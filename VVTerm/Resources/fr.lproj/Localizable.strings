@@ -721,6 +721,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Utilise la politique Tailscale SSH côté serveur. Aucun mot de passe ni clé SSH n'est requis.";
 "Tailscale SSH authentication was not accepted by the server." = "L'authentification Tailscale SSH n'a pas été acceptée par le serveur.";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "Cette app ne prend actuellement en charge que les connexions tailnet directes (sans solution de secours via proxy userspace).";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "La connexion OAuth s'ouvrira dans le navigateur. Les valeurs des domaines d'équipe/d'app sont détectées automatiquement à partir de l'hôte.";
+"Team Domain Override" = "Remplacement du domaine d'équipe";
+"Set Team Domain Override" = "Définir le remplacement du domaine d'équipe";
+"App Domain Override" = "Remplacement du domaine d'app";
+"Hide Overrides" = "Masquer les remplacements";
+"Set Team/App Domain Override" = "Définir le remplacement des domaines d'équipe/d'app";
+"Service Token Client ID" = "ID client du jeton de service";
+"Service Token Client Secret" = "Secret client du jeton de service";
+"Cloudflare configuration error: %@" = "Erreur de configuration Cloudflare : %@";
+"Cloudflare authentication failed: %@" = "Échec de l'authentification Cloudflare : %@";
+"Cloudflare tunnel failed: %@" = "Échec du tunnel Cloudflare : %@";
+"Cloudflare transport requires a valid hostname." = "Le transport Cloudflare nécessite un nom d'hôte valide.";
+"Cloudflare service token client ID is required." = "L'ID client du jeton de service Cloudflare est requis.";
+"Cloudflare service token client secret is required." = "Le secret client du jeton de service Cloudflare est requis.";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Indiquez les remplacements des domaines d'équipe et d'app pour Cloudflare OAuth.";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "La découverte des métadonnées Cloudflare a échoué. Ajoutez les remplacements des domaines d'équipe et d'app dans les réglages du serveur.";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "Choisir une session tmux";

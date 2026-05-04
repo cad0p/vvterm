@@ -719,6 +719,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Verwendet serverseitige Tailscale-SSH-Richtlinien. Es sind kein Passwort und kein SSH-Schlüssel erforderlich.";
 "Tailscale SSH authentication was not accepted by the server." = "Die Tailscale-SSH-Authentifizierung wurde vom Server nicht akzeptiert.";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "Diese App unterstützt derzeit nur direkte Tailnet-Verbindungen (kein Fallback über Userspace-Proxy).";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "Die OAuth-Anmeldung wird im Browser geöffnet. Team-/App-Domainwerte werden automatisch aus dem Host erkannt.";
+"Team Domain Override" = "Team-Domain-Überschreibung";
+"Set Team Domain Override" = "Team-Domain-Überschreibung festlegen";
+"App Domain Override" = "App-Domain-Überschreibung";
+"Hide Overrides" = "Überschreibungen ausblenden";
+"Set Team/App Domain Override" = "Team-/App-Domain-Überschreibung festlegen";
+"Service Token Client ID" = "Diensttoken-Client-ID";
+"Service Token Client Secret" = "Diensttoken-Client-Geheimnis";
+"Cloudflare configuration error: %@" = "Cloudflare-Konfigurationsfehler: %@";
+"Cloudflare authentication failed: %@" = "Cloudflare-Authentifizierung fehlgeschlagen: %@";
+"Cloudflare tunnel failed: %@" = "Cloudflare-Tunnel fehlgeschlagen: %@";
+"Cloudflare transport requires a valid hostname." = "Cloudflare-Transport erfordert einen gültigen Hostnamen.";
+"Cloudflare service token client ID is required." = "Client-ID für den Cloudflare-Diensttoken ist erforderlich.";
+"Cloudflare service token client secret is required." = "Client-Geheimnis für den Cloudflare-Diensttoken ist erforderlich.";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Gib für Cloudflare OAuth sowohl die Team-Domain- als auch die App-Domain-Überschreibung an.";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "Cloudflare-Metadaten konnten nicht erkannt werden. Füge in den Servereinstellungen Team-Domain- und App-Domain-Überschreibungen hinzu.";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "tmux-Sitzung auswählen";

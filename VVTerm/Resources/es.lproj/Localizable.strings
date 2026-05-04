@@ -719,6 +719,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Usa la política de Tailscale SSH del lado del servidor. No se requiere contraseña ni clave SSH.";
 "Tailscale SSH authentication was not accepted by the server." = "La autenticación de Tailscale SSH no fue aceptada por el servidor.";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "Esta app actualmente solo admite conexiones directas de tailnet (sin alternativa mediante proxy en espacio de usuario).";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "El inicio de sesión OAuth se abrirá en el navegador. Los valores de dominio de equipo/app se detectan automáticamente desde el host.";
+"Team Domain Override" = "Anulación del dominio del equipo";
+"Set Team Domain Override" = "Definir anulación del dominio del equipo";
+"App Domain Override" = "Anulación del dominio de la app";
+"Hide Overrides" = "Ocultar anulaciones";
+"Set Team/App Domain Override" = "Definir anulación del dominio de equipo/app";
+"Service Token Client ID" = "ID de cliente del token de servicio";
+"Service Token Client Secret" = "Secreto de cliente del token de servicio";
+"Cloudflare configuration error: %@" = "Error de configuración de Cloudflare: %@";
+"Cloudflare authentication failed: %@" = "La autenticación de Cloudflare falló: %@";
+"Cloudflare tunnel failed: %@" = "El túnel de Cloudflare falló: %@";
+"Cloudflare transport requires a valid hostname." = "El transporte de Cloudflare requiere un nombre de host válido.";
+"Cloudflare service token client ID is required." = "Se requiere el ID de cliente del token de servicio de Cloudflare.";
+"Cloudflare service token client secret is required." = "Se requiere el secreto de cliente del token de servicio de Cloudflare.";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Proporciona las anulaciones de dominio de equipo y de app para Cloudflare OAuth.";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "No se pudieron detectar los metadatos de Cloudflare. Añade las anulaciones de dominio de equipo y de app en los ajustes del servidor.";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "Elegir sesión de tmux";

@@ -719,6 +719,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "ใช้นโยบาย Tailscale SSH ฝั่งเซิร์ฟเวอร์ ไม่ต้องใช้รหัสผ่านหรือคีย์ SSH";
 "Tailscale SSH authentication was not accepted by the server." = "เซิร์ฟเวอร์ไม่ยอมรับการยืนยันตัวตน Tailscale SSH";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "ขณะนี้แอปรองรับเฉพาะการเชื่อมต่อ tailnet โดยตรงเท่านั้น (ไม่มีการ fallback ผ่าน userspace proxy)";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "การเข้าสู่ระบบ OAuth จะเปิดในเบราว์เซอร์ ค่าของโดเมนทีม/แอปจะถูกตรวจพบอัตโนมัติจากโฮสต์";
+"Team Domain Override" = "การแทนที่โดเมนทีม";
+"Set Team Domain Override" = "ตั้งค่าการแทนที่โดเมนทีม";
+"App Domain Override" = "การแทนที่โดเมนแอป";
+"Hide Overrides" = "ซ่อนการแทนที่";
+"Set Team/App Domain Override" = "ตั้งค่าการแทนที่โดเมนทีม/แอป";
+"Service Token Client ID" = "รหัสไคลเอ็นต์โทเค็นบริการ";
+"Service Token Client Secret" = "ความลับไคลเอ็นต์โทเค็นบริการ";
+"Cloudflare configuration error: %@" = "ข้อผิดพลาดการกำหนดค่า Cloudflare: %@";
+"Cloudflare authentication failed: %@" = "การยืนยันตัวตน Cloudflare ล้มเหลว: %@";
+"Cloudflare tunnel failed: %@" = "อุโมงค์ Cloudflare ล้มเหลว: %@";
+"Cloudflare transport requires a valid hostname." = "การขนส่ง Cloudflare ต้องใช้ชื่อโฮสต์ที่ถูกต้อง";
+"Cloudflare service token client ID is required." = "ต้องระบุรหัสไคลเอ็นต์โทเค็นบริการของ Cloudflare";
+"Cloudflare service token client secret is required." = "ต้องระบุความลับไคลเอ็นต์โทเค็นบริการของ Cloudflare";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "ระบุการแทนที่ทั้งโดเมนทีมและโดเมนแอปสำหรับ Cloudflare OAuth";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "ตรวจพบเมตาดาต้า Cloudflare ไม่สำเร็จ เพิ่มการแทนที่โดเมนทีมและโดเมนแอปในการตั้งค่าเซิร์ฟเวอร์";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "เลือกเซสชัน tmux";

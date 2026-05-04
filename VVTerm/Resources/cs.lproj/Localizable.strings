@@ -720,6 +720,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Používá zásady Tailscale SSH na straně serveru. Heslo ani SSH klíč nejsou vyžadovány.";
 "Tailscale SSH authentication was not accepted by the server." = "Ověření Tailscale SSH nebylo serverem přijato.";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "Tato aplikace momentálně podporuje pouze přímá tailnet připojení (bez náhradního userspace proxy).";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "Přihlášení OAuth se otevře v prohlížeči. Hodnoty domény týmu/aplikace se automaticky zjistí z hostitele.";
+"Team Domain Override" = "Přepsání domény týmu";
+"Set Team Domain Override" = "Nastavit přepsání domény týmu";
+"App Domain Override" = "Přepsání domény aplikace";
+"Hide Overrides" = "Skrýt přepsání";
+"Set Team/App Domain Override" = "Nastavit přepsání domény týmu/aplikace";
+"Service Token Client ID" = "ID klienta servisního tokenu";
+"Service Token Client Secret" = "Tajný klíč klienta servisního tokenu";
+"Cloudflare configuration error: %@" = "Chyba konfigurace Cloudflare: %@";
+"Cloudflare authentication failed: %@" = "Ověření Cloudflare se nezdařilo: %@";
+"Cloudflare tunnel failed: %@" = "Tunel Cloudflare selhal: %@";
+"Cloudflare transport requires a valid hostname." = "Přenos Cloudflare vyžaduje platný název hostitele.";
+"Cloudflare service token client ID is required." = "Je vyžadováno ID klienta servisního tokenu Cloudflare.";
+"Cloudflare service token client secret is required." = "Je vyžadován tajný klíč klienta servisního tokenu Cloudflare.";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Pro Cloudflare OAuth zadejte přepsání domény týmu i domény aplikace.";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "Zjištění metadat Cloudflare selhalo. V nastavení serveru přidejte přepsání domény týmu a domény aplikace.";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "Vybrat relaci tmux";
@@ -858,7 +876,7 @@
 "Delete Custom Theme?" = "Smazat vlastní motiv?";
 "Delete Snippet" = "Smazat úryvek";
 "Delete Snippet?" = "Smazat úryvek?";
-"Edit \"%@\"" = "Upravit \"__ph0__\"";
+"Edit \"%@\"" = "Upravit \"%@\"";
 "Edit Snippet" = "Upravit úryvek";
 "Enable tmux by default" = "Ve výchozím nastavení povolit tmux";
 "Enter" = "Vstupte";

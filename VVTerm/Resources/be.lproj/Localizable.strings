@@ -720,6 +720,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Выкарыстоўваецца серверная палітыка Tailscale SSH. Пароль або SSH-ключ не патрабуецца.";
 "Tailscale SSH authentication was not accepted by the server." = "Сервер не прыняў аўтэнтыфікацыю Tailscale SSH.";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "Гэта праграма цяпер падтрымлівае толькі прамыя падключэнні tailnet (без рэзервовага userspace-праксі).";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "Уваход OAuth адкрыецца ў браўзеры. Значэнні даменаў каманды/праграмы аўтаматычна вызначаюцца з хоста.";
+"Team Domain Override" = "Перавызначэнне дамена каманды";
+"Set Team Domain Override" = "Задаць перавызначэнне дамена каманды";
+"App Domain Override" = "Перавызначэнне дамена праграмы";
+"Hide Overrides" = "Схаваць перавызначэнні";
+"Set Team/App Domain Override" = "Задаць перавызначэнне дамена каманды/праграмы";
+"Service Token Client ID" = "ID кліента сэрвіснага токена";
+"Service Token Client Secret" = "Сакрэт кліента сэрвіснага токена";
+"Cloudflare configuration error: %@" = "Памылка канфігурацыі Cloudflare: %@";
+"Cloudflare authentication failed: %@" = "Аўтэнтыфікацыя Cloudflare не ўдалася: %@";
+"Cloudflare tunnel failed: %@" = "Тунэль Cloudflare не ўдаўся: %@";
+"Cloudflare transport requires a valid hostname." = "Транспарту Cloudflare патрэбна сапраўднае імя хоста.";
+"Cloudflare service token client ID is required." = "Патрэбны ID кліента сэрвіснага токена Cloudflare.";
+"Cloudflare service token client secret is required." = "Патрэбны сакрэт кліента сэрвіснага токена Cloudflare.";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Укажыце перавызначэнні дамена каманды і дамена праграмы для Cloudflare OAuth.";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "Не ўдалося выявіць метаданыя Cloudflare. Дадайце перавызначэнні дамена каманды і дамена праграмы ў наладах сервера.";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "Выбраць сесію tmux";

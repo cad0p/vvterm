@@ -764,6 +764,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "Sử dụng chính sách Tailscale SSH phía máy chủ. Không cần mật khẩu hoặc khóa SSH.";
 "Tailscale SSH authentication was not accepted by the server." = "Máy chủ không chấp nhận xác thực Tailscale SSH.";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "Hiện tại ứng dụng này chỉ hỗ trợ kết nối tailnet trực tiếp (không có phương án dự phòng userspace proxy).";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "Đăng nhập OAuth sẽ mở trong trình duyệt. Giá trị miền nhóm/ứng dụng được tự động phát hiện từ máy chủ.";
+"Team Domain Override" = "Ghi đè miền nhóm";
+"Set Team Domain Override" = "Đặt ghi đè miền nhóm";
+"App Domain Override" = "Ghi đè miền ứng dụng";
+"Hide Overrides" = "Ẩn ghi đè";
+"Set Team/App Domain Override" = "Đặt ghi đè miền nhóm/ứng dụng";
+"Service Token Client ID" = "ID máy khách mã thông báo dịch vụ";
+"Service Token Client Secret" = "Bí mật máy khách mã thông báo dịch vụ";
+"Cloudflare configuration error: %@" = "Lỗi cấu hình Cloudflare: %@";
+"Cloudflare authentication failed: %@" = "Xác thực Cloudflare thất bại: %@";
+"Cloudflare tunnel failed: %@" = "Đường hầm Cloudflare thất bại: %@";
+"Cloudflare transport requires a valid hostname." = "Transport Cloudflare yêu cầu tên máy chủ hợp lệ.";
+"Cloudflare service token client ID is required." = "Cần ID máy khách mã thông báo dịch vụ Cloudflare.";
+"Cloudflare service token client secret is required." = "Cần bí mật máy khách mã thông báo dịch vụ Cloudflare.";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Cung cấp cả ghi đè miền nhóm và miền ứng dụng cho Cloudflare OAuth.";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "Không thể phát hiện siêu dữ liệu Cloudflare. Thêm ghi đè miền nhóm và miền ứng dụng trong cài đặt máy chủ.";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "Chọn phiên tmux";

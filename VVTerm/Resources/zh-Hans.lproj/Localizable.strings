@@ -699,6 +699,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "使用服务器端 Tailscale SSH 策略。无需密码或 SSH 密钥。";
 "Tailscale SSH authentication was not accepted by the server." = "服务器未接受 Tailscale SSH 身份验证。";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "此应用目前仅支持直接 tailnet 连接（不支持 userspace 代理回退）。";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "OAuth 登录将在浏览器中打开。团队/应用域名会从主机自动发现。";
+"Team Domain Override" = "团队域名覆盖";
+"Set Team Domain Override" = "设置团队域名覆盖";
+"App Domain Override" = "应用域名覆盖";
+"Hide Overrides" = "隐藏覆盖项";
+"Set Team/App Domain Override" = "设置团队/应用域名覆盖";
+"Service Token Client ID" = "服务令牌客户端 ID";
+"Service Token Client Secret" = "服务令牌客户端密钥";
+"Cloudflare configuration error: %@" = "Cloudflare 配置错误：%@";
+"Cloudflare authentication failed: %@" = "Cloudflare 认证失败：%@";
+"Cloudflare tunnel failed: %@" = "Cloudflare 隧道失败：%@";
+"Cloudflare transport requires a valid hostname." = "Cloudflare 传输需要有效的主机名。";
+"Cloudflare service token client ID is required." = "需要 Cloudflare 服务令牌客户端 ID。";
+"Cloudflare service token client secret is required." = "需要 Cloudflare 服务令牌客户端密钥。";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "请为 Cloudflare OAuth 同时提供团队域名和应用域名覆盖。";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "Cloudflare 元数据发现失败。请在服务器设置中添加团队域名和应用域名覆盖。";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "选择 tmux 会话";

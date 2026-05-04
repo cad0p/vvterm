@@ -719,6 +719,24 @@
 "Uses server-side Tailscale SSH policy. No password or SSH key is required." = "サーバー側の Tailscale SSH ポリシーを使用します。パスワードや SSH キーは不要です。";
 "Tailscale SSH authentication was not accepted by the server." = "サーバーは Tailscale SSH 認証を受け入れませんでした。";
 "This app currently supports direct tailnet connections only (no userspace proxy fallback)." = "このアプリは現在、直接の tailnet 接続のみをサポートしています（userspace プロキシへのフォールバックはありません）。";
+"Cloudflare" = "Cloudflare";
+"Cloudflare Access" = "Cloudflare Access";
+"OAuth login will open in browser. Team/App domain values are auto-discovered from host." = "OAuth ログインはブラウザで開きます。チーム/アプリのドメイン値はホストから自動検出されます。";
+"Team Domain Override" = "チームドメインの上書き";
+"Set Team Domain Override" = "チームドメインの上書きを設定";
+"App Domain Override" = "アプリドメインの上書き";
+"Hide Overrides" = "上書きを非表示";
+"Set Team/App Domain Override" = "チーム/アプリドメインの上書きを設定";
+"Service Token Client ID" = "サービストークンのクライアント ID";
+"Service Token Client Secret" = "サービストークンのクライアントシークレット";
+"Cloudflare configuration error: %@" = "Cloudflare 設定エラー: %@";
+"Cloudflare authentication failed: %@" = "Cloudflare 認証に失敗しました: %@";
+"Cloudflare tunnel failed: %@" = "Cloudflare トンネルに失敗しました: %@";
+"Cloudflare transport requires a valid hostname." = "Cloudflare トランスポートには有効なホスト名が必要です。";
+"Cloudflare service token client ID is required." = "Cloudflare サービストークンのクライアント ID が必要です。";
+"Cloudflare service token client secret is required." = "Cloudflare サービストークンのクライアントシークレットが必要です。";
+"Provide both Team Domain and App Domain overrides for Cloudflare OAuth." = "Cloudflare OAuth 用にチームドメインとアプリドメインの上書きを両方指定してください。";
+"Cloudflare metadata discovery failed. Add Team Domain and App Domain overrides in server settings." = "Cloudflare メタデータの検出に失敗しました。サーバー設定でチームドメインとアプリドメインの上書きを追加してください。";
 
 /* Tmux Attach Prompt */
 "Choose tmux session" = "tmuxセッションを選択";
