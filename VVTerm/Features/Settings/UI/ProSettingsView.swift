@@ -116,9 +116,7 @@ struct ProSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .sheet(isPresented: $showingPlans) {
-            ProUpgradeSheet()
-        }
+        .proUpgradePresentation(isPresented: $showingPlans)
         #if os(iOS)
         .manageSubscriptionsSheetCompat(
             isPresented: $showingManageSubscription,

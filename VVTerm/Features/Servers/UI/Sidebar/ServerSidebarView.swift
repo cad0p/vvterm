@@ -260,9 +260,7 @@ struct ServerSidebarView: View {
         .sheet(isPresented: $showingSupport) {
             SupportSheet()
         }
-        .sheet(isPresented: $showingProUpgrade) {
-            ProUpgradeSheet()
-        }
+        .proUpgradePresentation(isPresented: $showingProUpgrade)
         .sheet(isPresented: $showingCreateEnvironment) {
             if let workspace = selectedWorkspace {
                 EnvironmentFormSheet(

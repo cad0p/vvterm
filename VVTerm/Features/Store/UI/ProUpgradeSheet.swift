@@ -12,6 +12,7 @@ import AppKit
 struct ProUpgradeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var storeManager: StoreManager
+    private let onDismiss: (() -> Void)?
 
     @State private var selectedPlan: ProPlanKind = .yearly
     @State private var showSuccess = false
@@ -24,6 +25,10 @@ struct ProUpgradeSheet: View {
         let title: String
         let message: String
         let isRestore: Bool
+    }
+
+    init(onDismiss: (() -> Void)? = nil) {
+        self.onDismiss = onDismiss
     }
 
     var body: some View {
@@ -45,7 +50,7 @@ struct ProUpgradeSheet: View {
 
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
-                            dismiss()
+                            close()
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 16, weight: .semibold))
@@ -112,11 +117,11 @@ struct ProUpgradeSheet: View {
             Button(String(localized: "Manage Subscription")) {
                 openSubscriptionManagement()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    dismiss()
+                    close()
                 }
             }
             Button(String(localized: "Later"), role: .cancel) {
-                dismiss()
+                close()
             }
         } message: {
             Text("You now have lifetime access. You should cancel your existing subscription to avoid being charged.")
@@ -132,39 +137,26 @@ struct ProUpgradeSheet: View {
     #if os(macOS)
     private var macSheetContent: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Upgrade to Pro")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    Text("Connect everywhere, without limits.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 22)
-            .padding(.bottom, 12)
-
             ScrollView {
                 contentStack
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 18)
                     .padding(.bottom, 18)
             }
+            .scrollIndicators(.automatic)
 
             purchaseFooter
         }
-        .frame(width: 720, height: 720)
+        .frame(
+            minWidth: 500,
+            idealWidth: 520,
+            maxWidth: .infinity,
+            minHeight: 620,
+            idealHeight: 780,
+            maxHeight: .infinity
+        )
         .background(sheetBackground)
+        .background(ProUpgradeWindowConfigurator())
         .task {
             await storeManager.loadProducts()
             selectedPlan = defaultPlan
@@ -204,11 +196,11 @@ struct ProUpgradeSheet: View {
             Button(String(localized: "Manage Subscription")) {
                 openSubscriptionManagement()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    dismiss()
+                    close()
                 }
             }
             Button(String(localized: "Later"), role: .cancel) {
-                dismiss()
+                close()
             }
         } message: {
             Text("You now have lifetime access. You should cancel your existing subscription to avoid being charged.")
@@ -305,7 +297,15 @@ struct ProUpgradeSheet: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 4)
+        #if os(macOS)
+        .overlay(alignment: .top) {
+            Divider()
+                .opacity(0.55)
+        }
+        .background(sheetBackground)
+        #else
         .background(.bar)
+        #endif
     }
 
     private var footerSupportRow: some View {
@@ -503,7 +503,7 @@ struct ProUpgradeSheet: View {
                 }
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    dismiss()
+                    close()
                 }
             }
         case .failed(let message):
@@ -571,6 +571,14 @@ struct ProUpgradeSheet: View {
         }
     }
 
+    private func close() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
+        }
+    }
+
     private var sheetBackground: Color {
         #if os(iOS)
         Color(uiColor: .systemGroupedBackground)
@@ -579,6 +587,227 @@ struct ProUpgradeSheet: View {
         #endif
     }
 }
+
+#if os(macOS)
+private struct ProUpgradeWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowConfigurationView {
+        WindowConfigurationView()
+    }
+
+    func updateNSView(_ nsView: WindowConfigurationView, context: Context) {
+        nsView.applyWindowConfiguration()
+    }
+
+    final class WindowConfigurationView: NSView {
+        override var intrinsicContentSize: NSSize { .zero }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            applyWindowConfiguration()
+        }
+
+        func applyWindowConfiguration() {
+            DispatchQueue.main.async { [weak self] in
+                guard let window = self?.window else { return }
+                ProUpgradeWindowChrome.configure(window, setInitialSize: false)
+            }
+        }
+    }
+}
+#endif
+
+extension View {
+    func proUpgradePresentation(isPresented: Binding<Bool>) -> some View {
+        modifier(ProUpgradePresentationModifier(isPresented: isPresented))
+    }
+}
+
+private struct ProUpgradePresentationModifier: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .onAppear {
+                if isPresented {
+                    presentWindow()
+                }
+            }
+            .onChangeCompat(of: isPresented) { shouldPresent in
+                if shouldPresent {
+                    presentWindow()
+                } else {
+                    ProUpgradeWindowPresenter.shared.close()
+                }
+            }
+        #else
+        content
+            .sheet(isPresented: $isPresented) {
+                ProUpgradeSheet()
+            }
+        #endif
+    }
+
+    #if os(macOS)
+    private func presentWindow() {
+        ProUpgradeWindowPresenter.shared.show(storeManager: StoreManager.shared) {
+            isPresented = false
+        }
+    }
+    #endif
+}
+
+#if os(macOS)
+@MainActor
+private final class ProUpgradeWindowPresenter: NSObject, NSWindowDelegate {
+    static let shared = ProUpgradeWindowPresenter()
+
+    private var window: NSWindow?
+    private var onClose: (() -> Void)?
+
+    private override init() {}
+
+    func show(storeManager: StoreManager, onClose: @escaping () -> Void) {
+        if let window, window.isVisible {
+            self.onClose = onClose
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let rootView = ProUpgradeSheet { [weak self] in
+            self?.close()
+        }
+        .environmentObject(storeManager)
+
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(contentViewController: hostingController)
+        configure(window)
+
+        self.window = window
+        self.onClose = onClose
+        window.delegate = self
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func close() {
+        window?.close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window = nil
+        let closeHandler = onClose
+        onClose = nil
+        closeHandler?()
+    }
+
+    private func configure(_ window: NSWindow) {
+        ProUpgradeWindowChrome.configure(window, setInitialSize: true)
+    }
+}
+
+private enum ProUpgradeWindowChrome {
+    private static let toolbarIdentifier = NSToolbar.Identifier("ProUpgradeWindowToolbar")
+    private static let titlebarAccessoryIdentifier = NSUserInterfaceItemIdentifier("ProUpgradeTitlebarAccessory")
+
+    static func configure(_ window: NSWindow, setInitialSize: Bool) {
+        window.title = String(localized: "Upgrade to Pro")
+        window.subtitle = String(localized: "Connect everywhere, without limits.")
+        window.styleMask.insert([.titled, .closable, .resizable])
+        window.styleMask.remove(.fullSizeContentView)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.backgroundColor = .windowBackgroundColor
+        window.isMovableByWindowBackground = false
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 500, height: 620)
+
+        if setInitialSize {
+            window.setContentSize(NSSize(width: 520, height: 780))
+        }
+
+        if window.toolbar?.identifier != toolbarIdentifier {
+            let toolbar = NSToolbar(identifier: toolbarIdentifier)
+            toolbar.displayMode = .iconOnly
+            toolbar.showsBaselineSeparator = false
+            toolbar.allowsUserCustomization = false
+            window.toolbar = toolbar
+        } else {
+            window.toolbar?.showsBaselineSeparator = false
+        }
+        window.toolbarStyle = .unified
+
+        installTitlebarAccessory(in: window)
+    }
+
+    private static func installTitlebarAccessory(in window: NSWindow) {
+        if let existing = window.titlebarAccessoryViewControllers.first(where: {
+            $0.view.identifier == titlebarAccessoryIdentifier
+        }) {
+            (existing.view as? ProUpgradeTitlebarView)?.updateText()
+            return
+        }
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.layoutAttribute = .left
+        accessory.view = ProUpgradeTitlebarView(identifier: titlebarAccessoryIdentifier)
+        window.addTitlebarAccessoryViewController(accessory)
+    }
+}
+
+private final class ProUpgradeTitlebarView: NSView {
+    private let titleField = NSTextField(labelWithString: "")
+    private let subtitleField = NSTextField(labelWithString: "")
+
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 42))
+        self.identifier = identifier
+        setup()
+        updateText()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func updateText() {
+        titleField.stringValue = String(localized: "Upgrade to Pro")
+        subtitleField.stringValue = String(localized: "Connect everywhere, without limits.")
+    }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        titleField.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleField.textColor = .labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+
+        subtitleField.font = .systemFont(ofSize: 12, weight: .regular)
+        subtitleField.textColor = .secondaryLabelColor
+        subtitleField.lineBreakMode = .byTruncatingTail
+
+        let stack = NSStackView(views: [titleField, subtitleField])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 1
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
+            widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+            heightAnchor.constraint(equalToConstant: 42),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1)
+        ])
+    }
+}
+#endif
 
 // MARK: - Plans
 
@@ -703,19 +932,11 @@ private struct PlanSelectionCard: View {
     }
 
     private var cardFill: Color {
-        #if os(iOS)
-        Color(uiColor: .secondarySystemGroupedBackground)
-        #else
-        Color(nsColor: .controlBackgroundColor)
-        #endif
+        paywallCardFillColor
     }
 
     private var cardStroke: Color {
-        #if os(iOS)
-        Color(uiColor: .separator).opacity(0.35)
-        #else
-        Color(nsColor: .separatorColor).opacity(0.35)
-        #endif
+        paywallCardBorderColor
     }
 }
 
@@ -767,11 +988,26 @@ private struct ComparisonTable: View {
                 }
             }
         }
+        .overlay {
+            GeometryReader { proxy in
+                Path { path in
+                    let featureBoundary = proxy.size.width - (ComparisonTableLayout.valueColumnWidth * 2)
+                    let proBoundary = proxy.size.width - ComparisonTableLayout.valueColumnWidth
+
+                    path.move(to: CGPoint(x: featureBoundary, y: 0))
+                    path.addLine(to: CGPoint(x: featureBoundary, y: proxy.size.height))
+                    path.move(to: CGPoint(x: proBoundary, y: 0))
+                    path.addLine(to: CGPoint(x: proBoundary, y: proxy.size.height))
+                }
+                .stroke(paywallTableGridColor, lineWidth: 0.5)
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     private var separator: some View {
         Rectangle()
-            .fill(separatorColor)
+            .fill(paywallTableGridColor)
             .frame(height: 0.5)
     }
 }
@@ -789,18 +1025,14 @@ private struct ComparisonTableRow<Feature: View, Free: View, Pro: View>: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, verticalPadding)
 
-            verticalSeparator
-
             free
-                .frame(minWidth: 74, maxWidth: 74, minHeight: rowHeight, alignment: .center)
-                .padding(.horizontal, 4)
+                .frame(width: ComparisonTableLayout.valueColumnWidth, alignment: .center)
+                .frame(minHeight: rowHeight, alignment: .center)
                 .padding(.vertical, verticalPadding)
 
-            verticalSeparator
-
             pro
-                .frame(minWidth: 74, maxWidth: 74, minHeight: rowHeight, alignment: .center)
-                .padding(.horizontal, 4)
+                .frame(width: ComparisonTableLayout.valueColumnWidth, alignment: .center)
+                .frame(minHeight: rowHeight, alignment: .center)
                 .padding(.vertical, verticalPadding)
         }
     }
@@ -813,11 +1045,10 @@ private struct ComparisonTableRow<Feature: View, Free: View, Pro: View>: View {
         isHeader ? 6 : 4
     }
 
-    private var verticalSeparator: some View {
-        Rectangle()
-            .fill(separatorColor)
-            .frame(width: 0.5)
-    }
+}
+
+private enum ComparisonTableLayout {
+    static let valueColumnWidth: CGFloat = 68
 }
 
 private struct ComparisonFeatureCell: View {
@@ -900,11 +1131,27 @@ private struct ComparisonValueCell: View {
     }
 }
 
-private var separatorColor: Color {
+private var paywallTableGridColor: Color {
     #if os(iOS)
-    Color(uiColor: .separator).opacity(0.35)
+    Color.primary.opacity(0.10)
     #else
-    Color(nsColor: .separatorColor).opacity(0.35)
+    Color.primary.opacity(0.13)
+    #endif
+}
+
+private var paywallCardFillColor: Color {
+    #if os(iOS)
+    Color(uiColor: .secondarySystemGroupedBackground)
+    #else
+    Color(nsColor: .controlBackgroundColor)
+    #endif
+}
+
+private var paywallCardBorderColor: Color {
+    #if os(iOS)
+    Color.primary.opacity(0.10)
+    #else
+    Color.primary.opacity(0.16)
     #endif
 }
 
@@ -915,32 +1162,25 @@ private struct NativeSectionCard<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
         content
             .padding(padding)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(cardFill)
+                shape.fill(cardFill)
             )
+            .clipShape(shape)
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(cardStroke, lineWidth: 0.5)
+                shape.stroke(cardStroke, lineWidth: 0.5)
             )
     }
 
     private var cardFill: Color {
-        #if os(iOS)
-        Color(uiColor: .secondarySystemGroupedBackground)
-        #else
-        Color(nsColor: .controlBackgroundColor)
-        #endif
+        paywallCardFillColor
     }
 
     private var cardStroke: Color {
-        #if os(iOS)
-        Color(uiColor: .separator).opacity(0.35)
-        #else
-        Color(nsColor: .separatorColor).opacity(0.35)
-        #endif
+        paywallCardBorderColor
     }
 }
 

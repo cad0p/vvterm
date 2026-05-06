@@ -1429,9 +1429,7 @@ struct MoveServerSheet: View {
                 }
             )
         }
-        .sheet(isPresented: $showingUpgrade) {
-            ProUpgradeSheet()
-        }
+        .proUpgradePresentation(isPresented: $showingUpgrade)
         #if os(iOS)
         .navigationTitle("Move Server")
         .navigationBarTitleDisplayMode(.inline)

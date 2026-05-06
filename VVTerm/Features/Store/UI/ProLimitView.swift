@@ -113,9 +113,7 @@ struct LimitReachedAlert: ViewModifier {
             } message: {
                 Text(limitType.message)
             }
-            .sheet(isPresented: $showUpgrade) {
-                ProUpgradeSheet()
-            }
+            .proUpgradePresentation(isPresented: $showUpgrade)
     }
 }
 
@@ -144,9 +142,7 @@ struct ProFeatureAlert: ViewModifier {
             } message: {
                 Text(message)
             }
-            .sheet(isPresented: $showUpgrade) {
-                ProUpgradeSheet()
-            }
+            .proUpgradePresentation(isPresented: $showUpgrade)
     }
 }
 
@@ -285,9 +281,7 @@ struct LockedItemAlert: ViewModifier {
             } message: {
                 Text(String(format: String(localized: "\"%@\" %@"), itemName, itemType.message))
             }
-            .sheet(isPresented: $showUpgrade) {
-                ProUpgradeSheet()
-            }
+            .proUpgradePresentation(isPresented: $showUpgrade)
     }
 }
 

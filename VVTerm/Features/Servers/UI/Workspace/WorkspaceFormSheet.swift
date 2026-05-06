@@ -130,9 +130,7 @@ struct WorkspaceFormSheet: View {
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || isAtLimit)
                 }
             }
-            .sheet(isPresented: $showingUpgradeSheet) {
-                ProUpgradeSheet()
-            }
+            .proUpgradePresentation(isPresented: $showingUpgradeSheet)
             .alert("Delete Workspace?", isPresented: Binding(
                 get: { workspaceToDelete != nil },
                 set: { if !$0 { workspaceToDelete = nil } }
