@@ -8,17 +8,29 @@ struct RemoteFileTabsEmptyState: View {
     let onNewTab: () -> Void
 
     var body: some View {
-        VStack(spacing: 18) {
-            RemoteFileEmptyState(
-                icon: "folder.badge.questionmark",
-                title: String(localized: "No File Tabs Open"),
-                message: String(localized: "Open a file tab to browse, preview, and transfer files for this server.")
-            )
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 10) {
+                Image(systemName: "folder.badge.questionmark")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Text("No File Tabs Open")
+                    .font(.headline)
+
+                Text("Open a file tab to browse, preview, and transfer files for this server.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
             Button(action: onNewTab) {
                 Label(String(localized: "New File Tab"), systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
+
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .padding(24)

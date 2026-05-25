@@ -475,7 +475,8 @@ struct ConnectionTerminalContainer: View {
             .toolbar {
                 if !isZenModeEnabled {
                     viewPickerToolbarItem
-                    if (selectedView == "terminal" && !serverTabs.isEmpty) || selectedView == "files" {
+                    if (selectedView == "terminal" && !serverTabs.isEmpty)
+                        || (selectedView == "files" && !serverFileTabs.isEmpty) {
                         tabsToolbarSpacer
                         tabsToolbarItem
                     }
