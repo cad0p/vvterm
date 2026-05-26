@@ -127,6 +127,7 @@ struct TerminalFindNavigatorLifecycle {
 private final class TerminalIMEProxyTextView: UIView, UITextInput {
     weak var terminalOwner: GhosttyTerminalView?
     private var markedBuffer = ""
+    private var deleteRepeatAnchorUsesAlternate = false
     private lazy var terminalNavigationCommands: [UIKeyCommand] = Self.makeTerminalNavigationCommands(
         action: #selector(handleTerminalNavigationCommand(_:))
     )
@@ -268,7 +269,10 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     var hasText: Bool {
-        !markedBuffer.isEmpty
+        // This proxy only stores transient IME preedit text. The terminal itself
+        // can still accept Backspace when that buffer is empty, and UIKit uses
+        // this value to keep software-keyboard delete active/repeating.
+        terminalOwner?.canRouteProxyDeleteBackward ?? false
     }
 
     func insertText(_ text: String) {
@@ -281,6 +285,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     func deleteBackward() {
         let before = terminalOwner?.imeProxySnapshot()
         guard !markedBuffer.isEmpty else {
+            notifyVirtualDeleteAnchorDidChange()
             terminalOwner?.imeProxyDidDeleteBackward(before: before)
             return
         }
@@ -310,15 +315,16 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     var selectedTextRange: UITextRange? {
         get {
-            TerminalNativeTextRange(
-                start: selectedRange.location,
-                end: selectedRange.location + selectedRange.length
+            let range = effectiveTextInputSelectedRange
+            return TerminalNativeTextRange(
+                start: range.location,
+                end: range.location + range.length
             )
         }
         set {
             guard let range = newValue as? TerminalNativeTextRange else { return }
             inputDelegate?.selectionWillChange(self)
-            selectedRange = clampedRange(range.nsRange)
+            selectedRange = usesDeleteRepeatAnchor ? NSRange(location: 0, length: 0) : clampedRange(range.nsRange)
             inputDelegate?.selectionDidChange(self)
             notifyTextInputStateDidChange()
         }
@@ -334,7 +340,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     var endOfDocument: UITextPosition {
-        TerminalNativeTextPosition(offset: markedBuffer.utf16.count)
+        TerminalNativeTextPosition(offset: textInputDocumentLength)
     }
 
     var textInputView: UIView {
@@ -364,9 +370,9 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     func text(in range: UITextRange) -> String? {
         guard let range = range as? TerminalNativeTextRange else { return nil }
-        let clamped = clampedRange(range.nsRange)
+        let clamped = clampedTextInputRange(range.nsRange)
         guard clamped.length > 0 else { return "" }
-        return (markedBuffer as NSString).substring(with: clamped)
+        return (textInputDocument as NSString).substring(with: clamped)
     }
 
     func replace(_ range: UITextRange, withText text: String) {
@@ -379,6 +385,9 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         guard !markedBuffer.isEmpty else {
             if !text.isEmpty {
                 _ = terminalOwner?.handleIMEProxyInsertText(text, fromIMEComposition: false)
+            } else {
+                notifyVirtualDeleteAnchorDidChange()
+                terminalOwner?.imeProxyDidDeleteBackward(before: terminalOwner?.imeProxySnapshot())
             }
             return
         }
@@ -475,7 +484,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     func closestPosition(to point: CGPoint) -> UITextPosition? {
-        TerminalNativeTextPosition(offset: markedBuffer.utf16.count)
+        TerminalNativeTextPosition(offset: textInputDocumentLength)
     }
 
     func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
@@ -582,6 +591,32 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         terminalOwner?.syncTextInputModelFromIMEProxy()
     }
 
+    private var usesDeleteRepeatAnchor: Bool {
+        markedBuffer.isEmpty && terminalOwner?.canRouteProxyDeleteBackward == true
+    }
+
+    private var deleteRepeatAnchorText: String {
+        deleteRepeatAnchorUsesAlternate ? "\u{2060}" : "\u{200B}"
+    }
+
+    private var textInputDocument: String {
+        usesDeleteRepeatAnchor ? deleteRepeatAnchorText : markedBuffer
+    }
+
+    private var textInputDocumentLength: Int {
+        (textInputDocument as NSString).length
+    }
+
+    private var effectiveTextInputSelectedRange: NSRange {
+        usesDeleteRepeatAnchor ? NSRange(location: textInputDocumentLength, length: 0) : selectedRange
+    }
+
+    private func notifyVirtualDeleteAnchorDidChange() {
+        inputDelegate?.textWillChange(self)
+        deleteRepeatAnchorUsesAlternate.toggle()
+        inputDelegate?.textDidChange(self)
+    }
+
     private func clampedRange(_ range: NSRange) -> NSRange {
         let length = markedBuffer.utf16.count
         let location = min(max(range.location, 0), length)
@@ -589,8 +624,15 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         return NSRange(location: location, length: rangeLength)
     }
 
+    private func clampedTextInputRange(_ range: NSRange) -> NSRange {
+        let length = textInputDocumentLength
+        let location = min(max(range.location, 0), length)
+        let rangeLength = min(max(range.length, 0), max(length - location, 0))
+        return NSRange(location: location, length: rangeLength)
+    }
+
     private func clampedOffset(_ offset: Int) -> Int {
-        min(max(offset, 0), markedBuffer.utf16.count)
+        min(max(offset, 0), textInputDocumentLength)
     }
 
     private static func makeTerminalNavigationCommands(action: Selector) -> [UIKeyCommand] {
@@ -1490,6 +1532,10 @@ class GhosttyTerminalView: UIView {
 
     private var canRouteTerminalInput: Bool {
         acceptsTerminalInput && !isFindNavigatorActive
+    }
+
+    fileprivate var canRouteProxyDeleteBackward: Bool {
+        canRouteTerminalInput
     }
 
     func markKeyboardFocusForReconnect() {
