@@ -223,6 +223,63 @@ struct ConnectionLifecycleIntegrationTests {
     }
 
     @Test
+    func openConnectionDoesNotSeedWorkingDirectoryFromSelectedDifferentServer() async throws {
+        try await withCleanConnectionManager { manager in
+            let firstServer = makeServer(name: "First")
+            let secondServer = makeServer(name: "Second")
+
+            try await withServerList([firstServer, secondServer]) {
+                let firstSession = ConnectionSession(
+                    serverId: firstServer.id,
+                    title: "First",
+                    connectionState: .disconnected,
+                    workingDirectory: "/srv/first"
+                )
+                manager.sessions = [firstSession]
+                manager.selectedSessionId = firstSession.id
+                manager.selectedSessionByServer[firstServer.id] = firstSession.id
+
+                let newSession = try await manager.openConnection(to: secondServer, forceNew: true)
+
+                #expect(newSession.serverId == secondServer.id)
+                #expect(newSession.workingDirectory == nil)
+            }
+        }
+    }
+
+    @Test
+    func openConnectionSeedsWorkingDirectoryFromSameServerSession() async throws {
+        try await withCleanConnectionManager { manager in
+            let firstServer = makeServer(name: "First")
+            let secondServer = makeServer(name: "Second")
+
+            try await withServerList([firstServer, secondServer]) {
+                let firstSession = ConnectionSession(
+                    serverId: firstServer.id,
+                    title: "First",
+                    connectionState: .disconnected,
+                    workingDirectory: "/srv/first"
+                )
+                let secondSession = ConnectionSession(
+                    serverId: secondServer.id,
+                    title: "Second",
+                    connectionState: .disconnected,
+                    workingDirectory: "/srv/second"
+                )
+                manager.sessions = [firstSession, secondSession]
+                manager.selectedSessionId = firstSession.id
+                manager.selectedSessionByServer[firstServer.id] = firstSession.id
+                manager.selectedSessionByServer[secondServer.id] = secondSession.id
+
+                let newSession = try await manager.openConnection(to: secondServer, forceNew: true)
+
+                #expect(newSession.serverId == secondServer.id)
+                #expect(newSession.workingDirectory == "/srv/second")
+            }
+        }
+    }
+
+    @Test
     func connectionManagerDisconnectServerLeavesOtherServersConnected() async {
         await withCleanConnectionManager { manager in
             let firstServerId = UUID()

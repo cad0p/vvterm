@@ -132,6 +132,22 @@ final class ConnectionSessionManager: ObservableObject {
         return session
     }
 
+    private func sourceSessionForNewTab(on serverId: UUID) -> ConnectionSession? {
+        if let selectedSessionId = selectedSessionByServer[serverId],
+           let session = sessionWithID(selectedSessionId),
+           session.serverId == serverId {
+            return session
+        }
+
+        if let selectedSessionId,
+           let session = sessionWithID(selectedSessionId),
+           session.serverId == serverId {
+            return session
+        }
+
+        return firstSession(for: serverId)
+    }
+
     private func storedWorkingDirectory(for sessionId: UUID) -> String? {
         sessionWithID(sessionId)?.workingDirectory
     }
@@ -229,21 +245,17 @@ final class ConnectionSessionManager: ObservableObject {
             throw VVTermError.proRequired(String(localized: "Upgrade to Pro for multiple connections"))
         }
 
-        let preferredSessionId = selectedSessionByServer[server.id] ?? selectedSessionId
-        let fallbackSessionId = firstSession(for: server.id)?.id
-        let sourceSessionId = preferredSessionId ?? fallbackSessionId
-        var sourceWorkingDirectory = sourceSessionId.flatMap(sessionWithID)?.workingDirectory
-            ?? firstSession(for: server.id)?.workingDirectory
+        let sourceSession = sourceSessionForNewTab(on: server.id)
+        var sourceWorkingDirectory = sourceSession?.workingDirectory
         if tmuxResolver.isTmuxEnabled(for: server.id),
-           let sourceSessionId,
-           let sourceSession = sessionWithID(sourceSessionId),
+           let sourceSession,
            let client = sshClient(for: sourceSession),
            let path = await RemoteTmuxManager.shared.currentPath(
-               sessionName: tmuxResolver.sessionName(for: sourceSessionId),
+               sessionName: tmuxResolver.sessionName(for: sourceSession.id),
                using: client
            ) {
             sourceWorkingDirectory = path
-            if let index = indexOfSession(sourceSessionId) {
+            if let index = indexOfSession(sourceSession.id) {
                 sessions[index].workingDirectory = path
             }
         }
