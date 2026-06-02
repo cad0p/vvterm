@@ -937,32 +937,9 @@ final class ServerManager: ObservableObject {
     }
 
     func updateLastConnected(for server: Server) async {
-        var updated = server
-        updated = Server(
-            id: server.id,
-            workspaceId: server.workspaceId,
-            environment: server.environment,
-            name: server.name,
-            host: server.host,
-            port: server.port,
-            username: server.username,
-            connectionMode: server.connectionMode,
-            authMethod: server.authMethod,
-            cloudflareAccessMode: server.cloudflareAccessMode,
-            cloudflareTeamDomainOverride: server.cloudflareTeamDomainOverride,
-            cloudflareAppDomainOverride: server.cloudflareAppDomainOverride,
-            tags: server.tags,
-            notes: server.notes,
-            lastConnected: Date(),
-            isFavorite: server.isFavorite,
-            requiresBiometricUnlock: server.requiresBiometricUnlock,
-            tmuxEnabledOverride: server.tmuxEnabledOverride,
-            tmuxStartupBehaviorOverride: server.tmuxStartupBehaviorOverride,
-            createdAt: server.createdAt,
-            updatedAt: Date()
-        )
-
-        try? await updateServer(updated)
+        guard let index = servers.firstIndex(where: { $0.id == server.id }) else { return }
+        servers[index].lastConnected = Date()
+        saveLocalData()
     }
 
     // MARK: - Workspace CRUD
