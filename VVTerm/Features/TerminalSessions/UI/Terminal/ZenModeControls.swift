@@ -302,6 +302,7 @@ struct MacOSZenModePanel: View {
     let viewTabs: [ConnectionViewTab]
     let terminalTabs: [TerminalTab]
     let selectedTerminalTabId: Binding<UUID?>
+    let terminalTabTitle: (TerminalTab) -> String
     let paneState: (TerminalTab) -> TerminalPaneState?
     let fileTabs: [RemoteFileTab]
     let selectedFileTabId: Binding<UUID?>
@@ -516,7 +517,7 @@ struct MacOSZenModePanel: View {
                         .frame(width: 7, height: 7)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(tab.title)
+                        Text(terminalTabTitle(tab))
                             .font(.callout.weight(isSelected ? .semibold : .regular))
                             .lineLimit(1)
 
@@ -613,6 +614,7 @@ struct IOSZenModePanel: View {
     let viewTabs: [ConnectionViewTab]
     let sessions: [ConnectionSession]
     let selectedSessionId: Binding<UUID?>
+    let sessionTitle: (ConnectionSession) -> String
     let onCloseSession: (ConnectionSession) -> Void
     let fileTabs: [RemoteFileTab]
     let selectedFileTabId: Binding<UUID?>
@@ -735,7 +737,7 @@ struct IOSZenModePanel: View {
                         .fill(session.connectionState.statusTintColor)
                         .frame(width: 7, height: 7)
 
-                    Text(session.title)
+                    Text(sessionTitle(session))
                         .font(.callout.weight(isSelected ? .semibold : .regular))
                         .lineLimit(1)
 

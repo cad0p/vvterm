@@ -54,6 +54,7 @@ final class TerminalTabManager: ObservableObject {
 
     /// Pane state keyed by pane ID
     @Published var paneStates: [UUID: TerminalPaneState] = [:]
+    @Published private(set) var runtimeTitleByPane: [UUID: String] = [:]
 
     @Published var tmuxAttachPrompt: TmuxAttachPrompt?
 
@@ -89,6 +90,13 @@ final class TerminalTabManager: ObservableObject {
 
     private func setPaneWorkingDirectory(_ workingDirectory: String, for paneId: UUID) {
         paneStates[paneId]?.workingDirectory = workingDirectory
+    }
+
+    private func setPaneTitle(_ title: String, for paneId: UUID) {
+        guard runtimeTitleByPane[paneId] != title else { return }
+
+        runtimeTitleByPane[paneId] = title
+        logger.info("Runtime pane title changed: \(title, privacy: .public)")
     }
 
     private func setPaneTransport(
@@ -349,7 +357,7 @@ final class TerminalTabManager: ObservableObject {
     /// Register a terminal view for a pane
     func registerTerminal(_ terminal: GhosttyTerminalView, for paneId: UUID) {
         terminalViews[paneId] = terminal
-        terminalRegistryVersion &+= 1
+        scheduleTerminalRegistryVersionUpdate()
     }
 
     /// Unregister a terminal view
@@ -357,7 +365,13 @@ final class TerminalTabManager: ObservableObject {
         if let terminal = terminalViews.removeValue(forKey: paneId) {
             terminal.cleanup()
         }
-        terminalRegistryVersion &+= 1
+        scheduleTerminalRegistryVersionUpdate()
+    }
+
+    private func scheduleTerminalRegistryVersionUpdate() {
+        Task { @MainActor [weak self] in
+            self?.terminalRegistryVersion &+= 1
+        }
     }
 
     /// Get terminal for a pane
@@ -555,6 +569,7 @@ final class TerminalTabManager: ObservableObject {
         clearTmuxRuntimeState(for: paneId)
         unregisterTerminal(for: paneId)
         paneStates.removeValue(forKey: paneId)
+        runtimeTitleByPane.removeValue(forKey: paneId)
 
         Task.detached { [weak self] in
             await self?.unregisterSSHClient(for: paneId)
@@ -581,6 +596,17 @@ final class TerminalTabManager: ObservableObject {
     func updatePaneWorkingDirectory(_ paneId: UUID, rawDirectory: String) {
         guard let normalized = normalizeWorkingDirectory(rawDirectory) else { return }
         setPaneWorkingDirectory(normalized, for: paneId)
+    }
+
+    func updatePaneTitle(_ paneId: UUID, rawTitle: String) {
+        guard paneStates[paneId] != nil else { return }
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        setPaneTitle(title, for: paneId)
+    }
+
+    func displayTitle(for tab: TerminalTab) -> String {
+        runtimeTitleByPane[tab.focusedPaneId] ?? runtimeTitleByPane[tab.rootPaneId] ?? tab.title
     }
 
     func workingDirectory(for paneId: UUID) -> String? {

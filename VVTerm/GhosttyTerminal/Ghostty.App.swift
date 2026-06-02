@@ -28,15 +28,22 @@ enum Ghostty {
     /// The surface is freed when the GhosttyTerminalView is deallocated
     class SurfaceReference {
         let surface: ghostty_surface_t
+        weak var terminalView: GhosttyTerminalView?
         var isValid: Bool = true
 
-        init(_ surface: ghostty_surface_t) {
+        init(_ surface: ghostty_surface_t, terminalView: GhosttyTerminalView) {
             self.surface = surface
+            self.terminalView = terminalView
         }
 
         func invalidate() {
             isValid = false
         }
+    }
+
+    @MainActor
+    private struct TitleDeliveryLogCache {
+        static var lastUndeliveredTitleBySurface: [String: String] = [:]
     }
 
 }
@@ -351,8 +358,8 @@ extension Ghostty {
         /// Register a surface for config update tracking
         /// Returns the surface reference that should be stored by the view
         @discardableResult
-        func registerSurface(_ surface: ghostty_surface_t) -> Ghostty.SurfaceReference {
-            let ref = Ghostty.SurfaceReference(surface)
+        func registerSurface(_ surface: ghostty_surface_t, terminalView: GhosttyTerminalView) -> Ghostty.SurfaceReference {
+            let ref = Ghostty.SurfaceReference(surface, terminalView: terminalView)
             activeSurfaces.append(ref)
             // Clean up invalid surfaces
             activeSurfaces = activeSurfaces.filter { $0.isValid }
@@ -363,6 +370,16 @@ extension Ghostty {
         func unregisterSurface(_ ref: Ghostty.SurfaceReference) {
             ref.invalidate()
             activeSurfaces = activeSurfaces.filter { $0.isValid }
+        }
+
+        func terminalView(for surface: ghostty_surface_t) -> GhosttyTerminalView? {
+            activeSurfaces = activeSurfaces.filter { $0.isValid && $0.terminalView != nil }
+            return activeSurfaces.first { $0.surface == surface }?.terminalView
+        }
+
+        func activeSurfaceCount() -> Int {
+            activeSurfaces = activeSurfaces.filter { $0.isValid && $0.terminalView != nil }
+            return activeSurfaces.count
         }
 
         /// Reload configuration (call when settings change)
@@ -549,11 +566,21 @@ extension Ghostty {
 
         static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
             // Get the terminal view from surface userdata if target is a surface
+            var titleTargetDescription = "target \(target.tag.rawValue)"
+            var activeSurfaceCount = 0
             let terminalView: GhosttyTerminalView? = {
                 guard target.tag == GHOSTTY_TARGET_SURFACE else { return nil }
-                let surface = target.target.surface
-                guard let userdata = ghostty_surface_userdata(surface) else { return nil }
-                return Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+                guard let surface = target.target.surface else { return nil }
+                titleTargetDescription = String(describing: surface)
+                if let appUserdata = ghostty_app_userdata(app) {
+                    let state = Unmanaged<App>.fromOpaque(appUserdata).takeUnretainedValue()
+                    activeSurfaceCount = state.activeSurfaceCount()
+                    if let registeredView = state.terminalView(for: surface) {
+                        return registeredView
+                    }
+                }
+                guard let surfaceUserdata = ghostty_surface_userdata(surface) else { return nil }
+                return Unmanaged<GhosttyTerminalView>.fromOpaque(surfaceUserdata).takeUnretainedValue()
             }()
 
             switch action.tag {
@@ -561,11 +588,30 @@ extension Ghostty {
                 // Window/tab title change
                 if let titlePtr = action.action.set_title.title {
                     let title = String(cString: titlePtr)
-                    Ghostty.logger.info("Title changed: \(title)")
 
                     // Propagate to terminal view callback
                     DispatchQueue.main.async {
-                        terminalView?.onTitleChange?(title)
+                        guard let terminalView else {
+                            if TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] != title {
+                                TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] = title
+                                Ghostty.logger.warning(
+                                    "Ghostty title received without terminal view: \(title, privacy: .public), target: \(titleTargetDescription, privacy: .public), active surfaces: \(activeSurfaceCount)"
+                                )
+                            }
+                            return
+                        }
+
+                        guard terminalView.onTitleChange != nil else {
+                            if TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] != title {
+                                TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] = title
+                                Ghostty.logger.warning(
+                                    "Ghostty title received before title callback was installed: \(title, privacy: .public), target: \(titleTargetDescription, privacy: .public)"
+                                )
+                            }
+                            return
+                        }
+
+                        terminalView.onTitleChange?(title)
                     }
                 }
                 return true

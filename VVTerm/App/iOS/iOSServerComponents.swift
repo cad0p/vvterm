@@ -150,6 +150,7 @@ struct iOSServerRow: View {
 
 struct iOSActiveConnectionRow: View {
     let session: ConnectionSession
+    let title: String
     let tabCount: Int
     let onOpen: () -> Void
     let onDisconnect: () -> Void
@@ -166,7 +167,7 @@ struct iOSActiveConnectionRow: View {
 
                 // Connection info
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title)
+                    Text(title)
                         .font(.body)
                         .foregroundStyle(.primary)
 

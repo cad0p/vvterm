@@ -244,7 +244,7 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
 
         // Register surface with app wrapper for config update tracking
         if let wrapper = ghosttyAppWrapper {
-            self.surfaceReference = wrapper.registerSurface(cSurface)
+            self.surfaceReference = wrapper.registerSurface(cSurface, terminalView: self)
         }
     }
 

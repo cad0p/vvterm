@@ -749,6 +749,7 @@ struct ConnectionTerminalContainer: View {
                 viewTabs: visibleViewTabs,
                 terminalTabs: serverTabs,
                 selectedTerminalTabId: selectedTabIdBinding,
+                terminalTabTitle: { tabManager.displayTitle(for: $0) },
                 paneState: { tab in
                     tabManager.paneStates[tab.focusedPaneId]
                 },
@@ -1209,7 +1210,7 @@ struct TerminalTabButton: View {
                     .frame(width: 6, height: 6)
 
                 // Title
-                Text(tab.title)
+                Text(tabManager.displayTitle(for: tab))
                     .font(.callout)
                     .lineLimit(1)
 

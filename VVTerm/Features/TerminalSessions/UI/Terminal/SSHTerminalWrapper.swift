@@ -16,18 +16,20 @@ enum SSHConnectionRunner {
         sshClient: SSHClient,
         terminal: GhosttyTerminalView,
         logger: Logger,
-        onAttempt: @escaping (_ attempt: Int) async -> Void,
-        startupPlan: @escaping () async -> (command: String?, skipTmuxLifecycle: Bool),
-        registerShell: @escaping (_ shell: ShellHandle, _ skipTmuxLifecycle: Bool) async -> Void,
-        onBeforeShellStart: @escaping (_ cols: Int, _ rows: Int) async -> Void,
-        onShellStarted: @escaping (_ terminal: GhosttyTerminalView, _ shellId: UUID) async -> Void,
-        shouldContinueStreaming: @escaping (_ data: Data, _ terminal: GhosttyTerminalView) async -> Bool,
+        onAttempt: @MainActor @escaping (_ attempt: Int) -> Void,
+        startupPlan: @MainActor @escaping () async -> (command: String?, skipTmuxLifecycle: Bool),
+        registerShell: @MainActor @escaping (_ shell: ShellHandle, _ skipTmuxLifecycle: Bool) async -> Void,
+        onBeforeShellStart: @MainActor @escaping (_ cols: Int, _ rows: Int) async -> Void,
+        onShellStarted: @MainActor @escaping (_ terminal: GhosttyTerminalView, _ shellId: UUID) async -> Void,
+        onTitleChange: @MainActor @escaping (_ title: String) -> Void,
+        shouldContinueStreaming: @MainActor @escaping (_ data: Data, _ terminal: GhosttyTerminalView) -> Bool,
         shouldResetClient: @escaping (_ error: SSHError) async -> Bool,
-        onProcessExit: @escaping () async -> Void,
-        onFailure: @escaping (_ error: Error, _ terminal: GhosttyTerminalView) async -> Void
+        onProcessExit: @MainActor @escaping () -> Void,
+        onFailure: @MainActor @escaping (_ error: Error, _ terminal: GhosttyTerminalView) -> Void
     ) async {
         let maxAttempts = 3
         var lastError: Error?
+        var titleParser = TerminalTitleSequenceParser()
 
         for attempt in 1...maxAttempts {
             guard !Task.isCancelled else { return }
@@ -61,6 +63,9 @@ enum SSHConnectionRunner {
                 guard !Task.isCancelled else { return }
                 for await data in shell.stream {
                     guard !Task.isCancelled else { break }
+                    for title in titleParser.parse(data) {
+                        await onTitleChange(title)
+                    }
                     let shouldContinue = await shouldContinueStreaming(data, terminal)
                     if !shouldContinue { break }
                 }
@@ -229,12 +234,10 @@ extension SSHTerminalCoordinator {
                 terminal: terminal,
                 logger: logger,
                 onAttempt: { attempt in
-                    await MainActor.run {
-                        if attempt == 1 {
-                            ConnectionSessionManager.shared.updateSessionState(sessionId, to: .connecting)
-                        } else {
-                            ConnectionSessionManager.shared.updateSessionState(sessionId, to: .reconnecting(attempt: attempt))
-                        }
+                    if attempt == 1 {
+                        ConnectionSessionManager.shared.updateSessionState(sessionId, to: .connecting)
+                    } else {
+                        ConnectionSessionManager.shared.updateSessionState(sessionId, to: .reconnecting(attempt: attempt))
                     }
                 },
                 startupPlan: {
@@ -245,19 +248,17 @@ extension SSHTerminalCoordinator {
                     )
                 },
                 registerShell: { shell, skipTmuxLifecycle in
-                    await MainActor.run {
-                        ConnectionSessionManager.shared.registerSSHClient(
-                            sshClient,
-                            shellId: shell.id,
-                            for: sessionId,
-                            serverId: server.id,
-                            transport: shell.transport,
-                            fallbackReason: shell.fallbackReason,
-                            skipTmuxLifecycle: skipTmuxLifecycle
-                        )
-                        ConnectionSessionManager.shared.updateSessionState(sessionId, to: .connected)
-                        self.shellId = shell.id
-                    }
+                    ConnectionSessionManager.shared.registerSSHClient(
+                        sshClient,
+                        shellId: shell.id,
+                        for: sessionId,
+                        serverId: server.id,
+                        transport: shell.transport,
+                        fallbackReason: shell.fallbackReason,
+                        skipTmuxLifecycle: skipTmuxLifecycle
+                    )
+                    ConnectionSessionManager.shared.updateSessionState(sessionId, to: .connected)
+                    self.shellId = shell.id
                 },
                 onBeforeShellStart: { cols, rows in
                     await self.onBeforeShellStart(cols: cols, rows: rows)
@@ -265,52 +266,45 @@ extension SSHTerminalCoordinator {
                 onShellStarted: { terminal, _ in
                     await self.onShellStarted(terminal: terminal)
                 },
+                onTitleChange: { title in
+                    ConnectionSessionManager.shared.updateSessionTitle(sessionId, rawTitle: title)
+                },
                 shouldContinueStreaming: { data, terminal in
-                    await MainActor.run {
-                        let sessionExists = ConnectionSessionManager.shared.sessions.contains { $0.id == sessionId }
-                        guard sessionExists else { return false }
-                        terminal.feedData(data)
-                        return true
-                    }
+                    let sessionExists = ConnectionSessionManager.shared.sessions.contains { $0.id == sessionId }
+                    guard sessionExists else { return false }
+                    terminal.feedData(data)
+                    return true
                 },
                 shouldResetClient: { sshError in
                     switch sshError {
                     case .notConnected, .connectionFailed, .socketError, .timeout:
                         return true
                     case .channelOpenFailed, .shellRequestFailed:
-                        let hasOtherRegistrations = await MainActor.run {
-                            ConnectionSessionManager.shared.hasOtherRegistrations(
-                                using: sshClient,
-                                excluding: sessionId
-                            )
-                        }
+                        let hasOtherRegistrations = await ConnectionSessionManager.shared.hasOtherRegistrations(
+                            using: sshClient,
+                            excluding: sessionId
+                        )
                         return !hasOtherRegistrations
                     case .authenticationFailed, .tailscaleAuthenticationNotAccepted, .cloudflareConfigurationRequired, .cloudflareAuthenticationFailed, .cloudflareTunnelFailed, .hostKeyVerificationFailed, .moshServerMissing, .moshBootstrapFailed, .moshSessionFailed, .unknown:
                         return false
                     }
                 },
                 onProcessExit: {
-                    await MainActor.run {
-                        onProcessExit()
-                    }
+                    onProcessExit()
                 },
                 onFailure: { error, terminal in
                     let errorMsg = "\r\n\u{001B}[31mSSH Error: \(error.localizedDescription)\u{001B}[0m\r\n"
                     if let data = errorMsg.data(using: .utf8) {
-                        await MainActor.run {
-                            terminal.feedData(data)
-                        }
+                        terminal.feedData(data)
                     }
-                    await MainActor.run {
-                        ConnectionSessionManager.shared.updateSessionState(sessionId, to: .failed(error.localizedDescription))
-                    }
+                    ConnectionSessionManager.shared.updateSessionState(sessionId, to: .failed(error.localizedDescription))
                 }
             )
         }
     }
 
     private func deferSessionStateUpdate(_ state: ConnectionState) {
-        DispatchQueue.main.async { [self] in
+        Task { @MainActor [self] in
             ConnectionSessionManager.shared.updateSessionState(sessionId, to: state)
         }
     }
@@ -388,6 +382,9 @@ struct SSHTerminalWrapper: NSViewRepresentable {
             existingTerminal.onPwdChange = { [sessionId = session.id] rawDirectory in
                 ConnectionSessionManager.shared.updateSessionWorkingDirectory(sessionId, rawDirectory: rawDirectory)
             }
+            existingTerminal.onTitleChange = { [sessionId = session.id] title in
+                ConnectionSessionManager.shared.updateSessionTitle(sessionId, rawTitle: title)
+            }
             existingTerminal.writeCallback = { [weak coordinator] data in
                 coordinator?.sendToSSH(data)
             }
@@ -438,6 +435,9 @@ struct SSHTerminalWrapper: NSViewRepresentable {
         terminalView.onProcessExit = onProcessExit
         terminalView.onPwdChange = { [sessionId = session.id] rawDirectory in
             ConnectionSessionManager.shared.updateSessionWorkingDirectory(sessionId, rawDirectory: rawDirectory)
+        }
+        terminalView.onTitleChange = { [sessionId = session.id] title in
+            ConnectionSessionManager.shared.updateSessionTitle(sessionId, rawTitle: title)
         }
 
         // Store terminal reference in coordinator and register with session manager
@@ -674,6 +674,9 @@ private struct SSHTerminalRepresentable: UIViewRepresentable {
                     ConnectionSessionManager.shared.updateSessionWorkingDirectory(sessionId, rawDirectory: rawDirectory)
                 }
             }
+            existingTerminal.onTitleChange = { [sessionId = session.id] title in
+                ConnectionSessionManager.shared.updateSessionTitle(sessionId, rawTitle: title)
+            }
 
             // Route through coordinator to preserve write ordering and transport behavior.
             existingTerminal.writeCallback = { [weak coordinator] data in
@@ -743,6 +746,9 @@ private struct SSHTerminalRepresentable: UIViewRepresentable {
             DispatchQueue.main.async {
                 ConnectionSessionManager.shared.updateSessionWorkingDirectory(sessionId, rawDirectory: rawDirectory)
             }
+        }
+        terminalView.onTitleChange = { [sessionId = session.id] title in
+            ConnectionSessionManager.shared.updateSessionTitle(sessionId, rawTitle: title)
         }
 
         coordinator.terminalView = terminalView

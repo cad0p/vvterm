@@ -984,6 +984,9 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
             existingTerminal.onPwdChange = { [paneId] rawDirectory in
                 TerminalTabManager.shared.updatePaneWorkingDirectory(paneId, rawDirectory: rawDirectory)
             }
+            existingTerminal.onTitleChange = { [paneId] title in
+                TerminalTabManager.shared.updatePaneTitle(paneId, rawTitle: title)
+            }
             existingTerminal.writeCallback = { [paneId] data in
                 if let client = TerminalTabManager.shared.getSSHClient(for: paneId),
                    let shellId = TerminalTabManager.shared.shellId(for: paneId) {
@@ -1029,6 +1032,9 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         terminalView.onProcessExit = onProcessExit
         terminalView.onPwdChange = { [paneId] rawDirectory in
             TerminalTabManager.shared.updatePaneWorkingDirectory(paneId, rawDirectory: rawDirectory)
+        }
+        terminalView.onTitleChange = { [paneId] title in
+            TerminalTabManager.shared.updatePaneTitle(paneId, rawTitle: title)
         }
 
         // Store terminal reference
@@ -1197,12 +1203,10 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
                     terminal: terminal,
                     logger: logger,
                     onAttempt: { attempt in
-                        await MainActor.run {
-                            if attempt == 1 {
-                                TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connecting)
-                            } else {
-                                TerminalTabManager.shared.updatePaneState(paneId, connectionState: .reconnecting(attempt: attempt))
-                            }
+                        if attempt == 1 {
+                            TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connecting)
+                        } else {
+                            TerminalTabManager.shared.updatePaneState(paneId, connectionState: .reconnecting(attempt: attempt))
                         }
                     },
                     startupPlan: {
@@ -1213,7 +1217,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
                         )
                     },
                     registerShell: { shell, skipTmuxLifecycle in
-                        await TerminalTabManager.shared.registerSSHClient(
+                        TerminalTabManager.shared.registerSSHClient(
                             sshClient,
                             shellId: shell.id,
                             for: paneId,
@@ -1222,56 +1226,45 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
                             fallbackReason: shell.fallbackReason,
                             skipTmuxLifecycle: skipTmuxLifecycle
                         )
-                        await MainActor.run {
-                            TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
-                            self.shellId = shell.id
-                        }
+                        TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
+                        self.shellId = shell.id
                         await self.applyWorkingDirectoryIfNeeded(paneId: paneId, shellId: shell.id, sshClient: sshClient)
                     },
                     onBeforeShellStart: { cols, rows in
-                        await MainActor.run {
-                            self.lastSize = (cols, rows)
-                        }
+                        self.lastSize = (cols, rows)
                     },
                     onShellStarted: { _, _ in },
+                    onTitleChange: { title in
+                        TerminalTabManager.shared.updatePaneTitle(paneId, rawTitle: title)
+                    },
                     shouldContinueStreaming: { data, terminal in
-                        await MainActor.run { [weak self] in
-                            guard self?.terminal != nil else { return false }
-                            terminal.feedData(data)
-                            return true
-                        }
+                        guard self.terminal != nil else { return false }
+                        terminal.feedData(data)
+                        return true
                     },
                     shouldResetClient: { sshError in
                         switch sshError {
                         case .notConnected, .connectionFailed, .socketError, .timeout:
                             return true
                         case .channelOpenFailed, .shellRequestFailed:
-                            let hasOtherRegistrations = await MainActor.run {
-                                TerminalTabManager.shared.hasOtherRegistrations(
-                                    using: sshClient,
-                                    excluding: paneId
-                                )
-                            }
+                            let hasOtherRegistrations = await TerminalTabManager.shared.hasOtherRegistrations(
+                                using: sshClient,
+                                excluding: paneId
+                            )
                             return !hasOtherRegistrations
                         case .authenticationFailed, .tailscaleAuthenticationNotAccepted, .cloudflareConfigurationRequired, .cloudflareAuthenticationFailed, .cloudflareTunnelFailed, .hostKeyVerificationFailed, .moshServerMissing, .moshBootstrapFailed, .moshSessionFailed, .unknown:
                             return false
                         }
                     },
                     onProcessExit: {
-                        await MainActor.run {
-                            onProcessExit()
-                        }
+                        onProcessExit()
                     },
                     onFailure: { error, terminal in
                         let errorMsg = "\r\n\u{001B}[31mSSH Error: \(error.localizedDescription)\u{001B}[0m\r\n"
                         if let data = errorMsg.data(using: .utf8) {
-                            await MainActor.run {
-                                terminal.feedData(data)
-                            }
+                            terminal.feedData(data)
                         }
-                        await MainActor.run {
-                            TerminalTabManager.shared.updatePaneState(paneId, connectionState: .failed(error.localizedDescription))
-                        }
+                        TerminalTabManager.shared.updatePaneState(paneId, connectionState: .failed(error.localizedDescription))
                     }
                 )
             }

@@ -507,6 +507,7 @@ struct iOSServerListView: View {
                 ForEach(activeConnections) { connection in
                     iOSActiveConnectionRow(
                         session: connection.session,
+                        title: sessionManager.displayTitle(for: connection.session),
                         tabCount: connection.tabCount,
                         onOpen: { openActiveConnection(connection) },
                         onDisconnect: { disconnectActiveConnection(connection) }
@@ -531,7 +532,9 @@ struct iOSServerListView: View {
             return ActiveConnection(id: serverId, session: session, tabCount: sessions.count)
         }
         .sorted { lhs, rhs in
-            lhs.session.title.localizedCaseInsensitiveCompare(rhs.session.title) == .orderedAscending
+            let lhsTitle = sessionManager.displayTitle(for: lhs.session)
+            let rhsTitle = sessionManager.displayTitle(for: rhs.session)
+            return lhsTitle.localizedCaseInsensitiveCompare(rhsTitle) == .orderedAscending
         }
     }
 
@@ -1208,6 +1211,7 @@ struct iOSTerminalView: View {
                 iOSTerminalTabsBar(
                     sessions: serverSessions,
                     selectedSessionId: selectedSessionIdBinding,
+                    titleForSession: { sessionManager.displayTitle(for: $0) },
                     onClose: { pendingCloseSession = $0 }
                 )
             }
@@ -1780,6 +1784,7 @@ struct iOSTerminalView: View {
                 viewTabs: viewTabConfig.currentVisibleTabs,
                 sessions: serverSessions,
                 selectedSessionId: selectedSessionIdBinding,
+                sessionTitle: { sessionManager.displayTitle(for: $0) },
                 onCloseSession: { session in
                     pendingCloseSession = session
                 },
@@ -2088,6 +2093,7 @@ private struct NavBarBackdrop: View {
 struct iOSTerminalTabsBar: View {
     let sessions: [ConnectionSession]
     @Binding var selectedSessionId: UUID?
+    let titleForSession: (ConnectionSession) -> String
     let onClose: (ConnectionSession) -> Void
     private let minTabWidth: CGFloat = 120
 
@@ -2105,6 +2111,7 @@ struct iOSTerminalTabsBar: View {
                         ForEach(sessions) { session in
                             iOSTerminalTabButton(
                                 session: session,
+                                title: titleForSession(session),
                                 isSelected: selectedSessionId == session.id,
                                 fixedWidth: itemWidth,
                                 onSelect: { selectedSessionId = session.id },
@@ -2121,6 +2128,7 @@ struct iOSTerminalTabsBar: View {
                             ForEach(sessions) { session in
                                 iOSTerminalTabButton(
                                     session: session,
+                                    title: titleForSession(session),
                                     isSelected: selectedSessionId == session.id,
                                     fixedWidth: nil,
                                     onSelect: { selectedSessionId = session.id },
@@ -2156,6 +2164,7 @@ struct iOSTerminalTabsBar: View {
 
 private struct iOSTerminalTabButton: View {
     let session: ConnectionSession
+    let title: String
     let isSelected: Bool
     let fixedWidth: CGFloat?
     let onSelect: () -> Void
@@ -2166,7 +2175,7 @@ private struct iOSTerminalTabButton: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 6, height: 6)
-            Text(session.title)
+            Text(title)
                 .font(.callout)
                 .lineLimit(1)
         }

@@ -43,6 +43,7 @@ struct ConnectionTabsScrollView: View {
                     ForEach(sessionManager.sessions, id: \.id) { session in
                         ConnectionTabButton(
                             session: session,
+                            title: sessionManager.displayTitle(for: session),
                             isSelected: sessionManager.selectedSessionId == session.id,
                             onSelect: { sessionManager.selectSession(session) },
                             onClose: { sessionManager.closeSession(session) }
@@ -123,6 +124,7 @@ struct ConnectionTabsScrollView: View {
 
 struct ConnectionTabButton: View {
     let session: ConnectionSession
+    let title: String
     let isSelected: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -151,7 +153,7 @@ struct ConnectionTabButton: View {
                     .frame(width: 6, height: 6)
 
                 // Title
-                Text(session.title)
+                Text(title)
                     .font(.callout)
                     .lineLimit(1)
             }
