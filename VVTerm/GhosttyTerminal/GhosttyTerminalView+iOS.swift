@@ -898,7 +898,14 @@ class GhosttyTerminalView: UIView {
         addSubview(imeProxyTextView)
         zoomIndicatorView.isHidden = true
         zoomIndicatorView.alpha = 0
+        zoomIndicatorView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(zoomIndicatorView)
+        NSLayoutConstraint.activate([
+            zoomIndicatorView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            zoomIndicatorView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            zoomIndicatorView.widthAnchor.constraint(greaterThanOrEqualToConstant: TerminalZoomPresentation.indicatorMinimumWidth),
+            zoomIndicatorView.heightAnchor.constraint(greaterThanOrEqualToConstant: TerminalZoomPresentation.indicatorMinimumHeight)
+        ])
         if usesNativeTouchSelection {
             nativeFindOverlay.frame = bounds
             addSubview(nativeFindOverlay)
@@ -1665,7 +1672,6 @@ class GhosttyTerminalView: UIView {
         imeProxyTextView.frame = bounds
         nativeFindOverlay.frame = bounds
         touchSelectionOverlay.frame = bounds
-        updateZoomIndicatorLayout()
         bringSubviewToFront(nativeFindOverlay)
         bringSubviewToFront(touchSelectionOverlay)
         bringSubviewToFront(touchSelectionLoupe)
@@ -2030,11 +2036,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func updateZoomIndicatorLayout() {
-        let fittingSize = zoomIndicatorView.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
-        let width = max(fittingSize.width, CGFloat(TerminalZoomPresentation.indicatorMinimumWidth))
-        let height = max(fittingSize.height, CGFloat(TerminalZoomPresentation.indicatorMinimumHeight))
-        zoomIndicatorView.bounds = CGRect(x: 0, y: 0, width: width, height: height)
-        zoomIndicatorView.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        setNeedsLayout()
+        layoutIfNeeded()
+        zoomIndicatorView.layoutIfNeeded()
     }
 
     private var canHandlePinchZoom: Bool {
@@ -3815,6 +3819,7 @@ class GhosttyTerminalView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for sublayer in sublayers {
+            guard isGhosttySurfaceLayer(sublayer) else { continue }
             sublayer.frame = targetBounds
             sublayer.contentsScale = scale
         }
@@ -3823,7 +3828,16 @@ class GhosttyTerminalView: UIView {
 
     private func markIOSurfaceLayersForDisplay() {
         layer.setNeedsDisplay()
-        layer.sublayers?.forEach { $0.setNeedsDisplay() }
+        layer.sublayers?.forEach { sublayer in
+            guard isGhosttySurfaceLayer(sublayer) else { return }
+            sublayer.setNeedsDisplay()
+        }
+    }
+
+    private func isGhosttySurfaceLayer(_ layer: CALayer) -> Bool {
+        !subviews.contains { subview in
+            subview.layer === layer
+        }
     }
 
     private func updateContentScaleIfNeeded() {
