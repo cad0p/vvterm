@@ -50,7 +50,7 @@ struct WorkspaceFormSheet: View {
                     Section {
                         ProLimitBanner(
                             title: String(localized: "Workspace Limit Reached"),
-                            message: String(localized: "Upgrade to Pro for unlimited workspaces.")
+                            message: String(localized: "Pro unlocks unlimited workspaces, servers, and connections.")
                         ) {
                             showingUpgradeSheet = true
                         }
@@ -130,7 +130,7 @@ struct WorkspaceFormSheet: View {
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || isAtLimit)
                 }
             }
-            .proUpgradePresentation(isPresented: $showingUpgradeSheet)
+            .proUpgradePresentation(isPresented: $showingUpgradeSheet, source: .workspaceLimit)
             .alert("Delete Workspace?", isPresented: Binding(
                 get: { workspaceToDelete != nil },
                 set: { if !$0 { workspaceToDelete = nil } }

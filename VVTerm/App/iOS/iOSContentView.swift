@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import StoreKit
 #if os(iOS)
 import UIKit
 #endif
@@ -15,6 +16,8 @@ struct iOSContentView: View {
     @StateObject private var serverManager = ServerManager.shared
     @StateObject private var sessionManager = ConnectionSessionManager.shared
     @StateObject private var viewTabConfig = ViewTabConfigurationManager.shared
+    @StateObject private var engagementTracker = EngagementTracker.shared
+    @Environment(\.requestReview) private var requestReview
 
     @State private var selectedWorkspace: Workspace?
     @State private var selectedServer: Server?
@@ -131,6 +134,18 @@ struct iOSContentView: View {
             }
         }
         .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
+        .proUpgradePresentation(isPresented: $engagementTracker.shouldShowProIntro, source: .postFirstConnection)
+        .onChange(of: showingTerminal) { isShowing in
+            if !isShowing {
+                engagementTracker.noteTerminalSessionEnded(
+                    otherTerminalsActive: false,
+                    isPro: StoreManager.shared.isPro
+                )
+            }
+        }
+        .onChange(of: engagementTracker.reviewRequestToken) { _ in
+            requestReview()
+        }
         .lockedItemAlert(
             .server,
             itemName: lockedServerName ?? "",
@@ -362,6 +377,7 @@ struct iOSServerListView: View {
         .proFeatureAlert(
             title: String(localized: "Custom Environments"),
             message: String(localized: "Upgrade to Pro for custom environments"),
+            source: .customEnvironment,
             isPresented: $showingCustomEnvironmentAlert
         )
         .onChange(of: showingLocalDiscovery) { isPresented in

@@ -18,6 +18,8 @@ final class StoreManager: ObservableObject {
     @Published var restoreState: RestoreState = .idle
     @Published private(set) var isReviewModeEnabled: Bool = false
     @Published private(set) var lastPurchasedProductId: String?
+    private(set) var activePaywallSource: PaywallSource = .general
+    private(set) var hasPresentedPaywallThisLaunch = false
 
     private var updateListenerTask: Task<Void, Error>?
     private var reviewModeExpiryTask: Task<Void, Never>?
@@ -69,6 +71,18 @@ final class StoreManager: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Paywall Presentation
+
+    func notePaywallPresented(source: PaywallSource) {
+        activePaywallSource = source
+        hasPresentedPaywallThisLaunch = true
+        EngagementTracker.shared.notePaywallPresented()
+        if source == .postFirstConnection {
+            EngagementTracker.shared.markProIntroShown()
+        }
+        AnalyticsTracker.shared.trackPaywallViewed(source: source.rawValue)
     }
 
     // MARK: - Purchase
@@ -259,6 +273,10 @@ final class StoreManager: ObservableObject {
     private func applySuccessfulPurchase(of product: Product) {
         lastPurchasedProductId = product.id
         purchaseState = .purchased
+        AnalyticsTracker.shared.trackPurchase(
+            source: activePaywallSource.rawValue,
+            productId: product.id
+        )
         logger.info("Purchase successful: \(product.id)")
     }
 
@@ -280,6 +298,7 @@ final class StoreManager: ObservableObject {
         isPro = hasAccess || isReviewModeEnabled
         isLifetime = hasLifetime
         subscriptionStatus = status
+        AnalyticsTracker.shared.trackAppLaunched(isPro: isPro)
         logger.info("Entitlements checked: isPro=\(hasAccess), isLifetime=\(hasLifetime), reviewMode=\(self.isReviewModeEnabled)")
     }
 }

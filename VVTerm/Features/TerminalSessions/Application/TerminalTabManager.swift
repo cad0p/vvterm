@@ -218,6 +218,11 @@ final class TerminalTabManager: ObservableObject {
             // User might still be viewing stats. Explicit disconnect handles that.
         }
 
+        EngagementTracker.shared.noteTerminalSessionEnded(
+            otherTerminalsActive: hasConnectedPanes,
+            isPro: StoreManager.shared.isPro
+        )
+
         logger.info("Closed tab \(tab.id)")
     }
 
@@ -234,13 +239,21 @@ final class TerminalTabManager: ObservableObject {
     /// Split a pane horizontally (left | right)
     func splitHorizontal(tab: TerminalTab, paneId: UUID) -> UUID? {
         guard StoreManager.shared.isPro else { return nil }
-        return splitPane(tab: tab, paneId: paneId, direction: .horizontal)
+        let newPaneId = splitPane(tab: tab, paneId: paneId, direction: .horizontal)
+        if newPaneId != nil {
+            AnalyticsTracker.shared.trackSplitPaneCreated()
+        }
+        return newPaneId
     }
 
     /// Split a pane vertically (top / bottom)
     func splitVertical(tab: TerminalTab, paneId: UUID) -> UUID? {
         guard StoreManager.shared.isPro else { return nil }
-        return splitPane(tab: tab, paneId: paneId, direction: .vertical)
+        let newPaneId = splitPane(tab: tab, paneId: paneId, direction: .vertical)
+        if newPaneId != nil {
+            AnalyticsTracker.shared.trackSplitPaneCreated()
+        }
+        return newPaneId
     }
 
     private func splitPane(tab: TerminalTab, paneId: UUID, direction: TerminalSplitDirection) -> UUID? {
@@ -596,6 +609,7 @@ final class TerminalTabManager: ObservableObject {
 
     /// Update connection state for a pane
     func updatePaneState(_ paneId: UUID, connectionState: ConnectionState) {
+        let wasConnected = paneStates[paneId]?.connectionState.isConnected == true
         paneStates[paneId]?.connectionState = connectionState
         switch connectionState {
         case .connecting, .reconnecting:
@@ -606,9 +620,24 @@ final class TerminalTabManager: ObservableObject {
             if paneTmuxStatus(for: paneId) == .foreground {
                 setPaneTmuxStatus(.background, for: paneId)
             }
-        case .connected, .idle:
+            if wasConnected {
+                EngagementTracker.shared.noteTerminalSessionEnded(
+                    otherTerminalsActive: hasConnectedPanes,
+                    isPro: StoreManager.shared.isPro
+                )
+            }
+        case .connected:
+            EngagementTracker.shared.recordSuccessfulConnection(
+                id: paneId,
+                transport: paneStates[paneId]?.activeTransport.rawValue ?? ShellTransport.ssh.rawValue
+            )
+        case .idle:
             break
         }
+    }
+
+    private var hasConnectedPanes: Bool {
+        paneStates.values.contains { $0.connectionState.isConnected }
     }
 
     func updatePaneWorkingDirectory(_ paneId: UUID, rawDirectory: String) {

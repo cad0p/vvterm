@@ -16,6 +16,7 @@
 		D1A7B0C12EAB100100A00001 /* MoshCore in Frameworks */ = {isa = PBXBuildFile; productRef = D1A7B0C12EAB100100A00011 /* MoshCore */; };
 		D1A7B0C12EAB100100A00002 /* MoshBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = D1A7B0C12EAB100100A00012 /* MoshBootstrap */; };
 		D2C4F00131AA100100B00001 /* Cloudflared in Frameworks */ = {isa = PBXBuildFile; productRef = D2C4F00131AA100100B00011 /* Cloudflared */; };
+		E7C4A10031BB100100C00001 /* Umami in Frameworks */ = {isa = PBXBuildFile; productRef = E7C4A10031BB100100C00011 /* Umami */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -136,6 +137,7 @@
 				D2C4F00131AA100100B00001 /* Cloudflared in Frameworks */,
 				D1A7B0C12EAB100100A00001 /* MoshCore in Frameworks */,
 				D1A7B0C12EAB100100A00002 /* MoshBootstrap in Frameworks */,
+				E7C4A10031BB100100C00001 /* Umami in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -240,6 +242,7 @@
 				D2C4F00131AA100100B00011 /* Cloudflared */,
 				D1A7B0C12EAB100100A00011 /* MoshCore */,
 				D1A7B0C12EAB100100A00012 /* MoshBootstrap */,
+				E7C4A10031BB100100C00011 /* Umami */,
 			);
 			productName = VVTerm;
 			productReference = CC83127E2F0CD84D006804BF /* VVTerm.app */;
@@ -344,6 +347,7 @@
 				8BEE7D9B1BB9C3D15D55C283 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */,
 				D1A7B0C12EAB100100A00021 /* XCRemoteSwiftPackageReference "swift-mosh" */,
+				E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CC83127F2F0CD84D006804BF /* Products */;
@@ -1097,6 +1101,14 @@
 				version = 0.1.2;
 			};
 		};
+		E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/wiedymi/swift-umami";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1134,6 +1146,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */;
 			productName = Cloudflared;
+		};
+		E7C4A10031BB100100C00011 /* Umami */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */;
+			productName = Umami;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

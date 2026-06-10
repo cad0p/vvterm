@@ -113,6 +113,20 @@ struct AboutSettingsView: View {
                 .padding(.vertical, 20)
             }
 
+            Section("Support") {
+                Link(destination: URL(string: "https://apps.apple.com/app/id6757482822?action=write-review")!) {
+                    Label("Rate VVTerm", systemImage: "star")
+                }
+                .tint(.primary)
+                .foregroundStyle(.primary)
+
+                Link(destination: URL(string: "https://github.com/vivy-company/vvterm/issues")!) {
+                    Label("Report an Issue", systemImage: "exclamationmark.bubble")
+                }
+                .tint(.primary)
+                .foregroundStyle(.primary)
+            }
+
             Section("Links") {
                 Link(destination: URL(string: "https://vvterm.com")!) {
                     Label("Visit Website", systemImage: "globe")
@@ -125,13 +139,9 @@ struct AboutSettingsView: View {
                 }
                 .tint(.primary)
                 .foregroundStyle(.primary)
+            }
 
-                Link(destination: URL(string: "https://github.com/vivy-company/vvterm/issues")!) {
-                    Label("Report an Issue", systemImage: "exclamationmark.bubble")
-                }
-                .tint(.primary)
-                .foregroundStyle(.primary)
-
+            Section("Legal") {
                 Link(destination: URL(string: "https://vvterm.com/privacy")!) {
                     Label("Privacy Policy", systemImage: "hand.raised")
                 }
@@ -145,7 +155,6 @@ struct AboutSettingsView: View {
                 .foregroundStyle(.primary)
             }
 
-            #if os(iOS)
             Section("Get in Touch") {
                 ForEach(contactOptions) { option in
                     Button {
@@ -188,7 +197,6 @@ struct AboutSettingsView: View {
                     .tint(.primary)
                 }
             }
-            #endif
 
             Section {
                 #if os(iOS)
@@ -221,12 +229,14 @@ struct AboutSettingsView: View {
         }
     }
 
-    #if os(iOS)
     private func openURL(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
         UIApplication.shared.open(url)
+        #endif
     }
-    #endif
 }
 
 // MARK: - Review Mode Sheet

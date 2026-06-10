@@ -4,6 +4,7 @@ struct TerminalCustomActionLibraryView: View {
     @EnvironmentObject private var preferences: TerminalAccessoryPreferencesManager
 
     @State private var showingCreateSheet = false
+    @State private var showingProGateAlert = false
     @State private var editingAction: TerminalAccessoryCustomAction?
 
     var body: some View {
@@ -69,7 +70,7 @@ struct TerminalCustomActionLibraryView: View {
                     String(
                         format: String(localized: "%lld/%lld custom actions. Tap a row to edit."),
                         Int64(preferences.customActions.count),
-                        Int64(TerminalAccessoryProfile.maxCustomActions)
+                        Int64(max(preferences.customActions.count, preferences.customActionLimit))
                     )
                 )
                 .font(.caption)
@@ -84,13 +85,26 @@ struct TerminalCustomActionLibraryView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showingCreateSheet = true
+                    if preferences.isCustomActionCreationProGated {
+                        showingProGateAlert = true
+                    } else {
+                        showingCreateSheet = true
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
                 .disabled(!preferences.canCreateCustomAction)
             }
         }
+        .proFeatureAlert(
+            title: String(localized: "Custom Actions"),
+            message: String(
+                format: String(localized: "The free plan includes %lld custom actions. Upgrade to Pro for unlimited custom actions."),
+                Int64(FreeTierLimits.maxCustomActions)
+            ),
+            source: .snippetLimit,
+            isPresented: $showingProGateAlert
+        )
         .sheet(isPresented: $showingCreateSheet) {
             TerminalCustomActionFormView()
         }

@@ -38,6 +38,21 @@ enum RestoreState: Equatable {
     }
 }
 
+enum PaywallSource: String {
+    case general
+    case serverLimit = "server_limit"
+    case workspaceLimit = "workspace_limit"
+    case tabLimit = "tab_limit"
+    case fileTabLimit = "file_tab_limit"
+    case splitPane = "split_pane"
+    case customEnvironment = "custom_environment"
+    case snippetLimit = "snippet_limit"
+    case postFirstConnection = "post_first_connection"
+    case welcome
+    case settings
+    case sidebarBanner = "sidebar_banner"
+}
+
 enum VVTermProducts {
     static let proMonthly = "com.vivy.vivyterm.pro.monthly"
     static let proYearly = "com.vivy.vivyterm.pro.yearly"

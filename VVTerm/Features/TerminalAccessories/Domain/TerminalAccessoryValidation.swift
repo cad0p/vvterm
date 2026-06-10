@@ -2,6 +2,7 @@ import Foundation
 
 enum TerminalAccessoryValidationError: LocalizedError {
     case customActionLimitReached
+    case customActionProRequired
     case emptyTitle
     case emptyCommandContent
     case customActionNotFound
@@ -12,6 +13,11 @@ enum TerminalAccessoryValidationError: LocalizedError {
             return String(
                 format: String(localized: "You can create up to %lld custom actions."),
                 Int64(TerminalAccessoryProfile.maxCustomActions)
+            )
+        case .customActionProRequired:
+            return String(
+                format: String(localized: "The free plan includes %lld custom actions. Upgrade to Pro for unlimited custom actions."),
+                Int64(FreeTierLimits.maxCustomActions)
             )
         case .emptyTitle:
             return String(localized: "Action title cannot be empty.")

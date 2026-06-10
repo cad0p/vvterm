@@ -9,7 +9,7 @@ import BaseLayout from "../layouts/BaseLayout.astro";
   canonicalPath="/privacy"
   ogType="article"
 >
-  <LegalPage title="Privacy Policy" lastUpdated="January 15, 2026">
+  <LegalPage title="Privacy Policy" lastUpdated="June 10, 2026">
     <section>
       <h2>1. Introduction</h2>
       <p>
@@ -36,7 +36,14 @@ import BaseLayout from "../layouts/BaseLayout.astro";
       <h3>Analytics Data</h3>
       <p>
         We use Umami Analytics, a privacy-focused analytics service, to collect anonymous usage
-        statistics on our website. No personal information is collected or stored.
+        statistics on our website and in the app. The data is anonymous, processed on our own
+        self-hosted analytics server, and never shared with third-party analytics companies or ad
+        networks.
+      </p>
+      <p>
+        We never collect the contents of your terminal sessions, the commands you type, your server
+        addresses, usernames, file contents, or anything that identifies you. You can turn off app
+        analytics at any time in Settings under "Help Improve VVTerm".
       </p>
       <h3>Purchase Information</h3>
       <p>
@@ -59,9 +66,9 @@ import BaseLayout from "../layouts/BaseLayout.astro";
       <h2>4. Data Storage and Security</h2>
       <p>
         Server configurations are synced via Apple iCloud, subject to Apple's security measures.
-        Credentials are stored in Apple Keychain and may sync via iCloud Keychain when enabled. We do
-        not operate our own servers to store your data. We do not sell or share your personal
-        information with third parties.
+        Credentials are stored in Apple Keychain and may sync via iCloud Keychain when enabled. The
+        only data our own servers receive is the anonymous usage statistics described above. We do
+        not sell or share your personal information with third parties.
       </p>
     </section>
 
@@ -72,6 +79,7 @@ import BaseLayout from "../layouts/BaseLayout.astro";
         <li>Delete all app data by removing VVTerm from your devices</li>
         <li>Disable iCloud sync in Settings to keep data local only</li>
         <li>Remove stored credentials from Keychain at any time</li>
+        <li>Turn off anonymous usage statistics in Settings ("Help Improve VVTerm")</li>
         <li>Request information about data we may have collected</li>
       </ul>
     </section>

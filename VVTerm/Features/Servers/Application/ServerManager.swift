@@ -1340,6 +1340,7 @@ enum FreeTierLimits {
     static let maxWorkspaces = 1
     static let maxServers = 3
     static let maxTabs = 1
+    static let maxCustomActions = 3
 }
 
 // MARK: - VVTerm Error

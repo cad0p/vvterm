@@ -596,7 +596,7 @@ struct ServerFormSheet: View {
             Section {
                 ProLimitBanner(
                     title: String(localized: "Server Limit Reached"),
-                    message: String(format: String(localized: "You've reached the limit of %lld servers. Upgrade to Pro for unlimited servers."), Int64(FreeTierLimits.maxServers))
+                    message: String(format: String(localized: "You've reached the free limit of %lld servers. Pro unlocks unlimited servers, connections, and split panes."), Int64(FreeTierLimits.maxServers))
                 ) {
                     showingServerLimitAlert = true
                 }
@@ -1429,7 +1429,7 @@ struct MoveServerSheet: View {
                 }
             )
         }
-        .proUpgradePresentation(isPresented: $showingUpgrade)
+        .proUpgradePresentation(isPresented: $showingUpgrade, source: .workspaceLimit)
         #if os(iOS)
         .navigationTitle("Move Server")
         .navigationBarTitleDisplayMode(.inline)

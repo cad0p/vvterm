@@ -268,6 +268,7 @@ struct GeneralSettingsView: View {
     @AppStorage("appearanceMode") private var appearanceMode: String = AppearanceMode.system.rawValue
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
     @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
+    @AppStorage(AnalyticsTracker.enabledKey) private var analyticsEnabled = true
     @EnvironmentObject private var appLockManager: AppLockManager
     @StateObject private var viewTabConfig = ViewTabConfigurationManager.shared
 
@@ -357,6 +358,8 @@ struct GeneralSettingsView: View {
             Section {
                 Toggle("Privacy Mode", isOn: $privacyModeEnabled)
 
+                Toggle("Help Improve VVTerm", isOn: $analyticsEnabled)
+
                 Toggle(
                     String(format: String(localized: "Require %@ to open VVTerm"), appLockManager.biometryDisplayName),
                     isOn: Binding(
@@ -403,6 +406,7 @@ struct GeneralSettingsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Privacy mode hides server addresses and usernames in the app UI and when the app is inactive.")
+                    Text("Help Improve VVTerm shares anonymous statistics about which features are used — never what you type, your servers, or anything that identifies you.")
                     Text("Biometric lock protects app and server access on this device.")
                 }
                 .font(.caption)

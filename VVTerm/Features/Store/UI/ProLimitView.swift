@@ -91,13 +91,22 @@ struct LimitReachedAlert: ViewModifier {
         var message: String {
             switch self {
             case .servers:
-                return String(format: String(localized: "You've reached the limit of %lld servers on the free plan. Upgrade to Pro for unlimited servers."), Int64(FreeTierLimits.maxServers))
+                return String(format: String(localized: "You've reached the free limit of %lld servers. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes."), Int64(FreeTierLimits.maxServers))
             case .workspaces:
-                return String(format: String(localized: "You've reached the limit of %lld workspace on the free plan. Upgrade to Pro for unlimited workspaces."), Int64(FreeTierLimits.maxWorkspaces))
+                return String(format: String(localized: "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes."), Int64(FreeTierLimits.maxWorkspaces))
             case .tabs:
-                return String(format: String(localized: "You can only have %lld connection at a time on the free plan. Upgrade to Pro for multiple simultaneous connections."), Int64(FreeTierLimits.maxTabs))
+                return String(format: String(localized: "The free plan runs %lld connection at a time. Pro unlocks simultaneous connections, unlimited servers, and split panes."), Int64(FreeTierLimits.maxTabs))
             case .fileTabs:
-                return String(localized: "You can only have 1 file tab at a time on the free plan. Upgrade to Pro for multiple file tabs.")
+                return String(localized: "The free plan opens 1 file tab at a time. Pro unlocks multiple file tabs, simultaneous connections, and unlimited servers.")
+            }
+        }
+
+        var paywallSource: PaywallSource {
+            switch self {
+            case .servers: return .serverLimit
+            case .workspaces: return .workspaceLimit
+            case .tabs: return .tabLimit
+            case .fileTabs: return .fileTabLimit
             }
         }
     }
@@ -113,7 +122,7 @@ struct LimitReachedAlert: ViewModifier {
             } message: {
                 Text(limitType.message)
             }
-            .proUpgradePresentation(isPresented: $showUpgrade)
+            .proUpgradePresentation(isPresented: $showUpgrade, source: limitType.paywallSource)
     }
 }
 
@@ -128,6 +137,7 @@ extension View {
 struct ProFeatureAlert: ViewModifier {
     let title: String
     let message: String
+    let source: PaywallSource
     @Binding var isPresented: Bool
     @State private var showUpgrade = false
 
@@ -142,19 +152,20 @@ struct ProFeatureAlert: ViewModifier {
             } message: {
                 Text(message)
             }
-            .proUpgradePresentation(isPresented: $showUpgrade)
+            .proUpgradePresentation(isPresented: $showUpgrade, source: source)
     }
 }
 
 extension View {
-    func proFeatureAlert(title: String, message: String, isPresented: Binding<Bool>) -> some View {
-        modifier(ProFeatureAlert(title: title, message: message, isPresented: isPresented))
+    func proFeatureAlert(title: String, message: String, source: PaywallSource = .general, isPresented: Binding<Bool>) -> some View {
+        modifier(ProFeatureAlert(title: title, message: message, source: source, isPresented: isPresented))
     }
 
     func splitPaneProFeatureAlert(isPresented: Binding<Bool>) -> some View {
         proFeatureAlert(
             title: String(localized: "Split Panes"),
             message: String(localized: "Upgrade to Pro to split terminal panes"),
+            source: .splitPane,
             isPresented: isPresented
         )
     }
@@ -269,6 +280,13 @@ struct LockedItemAlert: ViewModifier {
                 return String(format: String(localized: "This workspace exceeds your free plan limit of %lld workspace. Renew your Pro subscription to access all your workspaces."), Int64(FreeTierLimits.maxWorkspaces))
             }
         }
+
+        var paywallSource: PaywallSource {
+            switch self {
+            case .server: return .serverLimit
+            case .workspace: return .workspaceLimit
+            }
+        }
     }
 
     func body(content: Content) -> some View {
@@ -281,7 +299,7 @@ struct LockedItemAlert: ViewModifier {
             } message: {
                 Text(String(format: String(localized: "\"%@\" %@"), itemName, itemType.message))
             }
-            .proUpgradePresentation(isPresented: $showUpgrade)
+            .proUpgradePresentation(isPresented: $showUpgrade, source: itemType.paywallSource)
     }
 }
 

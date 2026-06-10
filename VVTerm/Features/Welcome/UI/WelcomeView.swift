@@ -22,6 +22,7 @@ struct WelcomeView: View {
 #if os(iOS)
 private struct iOSWelcomeContent: View {
     @Binding var hasSeenWelcome: Bool
+    @State private var showingProUpgrade = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,22 +91,35 @@ private struct iOSWelcomeContent: View {
             }
 
             // Continue button
-            Button {
-                hasSeenWelcome = true
-            } label: {
-                Text("Continue")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.accentColor)
-                    )
+            VStack(spacing: 14) {
+                Button {
+                    hasSeenWelcome = true
+                    AnalyticsTracker.shared.trackWelcomeCompleted()
+                } label: {
+                    Text("Continue")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.accentColor)
+                        )
+                }
+
+                Button {
+                    showingProUpgrade = true
+                } label: {
+                    Text("Explore Pro")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 24)
-            .padding(.bottom, 32)
+            .padding(.bottom, 24)
             .padding(.top, 8)
+            .proUpgradePresentation(isPresented: $showingProUpgrade, source: .welcome)
         }
     }
 }
@@ -116,6 +130,7 @@ private struct iOSWelcomeContent: View {
 #if os(macOS)
 private struct macOSWelcomeContent: View {
     @Binding var hasSeenWelcome: Bool
+    @State private var showingProUpgrade = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -184,19 +199,32 @@ private struct macOSWelcomeContent: View {
             }
 
             // Continue button
-            Button {
-                hasSeenWelcome = true
-            } label: {
-                Text("Continue")
-                    .frame(maxWidth: 420)
-                    .frame(height: 32)
+            VStack(spacing: 12) {
+                Button {
+                    hasSeenWelcome = true
+                    AnalyticsTracker.shared.trackWelcomeCompleted()
+                } label: {
+                    Text("Continue")
+                        .frame(maxWidth: 420)
+                        .frame(height: 32)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShapeCompat()
+                .tint(Color(red: 1.0, green: 0.27, blue: 0.35))
+                .controlSize(.large)
+
+                Button {
+                    showingProUpgrade = true
+                } label: {
+                    Text("Explore Pro")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShapeCompat()
-            .tint(Color(red: 1.0, green: 0.27, blue: 0.35))
-            .controlSize(.large)
             .padding(.horizontal, 48)
-            .padding(.bottom, 32)
+            .padding(.bottom, 28)
+            .proUpgradePresentation(isPresented: $showingProUpgrade, source: .welcome)
         }
         .frame(minWidth: 520, minHeight: 560)
         .background(Color(nsColor: .windowBackgroundColor))

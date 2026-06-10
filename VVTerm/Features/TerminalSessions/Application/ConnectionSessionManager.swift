@@ -300,6 +300,10 @@ final class ConnectionSessionManager: ObservableObject {
         switch state {
         case .connected:
             connectedServerIds.insert(serverId)
+            EngagementTracker.shared.recordSuccessfulConnection(
+                id: sessionId,
+                transport: sessions[index].activeTransport.rawValue
+            )
         case .disconnected, .failed:
             if case .failed = state {
                 sessions[index].presentationOverrides = .empty
@@ -432,6 +436,11 @@ final class ConnectionSessionManager: ObservableObject {
                 self?.redrawSessionAfterClose(selectedSession)
             }
         }
+
+        EngagementTracker.shared.noteTerminalSessionEnded(
+            otherTerminalsActive: !activeSessions.isEmpty,
+            isPro: StoreManager.shared.isPro
+        )
 
         logger.info("Closed terminal session \(title)")
     }
@@ -569,6 +578,10 @@ final class ConnectionSessionManager: ObservableObject {
         updateSessionState(sessionId, to: .disconnected)
         markTerminalForReconnectReset(for: sessionId)
         scheduleSSHUnregister(for: sessionId)
+        EngagementTracker.shared.noteTerminalSessionEnded(
+            otherTerminalsActive: !activeSessions.isEmpty,
+            isPro: StoreManager.shared.isPro
+        )
     }
 
     /// Disconnect all sessions for a specific server

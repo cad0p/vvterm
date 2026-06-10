@@ -81,6 +81,16 @@ final class TerminalAccessoryPreferencesManager: ObservableObject {
         customActions.count < TerminalAccessoryProfile.maxCustomActions
     }
 
+    /// Free tier is limited to `FreeTierLimits.maxCustomActions` created actions.
+    /// Existing actions beyond the limit keep working; only creation is gated.
+    var isCustomActionCreationProGated: Bool {
+        !StoreManager.shared.isPro && customActions.count >= FreeTierLimits.maxCustomActions
+    }
+
+    var customActionLimit: Int {
+        StoreManager.shared.isPro ? TerminalAccessoryProfile.maxCustomActions : FreeTierLimits.maxCustomActions
+    }
+
     func customAction(for id: UUID) -> TerminalAccessoryCustomAction? {
         customActions.first { $0.id == id }
     }
@@ -95,6 +105,9 @@ final class TerminalAccessoryPreferencesManager: ObservableObject {
     ) throws -> TerminalAccessoryCustomAction {
         guard canCreateCustomAction else {
             throw TerminalAccessoryValidationError.customActionLimitReached
+        }
+        guard !isCustomActionCreationProGated else {
+            throw TerminalAccessoryValidationError.customActionProRequired
         }
 
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -123,6 +136,7 @@ final class TerminalAccessoryPreferencesManager: ObservableObject {
         applyProfileMutation(at: now) { nextProfile, _ in
             nextProfile.customActions.insert(action, at: 0)
         }
+        AnalyticsTracker.shared.trackCustomActionCreated(kind: kind.rawValue)
         return action
     }
 

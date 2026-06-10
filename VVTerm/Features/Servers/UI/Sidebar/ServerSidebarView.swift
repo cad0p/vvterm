@@ -260,7 +260,7 @@ struct ServerSidebarView: View {
         .sheet(isPresented: $showingSupport) {
             SupportSheet()
         }
-        .proUpgradePresentation(isPresented: $showingProUpgrade)
+        .proUpgradePresentation(isPresented: $showingProUpgrade, source: .sidebarBanner)
         .sheet(isPresented: $showingCreateEnvironment) {
             if let workspace = selectedWorkspace {
                 EnvironmentFormSheet(
@@ -318,6 +318,7 @@ struct ServerSidebarView: View {
         .proFeatureAlert(
             title: String(localized: "Custom Environments"),
             message: String(localized: "Upgrade to Pro for custom environments"),
+            source: .customEnvironment,
             isPresented: $showingCustomEnvironmentAlert
         )
         .onChange(of: showingLocalDiscovery) { isPresented in

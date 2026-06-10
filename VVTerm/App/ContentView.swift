@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import StoreKit
 #if os(macOS)
 import AppKit
 #endif
@@ -14,6 +15,8 @@ struct ContentView: View {
     @StateObject private var serverManager = ServerManager.shared
     @StateObject private var tabManager = TerminalTabManager.shared
     @StateObject private var storeManager = StoreManager.shared
+    @StateObject private var engagementTracker = EngagementTracker.shared
+    @Environment(\.requestReview) private var requestReview
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var selectedWorkspace: Workspace?
@@ -212,6 +215,10 @@ struct ContentView: View {
     var body: some View {
         #if os(macOS)
         splitViewContent
+            .proUpgradePresentation(isPresented: $engagementTracker.shouldShowProIntro, source: .postFirstConnection)
+            .onChange(of: engagementTracker.reviewRequestToken) { _ in
+                requestReview()
+            }
             .focusedValue(\.toggleZenMode, zenToggleAction)
             .focusedValue(\.isZenModeEnabled, canUseZenMode ? effectiveZenModeEnabled : nil)
             .background(
