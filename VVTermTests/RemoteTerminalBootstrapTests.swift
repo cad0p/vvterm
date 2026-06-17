@@ -105,14 +105,14 @@ struct RemoteTerminalBootstrapTests {
     func directoryChangeCommandUsesPowerShellForWindowsPaths() {
         let command = RemoteTerminalBootstrap.directoryChangeCommand(for: #"C:\Users\O'Hara\repo"#, environment: powerShellEnvironment)
 
-        #expect(command == "Set-Location -LiteralPath 'C:\\Users\\O''Hara\\repo'\n")
+        #expect(command == "Set-Location -LiteralPath 'C:\\Users\\O''Hara\\repo'\r\n")
     }
 
     @Test
     func directoryChangeCommandNormalizesOSCStyleWindowsPaths() {
         let command = RemoteTerminalBootstrap.directoryChangeCommand(for: "/C:/Users/test/project", environment: powerShellEnvironment)
 
-        #expect(command == "Set-Location -LiteralPath 'C:\\Users\\test\\project'\n")
+        #expect(command == "Set-Location -LiteralPath 'C:\\Users\\test\\project'\r\n")
     }
 
     @Test

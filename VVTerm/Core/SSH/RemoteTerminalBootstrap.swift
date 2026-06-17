@@ -157,9 +157,9 @@ enum RemoteTerminalBootstrap {
 
     nonisolated static func powerShellDirectoryChangeCommand(for path: String) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "\n" }
+        guard !trimmed.isEmpty else { return "\r\n" }
         let resolved = normalizedWindowsPath(from: trimmed) ?? trimmed
-        return "Set-Location -LiteralPath \(powerShellQuoted(resolved))\n"
+        return "Set-Location -LiteralPath \(powerShellQuoted(resolved))\r\n"
     }
 
     nonisolated static func cmdDirectoryChangeCommand(for path: String) -> String {
