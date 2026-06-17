@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ZenModeFloatingOverlay<Panel: View>: View {
     @Binding var isPanelPresented: Bool
-    let indicatorColor: Color?
     let panel: (CGFloat) -> Panel
 
     #if os(macOS)
@@ -19,7 +18,6 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
         @ViewBuilder panel: @escaping (CGFloat) -> Panel
     ) {
         self._isPanelPresented = isPanelPresented
-        self.indicatorColor = indicatorColor
         self.panel = panel
     }
 
@@ -74,28 +72,15 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
                 isPanelPresented.toggle()
             }
         } label: {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 40, height: 40)
-                    .foregroundStyle(.primary)
-                    .adaptiveGlassCircle()
-                    .overlay(
-                        Circle()
-                            .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                    )
-
-                if let indicatorColor {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .foregroundStyle(.primary)
+                .zenModeLauncherGlass()
+                .overlay(
                     Circle()
-                        .fill(indicatorColor)
-                        .frame(width: 8, height: 8)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.black.opacity(0.22), lineWidth: 0.5)
-                        )
-                        .padding(5)
-                }
-            }
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Zen controls")
@@ -105,6 +90,17 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
     private func closePanel() {
         withAnimation(.easeInOut(duration: 0.18)) {
             isPanelPresented = false
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func zenModeLauncherGlass() -> some View {
+        if #available(iOS 26, macOS 26, *) {
+            self.glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            self.background(.ultraThinMaterial, in: Circle())
         }
     }
 }
