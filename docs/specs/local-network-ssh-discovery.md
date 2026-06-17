@@ -36,9 +36,7 @@ Creating a server currently requires users to know host/IP details in advance an
   - `Discover Local Devices` (icon: `dot.radiowaves.left.and.right`)
   - existing `Add Server`
   - existing `Add Workspace`
-- `NoServersEmptyState` adds secondary CTA:
-  - `Discover Local Devices`
-  - keep `Add Server` CTA for manual path.
+- `NoServersEmptyState` keeps the initial flow focused on the primary `Add Server` CTA.
 - In `ServerFormSheet`, add inline action in `Server` section:
   - `Pick from Local Discovery...`
   - opens discovery sheet and applies selected host back into current form.

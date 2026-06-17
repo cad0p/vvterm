@@ -169,7 +169,6 @@ struct iOSServerListView: View {
     @ObservedObject private var storeManager = StoreManager.shared
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
     @State private var showingAddServer = false
-    @State private var showingLocalDiscovery = false
     @State private var showingAddWorkspace = false
     @State private var showingSettings = false
     @State private var showingWorkspacePicker = false
@@ -183,7 +182,6 @@ struct iOSServerListView: View {
     @State private var navigationBarAppearanceToken = UUID()
     @State private var showingCustomEnvironmentAlert = false
     @State private var addServerPrefill: ServerFormPrefill?
-    @State private var queuedDiscoveryPrefill: ServerFormPrefill?
     @AppStorage("appearanceMode") private var appearanceMode = AppearanceMode.system.rawValue
 
     private var canAddServer: Bool {
@@ -207,7 +205,6 @@ struct iOSServerListView: View {
                 NoServersEmptyState(
                     onAddServer: { presentAddServer() },
                     onAddWorkspace: { showingAddWorkspace = true },
-                    onDiscoverLocalDevices: { showingLocalDiscovery = true },
                     requiresWorkspace: serverManager.workspaces.isEmpty
                 )
             }
@@ -248,12 +245,6 @@ struct iOSServerListView: View {
                     prefill: addServerPrefill,
                     onSave: { _ in showingAddServer = false }
                 )
-            }
-        }
-        .sheet(isPresented: $showingLocalDiscovery) {
-            LocalDeviceDiscoverySheet(manager: LocalSSHDiscoveryManager()) { discoveredHost in
-                queuedDiscoveryPrefill = ServerFormPrefill(discoveredHost: discoveredHost)
-                showingLocalDiscovery = false
             }
         }
         .sheet(isPresented: $showingAddWorkspace) {
@@ -380,11 +371,6 @@ struct iOSServerListView: View {
             source: .customEnvironment,
             isPresented: $showingCustomEnvironmentAlert
         )
-        .onChange(of: showingLocalDiscovery) { isPresented in
-            guard !isPresented, let queued = queuedDiscoveryPrefill else { return }
-            queuedDiscoveryPrefill = nil
-            presentAddServer(prefill: queued)
-        }
         .onChange(of: showingAddWorkspace) { isPresented in
             guard !isPresented else { return }
             resumePendingPrefilledAddServerIfNeeded()

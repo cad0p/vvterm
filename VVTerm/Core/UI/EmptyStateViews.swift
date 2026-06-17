@@ -137,7 +137,6 @@ struct MultiConnectionUpgradeEmptyState: View {
 struct NoServersEmptyState: View {
     let onAddServer: () -> Void
     var onAddWorkspace: (() -> Void)? = nil
-    var onDiscoverLocalDevices: (() -> Void)? = nil
     var requiresWorkspace = false
 
     var body: some View {
@@ -198,21 +197,6 @@ struct NoServersEmptyState: View {
                     .padding(.vertical, 10)
                     .background(.tint, in: RoundedRectangle(cornerRadius: 8))
                     .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if let onDiscoverLocalDevices, !requiresWorkspace {
-                Button(action: onDiscoverLocalDevices) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                        Text(String(localized: "Discover Local Devices"))
-                            .fontWeight(.medium)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
             }

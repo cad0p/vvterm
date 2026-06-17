@@ -711,13 +711,6 @@ struct ServerSidebarView: View {
                     Text("Add Server")
                 }
                 .buttonStyle(.bordered)
-
-                Button {
-                    showingLocalDiscovery = true
-                } label: {
-                    Label(String(localized: "Discover Local Devices"), systemImage: "dot.radiowaves.left.and.right")
-                }
-                .buttonStyle(.borderless)
             }
             Spacer()
         }
