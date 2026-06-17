@@ -1264,7 +1264,7 @@ struct iOSTerminalView: View {
                 }
                 .id(selectedFileTab.id)
             } else {
-                RemoteFileTabsEmptyState {
+                RemoteFileTabsEmptyState(server: server) {
                     openNewFileTab()
                 }
             }
@@ -1306,7 +1306,7 @@ struct iOSTerminalView: View {
                         .id(selectedFileTab.id)
                         .zIndex(1)
                     } else {
-                        RemoteFileTabsEmptyState {
+                        RemoteFileTabsEmptyState(server: server) {
                             openNewFileTab()
                         }
                         .zIndex(1)

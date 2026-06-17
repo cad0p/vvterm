@@ -254,7 +254,7 @@ struct ConnectionTerminalContainer: View {
                     .id(selectedFileTab.id)
                     .zIndex(1)
                 } else {
-                    RemoteFileTabsEmptyState {
+                    RemoteFileTabsEmptyState(server: server) {
                         openNewFileTab(selectFilesViewOnSuccess: false)
                     }
                     .zIndex(1)

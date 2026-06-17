@@ -5,35 +5,50 @@ import AppKit
 #endif
 
 struct RemoteFileTabsEmptyState: View {
+    let server: Server?
     let onNewTab: () -> Void
+
+    init(server: Server? = nil, onNewTab: @escaping () -> Void) {
+        self.server = server
+        self.onNewTab = onNewTab
+    }
 
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
 
-            VStack(spacing: 10) {
-                Image(systemName: "folder.badge.questionmark")
-                    .font(.system(size: 24, weight: .semibold))
+            VStack(spacing: 16) {
+                Image(systemName: "folder")
+                    .font(.system(size: 56))
                     .foregroundStyle(.secondary)
 
-                Text("No File Tabs Open")
-                    .font(.headline)
+                VStack(spacing: 8) {
+                    Text(server?.name ?? String(localized: "Files"))
+                        .font(.title2)
+                        .fontWeight(.semibold)
 
-                Text("Open a file tab to browse, preview, and transfer files for this server.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    Text("No file tabs open")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Button(action: onNewTab) {
-                Label(String(localized: "New File Tab"), systemImage: "plus")
+                HStack(spacing: 8) {
+                    Image(systemName: "plus")
+                    Text("New File Tab")
+                        .fontWeight(.medium)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(.tint, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(.white)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
 
             Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
