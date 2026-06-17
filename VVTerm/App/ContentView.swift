@@ -167,7 +167,6 @@ struct ContentView: View {
             // LEFT: Sidebar with workspace + servers
             ServerSidebarView(
                 serverManager: serverManager,
-                backgroundColor: macOSWindowBackgroundColor,
                 selectedWorkspace: $selectedWorkspace,
                 selectedServer: $selectedServer
             )
@@ -175,11 +174,12 @@ struct ContentView: View {
         } detail: {
             // RIGHT: Detail view based on selection state
             detailContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(macOSWindowBackgroundColor)
                 #if os(macOS)
                 .navigationTitle(zenNavigationTitle)
                 #endif
         }
-        .background(macOSWindowBackgroundColor)
         .onAppear {
             if selectedWorkspace == nil {
                 selectedWorkspace = serverManager.workspaces.first

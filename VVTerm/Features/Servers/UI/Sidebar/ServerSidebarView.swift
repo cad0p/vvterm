@@ -4,7 +4,6 @@ import SwiftUI
 
 struct ServerSidebarView: View {
     @ObservedObject var serverManager: ServerManager
-    let backgroundColor: Color
     @Binding var selectedWorkspace: Workspace?
     @Binding var selectedServer: Server?
 
@@ -352,7 +351,6 @@ struct ServerSidebarView: View {
                 set: { if !$0 { lockedServerAlert = nil } }
             )
         )
-        .background(backgroundColor)
     }
 
     // MARK: - Server Controls (Filter + Search)
