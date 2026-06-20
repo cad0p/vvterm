@@ -952,11 +952,18 @@ private final class TerminalZoomIndicatorView: NSVisualEffectView {
         stackView.addArrangedSubview(titleLabel)
         addSubview(stackView)
 
-        NSLayoutConstraint.activate([
+        // Padding constraints are non-required so they break silently while the
+        // view still has a zero-size autoresizing frame (before it's shown),
+        // instead of logging "unable to satisfy" conflicts. They hold normally
+        // once the view is sized.
+        let padding = [
             stackView.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 18),
             stackView.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -18),
             stackView.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 12),
-            stackView.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12),
+            stackView.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12)
+        ]
+        padding.forEach { $0.priority = NSLayoutConstraint.Priority(999) }
+        NSLayoutConstraint.activate(padding + [
             stackView.centerXAnchor.constraint(equalTo: centerXAnchor),
             stackView.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])

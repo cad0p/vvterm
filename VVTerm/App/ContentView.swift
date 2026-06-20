@@ -19,6 +19,20 @@ struct ContentView: View {
     @Environment(\.requestReview) private var requestReview
     @Environment(\.colorScheme) private var colorScheme
 
+    #if os(macOS)
+    // Re-injected into the AppKit-hosted sidebar/detail panes, since environment
+    // values do not cross an NSHostingController boundary automatically.
+    @EnvironmentObject private var ghosttyApp: Ghostty.App
+    @EnvironmentObject private var terminalThemeManager: TerminalThemeManager
+    @EnvironmentObject private var terminalAccessoryPreferencesManager: TerminalAccessoryPreferencesManager
+    @EnvironmentObject private var appLockManager: AppLockManager
+    @Environment(\.locale) private var locale
+    @Environment(\.privacyModeEnabled) private var privacyModeEnabled
+    // Republishes the hosted detail pane's command actions as scene focus
+    // values so the menu commands (Cmd+T/W, tab nav, splits) can reach them.
+    @StateObject private var commandBridge = MacShellCommandBridge.shared
+    #endif
+
     @State private var selectedWorkspace: Workspace?
     @State private var selectedServer: Server?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -162,65 +176,126 @@ struct ContentView: View {
         return { toggleZenMode() }
     }
 
-    private var splitViewContent: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            // LEFT: Sidebar with workspace + servers
-            ServerSidebarView(
-                serverManager: serverManager,
-                selectedWorkspace: $selectedWorkspace,
-                selectedServer: $selectedServer
-            )
-            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
-        } detail: {
-            // RIGHT: Detail view based on selection state
-            detailContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(macOSWindowBackgroundColor)
-                #if os(macOS)
-                .navigationTitle(zenNavigationTitle)
-                #endif
-        }
-        .onAppear {
-            if selectedWorkspace == nil {
-                selectedWorkspace = serverManager.workspaces.first
-            }
-            if !canUseZenMode {
-                setZenMode(false)
-            } else if isZenModeEnabled {
-                applyZenPresentation(true)
-            }
-        }
-        .onChange(of: serverManager.workspaces) { workspaces in
-            if selectedWorkspace == nil {
-                selectedWorkspace = workspaces.first
-            }
-        }
-        .onChange(of: columnVisibility) { newValue in
-            if !isZenModeEnabled && newValue != .detailOnly {
-                restoredColumnVisibility = newValue
-            }
-        }
-        .onChange(of: isZenModeEnabled) { enabled in
-            applyZenPresentation(enabled && canUseZenMode)
-        }
-        .onChange(of: canUseZenMode) { available in
-            if !available && isZenModeEnabled {
-                withAnimation(.easeInOut(duration: 0.2)) {
+    /// Shared workspace-seeding and zen-presentation lifecycle, applied to both
+    /// the iOS NavigationSplitView and the macOS AppKit shell host.
+    private func withSplitLifecycle<Content: View>(_ content: Content) -> some View {
+        content
+            .onAppear {
+                if selectedWorkspace == nil {
+                    selectedWorkspace = serverManager.workspaces.first
+                }
+                if !canUseZenMode {
                     setZenMode(false)
+                } else if isZenModeEnabled {
+                    applyZenPresentation(true)
                 }
             }
-        }
+            .onChange(of: serverManager.workspaces) { workspaces in
+                if selectedWorkspace == nil {
+                    selectedWorkspace = workspaces.first
+                }
+            }
+            .onChange(of: columnVisibility) { newValue in
+                if !isZenModeEnabled && newValue != .detailOnly {
+                    restoredColumnVisibility = newValue
+                }
+            }
+            .onChange(of: isZenModeEnabled) { enabled in
+                applyZenPresentation(enabled && canUseZenMode)
+            }
+            .onChange(of: canUseZenMode) { available in
+                if !available && isZenModeEnabled {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        setZenMode(false)
+                    }
+                }
+            }
     }
+
+    private var splitViewContent: some View {
+        withSplitLifecycle(
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                // LEFT: Sidebar with workspace + servers
+                ServerSidebarView(
+                    serverManager: serverManager,
+                    selectedWorkspace: $selectedWorkspace,
+                    selectedServer: $selectedServer
+                )
+                .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
+            } detail: {
+                // RIGHT: Detail view based on selection state
+                detailContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(macOSWindowBackgroundColor)
+                    #if os(macOS)
+                    .navigationTitle(zenNavigationTitle)
+                    #endif
+            }
+        )
+    }
+
+    #if os(macOS)
+    /// macOS shell: the sidebar + detail hosted inside an AppKit
+    /// NSSplitViewController so the window toolbar can be owned by a custom
+    /// NSToolbar (added in a later stage).
+    private var macShellContent: some View {
+        withSplitLifecycle(
+            MacShellSplitHost(
+                isSidebarCollapsed: columnVisibility == .detailOnly,
+                onToggleSidebar: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        setSidebarVisible(!isSidebarVisible)
+                    }
+                },
+                sidebar: {
+                    withShellEnvironment(
+                        ServerSidebarView(
+                            serverManager: serverManager,
+                            selectedWorkspace: $selectedWorkspace,
+                            selectedServer: $selectedServer
+                        )
+                    )
+                },
+                detail: {
+                    withShellEnvironment(
+                        detailContent
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(macOSWindowBackgroundColor)
+                    )
+                }
+            )
+            .ignoresSafeArea()
+        )
+    }
+
+    /// Re-injects the environment the hosted panes require, since it does not
+    /// cross the NSHostingController boundary.
+    private func withShellEnvironment<V: View>(_ view: V) -> some View {
+        view
+            .environmentObject(ghosttyApp)
+            .environmentObject(terminalThemeManager)
+            .environmentObject(terminalAccessoryPreferencesManager)
+            .environmentObject(appLockManager)
+            .environmentObject(storeManager)
+            .environment(\.locale, locale)
+            .environment(\.privacyModeEnabled, privacyModeEnabled)
+    }
+    #endif
 
     var body: some View {
         #if os(macOS)
-        splitViewContent
+        macShellContent
             .proUpgradePresentation(isPresented: $engagementTracker.shouldShowProIntro, source: .postFirstConnection)
             .onChange(of: engagementTracker.reviewRequestToken) { _ in
                 requestReview()
             }
-            .focusedValue(\.toggleZenMode, zenToggleAction)
-            .focusedValue(\.isZenModeEnabled, canUseZenMode ? effectiveZenModeEnabled : nil)
+            .focusedSceneValue(\.toggleZenMode, zenToggleAction)
+            .focusedSceneValue(\.isZenModeEnabled, canUseZenMode ? effectiveZenModeEnabled : nil)
+            .focusedSceneValue(\.serverViewTabActions, commandBridge.serverViewTabActions)
+            .focusedSceneValue(\.terminalSplitActions, commandBridge.splitActions)
+            .focusedSceneValue(\.activeServerId, commandBridge.activeServerId)
+            .focusedSceneValue(\.activePaneId, commandBridge.activePaneId)
+            .focusedSceneValue(\.openLocalSSHDiscovery, commandBridge.openLocalDiscovery)
             .background(
                 MainWindowChromeBridge(
                     windowTitle: zenWindowTitle,

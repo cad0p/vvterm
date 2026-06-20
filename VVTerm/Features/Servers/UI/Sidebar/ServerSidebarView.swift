@@ -350,6 +350,15 @@ struct ServerSidebarView: View {
         .focusedValue(\.openLocalSSHDiscovery, {
             showingLocalDiscovery = true
         })
+        // The sidebar is hosted in its own NSHostingController, so the
+        // focusedValue above can't reach the scene Commands. Register the action
+        // on the shell command bridge too; ContentView republishes it.
+        .onAppear {
+            MacShellCommandBridge.shared.openLocalDiscovery = { showingLocalDiscovery = true }
+        }
+        .onDisappear {
+            MacShellCommandBridge.shared.openLocalDiscovery = nil
+        }
         #endif
         .lockedItemAlert(
             .server,

@@ -206,12 +206,18 @@ final class TerminalTabManager: ObservableObject {
 
         // Remove from tabs
         if var serverTabs = tabsByServer[tab.serverId] {
+            let closingIndex = serverTabs.firstIndex { $0.id == tab.id }
             serverTabs.removeAll { $0.id == tab.id }
             tabsByServer[tab.serverId] = serverTabs
 
-            // Select another tab if this was selected
+            // Select the closest neighbor when the selected tab is closed: the
+            // tab that shifted into its slot, or the new last tab if it was last.
             if selectedTabByServer[tab.serverId] == tab.id {
-                selectedTabByServer[tab.serverId] = serverTabs.first?.id
+                if let closingIndex, !serverTabs.isEmpty {
+                    selectedTabByServer[tab.serverId] = serverTabs[min(closingIndex, serverTabs.count - 1)].id
+                } else {
+                    selectedTabByServer[tab.serverId] = serverTabs.first?.id
+                }
             }
 
             // Note: Don't remove from connectedServerIds here
@@ -348,9 +354,17 @@ final class TerminalTabManager: ObservableObject {
             // (not rootPaneId which might have been closed)
             updatedTab.layout = newLayout.equalized()
 
-            // Update focus if needed
+            // Focus the closest remaining pane (the one that took the closed
+            // pane's slot, or the new last pane if it was last) instead of
+            // jumping to the first pane.
             if updatedTab.focusedPaneId == paneId {
-                updatedTab.focusedPaneId = newLayout.allPaneIds().first ?? currentTab.rootPaneId
+                let oldPanes = currentLayout.allPaneIds()
+                let newPanes = newLayout.allPaneIds()
+                if let closedIndex = oldPanes.firstIndex(of: paneId), !newPanes.isEmpty {
+                    updatedTab.focusedPaneId = newPanes[min(closedIndex, newPanes.count - 1)]
+                } else {
+                    updatedTab.focusedPaneId = newPanes.first ?? currentTab.rootPaneId
+                }
             }
         }
         updateTab(updatedTab)

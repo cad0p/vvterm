@@ -56,6 +56,11 @@ struct RemoteFileTabsEmptyState: View {
 struct RemoteFileTabsScrollView: View {
     let tabs: [RemoteFileTab]
     @Binding var selectedTabId: UUID?
+    // Observed so the hosted tab strip redraws when navigation changes a tab's
+    // path/title (the title closures read this store). The toolbar host itself
+    // only observes the terminal manager, so without this the strip would keep
+    // showing the old folder until a tab open/close/select forced a redraw.
+    @ObservedObject var fileBrowser: RemoteFileBrowserStore
     let titleForTab: (RemoteFileTab) -> String
     let onSelect: (RemoteFileTab) -> Void
     let onClose: (RemoteFileTab) -> Void
@@ -75,12 +80,14 @@ struct RemoteFileTabsScrollView: View {
             onPrevious: selectPrevious,
             onNext: selectNext,
             onNew: onNew
-        ) { tab, tabWidth in
+        ) { tab, tabWidth, glassNamespace in
             ServerToolbarTabCell(
                 title: titleForTab(tab),
                 isSelected: selectedTabId == tab.id,
                 statusColor: .green,
                 width: tabWidth,
+                glassNamespace: glassNamespace,
+                shortcutNumber: tabs.firstIndex(where: { $0.id == tab.id }).map { $0 + 1 },
                 onSelect: { onSelect(tab) },
                 onClose: { onClose(tab) }
             )

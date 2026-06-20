@@ -241,6 +241,16 @@ struct VVTermCommands: Commands {
             }
             .keyboardShortcut("]", modifiers: [.command, .shift])
             .disabled(serverViewTabActions == nil)
+
+            Divider()
+
+            ForEach(1...9, id: \.self) { number in
+                Button("Tab \(number)") {
+                    serverViewTabActions?.selectIndex(number - 1)
+                }
+                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
+                .disabled(serverViewTabActions == nil)
+            }
         }
 
         // Split commands (Pro feature)

@@ -1,0 +1,211 @@
+//
+//  MacShellSplitHost.swift
+//  VVTerm
+//
+//  AppKit-owned macOS shell: hosts the SwiftUI sidebar and detail panes inside
+//  an NSSplitViewController so the window's toolbar can be owned by AppKit
+//  (NSToolbar) instead of SwiftUI's NavigationSplitView. NavigationSplitView
+//  owns the window toolbar and will not allow a custom NSToolbar to coexist;
+//  hosting the same SwiftUI panes under an NSSplitViewController removes that
+//  ownership so a native, fill-capable toolbar can be installed.
+//
+
+#if os(macOS)
+import Combine
+import SwiftUI
+import AppKit
+
+/// Wraps an `NSSplitViewController` (sidebar + detail) and bridges it into the
+/// SwiftUI `WindowGroup`. The hosted SwiftUI panes are passed in already
+/// wrapped with the required environment, since environment values do not flow
+/// across an `NSHostingController` boundary automatically.
+struct MacShellSplitHost<Sidebar: View, Detail: View>: NSViewControllerRepresentable {
+    let isSidebarCollapsed: Bool
+    var onToggleSidebar: () -> Void = {}
+    /// Hides the window toolbar (zen mode) and restores it on exit.
+    var isToolbarHidden: Bool = false
+    var sidebarMinWidth: CGFloat = 200
+    var sidebarIdealWidth: CGFloat = 250
+    var sidebarMaxWidth: CGFloat = 300
+    @ViewBuilder var sidebar: () -> Sidebar
+    @ViewBuilder var detail: () -> Detail
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSViewController(context: Context) -> NSSplitViewController {
+        let coordinator = context.coordinator
+
+        let sidebarHC = NSHostingController(rootView: AnyView(sidebar()))
+        let detailHC = NSHostingController(rootView: AnyView(detail()))
+        coordinator.sidebarHostingController = sidebarHC
+        coordinator.detailHostingController = detailHC
+
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHC)
+        sidebarItem.minimumThickness = sidebarMinWidth
+        sidebarItem.maximumThickness = sidebarMaxWidth
+        sidebarItem.canCollapse = true
+        sidebarItem.holdingPriority = NSLayoutConstraint.Priority(260)
+        coordinator.sidebarItem = sidebarItem
+
+        let detailItem = NSSplitViewItem(viewController: detailHC)
+        detailItem.minimumThickness = 400
+        detailItem.canCollapse = false
+
+        let splitVC = ShellSplitViewController()
+        splitVC.splitView.dividerStyle = .thin
+        splitVC.splitView.autosaveName = "vvterm.mac.sidebar"
+        splitVC.initialSidebarWidth = sidebarIdealWidth
+        splitVC.onToggleSidebar = onToggleSidebar
+        splitVC.isToolbarHidden = isToolbarHidden
+        splitVC.addSplitViewItem(sidebarItem)
+        splitVC.addSplitViewItem(detailItem)
+        coordinator.splitViewController = splitVC
+
+        // Apply initial collapse state.
+        sidebarItem.isCollapsed = isSidebarCollapsed
+
+        return splitVC
+    }
+
+    func updateNSViewController(_ nsViewController: NSSplitViewController, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.sidebarHostingController?.rootView = AnyView(sidebar())
+        coordinator.detailHostingController?.rootView = AnyView(detail())
+        (nsViewController as? ShellSplitViewController)?.onToggleSidebar = onToggleSidebar
+        (nsViewController as? ShellSplitViewController)?.updateToolbarHidden(isToolbarHidden)
+
+        if let item = coordinator.sidebarItem, item.isCollapsed != isSidebarCollapsed {
+            item.animator().isCollapsed = isSidebarCollapsed
+        }
+    }
+
+    final class Coordinator {
+        var splitViewController: NSSplitViewController?
+        var sidebarHostingController: NSHostingController<AnyView>?
+        var detailHostingController: NSHostingController<AnyView>?
+        var sidebarItem: NSSplitViewItem?
+    }
+}
+
+/// NSSplitViewController that applies an initial sidebar width once, since
+/// NSSplitViewItem has no "ideal" thickness.
+final class ShellSplitViewController: NSSplitViewController {
+    var initialSidebarWidth: CGFloat = 250
+    var onToggleSidebar: (() -> Void)?
+    var isToolbarHidden = false
+    private var didApplyInitialWidth = false
+    private var zenAccessory: NSTitlebarAccessoryViewController?
+    private var bridgeObserver: AnyCancellable?
+
+    /// Hide/show the window toolbar for zen mode.
+    func updateToolbarHidden(_ hidden: Bool) {
+        isToolbarHidden = hidden
+        view.window?.toolbar?.isVisible = !hidden
+    }
+
+    /// In zen mode the server title/subtitle is shown as a plain (glass-free)
+    /// leading titlebar accessory. Toolbar items always get a glass capsule in
+    /// macOS 26, but a titlebar accessory view does not, so the title reads as
+    /// normal text aligned with the toolbar row.
+    private func updateZenAccessory() {
+        guard let window = view.window else { return }
+        let bridge = MacToolbarBridge.shared
+        let showZen = bridge.isActive && bridge.isZenMode
+        if showZen {
+            let root = ZenTitleAccessory(
+                icon: bridge.zenIcon,
+                title: bridge.zenTitle,
+                subtitle: bridge.zenSubtitle()
+            )
+            if let host = zenAccessory?.view as? NSHostingView<ZenTitleAccessory> {
+                host.rootView = root
+            } else {
+                let host = NSHostingView(rootView: root)
+                let accessory = NSTitlebarAccessoryViewController()
+                accessory.layoutAttribute = .leading
+                accessory.view = host
+                window.addTitlebarAccessoryViewController(accessory)
+                zenAccessory = accessory
+            }
+        } else if let zenAccessory,
+                  let index = window.titlebarAccessoryViewControllers.firstIndex(where: { $0 === zenAccessory }) {
+            window.removeTitlebarAccessoryViewController(at: index)
+            self.zenAccessory = nil
+        }
+    }
+
+    /// The system `.toggleSidebar` toolbar item targets this. Route it through
+    /// the SwiftUI columnVisibility (single source of truth) instead of letting
+    /// NSSplitViewController collapse the item directly, which would fight the
+    /// SwiftUI-driven collapse state.
+    override func toggleSidebar(_ sender: Any?) {
+        if let onToggleSidebar {
+            onToggleSidebar()
+        } else {
+            super.toggleSidebar(sender)
+        }
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        installToolbarIfNeeded()
+        if bridgeObserver == nil {
+            bridgeObserver = MacToolbarBridge.shared.$revision
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.updateZenAccessory() }
+            updateZenAccessory()
+        }
+        guard !didApplyInitialWidth else { return }
+        didApplyInitialWidth = true
+        // Only set the initial position when autosave did not already restore one.
+        guard splitView.subviews.count >= 2 else { return }
+        let current = splitView.subviews[0].frame.width
+        if current < 1 || current.isNaN {
+            splitView.setPosition(initialSidebarWidth, ofDividerAt: 0)
+        }
+    }
+
+    private func installToolbarIfNeeded() {
+        guard let window = view.window else { return }
+        let toolbar = MacConnectionToolbarController.shared.toolbar
+        if window.toolbar !== toolbar {
+            window.toolbar = toolbar
+            window.toolbarStyle = .unified
+        }
+        window.toolbar?.isVisible = !isToolbarHidden
+    }
+}
+
+/// Plain (glass-free) server title + live subtitle for the zen titlebar
+/// accessory: server icon, name, and the focused tab/pane title or directory.
+struct ZenTitleAccessory: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if !icon.isEmpty {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .fixedSize()
+    }
+}
+#endif

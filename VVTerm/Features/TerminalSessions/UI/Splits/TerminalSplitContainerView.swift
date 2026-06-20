@@ -10,6 +10,8 @@ struct ServerViewTabActions {
     let closeSelected: () -> Void
     let selectPrevious: () -> Void
     let selectNext: () -> Void
+    /// Select the tab at a zero-based index (Cmd+1…9). No-op if out of range.
+    let selectIndex: (Int) -> Void
 }
 
 #if os(macOS)
