@@ -214,17 +214,23 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
 
         let segmented = NSSegmentedControl()
         segmented.trackingMode = .selectOne
-        // macOS 27+: the `.tabs` role gives the Activity Monitor look —
-        // tab-style segments, no inter-segment dividers, native Liquid Glass.
-        if #available(macOS 27.0, *) {
-            segmented.role = .tabs
-        }
+        applyMacOS27TabRoleIfAvailable(to: segmented)
         segmented.target = self
         segmented.action = #selector(viewSegmentChanged(_:))
         configureSegmentedControl(segmented)
         segmentedControl = segmented
         item.view = segmented
         return item
+    }
+
+    private func applyMacOS27TabRoleIfAvailable(to segmented: NSSegmentedControl) {
+        let setRoleSelector = NSSelectorFromString("setRole:")
+        guard segmented.responds(to: setRoleSelector) else { return }
+
+        // macOS 27+: NSSegmentedControl.Role.tabs gives the Activity Monitor
+        // look. Use KVC so this still compiles with SDKs/toolchains whose Swift
+        // AppKit import does not expose NSSegmentedControl.role yet.
+        segmented.setValue(NSNumber(value: 1), forKey: "role")
     }
 
     private func configureSegmentedControl(_ segmented: NSSegmentedControl) {
