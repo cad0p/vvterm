@@ -10,6 +10,14 @@ struct WelcomeFeature: Identifiable {
 }
 
 enum WelcomeFeatureCatalog {
+    private static var companionPlatformTitle: LocalizedStringKey {
+        #if os(macOS)
+        return "Available on iPhone and iPad"
+        #else
+        return "Available on Mac"
+        #endif
+    }
+
     static let features: [WelcomeFeature] = [
         WelcomeFeature(
             icon: "terminal.fill",
@@ -30,9 +38,15 @@ enum WelcomeFeatureCatalog {
             color: .mint
         ),
         WelcomeFeature(
+            icon: "macbook.and.iphone",
+            title: companionPlatformTitle,
+            description: "VVTerm is available on iPhone, iPad, and Mac. Pro purchases carry over with the same Apple ID.",
+            color: .blue
+        ),
+        WelcomeFeature(
             icon: "icloud.fill",
             title: "iCloud Sync",
-            description: "Servers and credentials sync across all your devices.",
+            description: "Server metadata syncs with iCloud across your devices.",
             color: .cyan
         ),
         WelcomeFeature(
