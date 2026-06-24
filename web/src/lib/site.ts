@@ -72,7 +72,7 @@ export const softwareSchema = {
       "@type": "Offer",
       price: "0",
       priceCurrency: "USD",
-      description: "Free tier with 1 workspace, 3 servers",
+      description: "Free tier with 1 workspace, 1 server",
     },
     {
       "@type": "Offer",

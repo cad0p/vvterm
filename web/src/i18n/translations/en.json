@@ -98,7 +98,7 @@
       "period": "/forever",
       "features": [
         "1 workspace",
-        "3 servers",
+        "1 server",
         "1 connection tab",
         "SSH, Mosh, Tailscale SSH, and Cloudflare Tunnel SSH",
         "Ghostty-powered terminal rendering",
@@ -170,7 +170,7 @@
     },
     "q6": {
       "question": "What is included in Free vs Pro?",
-      "answer": "Free includes 1 workspace, 3 servers, and 1 connection tab. Pro unlocks unlimited workspaces, servers, simultaneous connections, and custom environments."
+      "answer": "Free includes 1 workspace, 1 server, and 1 connection tab. Pro unlocks unlimited workspaces, servers, simultaneous connections, and custom environments."
     },
     "q7": {
       "question": "Can I use one purchase on multiple devices?",

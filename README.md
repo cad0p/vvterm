@@ -185,7 +185,7 @@ Swift package dependencies currently resolved by the Xcode project:
 | Feature | Free | Pro |
 |---------|------|-----|
 | Workspaces | 1 | Unlimited |
-| Servers | 3 | Unlimited |
+| Servers | 1 | Unlimited |
 | Tabs | 1 | Unlimited |
 | Split panes | No | Yes |
 
