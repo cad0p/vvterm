@@ -798,6 +798,17 @@ extension Ghostty {
                 )
                 return true
 
+            case GHOSTTY_ACTION_READONLY:
+                #if os(macOS)
+                let isReadonly = action.action.readonly == GHOSTTY_READONLY_ON
+                DispatchQueue.main.async {
+                    terminalView?.updateReadonlyState(isReadonly)
+                }
+                return true
+                #else
+                return true
+                #endif
+
             case GHOSTTY_ACTION_MOUSE_SHAPE,
                  GHOSTTY_ACTION_MOUSE_VISIBILITY,
                  GHOSTTY_ACTION_MOUSE_OVER_LINK:

@@ -168,26 +168,26 @@ class GhosttyInputHandler {
         surface.sendMouseButton(mouseEvent)
     }
 
-    func handleRightMouseDown(with event: NSEvent) {
-        guard let surface = surface else { return }
+    func handleRightMouseDown(with event: NSEvent) -> Bool {
+        guard let surface = surface else { return false }
 
         let mouseEvent = Ghostty.Input.MouseButtonEvent(
             action: .press,
             button: .right,
             mods: Ghostty.Input.Mods(nsFlags: event.modifierFlags)
         )
-        surface.sendMouseButton(mouseEvent)
+        return surface.sendMouseButton(mouseEvent)
     }
 
-    func handleRightMouseUp(with event: NSEvent) {
-        guard let surface = surface else { return }
+    func handleRightMouseUp(with event: NSEvent) -> Bool {
+        guard let surface = surface else { return false }
 
         let mouseEvent = Ghostty.Input.MouseButtonEvent(
             action: .release,
             button: .right,
             mods: Ghostty.Input.Mods(nsFlags: event.modifierFlags)
         )
-        surface.sendMouseButton(mouseEvent)
+        return surface.sendMouseButton(mouseEvent)
     }
 
     func handleOtherMouseDown(with event: NSEvent) {

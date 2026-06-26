@@ -15,6 +15,31 @@ enum TerminalSplitDirection: String, Codable, Equatable {
     case vertical    // top / bottom
 }
 
+enum TerminalSplitPlacement: Equatable {
+    case right
+    case left
+    case down
+    case up
+
+    var direction: TerminalSplitDirection {
+        switch self {
+        case .right, .left:
+            return .horizontal
+        case .down, .up:
+            return .vertical
+        }
+    }
+
+    var insertsBeforeSource: Bool {
+        switch self {
+        case .left, .up:
+            return true
+        case .right, .down:
+            return false
+        }
+    }
+}
+
 // MARK: - Split Node
 
 /// A split node stores pane IDs, not connection objects.

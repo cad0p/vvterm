@@ -76,6 +76,8 @@ struct SplitCommands: Commands {
 struct TerminalSplitActions {
     let splitHorizontal: () -> Void
     let splitVertical: () -> Void
+    let splitLeft: () -> Void
+    let splitUp: () -> Void
     let closePane: () -> Void
 }
 

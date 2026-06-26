@@ -52,6 +52,7 @@ final class ConnectionSessionManager: ObservableObject {
     @Published var terminalBrowseModeBySession: [UUID: Bool] = [:]
     @Published var terminalFindNavigatorVisibleBySession: [UUID: Bool] = [:]
     @Published private(set) var runtimeTitleBySession: [UUID: String] = [:]
+    @Published private(set) var titleOverrideBySession: [UUID: String] = [:]
 
     let tmuxResolver = TmuxAttachResolver()
 
@@ -363,6 +364,16 @@ final class ConnectionSessionManager: ObservableObject {
         logger.info("Runtime session title changed: \(title, privacy: .public)")
     }
 
+    func setSessionTitleOverride(_ rawTitle: String?, for sessionId: UUID) {
+        guard sessionWithID(sessionId) != nil else { return }
+        let title = rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if title.isEmpty {
+            titleOverrideBySession.removeValue(forKey: sessionId)
+        } else {
+            titleOverrideBySession[sessionId] = title
+        }
+    }
+
     func presentationOverrides(for sessionId: UUID) -> TerminalPresentationOverrides {
         sessionWithID(sessionId)?.presentationOverrides ?? .empty
     }
@@ -388,7 +399,7 @@ final class ConnectionSessionManager: ObservableObject {
     }
 
     func displayTitle(for session: ConnectionSession) -> String {
-        runtimeTitleBySession[session.id] ?? session.title
+        titleOverrideBySession[session.id] ?? runtimeTitleBySession[session.id] ?? session.title
     }
 
     // MARK: - Close Terminal
@@ -473,6 +484,7 @@ final class ConnectionSessionManager: ObservableObject {
         terminalBrowseModeBySession.removeValue(forKey: sessionId)
         clearTmuxRuntimeState(for: sessionId)
         runtimeTitleBySession.removeValue(forKey: sessionId)
+        titleOverrideBySession.removeValue(forKey: sessionId)
     }
 
     private func handleTerminalCloseUI(
@@ -1557,6 +1569,8 @@ extension ConnectionSessionManager {
         selectedViewByServer = [:]
         selectedSessionByServer = [:]
         tmuxAttachPrompt = nil
+        runtimeTitleBySession = [:]
+        titleOverrideBySession = [:]
         shellRegistry.removeAll()
         shellCancelHandlers.removeAll()
         shellSuspendHandlers.removeAll()

@@ -62,6 +62,8 @@ struct TerminalTabView: View {
         return TerminalSplitActions(
             splitHorizontal: { splitHorizontal() },
             splitVertical: { splitVertical() },
+            splitLeft: { splitLeft() },
+            splitUp: { splitUp() },
             closePane: { requestClosePane() }
         )
     }
@@ -81,6 +83,7 @@ struct TerminalTabView: View {
                     isTabSelected: isSelected,
                     onFocus: { },
                     onProcessExit: { handlePaneExit(paneId: tab.rootPaneId) },
+                    terminalContextMenuActions: terminalContextMenuActions(for: tab.rootPaneId),
                     showsVoiceButton: isSelected
                         && voiceButtonEnabled
                         && !showingVoiceRecording
@@ -153,6 +156,7 @@ struct TerminalTabView: View {
                     isTabSelected: isSelected,
                     onFocus: { focusPane(paneId) },
                     onProcessExit: { handlePaneExit(paneId: paneId) },
+                    terminalContextMenuActions: terminalContextMenuActions(for: paneId),
                     showsVoiceButton: isSelected
                         && voiceButtonEnabled
                         && !showingVoiceRecording
@@ -219,21 +223,56 @@ struct TerminalTabView: View {
     // MARK: - Split Actions
 
     func splitHorizontal() {
-        guard StoreManager.shared.isPro else {
-            showingSplitPaneUpgradeAlert = true
-            return
-        }
-        guard tabManager.splitHorizontal(tab: tab, paneId: tab.focusedPaneId) != nil else { return }
-        layoutVersion += 1
+        splitPane(tab.focusedPaneId, placement: .right)
     }
 
     func splitVertical() {
+        splitPane(tab.focusedPaneId, placement: .down)
+    }
+
+    func splitLeft() {
+        splitPane(tab.focusedPaneId, placement: .left)
+    }
+
+    func splitUp() {
+        splitPane(tab.focusedPaneId, placement: .up)
+    }
+
+    private func splitPane(_ paneId: UUID, placement: TerminalSplitPlacement) {
         guard StoreManager.shared.isPro else {
             showingSplitPaneUpgradeAlert = true
             return
         }
-        guard tabManager.splitVertical(tab: tab, paneId: tab.focusedPaneId) != nil else { return }
+        focusPane(paneId)
+        let newPaneId: UUID?
+        switch placement {
+        case .right:
+            newPaneId = tabManager.splitRight(tab: tab, paneId: paneId)
+        case .left:
+            newPaneId = tabManager.splitLeft(tab: tab, paneId: paneId)
+        case .down:
+            newPaneId = tabManager.splitDown(tab: tab, paneId: paneId)
+        case .up:
+            newPaneId = tabManager.splitUp(tab: tab, paneId: paneId)
+        }
+        guard newPaneId != nil else { return }
         layoutVersion += 1
+    }
+
+    private func terminalContextMenuActions(for paneId: UUID) -> TerminalContextMenuActions {
+        TerminalContextMenuActions(
+            focus: { focusPane(paneId) },
+            splitRight: { splitPane(paneId, placement: .right) },
+            splitLeft: { splitPane(paneId, placement: .left) },
+            splitDown: { splitPane(paneId, placement: .down) },
+            splitUp: { splitPane(paneId, placement: .up) },
+            currentTitle: {
+                tabManager.displayTitle(forPane: paneId, fallback: tab.title) ?? tab.title
+            },
+            setTitle: { title in
+                tabManager.setPaneTitleOverride(title, for: paneId)
+            }
+        )
     }
 
     func closeCurrentPane() {
@@ -370,6 +409,7 @@ struct TerminalPaneView: View {
     let isTabSelected: Bool
     let onFocus: () -> Void
     let onProcessExit: () -> Void
+    let terminalContextMenuActions: TerminalContextMenuActions
     let showsVoiceButton: Bool
     let onVoiceTrigger: () -> Void
 
@@ -546,6 +586,7 @@ struct TerminalPaneView: View {
                         credentials: credentials,
                         richPasteUIModel: richPasteUI,
                         isActive: shouldFocus,
+                        terminalContextMenuActions: terminalContextMenuActions,
                         onProcessExit: onProcessExit,
                         onReady: { isReady = true }
                     )
@@ -953,6 +994,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
     let credentials: ServerCredentials
     let richPasteUIModel: TerminalRichPasteUIModel
     let isActive: Bool
+    let terminalContextMenuActions: TerminalContextMenuActions
     let onProcessExit: () -> Void
     let onReady: () -> Void
 
@@ -990,6 +1032,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
             existingTerminal.onZoomAction = { [paneId] action in
                 TerminalTabManager.shared.handleTerminalZoom(action, for: paneId)
             }
+            existingTerminal.terminalContextMenuActions = terminalContextMenuActions
             existingTerminal.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
             existingTerminal.writeCallback = { [paneId] data in
                 if let client = TerminalTabManager.shared.getSSHClient(for: paneId),
@@ -1043,6 +1086,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         terminalView.onZoomAction = { [paneId] action in
             TerminalTabManager.shared.handleTerminalZoom(action, for: paneId)
         }
+        terminalView.terminalContextMenuActions = terminalContextMenuActions
         terminalView.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
 
         // Store terminal reference
@@ -1074,6 +1118,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         if let scrollView = nsView as? TerminalScrollView {
             scrollView.shouldOwnFirstResponder = isActive
             let terminalView = scrollView.surfaceView
+            terminalView.terminalContextMenuActions = terminalContextMenuActions
             if terminalView.surfacePresentationOverrides != TerminalTabManager.shared.presentationOverrides(for: paneId) {
                 terminalView.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
             }

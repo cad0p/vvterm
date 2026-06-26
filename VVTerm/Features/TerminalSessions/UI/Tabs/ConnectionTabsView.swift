@@ -630,8 +630,10 @@ struct ConnectionTerminalContainer: View {
             ownerId: server.id.uuidString,
             serverViewTabActions: serverViewTabActions(),
             splitActions: TerminalSplitActions(
-                splitHorizontal: { splitFocusedPane(.horizontal) },
-                splitVertical: { splitFocusedPane(.vertical) },
+                splitHorizontal: { splitFocusedPane(.right) },
+                splitVertical: { splitFocusedPane(.down) },
+                splitLeft: { splitFocusedPane(.left) },
+                splitUp: { splitFocusedPane(.up) },
                 closePane: { requestCloseFocusedPane() }
             ),
             activeServerId: server.id,
@@ -931,10 +933,10 @@ struct ConnectionTerminalContainer: View {
                     fileTabManager.selectTab(tab)
                 },
                 onSplitRight: {
-                    splitFocusedPane(.horizontal)
+                    splitFocusedPane(.right)
                 },
                 onSplitDown: {
-                    splitFocusedPane(.vertical)
+                    splitFocusedPane(.down)
                 },
                 onClosePane: { requestCloseFocusedPane() },
                 canSplit: selectedTab != nil,
@@ -982,7 +984,7 @@ struct ConnectionTerminalContainer: View {
         tabManager.connectedServerIds.remove(server.id)
     }
 
-    private func splitFocusedPane(_ direction: TerminalSplitDirection) {
+    private func splitFocusedPane(_ placement: TerminalSplitPlacement) {
         guard let selectedTab else { return }
         guard StoreManager.shared.isPro else {
             showingZenPanel = false
@@ -990,11 +992,15 @@ struct ConnectionTerminalContainer: View {
             return
         }
 
-        switch direction {
-        case .horizontal:
-            _ = tabManager.splitHorizontal(tab: selectedTab, paneId: selectedTab.focusedPaneId)
-        case .vertical:
-            _ = tabManager.splitVertical(tab: selectedTab, paneId: selectedTab.focusedPaneId)
+        switch placement {
+        case .right:
+            _ = tabManager.splitRight(tab: selectedTab, paneId: selectedTab.focusedPaneId)
+        case .left:
+            _ = tabManager.splitLeft(tab: selectedTab, paneId: selectedTab.focusedPaneId)
+        case .down:
+            _ = tabManager.splitDown(tab: selectedTab, paneId: selectedTab.focusedPaneId)
+        case .up:
+            _ = tabManager.splitUp(tab: selectedTab, paneId: selectedTab.focusedPaneId)
         }
     }
     #endif

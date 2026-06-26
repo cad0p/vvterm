@@ -117,9 +117,10 @@ extension Ghostty {
         ///
         /// - Parameter event: The mouse button event to send to the terminal
         @MainActor
-        func sendMouseButton(_ event: Input.MouseButtonEvent) {
-            guard let surface = unsafeCValue else { return }
-            ghostty_surface_mouse_button(
+        @discardableResult
+        func sendMouseButton(_ event: Input.MouseButtonEvent) -> Bool {
+            guard let surface = unsafeCValue else { return false }
+            return ghostty_surface_mouse_button(
                 surface,
                 event.action.cMouseState,
                 event.button.cMouseButton,

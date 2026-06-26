@@ -55,6 +55,7 @@ final class TerminalTabManager: ObservableObject {
     /// Pane state keyed by pane ID
     @Published var paneStates: [UUID: TerminalPaneState] = [:]
     @Published private(set) var runtimeTitleByPane: [UUID: String] = [:]
+    @Published private(set) var titleOverrideByPane: [UUID: String] = [:]
 
     @Published var tmuxAttachPrompt: TmuxAttachPrompt?
 
@@ -244,28 +245,43 @@ final class TerminalTabManager: ObservableObject {
 
     /// Split a pane horizontally (left | right)
     func splitHorizontal(tab: TerminalTab, paneId: UUID) -> UUID? {
-        guard StoreManager.shared.isPro else { return nil }
-        let newPaneId = splitPane(tab: tab, paneId: paneId, direction: .horizontal)
-        if newPaneId != nil {
-            AnalyticsTracker.shared.trackSplitPaneCreated()
-        }
-        return newPaneId
+        splitRight(tab: tab, paneId: paneId)
     }
 
     /// Split a pane vertically (top / bottom)
     func splitVertical(tab: TerminalTab, paneId: UUID) -> UUID? {
+        splitDown(tab: tab, paneId: paneId)
+    }
+
+    func splitRight(tab: TerminalTab, paneId: UUID) -> UUID? {
+        splitPane(tab: tab, paneId: paneId, placement: .right)
+    }
+
+    func splitLeft(tab: TerminalTab, paneId: UUID) -> UUID? {
+        splitPane(tab: tab, paneId: paneId, placement: .left)
+    }
+
+    func splitDown(tab: TerminalTab, paneId: UUID) -> UUID? {
+        splitPane(tab: tab, paneId: paneId, placement: .down)
+    }
+
+    func splitUp(tab: TerminalTab, paneId: UUID) -> UUID? {
+        splitPane(tab: tab, paneId: paneId, placement: .up)
+    }
+
+    private func splitPane(tab: TerminalTab, paneId: UUID, placement: TerminalSplitPlacement) -> UUID? {
         guard StoreManager.shared.isPro else { return nil }
-        let newPaneId = splitPane(tab: tab, paneId: paneId, direction: .vertical)
+        let newPaneId = createSplitPane(tab: tab, paneId: paneId, placement: placement)
         if newPaneId != nil {
             AnalyticsTracker.shared.trackSplitPaneCreated()
         }
         return newPaneId
     }
 
-    private func splitPane(tab: TerminalTab, paneId: UUID, direction: TerminalSplitDirection) -> UUID? {
+    private func createSplitPane(tab: TerminalTab, paneId: UUID, placement: TerminalSplitPlacement) -> UUID? {
         // Resolve the latest tab from manager state since the passed value can be stale.
         guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
-            logger.warning("splitPane: tab not found \(tab.id.uuidString, privacy: .public)")
+            logger.warning("createSplitPane: tab not found \(tab.id.uuidString, privacy: .public)")
             return nil
         }
 
@@ -276,7 +292,7 @@ final class TerminalTabManager: ObservableObject {
             paneExists = currentTab.rootPaneId == paneId
         }
         guard paneExists else {
-            logger.warning("splitPane: pane not found \(paneId.uuidString, privacy: .public)")
+            logger.warning("createSplitPane: pane not found \(paneId.uuidString, privacy: .public)")
             return nil
         }
 
@@ -294,12 +310,14 @@ final class TerminalTabManager: ObservableObject {
         newState.tmuxStatus = tmuxResolver.isTmuxEnabled(for: currentTab.serverId) ? .unknown : .off
         paneStates[newPaneId] = newState
 
+        let sourceNode = TerminalSplitNode.leaf(paneId: paneId)
+        let newNode = TerminalSplitNode.leaf(paneId: newPaneId)
         // Create the new split node
         let newSplit = TerminalSplitNode.split(TerminalSplitNode.Split(
-            direction: direction,
+            direction: placement.direction,
             ratio: 0.5,
-            left: .leaf(paneId: paneId),
-            right: .leaf(paneId: newPaneId)
+            left: placement.insertsBeforeSource ? newNode : sourceNode,
+            right: placement.insertsBeforeSource ? sourceNode : newNode
         ))
 
         // Update tab layout
@@ -315,7 +333,7 @@ final class TerminalTabManager: ObservableObject {
         // Update tabs array (triggers @Published, view will have state ready)
         updateTab(updatedTab)
 
-        logger.info("Split pane \(paneId) \(direction.rawValue), new pane: \(newPaneId)")
+        logger.info("Split pane \(paneId) \(placement.direction.rawValue), new pane: \(newPaneId)")
         return newPaneId
     }
 
@@ -610,6 +628,7 @@ final class TerminalTabManager: ObservableObject {
         unregisterTerminal(for: paneId)
         paneStates.removeValue(forKey: paneId)
         runtimeTitleByPane.removeValue(forKey: paneId)
+        titleOverrideByPane.removeValue(forKey: paneId)
 
         Task.detached { [weak self] in
             await self?.unregisterSSHClient(
@@ -659,6 +678,20 @@ final class TerminalTabManager: ObservableObject {
         setPaneTitle(title, for: paneId)
     }
 
+    func setPaneTitleOverride(_ rawTitle: String?, for paneId: UUID) {
+        guard paneStates[paneId] != nil else { return }
+        let title = rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if title.isEmpty {
+            titleOverrideByPane.removeValue(forKey: paneId)
+        } else {
+            titleOverrideByPane[paneId] = title
+        }
+    }
+
+    func displayTitle(forPane paneId: UUID, fallback: String? = nil) -> String? {
+        titleOverrideByPane[paneId] ?? runtimeTitleByPane[paneId] ?? fallback
+    }
+
     func presentationOverrides(for paneId: UUID) -> TerminalPresentationOverrides {
         paneStates[paneId]?.presentationOverrides ?? .empty
     }
@@ -684,7 +717,11 @@ final class TerminalTabManager: ObservableObject {
     }
 
     func displayTitle(for tab: TerminalTab) -> String {
-        runtimeTitleByPane[tab.focusedPaneId] ?? runtimeTitleByPane[tab.rootPaneId] ?? tab.title
+        titleOverrideByPane[tab.focusedPaneId]
+            ?? runtimeTitleByPane[tab.focusedPaneId]
+            ?? titleOverrideByPane[tab.rootPaneId]
+            ?? runtimeTitleByPane[tab.rootPaneId]
+            ?? tab.title
     }
 
     func workingDirectory(for paneId: UUID) -> String? {
@@ -1230,6 +1267,8 @@ extension TerminalTabManager {
         connectedServerIds = []
         selectedViewByServer = [:]
         paneStates = [:]
+        runtimeTitleByPane = [:]
+        titleOverrideByPane = [:]
         tmuxAttachPrompt = nil
         terminalRegistryVersion = 0
         terminalViews.removeAll()
