@@ -7,11 +7,15 @@ enum TerminalHardwareTextInputRoutingPolicy {
         hasCommandModifier: Bool,
         hasActiveIMEComposition: Bool,
         isSystemTextInputToggleKey: Bool,
+        isTextInputModifierOnlyKey: Bool,
         hasTerminalFallbackKey: Bool,
         keyProducesText: Bool
     ) -> Bool {
         if hasCommandModifier {
             return false
+        }
+        if isTextInputModifierOnlyKey {
+            return true
         }
         if hasActiveIMEComposition {
             return true
@@ -48,5 +52,11 @@ enum TerminalHardwareTextInputRoutingPolicy {
             && !hasAlternateModifier
             && !hasCommandModifier
             && !isSystemTextInputToggleKey
+    }
+
+    static func shouldMirrorSystemTextInputModifierPressToTerminal(
+        isTextInputModifierOnlyKey: Bool
+    ) -> Bool {
+        isTextInputModifierOnlyKey
     }
 }

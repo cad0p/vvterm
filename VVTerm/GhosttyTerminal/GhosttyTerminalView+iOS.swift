@@ -3464,6 +3464,51 @@ class GhosttyTerminalView: UIView {
         }
     }
 
+    private func isTextInputModifierOnlyKey(_ key: UIKey) -> Bool {
+        switch key.keyCode {
+        case .keyboardLeftShift,
+             .keyboardRightShift,
+             .keyboardLeftAlt,
+             .keyboardRightAlt:
+            return key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty
+        default:
+            return false
+        }
+    }
+
+    @discardableResult
+    private func sendHardwarePressToGhostty(
+        _ key: UIKey,
+        keyCode: UInt16,
+        surface: Ghostty.Surface,
+        cSurface: ghostty_surface_t
+    ) -> Bool {
+        if sendDirectHardwareKeyEvent(key, action: GHOSTTY_ACTION_PRESS, surface: cSurface) {
+            hardwarePressesSentToGhostty.insert(keyCode)
+            fallbackHardwarePressKeys.removeValue(forKey: keyCode)
+            fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
+            startKeyRepeat(for: key)
+            return true
+        }
+
+        guard let fallbackKey = fallbackHardwareKey(for: key) else {
+            return false
+        }
+
+        surface.sendKeyEvent(
+            fallbackHardwareEvent(
+                key: fallbackKey,
+                action: .press,
+                modifiers: key.modifierFlags
+            )
+        )
+        hardwarePressesSentToGhostty.insert(keyCode)
+        fallbackHardwarePressKeys[keyCode] = fallbackKey
+        fallbackHardwarePressModifiers[keyCode] = key.modifierFlags
+        startKeyRepeat(for: key)
+        return true
+    }
+
     private func shouldRoutePressToSystemTextInput(_ key: UIKey) -> Bool {
         let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
         return TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
@@ -3472,6 +3517,7 @@ class GhosttyTerminalView: UIView {
             hasCommandModifier: key.modifierFlags.contains(.command),
             hasActiveIMEComposition: textInputModel.hasActiveIMEComposition,
             isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock,
+            isTextInputModifierOnlyKey: isTextInputModifierOnlyKey(key),
             hasTerminalFallbackKey: fallbackHardwareKey(for: key) != nil,
             keyProducesText: keyProducesText
         )
@@ -3509,10 +3555,26 @@ class GhosttyTerminalView: UIView {
                 result.didHandleGhosttyInput = true
                 continue
             }
+            let keyCode = UInt16(key.keyCode.rawValue)
             if shouldRoutePressToSystemTextInput(key) {
-                let keyCode = UInt16(key.keyCode.rawValue)
                 let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
                 systemTextInputPresses.insert(keyCode)
+                if TerminalHardwareTextInputRoutingPolicy.shouldMirrorSystemTextInputModifierPressToTerminal(
+                    isTextInputModifierOnlyKey: isTextInputModifierOnlyKey(key)
+                ) {
+                    // UIKit needs Shift/Option transitions to interpret the next text key, while
+                    // Ghostty still needs matching modifier press/release events.
+                    if sendHardwarePressToGhostty(
+                        key,
+                        keyCode: keyCode,
+                        surface: surface,
+                        cSurface: cSurface
+                    ) {
+                        result.didHandleGhosttyInput = true
+                    }
+                    result.forwardedToSystem.insert(press)
+                    continue
+                }
                 if TerminalHardwareTextInputRoutingPolicy.shouldRecordPendingInterpretedHardwareKey(
                     keyProducesText: keyProducesText,
                     hasControlModifier: key.modifierFlags.contains(.control),
@@ -3527,28 +3589,15 @@ class GhosttyTerminalView: UIView {
                 continue
             }
 
-            let keyCode = UInt16(key.keyCode.rawValue)
             if hasLocalTextInputSession {
                 invalidateLocalTextInputSession()
             }
-            if sendDirectHardwareKeyEvent(key, action: GHOSTTY_ACTION_PRESS, surface: cSurface) {
-                hardwarePressesSentToGhostty.insert(keyCode)
-                fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-                fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-                startKeyRepeat(for: key)
-                result.didHandleGhosttyInput = true
-            } else if let fallbackKey = fallbackHardwareKey(for: key) {
-                surface.sendKeyEvent(
-                    fallbackHardwareEvent(
-                        key: fallbackKey,
-                        action: .press,
-                        modifiers: key.modifierFlags
-                    )
-                )
-                hardwarePressesSentToGhostty.insert(keyCode)
-                fallbackHardwarePressKeys[keyCode] = fallbackKey
-                fallbackHardwarePressModifiers[keyCode] = key.modifierFlags
-                startKeyRepeat(for: key)
+            if sendHardwarePressToGhostty(
+                key,
+                keyCode: keyCode,
+                surface: surface,
+                cSurface: cSurface
+            ) {
                 result.didHandleGhosttyInput = true
             }
         }
@@ -3571,10 +3620,10 @@ class GhosttyTerminalView: UIView {
                 continue
             }
             let keyCode = UInt16(key.keyCode.rawValue)
+            let shouldForwardToSystem = systemTextInputPresses.remove(keyCode) != nil
             guard hardwarePressesSentToGhostty.contains(keyCode) else {
                 fallbackHardwarePressKeys.removeValue(forKey: keyCode)
                 fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-                systemTextInputPresses.remove(keyCode)
                 result.forwardedToSystem.insert(press)
                 continue
             }
@@ -3597,6 +3646,9 @@ class GhosttyTerminalView: UIView {
                     )
                 )
                 result.didHandleGhosttyInput = true
+            }
+            if shouldForwardToSystem {
+                result.forwardedToSystem.insert(press)
             }
         }
 

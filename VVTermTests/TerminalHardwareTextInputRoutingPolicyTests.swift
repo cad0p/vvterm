@@ -11,6 +11,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
             )
@@ -26,6 +27,23 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: true,
+                isTextInputModifierOnlyKey: false,
+                hasTerminalFallbackKey: true,
+                keyProducesText: false
+            )
+        )
+    }
+
+    @Test
+    func routesTextInputModifierOnlyKeysToSystemTextInputEvenThoughTheyAreFallbackKeys() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: true,
                 hasTerminalFallbackKey: true,
                 keyProducesText: false
             )
@@ -41,6 +59,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: true,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: true,
                 keyProducesText: false
             )
@@ -52,6 +71,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: true,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: true,
                 keyProducesText: false
             )
@@ -67,6 +87,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: true,
                 keyProducesText: true
             ) == false
@@ -82,6 +103,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
             ) == false
@@ -97,6 +119,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
             )
@@ -112,6 +135,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: true,
                 keyProducesText: true
             ) == false
@@ -127,6 +151,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: true,
                 hasActiveIMEComposition: false,
                 isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
                 hasTerminalFallbackKey: false,
                 keyProducesText: true
             ) == false
@@ -171,6 +196,24 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasCommandModifier: false,
                 hasActiveIMEComposition: true,
                 isSystemTextInputToggleKey: false
+            ) == false
+        )
+    }
+
+    @Test
+    func mirrorsTextInputModifierOnlyKeysToTerminal() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldMirrorSystemTextInputModifierPressToTerminal(
+                isTextInputModifierOnlyKey: true
+            )
+        )
+    }
+
+    @Test
+    func doesNotMirrorPrintableSystemTextInputKeysToTerminal() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldMirrorSystemTextInputModifierPressToTerminal(
+                isTextInputModifierOnlyKey: false
             ) == false
         )
     }
