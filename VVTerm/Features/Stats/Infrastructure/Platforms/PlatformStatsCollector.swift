@@ -15,6 +15,37 @@ protocol PlatformStatsCollector: Sendable {
     /// - Parameter client: SSH client to execute commands
     /// - Returns: System info tuple
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int)
+
+    /// Get stable hardware details used by the system info sheet.
+    /// Platforms may return partial data; collectors should avoid throwing for missing optional probes.
+    func collectProfile(client: SSHClient) async throws -> HardwareProfile
+
+    /// Collect a fuller process list for detail sheets.
+    /// Periodic collectors may keep their process list capped for SSH/UI performance.
+    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo]
+}
+
+extension PlatformStatsCollector {
+    func collectProfile(client: SSHClient) async throws -> HardwareProfile {
+        let systemInfo = try await getSystemInfo(client: client)
+        return HardwareProfile(
+            hostname: systemInfo.hostname,
+            osInfo: systemInfo.osInfo,
+            architecture: "",
+            kernelVersion: "",
+            cpuModel: "",
+            cpuVendor: "",
+            cpuCores: systemInfo.cpuCores,
+            cpuThreads: systemInfo.cpuCores,
+            memoryTotal: 0,
+            gpus: [],
+            collectedAt: Date()
+        )
+    }
+
+    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
+        []
+    }
 }
 
 // MARK: - Stats Collection Context
@@ -25,6 +56,9 @@ final class StatsCollectionContext: @unchecked Sendable {
     var prevNetTx: UInt64 = 0
     var prevTimestamp: Date?
     var prevCpuValues: LinuxCpuValues?
+    var prevCpuCoreValues: [String: LinuxCpuValues] = [:]
+    var lastGPUCollectionTimestamp: Date?
+    var lastGPUSamples: [GPUSample] = []
 
     private let lock = NSLock()
 
@@ -40,6 +74,9 @@ final class StatsCollectionContext: @unchecked Sendable {
             prevNetTx = 0
             prevTimestamp = nil
             prevCpuValues = nil
+            prevCpuCoreValues = [:]
+            lastGPUCollectionTimestamp = nil
+            lastGPUSamples = []
         }
     }
 
@@ -66,6 +103,44 @@ final class StatsCollectionContext: @unchecked Sendable {
     func getCpuValues() -> LinuxCpuValues? {
         withLock {
             prevCpuValues
+        }
+    }
+
+    func updateCpuCoreValues(_ values: [String: LinuxCpuValues]) {
+        withLock {
+            prevCpuCoreValues = values
+        }
+    }
+
+    func getCpuCoreValues() -> [String: LinuxCpuValues] {
+        withLock {
+            prevCpuCoreValues
+        }
+    }
+
+    func shouldCollectGPU(now: Date = Date(), minimumInterval: TimeInterval = 5) -> Bool {
+        withLock {
+            guard let lastGPUCollectionTimestamp else { return true }
+            return now.timeIntervalSince(lastGPUCollectionTimestamp) >= minimumInterval
+        }
+    }
+
+    func markGPUCollected(at timestamp: Date = Date()) {
+        withLock {
+            lastGPUCollectionTimestamp = timestamp
+        }
+    }
+
+    func updateGPUSamples(_ samples: [GPUSample], timestamp: Date = Date()) {
+        withLock {
+            lastGPUCollectionTimestamp = timestamp
+            lastGPUSamples = samples
+        }
+    }
+
+    func getGPUSamples() -> [GPUSample] {
+        withLock {
+            lastGPUSamples
         }
     }
 }

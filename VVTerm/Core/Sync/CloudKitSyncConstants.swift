@@ -18,6 +18,7 @@ enum CloudKitSyncConstants {
     static let terminalUsePerAppearanceThemeKey = "terminalUsePerAppearanceTheme"
     static let terminalThemePreferenceUpdatedAtKey = "terminalThemePreferenceUpdatedAt"
     static let terminalAccessoryProfileStorageKey = "terminalAccessoryProfileV1"
+    static let statsPreferencesStorageKey = "statsPreferencesV1"
 
     static func changeTokenKey(for zoneName: String = recordZoneName) -> String {
         "\(appPrefix).cloudkit.\(zoneName).token"

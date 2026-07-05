@@ -4,6 +4,7 @@ struct ServerStats {
     // System
     var hostname: String = ""
     var osInfo: String = ""
+    var hardware: HardwareProfile = .empty
     var cpuCores: Int = 0
 
     // CPU detailed
@@ -13,6 +14,7 @@ struct ServerStats {
     var cpuIowait: Double = 0
     var cpuSteal: Double = 0
     var cpuIdle: Double = 0
+    var cpuCoreSamples: [CPUCoreSample] = []
 
     // Memory detailed (in bytes)
     var memoryTotal: UInt64 = 0
@@ -35,12 +37,26 @@ struct ServerStats {
     var uptime: TimeInterval = 0
     var processCount: Int = 0
     var topProcesses: [ProcessInfo] = []
+    var gpuSamples: [GPUSample] = []
     var timestamp: Date = Date()
 
     var memoryPercent: Double {
         guard memoryTotal > 0 else { return 0 }
         return Double(memoryUsed) / Double(memoryTotal) * 100
     }
+}
+
+struct CPUCoreSample: Identifiable {
+    let identifier: String
+    let displayName: String
+    let usagePercent: Double
+    let userPercent: Double
+    let systemPercent: Double
+    let iowaitPercent: Double
+    let stealPercent: Double
+    let idlePercent: Double
+
+    var id: String { identifier }
 }
 
 struct VolumeInfo: Identifiable {
@@ -62,6 +78,24 @@ struct ProcessInfo: Identifiable {
     let name: String
     let cpuPercent: Double
     let memoryPercent: Double
+    let user: String
+    let command: String
+
+    init(
+        pid: Int,
+        name: String,
+        cpuPercent: Double,
+        memoryPercent: Double,
+        user: String = "",
+        command: String = ""
+    ) {
+        self.pid = pid
+        self.name = name
+        self.cpuPercent = cpuPercent
+        self.memoryPercent = memoryPercent
+        self.user = user
+        self.command = command.isEmpty ? name : command
+    }
 }
 
 struct StatsPoint: Identifiable {

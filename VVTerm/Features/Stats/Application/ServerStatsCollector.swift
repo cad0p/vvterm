@@ -10,6 +10,9 @@ final class ServerStatsCollector: ObservableObject {
     @Published var stats = ServerStats()
     @Published var cpuHistory: [StatsPoint] = []
     @Published var memoryHistory: [StatsPoint] = []
+    @Published var networkRxHistory: [StatsPoint] = []
+    @Published var networkTxHistory: [StatsPoint] = []
+    @Published var gpuUtilizationHistoryByDeviceID: [String: [StatsPoint]] = [:]
     @Published var isCollecting = false
     @Published var connectionError: String?
 
@@ -24,6 +27,7 @@ final class ServerStatsCollector: ObservableObject {
     private var remotePlatform: RemotePlatform = .unknown
     private var platformCollector: PlatformStatsCollector?
     private let context = StatsCollectionContext()
+    private var hardwareProfile: HardwareProfile = .empty
 
     // MARK: - Collection Control
 
@@ -102,6 +106,39 @@ final class ServerStatsCollector: ObservableObject {
         clearConnectionState()
     }
 
+    func terminateProcess(_ process: ProcessInfo) async throws {
+        guard process.pid > 1 else {
+            throw ProcessControlError.protectedProcess
+        }
+
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+
+        let command: String
+        switch remotePlatform {
+        case .windows:
+            command = "taskkill /PID \(process.pid) /T /F"
+        case .linux, .darwin, .freebsd, .openbsd, .netbsd, .unknown:
+            command = "kill -TERM \(process.pid)"
+        }
+
+        _ = try await client.execute(command, timeout: .seconds(5))
+        await collectStats(client: client)
+    }
+
+    func loadProcesses() async throws -> [ProcessInfo] {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+        guard let platformCollector else {
+            return stats.topProcesses
+        }
+
+        let processes = try await platformCollector.collectProcesses(client: client)
+        return processes.isEmpty ? stats.topProcesses : processes
+    }
+
     // MARK: - Stats Collection
 
     private func collectStats(client: SSHClient) async {
@@ -113,10 +150,11 @@ final class ServerStatsCollector: ObservableObject {
 
                 logger.info("Detected remote platform: \(self.remotePlatform.rawValue)")
 
-                // Get initial system info
-                let systemInfo = try await platformCollector?.getSystemInfo(client: client)
+                // Get initial hardware profile. Individual platform collectors return
+                // partial profiles when optional probes are unavailable.
+                let profile = await self.collectInitialProfile(client: client)
                 await MainActor.run {
-                    self.applySystemInfo(systemInfo)
+                    self.applyProfile(profile)
                 }
             }
 
@@ -127,9 +165,17 @@ final class ServerStatsCollector: ObservableObject {
 
             // Preserve system info
             let existingStats = await MainActor.run { self.stats }
+            let collectedCpuCores = newStats.cpuCores
             newStats.hostname = existingStats.hostname
             newStats.osInfo = existingStats.osInfo
-            newStats.cpuCores = existingStats.cpuCores
+            newStats.cpuCores = Self.resolvedCPUCoreCount(
+                existing: existingStats.cpuCores,
+                collected: collectedCpuCores
+            )
+            newStats.hardware = existingStats.hardware
+            if newStats.gpuSamples.isEmpty, !existingStats.gpuSamples.isEmpty {
+                newStats.gpuSamples = existingStats.gpuSamples
+            }
 
             // Update on main thread
             await MainActor.run {
@@ -148,6 +194,38 @@ final class ServerStatsCollector: ObservableObject {
         context.reset()
         remotePlatform = .unknown
         platformCollector = nil
+        hardwareProfile = .empty
+        cpuHistory = []
+        memoryHistory = []
+        networkRxHistory = []
+        networkTxHistory = []
+        gpuUtilizationHistoryByDeviceID = [:]
+    }
+
+    private func collectInitialProfile(client: SSHClient) async -> HardwareProfile? {
+        guard let platformCollector else { return nil }
+
+        if let profile = try? await platformCollector.collectProfile(client: client) {
+            return profile
+        }
+
+        if let systemInfo = try? await platformCollector.getSystemInfo(client: client) {
+            return HardwareProfile(
+                hostname: systemInfo.hostname,
+                osInfo: systemInfo.osInfo,
+                architecture: "",
+                kernelVersion: "",
+                cpuModel: "",
+                cpuVendor: "",
+                cpuCores: systemInfo.cpuCores,
+                cpuThreads: systemInfo.cpuCores,
+                memoryTotal: 0,
+                gpus: [],
+                collectedAt: Date()
+            )
+        }
+
+        return nil
     }
 
     private func configureConnectionState(client: SSHClient, ownsClient: Bool) {
@@ -166,19 +244,68 @@ final class ServerStatsCollector: ObservableObject {
         clearConnectionState()
     }
 
-    private func applySystemInfo(_ systemInfo: (hostname: String, osInfo: String, cpuCores: Int)?) {
-        stats.hostname = systemInfo?.hostname ?? ""
-        stats.osInfo = systemInfo?.osInfo ?? ""
-        stats.cpuCores = systemInfo?.cpuCores ?? 1
+    private func applyProfile(_ profile: HardwareProfile?) {
+        hardwareProfile = profile ?? .empty
+        stats.hardware = hardwareProfile
+        stats.hostname = hardwareProfile.hostname
+        stats.osInfo = hardwareProfile.osInfo
+        let profileCPUCount = hardwareProfile.cpuThreads > 0 ? hardwareProfile.cpuThreads : hardwareProfile.cpuCores
+        if profileCPUCount > 0 {
+            stats.cpuCores = profileCPUCount
+        }
+        if stats.memoryTotal == 0 {
+            stats.memoryTotal = hardwareProfile.memoryTotal
+        }
     }
 
     private func applyCollectedStats(_ newStats: ServerStats) {
         stats = newStats
 
         cpuHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.cpuUsage))
-        memoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.memoryUsed)))
+        memoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.memoryPercent))
+        networkRxHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.networkRxSpeed)))
+        networkTxHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.networkTxSpeed)))
+        appendGPUHistory(from: newStats)
 
         if cpuHistory.count > 60 { cpuHistory.removeFirst() }
         if memoryHistory.count > 60 { memoryHistory.removeFirst() }
+        if networkRxHistory.count > 60 { networkRxHistory.removeFirst() }
+        if networkTxHistory.count > 60 { networkTxHistory.removeFirst() }
+    }
+
+    private func appendGPUHistory(from newStats: ServerStats) {
+        for sample in newStats.gpuSamples {
+            guard let utilization = sample.utilizationPercent else { continue }
+            var history = gpuUtilizationHistoryByDeviceID[sample.deviceID] ?? []
+            history.append(StatsPoint(timestamp: newStats.timestamp, value: utilization))
+            if history.count > 60 {
+                history.removeFirst(history.count - 60)
+            }
+            gpuUtilizationHistoryByDeviceID[sample.deviceID] = history
+        }
+    }
+
+    nonisolated static func resolvedCPUCoreCount(existing: Int, collected: Int) -> Int {
+        if existing > 0, collected > 0 {
+            return max(existing, collected)
+        }
+        if existing > 0 {
+            return existing
+        }
+        return max(collected, 0)
+    }
+}
+
+private enum ProcessControlError: LocalizedError {
+    case notConnected
+    case protectedProcess
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            return String(localized: "Stats is not connected to the server.")
+        case .protectedProcess:
+            return String(localized: "This process cannot be killed from Stats.")
+        }
     }
 }

@@ -13,6 +13,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
     private let networkTimeout: Duration = .seconds(6)
     private let topProcessesTimeout: Duration = .seconds(8)
     private let volumesTimeout: Duration = .seconds(6)
+    private let periodicProcessLimit = 24
 
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int) {
         let environment = await client.remoteEnvironment()
@@ -39,6 +40,59 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         }
 
         return (hostname, osInfo, cpuCoresCMD)
+    }
+
+    func collectProfile(client: SSHClient) async throws -> HardwareProfile {
+        let systemInfo = try await getSystemInfo(client: client)
+
+        let cpuOutput = (try? await executePowerShell(
+            using: client,
+            script: """
+            $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1;
+            Write-Output $cpu.Name;
+            Write-Output '---SEP---';
+            Write-Output $cpu.Manufacturer;
+            Write-Output '---SEP---';
+            Write-Output $cpu.NumberOfCores;
+            Write-Output '---SEP---';
+            Write-Output $cpu.NumberOfLogicalProcessors
+            """,
+            timeout: shellInfoTimeout,
+            probeName: "profile_cpu"
+        )) ?? ""
+        let cpuSections = cpuOutput.components(separatedBy: "---SEP---")
+
+        let memoryOutput = (try? await executePowerShell(
+            using: client,
+            script: "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory",
+            timeout: shellInfoTimeout,
+            probeName: "profile_memory"
+        )) ?? ""
+
+        let gpuOutput = (try? await executePowerShell(
+            using: client,
+            script: """
+            Get-CimInstance Win32_VideoController | ForEach-Object {
+                Write-Output ('{0}|{1}|{2}|{3}' -f $_.Name, $_.AdapterCompatibility, $_.AdapterRAM, $_.DriverVersion)
+            }
+            """,
+            timeout: shellInfoTimeout,
+            probeName: "profile_gpu"
+        )) ?? ""
+
+        return HardwareProfile(
+            hostname: systemInfo.hostname,
+            osInfo: systemInfo.osInfo,
+            architecture: "",
+            kernelVersion: "",
+            cpuModel: section(cpuSections, 0),
+            cpuVendor: section(cpuSections, 1),
+            cpuCores: Int(section(cpuSections, 2)) ?? 0,
+            cpuThreads: Int(section(cpuSections, 3)) ?? systemInfo.cpuCores,
+            memoryTotal: UInt64(memoryOutput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
+            gpus: parseWindowsGPUs(gpuOutput),
+            collectedAt: Date()
+        )
     }
 
     func collectStats(client: SSHClient, context: StatsCollectionContext) async throws -> ServerStats {
@@ -131,21 +185,19 @@ struct WindowsStatsCollector: PlatformStatsCollector {
             let now = Date()
             let (prevRx, prevTx, previousTimestamp) = context.getNetworkPrev()
 
-            if let previousTimestamp, prevRx > 0 {
-                let elapsed = now.timeIntervalSince(previousTimestamp)
-                if elapsed > 0 {
-                    stats.networkRxSpeed = UInt64(Double(netRx - prevRx) / elapsed)
-                }
-            }
             let netTx = network.tx
             stats.networkTxTotal = netTx
 
-            if let previousTimestamp, prevTx > 0 {
-                let elapsed = now.timeIntervalSince(previousTimestamp)
-                if elapsed > 0 {
-                    stats.networkTxSpeed = UInt64(Double(netTx - prevTx) / elapsed)
-                }
-            }
+            let speeds = StatsParsingUtils.calculateNetworkSpeed(
+                currentRx: netRx,
+                currentTx: netTx,
+                prevRx: prevRx,
+                prevTx: prevTx,
+                prevTimestamp: previousTimestamp,
+                now: now
+            )
+            stats.networkRxSpeed = speeds.rxSpeed
+            stats.networkTxSpeed = speeds.txSpeed
 
             context.updateNetwork(rx: stats.networkRxTotal, tx: netTx, timestamp: Date())
         }
@@ -163,7 +215,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
             }
         } else if let processOutput = try? await executePowerShell(
             using: client,
-            script: "Get-Process | Sort-Object CPU -Descending | Select-Object -First 5 | ForEach-Object { Write-Output ('{0}|{1}|{2}|{3}' -f $_.Id, $_.ProcessName, [math]::Round($_.CPU,1), [math]::Round($_.WorkingSet64/1MB,1)) }",
+            script: powerShellProcessScript(limit: periodicProcessLimit),
             timeout: topProcessesTimeout,
             probeName: "top_processes"
         ) {
@@ -189,6 +241,30 @@ struct WindowsStatsCollector: PlatformStatsCollector {
 
         stats.timestamp = Date()
         return stats
+    }
+
+    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
+        if let processOutput = try? await executePowerShell(
+            using: client,
+            script: powerShellProcessScript(limit: nil),
+            timeout: topProcessesTimeout,
+            probeName: "top_processes_full"
+        ) {
+            return parseProcesses(processOutput)
+        }
+
+        let memory = (try? await collectMemoryCMD(client: client)) ?? (total: 0, used: 0, free: 0)
+        let processOutput = try await executeCMD(
+            "wmic path Win32_PerfFormattedData_PerfProc_Process get IDProcess,Name,PercentProcessorTime,WorkingSetPrivate /format:csv",
+            using: client,
+            timeout: topProcessesTimeout
+        )
+        return parseWMICProcesses(processOutput, memoryTotal: memory.total)
+    }
+
+    private func powerShellProcessScript(limit: Int?) -> String {
+        let limitClause = limit.map { " | Select-Object -First \($0)" } ?? ""
+        return "Get-Process | Sort-Object CPU -Descending\(limitClause) | ForEach-Object { Write-Output ('{0}|{1}|{2}|{3}' -f $_.Id, $_.ProcessName, [math]::Round($_.CPU,1), [math]::Round($_.WorkingSet64/1MB,1)) }"
     }
 
     private func applyCPU(_ cpuPercent: Double, to stats: inout ServerStats) {
@@ -318,7 +394,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
 
     // MARK: - Parsers
 
-    private func parseProcesses(_ output: String) -> [ProcessInfo] {
+    func parseProcesses(_ output: String) -> [ProcessInfo] {
         var processes: [ProcessInfo] = []
 
         for line in output.components(separatedBy: .newlines) {
@@ -339,7 +415,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return processes
     }
 
-    private func parseVolumes(_ output: String) -> [VolumeInfo] {
+    func parseVolumes(_ output: String) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
 
         for line in output.components(separatedBy: .newlines) {
@@ -365,7 +441,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return volumes
     }
 
-    private func parseWMICVolumes(_ output: String) -> [VolumeInfo] {
+    func parseWMICVolumes(_ output: String) -> [VolumeInfo] {
         let entries = parseWMICEntries(output)
         return entries.compactMap { entry in
             guard
@@ -388,7 +464,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         }
     }
 
-    private func parseWMICProcesses(_ output: String, memoryTotal: UInt64) -> [ProcessInfo] {
+    func parseWMICProcesses(_ output: String, memoryTotal: UInt64) -> [ProcessInfo] {
         let lines = output
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -427,8 +503,42 @@ struct WindowsStatsCollector: PlatformStatsCollector {
                 }
                 return lhs.cpuPercent > rhs.cpuPercent
             }
-            .prefix(5)
             .map { $0 }
+    }
+
+    func parseWindowsGPUs(_ output: String) -> [GPUDevice] {
+        output.components(separatedBy: .newlines).enumerated().compactMap { index, line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let parts = trimmed.components(separatedBy: "|")
+            guard parts.count >= 1 else { return nil }
+            let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return nil }
+            let vendor = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            let memory = parts.count > 2 ? (UInt64(parts[2].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) : 0
+            let driver = parts.count > 3 ? parts[3].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            let lower = "\(name) \(vendor)".lowercased()
+            let kind: GPUKind
+            if lower.contains("nvidia") {
+                kind = .nvidia
+            } else if lower.contains("amd") || lower.contains("radeon") || lower.contains("advanced micro devices") {
+                kind = .amd
+            } else if lower.contains("intel") {
+                kind = .intel
+            } else {
+                kind = .unknown
+            }
+
+            return GPUDevice(
+                id: "windows-\(index)",
+                name: name,
+                vendor: vendor,
+                kind: kind,
+                driverVersion: driver,
+                memoryTotal: memory,
+                source: .wmi
+            )
+        }
     }
 
     private func parseWMICKeyValueOutput(_ output: String) -> [String: [String]] {
@@ -477,7 +587,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return Double(normalized)
     }
 
-    private func parseNetstatInterfaceStats(_ output: String) -> (rx: UInt64, tx: UInt64) {
+    func parseNetstatInterfaceStats(_ output: String) -> (rx: UInt64, tx: UInt64) {
         for line in output.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.lowercased().hasPrefix("bytes") else { continue }
@@ -558,5 +668,10 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         components.second = second
         components.timeZone = TimeZone(secondsFromGMT: signedOffset * 60)
         return Calendar(identifier: .gregorian).date(from: components)
+    }
+
+    private func section(_ sections: [String], _ index: Int) -> String {
+        guard sections.indices.contains(index) else { return "" }
+        return sections[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -349,6 +349,15 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section(String(localized: "Stats")) {
+                NavigationLink {
+                    AppearanceSettings()
+                        .navigationTitle(Text("Stats Appearance"))
+                } label: {
+                    Label(String(localized: "Stats Appearance"), systemImage: "chart.bar.xaxis")
+                }
+            }
+
             Section {
                 Button("Reset Server Views") {
                     viewTabConfig.resetToDefaults()

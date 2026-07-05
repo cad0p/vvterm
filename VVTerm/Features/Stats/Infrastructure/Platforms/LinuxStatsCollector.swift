@@ -9,6 +9,8 @@ struct LinuxStatsCollector: PlatformStatsCollector {
     private let bytesPerGiB: UInt64 = 1_073_741_824
     private let bytesPerTiB: UInt64 = 1_099_511_627_776
     private let bytesPerPiB: UInt64 = 1_125_899_906_842_624
+    private let periodicProcessLimit = 24
+    private let processListTimeout: Duration = .seconds(8)
 
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int) {
         let cmd = "uname -srm; echo '---SEP---'; hostname; echo '---SEP---'; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1"
@@ -22,12 +24,50 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         return (hostname, osInfo, cpuCores)
     }
 
+    func collectProfile(client: SSHClient) async throws -> HardwareProfile {
+        let cmd = """
+            LC_ALL=C LANG=C; \
+            hostname 2>/dev/null; echo '---SEP---'; \
+            uname -srm 2>/dev/null; echo '---SEP---'; \
+            uname -m 2>/dev/null; echo '---SEP---'; \
+            uname -r 2>/dev/null; echo '---SEP---'; \
+            (lscpu 2>/dev/null || cat /proc/cpuinfo 2>/dev/null); echo '---SEP---'; \
+            grep -m1 '^MemTotal:' /proc/meminfo 2>/dev/null; echo '---SEP---'; \
+            (nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv,noheader,nounits 2>/dev/null || true); echo '---SEP---'; \
+            (lspci -mm 2>/dev/null | grep -Ei 'VGA|3D|Display' || true)
+            """
+        let output = try await client.execute(cmd, timeout: .seconds(5))
+        let sections = output.components(separatedBy: "---SEP---")
+        let hostname = sections[safe: 0]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let osInfo = sections[safe: 1]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let architecture = sections[safe: 2]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let kernelVersion = sections[safe: 3]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cpu = parseCPUProfile(sections[safe: 4] ?? "")
+        let memoryTotal = parseMemTotal(sections[safe: 5] ?? "")
+        let nvidiaGPUs = parseNvidiaProfile(sections[safe: 6] ?? "")
+        let pciGPUs = parsePCIGPUs(sections[safe: 7] ?? "", existingIDs: Set(nvidiaGPUs.map(\.id)))
+
+        return HardwareProfile(
+            hostname: hostname,
+            osInfo: osInfo,
+            architecture: architecture,
+            kernelVersion: kernelVersion,
+            cpuModel: cpu.model,
+            cpuVendor: cpu.vendor,
+            cpuCores: cpu.cores,
+            cpuThreads: cpu.threads,
+            memoryTotal: memoryTotal,
+            gpus: nvidiaGPUs + pciGPUs,
+            collectedAt: Date()
+        )
+    }
+
     func collectStats(client: SSHClient, context: StatsCollectionContext) async throws -> ServerStats {
         var stats = ServerStats()
 
         // Batch multiple /proc reads in one command
         let batchCmd = """
-            cat /proc/stat | head -1; echo '---SEP---'; \
+            grep '^cpu' /proc/stat; echo '---SEP---'; \
             cat /proc/meminfo; echo '---SEP---'; \
             cat /proc/net/dev; echo '---SEP---'; \
             cat /proc/loadavg; echo '---SEP---'; \
@@ -56,6 +96,9 @@ struct LinuxStatsCollector: PlatformStatsCollector {
                 stats.cpuIdle = cpuResult.result.idle
                 stats.cpuUsage = cpuResult.result.total
                 context.updateCpuValues(cpuResult.newValues)
+                let coreResult = parseProcStatCores(sections[0], prevValues: context.getCpuCoreValues())
+                stats.cpuCoreSamples = coreResult.samples
+                context.updateCpuCoreValues(coreResult.newValues)
                 missingCpu = false
             }
         }
@@ -142,7 +185,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
                   [ -n "$rx" ] && [ -n "$tx" ] && echo "$n $rx $tx"; \
                 done; echo '---SEP---'; \
                 (ip -s link 2>/dev/null || ifconfig -a 2>/dev/null); echo '---SEP---'; \
-                (ps aux --sort=-%cpu 2>/dev/null | head -6 || ps aux | head -6); echo '---SEP---'; \
+                \(processCommand(limit: periodicProcessLimit)); echo '---SEP---'; \
                 (ps -e 2>/dev/null | wc -l)
                 """
             let fallbackOutput = try await client.execute(fallbackCmd)
@@ -217,12 +260,12 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         }
 
         // Volumes (separate command for reliability)
-        let dfOutput = try await client.execute("df -BM -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null | tail -n +2")
+        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -BM -P -x tmpfs -x devtmpfs -x squashfs 2>/dev/null")
         stats.volumes = parseDfVolumes(dfOutput)
 
         // Top processes
         if stats.topProcesses.isEmpty {
-            let psOutput = try await client.execute("ps aux --sort=-%cpu 2>/dev/null | head -6 || ps aux | head -6")
+            let psOutput = try await client.execute(processCommand(limit: periodicProcessLimit), timeout: processListTimeout)
             stats.topProcesses = parsePs(psOutput)
         }
 
@@ -232,14 +275,28 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             stats.processCount = Int(procCount.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         }
 
+        stats.gpuSamples = await collectGPUSamplesIfNeeded(client: client, context: context)
         stats.timestamp = Date()
         return stats
     }
 
+    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
+        let output = try await client.execute(processCommand(limit: nil), timeout: processListTimeout)
+        return parsePs(output)
+    }
+
     // MARK: - Parsers
 
+    private func processCommand(limit: Int?) -> String {
+        let command = "(ps -eo pid=,user=,pcpu=,pmem=,comm=,args= --sort=-pcpu 2>/dev/null || ps aux --sort=-%cpu 2>/dev/null || ps aux)"
+        guard let limit else { return command }
+        return "\(command) | head -n \(limit)"
+    }
+
     private func isProcStatValid(_ output: String) -> Bool {
-        let components = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = output.components(separatedBy: .newlines)
+            .first { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("cpu ") } ?? output
+        let components = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .whitespaces)
             .filter { !$0.isEmpty }
         return components.count >= 8 && components.first == "cpu"
@@ -253,14 +310,64 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         output.contains(":") && output.contains("bytes")
     }
 
-    private func parseProcStat(_ output: String, prevValues: LinuxCpuValues?) -> (result: CpuResult, newValues: LinuxCpuValues) {
-        let components = output.trimmingCharacters(in: .whitespacesAndNewlines)
+    func parseProcStat(_ output: String, prevValues: LinuxCpuValues?) -> (result: CpuResult, newValues: LinuxCpuValues) {
+        let firstLine = output.components(separatedBy: .newlines)
+            .first { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("cpu ") } ?? output
+        guard let current = parseCpuValues(firstLine) else {
+            let zeroValues = LinuxCpuValues(user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0, steal: 0)
+            return (CpuResult(total: 0, user: 0, system: 0, iowait: 0, steal: 0, idle: 100), zeroValues)
+        }
+
+        return (calculateCpuResult(current: current, previous: prevValues), current)
+    }
+
+    func parseProcStatCores(
+        _ output: String,
+        prevValues: [String: LinuxCpuValues]
+    ) -> (samples: [CPUCoreSample], newValues: [String: LinuxCpuValues]) {
+        var samples: [CPUCoreSample] = []
+        var newValues: [String: LinuxCpuValues] = [:]
+
+        for line in output.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parts = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            guard let identifier = parts.first,
+                  identifier.hasPrefix("cpu"),
+                  identifier != "cpu",
+                  let values = parseCpuValues(trimmed) else {
+                continue
+            }
+
+            let result = calculateCpuResult(current: values, previous: prevValues[identifier])
+            let indexText = String(identifier.dropFirst(3))
+            let displayIndex = (Int(indexText) ?? samples.count) + 1
+            samples.append(CPUCoreSample(
+                identifier: identifier,
+                displayName: String(format: String(localized: "CPU %lld"), Int64(displayIndex)),
+                usagePercent: result.total,
+                userPercent: result.user,
+                systemPercent: result.system,
+                iowaitPercent: result.iowait,
+                stealPercent: result.steal,
+                idlePercent: result.idle
+            ))
+            newValues[identifier] = values
+        }
+
+        samples.sort { lhs, rhs in
+            numericCPUIndex(lhs.identifier) < numericCPUIndex(rhs.identifier)
+        }
+
+        return (samples, newValues)
+    }
+
+    private func parseCpuValues(_ line: String) -> LinuxCpuValues? {
+        let components = line.trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .whitespaces)
             .filter { !$0.isEmpty }
 
         guard components.count >= 8 else {
-            let zeroValues = LinuxCpuValues(user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0, steal: 0)
-            return (CpuResult(total: 0, user: 0, system: 0, iowait: 0, steal: 0, idle: 100), zeroValues)
+            return nil
         }
 
         let user = UInt64(components[1]) ?? 0
@@ -272,12 +379,14 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         let softirq = UInt64(components[7]) ?? 0
         let steal = components.count > 8 ? (UInt64(components[8]) ?? 0) : 0
 
-        let current = LinuxCpuValues(
+        return LinuxCpuValues(
             user: user, nice: nice, system: system, idle: idle,
             iowait: iowait, irq: irq, softirq: softirq, steal: steal
         )
+    }
 
-        if let prev = prevValues {
+    private func calculateCpuResult(current: LinuxCpuValues, previous: LinuxCpuValues?) -> CpuResult {
+        if let prev = previous {
             let dUser = Double(clampedAdd(clampedSubtract(current.user, prev.user), clampedSubtract(current.nice, prev.nice)))
             let dSystem = Double(
                 clampedAdd(
@@ -291,21 +400,22 @@ struct LinuxStatsCollector: PlatformStatsCollector {
 
             let total = dUser + dSystem + dIdle + dIowait + dSteal
             if total > 0 {
-                return (
-                    CpuResult(
-                        total: (dUser + dSystem + dIowait + dSteal) / total * 100,
-                        user: dUser / total * 100,
-                        system: dSystem / total * 100,
-                        iowait: dIowait / total * 100,
-                        steal: dSteal / total * 100,
-                        idle: dIdle / total * 100
-                    ),
-                    current
+                return CpuResult(
+                    total: (dUser + dSystem + dIowait + dSteal) / total * 100,
+                    user: dUser / total * 100,
+                    system: dSystem / total * 100,
+                    iowait: dIowait / total * 100,
+                    steal: dSteal / total * 100,
+                    idle: dIdle / total * 100
                 )
             }
         }
 
-        return (CpuResult(total: 0, user: 0, system: 0, iowait: 0, steal: 0, idle: 100), current)
+        return CpuResult(total: 0, user: 0, system: 0, iowait: 0, steal: 0, idle: 100)
+    }
+
+    private func numericCPUIndex(_ identifier: String) -> Int {
+        Int(identifier.dropFirst(3)) ?? Int.max
     }
 
     private func parseTopCpu(_ output: String) -> CpuResult? {
@@ -331,6 +441,191 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         let total = max(0, min(100, user + system + iowait + steal))
 
         return CpuResult(total: total, user: user, system: system, iowait: iowait, steal: steal, idle: idle)
+    }
+
+    private func parseCPUProfile(_ output: String) -> (model: String, vendor: String, cores: Int, threads: Int) {
+        var model = ""
+        var vendor = ""
+        var cores = 0
+        var threads = 0
+        var coresPerSocket = 0
+        var sockets = 0
+
+        for line in output.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("Model name:") {
+                model = valueAfterColon(trimmed)
+            } else if trimmed.hasPrefix("Vendor ID:") {
+                vendor = valueAfterColon(trimmed)
+            } else if trimmed.hasPrefix("CPU(s):"), threads == 0 {
+                threads = Int(valueAfterColon(trimmed)) ?? 0
+            } else if trimmed.hasPrefix("Core(s) per socket:") {
+                coresPerSocket = Int(valueAfterColon(trimmed)) ?? 0
+            } else if trimmed.hasPrefix("Socket(s):") {
+                sockets = Int(valueAfterColon(trimmed)) ?? 0
+            } else if trimmed.hasPrefix("model name"), model.isEmpty {
+                model = valueAfterColon(trimmed)
+            } else if trimmed.hasPrefix("vendor_id"), vendor.isEmpty {
+                vendor = valueAfterColon(trimmed)
+            } else if trimmed.hasPrefix("processor") {
+                threads += 1
+            }
+        }
+
+        if coresPerSocket > 0 && sockets > 0 {
+            cores = coresPerSocket * sockets
+        } else {
+            cores = threads
+        }
+
+        return (model, vendor, max(cores, 0), max(threads, cores))
+    }
+
+    private func parseMemTotal(_ output: String) -> UInt64 {
+        let parts = output.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard parts.count >= 2,
+              let kib = UInt64(parts[1]) else {
+            return 0
+        }
+        return bytesFromKiB(kib) ?? 0
+    }
+
+    private func parseNvidiaProfile(_ output: String) -> [GPUDevice] {
+        output
+            .components(separatedBy: .newlines)
+            .compactMap { line -> GPUDevice? in
+                let parts = line.split(separator: ",", omittingEmptySubsequences: false)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard parts.count >= 4,
+                      !parts[0].isEmpty else {
+                    return nil
+                }
+
+                let memoryMiB = UInt64(parts[3]) ?? 0
+                return GPUDevice(
+                    id: "nvidia-\(parts[0])",
+                    name: parts[1],
+                    vendor: "NVIDIA",
+                    kind: .nvidia,
+                    driverVersion: parts[2],
+                    memoryTotal: multiplyBytes(memoryMiB, by: bytesPerMiB) ?? 0,
+                    source: .nvidiaSMI
+                )
+            }
+    }
+
+    private func parsePCIGPUs(_ output: String, existingIDs: Set<String>) -> [GPUDevice] {
+        var devices: [GPUDevice] = []
+        for (index, line) in output.components(separatedBy: .newlines).enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let lower = trimmed.lowercased()
+            let kind: GPUKind
+            let vendor: String
+            if lower.contains("nvidia") {
+                kind = .nvidia
+                vendor = "NVIDIA"
+            } else if lower.contains("amd") || lower.contains("advanced micro devices") || lower.contains("ati") {
+                kind = .amd
+                vendor = "AMD"
+            } else if lower.contains("intel") {
+                kind = .intel
+                vendor = "Intel"
+            } else {
+                kind = .unknown
+                vendor = ""
+            }
+
+            if kind == .nvidia, existingIDs.contains(where: { $0.hasPrefix("nvidia-") }) {
+                continue
+            }
+
+            let id = "pci-\(index)"
+            guard !existingIDs.contains(id) else { continue }
+            devices.append(GPUDevice(
+                id: id,
+                name: parsePCIDeviceName(trimmed, vendor: vendor),
+                vendor: vendor,
+                kind: kind,
+                driverVersion: "",
+                memoryTotal: 0,
+                source: .unknown
+            ))
+        }
+        return devices
+    }
+
+    private func parsePCIDeviceName(_ line: String, vendor: String) -> String {
+        let quotedParts = line.components(separatedBy: "\"").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        if quotedParts.count >= 4 {
+            return quotedParts[3].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if quotedParts.count >= 2 {
+            return quotedParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return vendor.isEmpty ? line : line.replacingOccurrences(of: vendor, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func collectGPUSamplesIfNeeded(client: SSHClient, context: StatsCollectionContext) async -> [GPUSample] {
+        guard context.shouldCollectGPU() else {
+            return context.getGPUSamples()
+        }
+
+        let now = Date()
+        let output = (try? await client.execute(
+            "nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null || true",
+            timeout: .seconds(4)
+        )) ?? ""
+        let samples = parseNvidiaSamples(output, timestamp: now)
+        guard !samples.isEmpty else {
+            context.markGPUCollected(at: now)
+            return context.getGPUSamples()
+        }
+
+        context.updateGPUSamples(samples, timestamp: now)
+        return samples
+    }
+
+    func parseNvidiaSamples(_ output: String, timestamp: Date) -> [GPUSample] {
+        output
+            .components(separatedBy: .newlines)
+            .compactMap { line -> GPUSample? in
+                let parts = line.split(separator: ",", omittingEmptySubsequences: false)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard parts.count >= 6,
+                      !parts[0].isEmpty else {
+                    return nil
+                }
+
+                let memoryUsedMiB = UInt64(parts[2])
+                let memoryTotalMiB = UInt64(parts[3])
+                return GPUSample(
+                    deviceID: "nvidia-\(parts[0])",
+                    utilizationPercent: Double(parts[1]),
+                    memoryUsed: memoryUsedMiB.flatMap { multiplyBytes($0, by: bytesPerMiB) },
+                    memoryTotal: memoryTotalMiB.flatMap { multiplyBytes($0, by: bytesPerMiB) },
+                    temperatureCelsius: Double(parts[4]),
+                    powerWatts: parseOptionalDouble(parts[5]),
+                    processes: [],
+                    source: .nvidiaSMI,
+                    timestamp: timestamp
+                )
+            }
+    }
+
+    private func parseOptionalDouble(_ rawValue: String) -> Double? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed != "[Not Supported]",
+              trimmed != "N/A" else {
+            return nil
+        }
+        return Double(trimmed)
+    }
+
+    private func valueAfterColon(_ line: String) -> String {
+        line.components(separatedBy: ":").dropFirst().joined(separator: ":")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func parseProcMeminfo(_ output: String) -> (total: UInt64, used: UInt64, free: UInt64, cached: UInt64, buffers: UInt64) {
@@ -572,12 +867,15 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         return found ? (totalRx, totalTx) : nil
     }
 
-    private func parseDfVolumes(_ output: String) -> [VolumeInfo] {
+    func parseDfVolumes(_ output: String) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
         let lines = output.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         let defaultUnit = lines.first.flatMap(dfUnitMultiplier)
+        let volumeLines = defaultUnit == nil ? lines : Array(lines.dropFirst())
 
-        for line in lines.dropFirst() {
+        for line in volumeLines {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
             guard parts.count >= 6 else { continue }
 
@@ -598,10 +896,49 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         return volumes
     }
 
-    private func parsePs(_ output: String) -> [ProcessInfo] {
+    func parsePs(_ output: String) -> [ProcessInfo] {
+        let lines = output.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let firstLine = lines.first else { return [] }
+
+        if firstLine.lowercased().hasPrefix("user ") {
+            return parseAuxProcesses(lines)
+        }
+
+        return parseProcessTable(lines)
+    }
+
+    private func parseProcessTable(_ lines: [String]) -> [ProcessInfo] {
         var processes: [ProcessInfo] = []
 
-        let lines = output.components(separatedBy: .newlines)
+        for line in lines {
+            let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            guard parts.count >= 5 else { continue }
+
+            guard let pid = Int(parts[0]) else { continue }
+            let user = parts[1]
+            let cpu = Double(parts[2]) ?? 0
+            let mem = Double(parts[3]) ?? 0
+            let name = parts[4]
+            let command = parts.count > 5 ? parts.dropFirst(5).joined(separator: " ") : name
+
+            processes.append(ProcessInfo(
+                pid: pid,
+                name: name,
+                cpuPercent: cpu,
+                memoryPercent: mem,
+                user: user,
+                command: command
+            ))
+        }
+
+        return processes
+    }
+
+    private func parseAuxProcesses(_ lines: [String]) -> [ProcessInfo] {
+        var processes: [ProcessInfo] = []
+
         for line in lines.dropFirst() {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
             guard parts.count >= 11 else { continue }
@@ -609,9 +946,18 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             let pid = Int(parts[1]) ?? 0
             let cpu = Double(parts[2]) ?? 0
             let mem = Double(parts[3]) ?? 0
+            let user = parts[0]
             let name = parts[10]
+            let command = parts.dropFirst(10).joined(separator: " ")
 
-            processes.append(ProcessInfo(pid: pid, name: name, cpuPercent: cpu, memoryPercent: mem))
+            processes.append(ProcessInfo(
+                pid: pid,
+                name: name,
+                cpuPercent: cpu,
+                memoryPercent: mem,
+                user: user,
+                command: command
+            ))
         }
 
         return processes
@@ -727,4 +1073,10 @@ struct CpuResult {
     let iowait: Double
     let steal: Double
     let idle: Double
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
 }
