@@ -534,6 +534,12 @@ struct ProUpgradeSheet: View {
                 pro: .included(accessibilityLabel: String(localized: "Server stats included on Pro"))
             ),
             ComparisonFeature(
+                icon: "shippingbox",
+                title: String(localized: "Docker monitoring"),
+                free: .notIncluded(accessibilityLabel: String(localized: "Docker monitoring not included on Free")),
+                pro: .included(accessibilityLabel: String(localized: "Docker monitoring included on Pro"))
+            ),
+            ComparisonFeature(
                 icon: "paintbrush",
                 title: String(localized: "Environments"),
                 free: .text(String(localized: "Built-in"), emphasized: false),
@@ -910,6 +916,8 @@ extension PaywallSource {
             return String(localized: "You're connected")
         case .welcome:
             return String(localized: "VVTerm Pro")
+        case .dockerStats:
+            return String(localized: "Unlock Docker monitoring")
         }
     }
 
@@ -933,6 +941,8 @@ extension PaywallSource {
             return String(localized: "Keep every command one tap away.")
         case .postFirstConnection:
             return String(localized: "Free covers one machine. Pro works across all of them.")
+        case .dockerStats:
+            return String(localized: "Track containers, health, CPU, memory, and network from Stats.")
         }
     }
 }

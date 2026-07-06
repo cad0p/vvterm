@@ -13,6 +13,8 @@ final class ServerStatsCollector: ObservableObject {
     @Published var networkRxHistory: [StatsPoint] = []
     @Published var networkTxHistory: [StatsPoint] = []
     @Published var gpuUtilizationHistoryByDeviceID: [String: [StatsPoint]] = [:]
+    @Published var dockerCPUHistory: [StatsPoint] = []
+    @Published var dockerMemoryHistory: [StatsPoint] = []
     @Published var isCollecting = false
     @Published var connectionError: String?
 
@@ -26,14 +28,24 @@ final class ServerStatsCollector: ObservableObject {
     // Platform detection and collector
     private var remotePlatform: RemotePlatform = .unknown
     private var platformCollector: PlatformStatsCollector?
+    private let dockerCollector = DockerStatsCollector()
     private let context = StatsCollectionContext()
     private var hardwareProfile: HardwareProfile = .empty
+    private var isDockerCollectionEnabled = false
 
     // MARK: - Collection Control
 
-    func startCollecting(for server: Server, using sharedClient: SSHClient? = nil) async {
-        guard !isCollecting else { return }
+    func startCollecting(
+        for server: Server,
+        using sharedClient: SSHClient? = nil,
+        collectDocker: Bool = false
+    ) async {
+        guard !isCollecting else {
+            isDockerCollectionEnabled = collectDocker
+            return
+        }
         isCollecting = true
+        isDockerCollectionEnabled = collectDocker
         connectionError = nil
         resetCollectionState()
 
@@ -139,6 +151,39 @@ final class ServerStatsCollector: ObservableObject {
         return processes.isEmpty ? stats.topProcesses : processes
     }
 
+    func loadDockerStats() async throws -> DockerStats {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+        let dockerStats = await dockerCollector.collect(
+            client: client,
+            platform: remotePlatform,
+            limit: nil,
+            fallback: stats.docker
+        )
+        context.updateDockerStats(dockerStats, timestamp: dockerStats.timestamp)
+        stats.docker = dockerStats
+        return dockerStats
+    }
+
+    func performDockerAction(_ action: DockerContainerAction, on container: DockerContainer) async throws -> DockerStats {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+
+        try await dockerCollector.perform(action, container: container, client: client, platform: remotePlatform)
+        try? await Task.sleep(for: .milliseconds(500))
+        let dockerStats = await dockerCollector.collect(
+            client: client,
+            platform: remotePlatform,
+            limit: nil,
+            fallback: stats.docker
+        )
+        context.updateDockerStats(dockerStats, timestamp: dockerStats.timestamp)
+        stats.docker = dockerStats
+        return dockerStats
+    }
+
     // MARK: - Stats Collection
 
     private func collectStats(client: SSHClient) async {
@@ -176,6 +221,9 @@ final class ServerStatsCollector: ObservableObject {
             if newStats.gpuSamples.isEmpty, !existingStats.gpuSamples.isEmpty {
                 newStats.gpuSamples = existingStats.gpuSamples
             }
+            if isDockerCollectionEnabled {
+                newStats.docker = await self.collectDockerStatsIfNeeded(client: client, timestamp: newStats.timestamp)
+            }
 
             // Update on main thread
             await MainActor.run {
@@ -200,6 +248,8 @@ final class ServerStatsCollector: ObservableObject {
         networkRxHistory = []
         networkTxHistory = []
         gpuUtilizationHistoryByDeviceID = [:]
+        dockerCPUHistory = []
+        dockerMemoryHistory = []
     }
 
     private func collectInitialProfile(client: SSHClient) async -> HardwareProfile? {
@@ -265,12 +315,31 @@ final class ServerStatsCollector: ObservableObject {
         memoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.memoryPercent))
         networkRxHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.networkRxSpeed)))
         networkTxHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.networkTxSpeed)))
+        dockerCPUHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.docker.aggregateCPUPercent))
+        dockerMemoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.docker.memoryPercent))
         appendGPUHistory(from: newStats)
 
         if cpuHistory.count > 60 { cpuHistory.removeFirst() }
         if memoryHistory.count > 60 { memoryHistory.removeFirst() }
         if networkRxHistory.count > 60 { networkRxHistory.removeFirst() }
         if networkTxHistory.count > 60 { networkTxHistory.removeFirst() }
+        if dockerCPUHistory.count > 60 { dockerCPUHistory.removeFirst() }
+        if dockerMemoryHistory.count > 60 { dockerMemoryHistory.removeFirst() }
+    }
+
+    private func collectDockerStatsIfNeeded(client: SSHClient, timestamp: Date) async -> DockerStats {
+        guard context.shouldCollectDocker(now: timestamp) else {
+            return context.getDockerStats()
+        }
+
+        let dockerStats = await dockerCollector.collect(
+            client: client,
+            platform: remotePlatform,
+            limit: DockerStatsCollector.periodicContainerLimit,
+            fallback: context.getDockerStats()
+        )
+        context.updateDockerStats(dockerStats, timestamp: timestamp)
+        return dockerStats
     }
 
     private func appendGPUHistory(from newStats: ServerStats) {

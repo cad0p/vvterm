@@ -55,6 +55,11 @@ final class ServerStatsDomainTests: XCTestCase {
         XCTAssertEqual(StatsPreferences.defaultValue.style, .cardsDetailed)
     }
 
+    func testStatsPreferencesDefaultBlocksIncludeDockerVisible() {
+        XCTAssertTrue(StatsPreferences.defaultValue.visibleBlocks.contains(.docker))
+        XCTAssertTrue(StatsPreferences.defaultValue.isBlockVisible(.docker))
+    }
+
     func testStatsPreferencesNormalizeDeduplicatesAndReindexesBlocks() {
         let olderCPUBlock = StatsPreferences.Block(
             id: .cpu,

@@ -37,6 +37,7 @@ struct StatsPreferences: Codable, Equatable {
         case network
         case storage
         case processes
+        case docker
 
         var id: String { rawValue }
     }

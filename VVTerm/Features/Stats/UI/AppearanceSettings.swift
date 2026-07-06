@@ -169,6 +169,8 @@ private extension StatsPreferences.BlockID {
             return String(localized: "Storage")
         case .processes:
             return String(localized: "Processes")
+        case .docker:
+            return String(localized: "Docker")
         }
     }
 
@@ -188,6 +190,8 @@ private extension StatsPreferences.BlockID {
             return "internaldrive"
         case .processes:
             return "list.bullet.rectangle"
+        case .docker:
+            return "shippingbox"
         }
     }
 
@@ -207,6 +211,8 @@ private extension StatsPreferences.BlockID {
             return .orange
         case .processes:
             return .purple
+        case .docker:
+            return .blue
         }
     }
 }

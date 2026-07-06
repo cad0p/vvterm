@@ -51,6 +51,7 @@ enum PaywallSource: String {
     case welcome
     case settings
     case sidebarBanner = "sidebar_banner"
+    case dockerStats = "docker_stats"
 }
 
 enum VVTermProducts {

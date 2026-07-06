@@ -38,6 +38,7 @@ struct ServerStats {
     var processCount: Int = 0
     var topProcesses: [ProcessInfo] = []
     var gpuSamples: [GPUSample] = []
+    var docker = DockerStats()
     var timestamp: Date = Date()
 
     var memoryPercent: Double {

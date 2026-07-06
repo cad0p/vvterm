@@ -226,8 +226,10 @@ struct ServerStatsView: View {
     var sharedClientProvider: () -> SSHClient? = { nil }
 
     @StateObject private var preferences = PreferencesStore.shared
+    @StateObject private var storeManager = StoreManager.shared
     @State private var statsCollector: ServerStatsCollector
     @State private var isShowingAppearanceSettings = false
+    @State private var isShowingDockerUpgrade = false
 
     init(
         server: Server,
@@ -252,12 +254,16 @@ struct ServerStatsView: View {
             backgroundColor: backgroundColor,
             sharedClientProvider: sharedClientProvider,
             statsCollector: statsCollector,
-            preferences: currentPreferences
+            preferences: currentPreferences,
+            isDockerUnlocked: storeManager.isPro
         ) {
             isShowingAppearanceSettings = true
+        } showDockerUpgrade: {
+            isShowingDockerUpgrade = true
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(StatsBlocksContent.pageBackground(for: currentPreferences.style, backgroundColor: backgroundColor))
+        .proUpgradePresentation(isPresented: $isShowingDockerUpgrade, source: .dockerStats)
         .sheet(isPresented: $isShowingAppearanceSettings) {
             NavigationStack {
                 AppearanceSettings()
@@ -282,7 +288,9 @@ private struct ServerStatsDashboard: View {
     var sharedClientProvider: () -> SSHClient?
     @ObservedObject var statsCollector: ServerStatsCollector
     let preferences: StatsPreferences
+    let isDockerUnlocked: Bool
     let showAppearanceSettings: () -> Void
+    let showDockerUpgrade: () -> Void
 
     var body: some View {
         let style = StatsVisualStyle(preferencesStyle: preferences.style)
@@ -297,18 +305,28 @@ private struct ServerStatsDashboard: View {
                     gpuHistories: statsCollector.gpuUtilizationHistoryByDeviceID,
                     networkRxHistory: statsCollector.networkRxHistory,
                     networkTxHistory: statsCollector.networkTxHistory,
+                    dockerCPUHistory: statsCollector.dockerCPUHistory,
+                    dockerMemoryHistory: statsCollector.dockerMemoryHistory,
                     preferences: preferences,
                     backgroundColor: backgroundColor,
                     surface: .dashboard,
                     constrainsWidth: true,
                     usesPagePadding: true,
+                    isDockerUnlocked: isDockerUnlocked,
                     showsCustomizationEntryPoint: true,
                     customizeAction: showAppearanceSettings,
+                    dockerUpgradeAction: showDockerUpgrade,
                     terminateProcess: { process in
                         try await statsCollector.terminateProcess(process)
                     },
                     loadProcesses: {
                         try await statsCollector.loadProcesses()
+                    },
+                    loadDockerStats: {
+                        try await statsCollector.loadDockerStats()
+                    },
+                    performDockerAction: { action, container in
+                        try await statsCollector.performDockerAction(action, on: container)
                     }
                 )
             }
@@ -316,7 +334,11 @@ private struct ServerStatsDashboard: View {
             if isVisible, let error = statsCollector.connectionError {
                 ConnectionErrorOverlay(error: error, style: style) {
                     Task {
-                        await statsCollector.startCollecting(for: server, using: sharedClientProvider())
+                        await statsCollector.startCollecting(
+                            for: server,
+                            using: sharedClientProvider(),
+                            collectDocker: isDockerUnlocked
+                        )
                     }
                 }
                 .padding()
@@ -324,7 +346,11 @@ private struct ServerStatsDashboard: View {
         }
         .task(id: makeTaskKey()) {
             if isVisible {
-                await statsCollector.startCollecting(for: server, using: sharedClientProvider())
+                await statsCollector.startCollecting(
+                    for: server,
+                    using: sharedClientProvider(),
+                    collectDocker: isDockerUnlocked
+                )
             } else {
                 statsCollector.stopCollecting()
             }
@@ -336,7 +362,7 @@ private struct ServerStatsDashboard: View {
 
     private func makeTaskKey() -> String {
         let clientId = sharedClientProvider().map { ObjectIdentifier($0).hashValue } ?? 0
-        return "\(server.id.uuidString)-\(isVisible)-\(clientId)"
+        return "\(server.id.uuidString)-\(isVisible)-\(clientId)-\(isDockerUnlocked)"
     }
 }
 
@@ -352,15 +378,21 @@ struct StatsAppearancePreviewContent: View {
             gpuHistories: StatsPreviewFixture.gpuHistories,
             networkRxHistory: StatsPreviewFixture.networkRxHistory,
             networkTxHistory: StatsPreviewFixture.networkTxHistory,
+            dockerCPUHistory: StatsPreviewFixture.dockerCPUHistory,
+            dockerMemoryHistory: StatsPreviewFixture.dockerMemoryHistory,
             preferences: preferences,
             backgroundColor: .clear,
             surface: .grouped,
             constrainsWidth: false,
             usesPagePadding: false,
+            isDockerUnlocked: true,
             showsCustomizationEntryPoint: false,
             customizeAction: nil,
+            dockerUpgradeAction: nil,
             terminateProcess: nil,
-            loadProcesses: nil
+            loadProcesses: nil,
+            loadDockerStats: nil,
+            performDockerAction: nil
         )
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
@@ -375,15 +407,21 @@ private struct StatsBlocksContent: View {
     let gpuHistories: [String: [StatsPoint]]
     let networkRxHistory: [StatsPoint]
     let networkTxHistory: [StatsPoint]
+    let dockerCPUHistory: [StatsPoint]
+    let dockerMemoryHistory: [StatsPoint]
     let preferences: StatsPreferences
     let backgroundColor: Color
     let surface: StatsVisualStyle.Surface
     let constrainsWidth: Bool
     let usesPagePadding: Bool
+    let isDockerUnlocked: Bool
     let showsCustomizationEntryPoint: Bool
     let customizeAction: (() -> Void)?
+    let dockerUpgradeAction: (() -> Void)?
     let terminateProcess: ((ProcessInfo) async throws -> Void)?
     let loadProcesses: (() async throws -> [ProcessInfo])?
+    let loadDockerStats: (() async throws -> DockerStats)?
+    let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
 
     static func pageBackground(for preferencesStyle: StatsPreferences.Style, backgroundColor: Color) -> Color {
         if preferencesStyle == .classic {
@@ -402,10 +440,14 @@ private struct StatsBlocksContent: View {
                 stats: stats,
                 visibleBlocks: preferences.visibleBlocks,
                 surfaceStyle: classicSurfaceStyle,
+                isDockerUnlocked: isDockerUnlocked,
                 showsCustomizationEntryPoint: showsCustomizationEntryPoint,
                 customizeAction: customizeAction,
+                dockerUpgradeAction: dockerUpgradeAction,
                 terminateProcess: terminateProcess,
-                loadProcesses: loadProcesses
+                loadProcesses: loadProcesses,
+                loadDockerStats: loadDockerStats,
+                performDockerAction: performDockerAction
             )
             .padding(usesPagePadding ? 16 : 0)
             .drawingGroup()
@@ -477,6 +519,19 @@ private struct StatsBlocksContent: View {
                 terminateProcess: terminateProcess,
                 loadProcesses: loadProcesses
             )
+        case .docker:
+            if isDockerUnlocked {
+                DockerCard(
+                    docker: stats.docker,
+                    cpuHistory: dockerCPUHistory,
+                    memoryHistory: dockerMemoryHistory,
+                    style: style,
+                    loadDockerStats: loadDockerStats,
+                    performDockerAction: performDockerAction
+                )
+            } else if let dockerUpgradeAction {
+                LockedDockerCard(style: style, action: dockerUpgradeAction)
+            }
         }
     }
 
@@ -561,6 +616,75 @@ private enum StatsPreviewFixture {
             ProcessInfo(pid: 364, name: "logd", cpuPercent: 1.5, memoryPercent: 0.2),
             ProcessInfo(pid: 1, name: "launchd", cpuPercent: 1.0, memoryPercent: 0.1)
         ]
+        stats.docker = DockerStats(
+            availability: .available,
+            containers: [
+                DockerContainer(
+                    id: "f0a1b2c3d4e5f6",
+                    name: "ollama",
+                    image: "ollama/ollama:latest",
+                    command: "ollama serve",
+                    state: .running,
+                    status: "Up 2 hours (healthy)",
+                    health: .healthy,
+                    createdAt: "2026-07-06 09:00:00 +0000 UTC",
+                    runningFor: "2 hours",
+                    ports: "11434/tcp",
+                    cpuPercent: 42,
+                    memoryPercent: 28,
+                    memoryUsed: 4 * gigabyte,
+                    memoryLimit: 14 * gigabyte,
+                    networkRx: 820 * 1_048_576,
+                    networkTx: 210 * 1_048_576,
+                    blockRead: 18 * gigabyte,
+                    blockWrite: 6 * gigabyte,
+                    pids: 22
+                ),
+                DockerContainer(
+                    id: "a0b1c2d3e4f5a6",
+                    name: "postgres",
+                    image: "postgres:16",
+                    command: "docker-entrypoint.sh",
+                    state: .running,
+                    status: "Up 3 days",
+                    health: .none,
+                    createdAt: "2026-07-03 12:00:00 +0000 UTC",
+                    runningFor: "3 days",
+                    ports: "5432/tcp",
+                    cpuPercent: 6,
+                    memoryPercent: 12,
+                    memoryUsed: 1 * gigabyte,
+                    memoryLimit: 8 * gigabyte,
+                    networkRx: 220 * 1_048_576,
+                    networkTx: 180 * 1_048_576,
+                    blockRead: 9 * gigabyte,
+                    blockWrite: 24 * gigabyte,
+                    pids: 16
+                ),
+                DockerContainer(
+                    id: "b0c1d2e3f4a5b6",
+                    name: "redis",
+                    image: "redis:7",
+                    command: "redis-server",
+                    state: .exited,
+                    status: "Exited (0) 1 hour ago",
+                    health: .none,
+                    createdAt: "2026-07-01 10:00:00 +0000 UTC",
+                    runningFor: "",
+                    ports: "6379/tcp",
+                    cpuPercent: 0,
+                    memoryPercent: 0,
+                    memoryUsed: nil,
+                    memoryLimit: nil,
+                    networkRx: nil,
+                    networkTx: nil,
+                    blockRead: nil,
+                    blockWrite: nil,
+                    pids: nil
+                )
+            ],
+            timestamp: now
+        )
         stats.gpuSamples = [
             GPUSample(
                 deviceID: gpu.id,
@@ -614,6 +738,14 @@ private enum StatsPreviewFixture {
             "gpu-0": makeHistory([28, 36, 61, 79, 71, 84, 76, 66, 72, 76]),
             "gpu-1": makeHistory([11, 18, 27, 45, 39, 52, 47, 44, 38, 41])
         ]
+    }
+
+    static var dockerCPUHistory: [StatsPoint] {
+        makeHistory([12, 18, 26, 48, 35, 55, 42, 38, 51, 48])
+    }
+
+    static var dockerMemoryHistory: [StatsPoint] {
+        makeHistory([20, 22, 24, 28, 30, 31, 32, 35, 37, 36])
     }
 
     private static func makeHistory(_ values: [Double]) -> [StatsPoint] {
@@ -708,10 +840,14 @@ private struct ClassicStatsContent: View {
     let stats: ServerStats
     let visibleBlocks: [StatsPreferences.BlockID]
     let surfaceStyle: ClassicStatsCardSurfaceStyle
+    let isDockerUnlocked: Bool
     let showsCustomizationEntryPoint: Bool
     let customizeAction: (() -> Void)?
+    let dockerUpgradeAction: (() -> Void)?
     let terminateProcess: ((ProcessInfo) async throws -> Void)?
     let loadProcesses: (() async throws -> [ProcessInfo])?
+    let loadDockerStats: (() async throws -> DockerStats)?
+    let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
 
     var body: some View {
         LazyVStack(spacing: 16) {
@@ -781,6 +917,17 @@ private struct ClassicStatsContent: View {
                 terminateProcess: terminateProcess,
                 loadProcesses: loadProcesses
             )
+        case .docker:
+            if isDockerUnlocked {
+                ClassicDockerStatsCard(
+                    docker: stats.docker,
+                    surfaceStyle: surfaceStyle,
+                    loadDockerStats: loadDockerStats,
+                    performDockerAction: performDockerAction
+                )
+            } else if let dockerUpgradeAction {
+                ClassicLockedDockerCard(surfaceStyle: surfaceStyle, action: dockerUpgradeAction)
+            }
         }
     }
 }
@@ -1336,6 +1483,91 @@ private struct ClassicCircularGauge: View, Equatable {
                 .rotationEffect(.degrees(-90))
                 .animation(.easeInOut(duration: 0.3), value: value)
         }
+    }
+}
+
+private struct ClassicDockerStatsCard: View {
+    let docker: DockerStats
+    let surfaceStyle: ClassicStatsCardSurfaceStyle
+    let loadDockerStats: (() async throws -> DockerStats)?
+    let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+    @State private var showingDetails = false
+
+    var body: some View {
+        Button {
+            showingDetails = true
+        } label: {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 16) {
+                        ClassicStatLabel(color: .blue, label: String(localized: "RUNNING"), value: "\(docker.runningCount)")
+                        ClassicStatLabel(color: .secondary, label: String(localized: "STOPPED"), value: "\(docker.stoppedCount)")
+                    }
+
+                    HStack(spacing: 16) {
+                        ClassicStatLabel(color: .pink, label: String(localized: "CPU"), value: formatPercent(docker.aggregateCPUPercent))
+                        ClassicStatLabel(color: .blue, label: String(localized: "MEM"), value: formatPercent(docker.memoryPercent))
+                    }
+                }
+
+                Spacer()
+
+                ZStack {
+                    ClassicCircularGauge(value: docker.memoryPercent / 100, color: .blue)
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.blue)
+                }
+                .frame(width: 50, height: 50)
+            }
+            .padding()
+            .classicStatsCardSurface(surfaceStyle)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showingDetails) {
+            DockerDetailsSheet(
+                docker: docker,
+                loadDockerStats: loadDockerStats,
+                performDockerAction: performDockerAction
+            )
+        }
+    }
+}
+
+private struct ClassicLockedDockerCard: View {
+    let surfaceStyle: ClassicStatsCardSurfaceStyle
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 36, height: 36)
+                    .background(Color.blue.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(String(localized: "Docker"))
+                            .font(.headline)
+                        ProBadge(compact: true)
+                    }
+                    Text(String(localized: "Unlock Docker monitoring"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 10)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .classicStatsCardSurface(surfaceStyle)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2104,6 +2336,220 @@ private struct ProcessesCard: View {
     }
 }
 
+private struct DockerCard: View {
+    let docker: DockerStats
+    let cpuHistory: [StatsPoint]
+    let memoryHistory: [StatsPoint]
+    let style: StatsVisualStyle
+    let loadDockerStats: (() async throws -> DockerStats)?
+    let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+    @State private var showingDetails = false
+
+    var body: some View {
+        Button {
+            showingDetails = true
+        } label: {
+            AppleCard(style: style, minHeight: style.metricMinHeight) {
+                VStack(alignment: .leading, spacing: 18) {
+                    CardHeader(
+                        icon: "shippingbox",
+                        title: String(localized: "Docker"),
+                        titleColor: .blue,
+                        trailing: trailing,
+                        showsChevron: true,
+                        style: style
+                    )
+
+                    HStack(alignment: .bottom, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(metricLabel)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(style.secondaryText)
+
+                            Text(metricValue)
+                                .font(.system(size: style.metricValueSize, weight: .bold, design: .rounded))
+                                .foregroundStyle(style.primaryText)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.55)
+
+                            Text(footer)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(style.secondaryText)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.78)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        MetricPreviewChart(
+                            history: chartHistory,
+                            color: .blue,
+                            yDomain: chartYDomain,
+                            style: style
+                        )
+                        .frame(width: style.metricPreviewWidth, height: style.metricPreviewHeight)
+                    }
+
+                    if style.density == .detailed {
+                        MetricDetailGrid(items: detailItems, style: style)
+
+                        if docker.isAvailable, !docker.topContainers.isEmpty {
+                            VStack(spacing: 12) {
+                                ForEach(docker.topContainers.prefix(3)) { container in
+                                    DockerContainerCardRow(container: container, style: style)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(style.cardPadding)
+            }
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showingDetails) {
+            DockerDetailsSheet(
+                docker: docker,
+                loadDockerStats: loadDockerStats,
+                performDockerAction: performDockerAction
+            )
+        }
+    }
+
+    private var trailing: String {
+        guard docker.isAvailable else { return String(localized: "Unavailable") }
+        if docker.runningCount == 1 { return String(localized: "1 running") }
+        return String(format: String(localized: "%lld running"), Int64(docker.runningCount))
+    }
+
+    private var metricLabel: String {
+        docker.isAvailable ? String(localized: "Running") : String(localized: "Status")
+    }
+
+    private var metricValue: String {
+        guard docker.isAvailable else { return String(localized: "No Data") }
+        return "\(docker.runningCount)"
+    }
+
+    private var footer: String {
+        guard docker.isAvailable else { return docker.availability.message }
+        if docker.totalCount == 0 {
+            return String(localized: "No containers reported")
+        }
+        return String(
+            format: String(localized: "%lld containers reported"),
+            Int64(docker.totalCount)
+        )
+    }
+
+    private var chartHistory: [StatsPoint] {
+        docker.isAvailable ? cpuHistory : memoryHistory
+    }
+
+    private var chartYDomain: ClosedRange<Double> {
+        guard docker.isAvailable else { return 0...100 }
+        let highestValue = chartHistory.reduce(docker.aggregateCPUPercent) { partialResult, point in
+            max(partialResult, point.value)
+        }
+        let upperBound = max(100, (highestValue / 100).rounded(.up) * 100)
+        return 0...upperBound
+    }
+
+    private var detailItems: [MetricDetailItem] {
+        [
+            MetricDetailItem(title: String(localized: "CPU"), value: formatPercent(docker.aggregateCPUPercent), color: .pink),
+            MetricDetailItem(title: String(localized: "Memory"), value: formatPercent(docker.memoryPercent), color: .blue),
+            MetricDetailItem(title: String(localized: "Stopped"), value: "\(docker.stoppedCount)", color: .secondary),
+            MetricDetailItem(title: String(localized: "Unhealthy"), value: "\(docker.unhealthyCount)", color: .red)
+        ]
+    }
+}
+
+private struct LockedDockerCard: View {
+    let style: StatsVisualStyle
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            AppleCard(style: style, minHeight: style.density == .detailed ? 148 : 126) {
+                HStack(spacing: 16) {
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(Color.blue)
+                        .frame(width: 46, height: 46)
+                        .background(Color.blue.opacity(0.16), in: Circle())
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(String(localized: "Docker"))
+                                .font(.headline.weight(.bold))
+                            ProBadge(compact: true)
+                        }
+                        .foregroundStyle(style.primaryText)
+
+                        Text(String(localized: "Monitor containers, health, CPU, and memory."))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(style.secondaryText)
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Image(systemName: "chevron.right")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(style.tertiaryText)
+                }
+                .padding(style.cardPadding)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Unlock Docker monitoring"))
+    }
+}
+
+private struct DockerContainerCardRow: View {
+    let container: DockerContainer
+    let style: StatsVisualStyle
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Circle()
+                .fill(dockerStatusColor(container))
+                .frame(width: 9, height: 9)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(container.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(style.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(container.image)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(style.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            ProcessBadge(
+                title: String(localized: "CPU"),
+                value: container.cpuPercent,
+                color: .pink,
+                style: style
+            )
+
+            ProcessBadge(
+                title: String(localized: "MEM"),
+                value: container.memoryPercent,
+                color: .blue,
+                style: style
+            )
+        }
+    }
+}
+
 private struct ProcessCardHeader: View {
     let processCount: Int
     let style: StatsVisualStyle
@@ -2803,6 +3249,572 @@ private struct EmptyProcessListRow: View {
     }
 }
 
+private struct DockerDetailsSheet: View {
+    let loadDockerStats: (() async throws -> DockerStats)?
+    let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+
+    @State private var docker: DockerStats
+    @State private var searchText = ""
+    @State private var sortOption: DockerContainerSortOption = .cpu
+    @State private var filterOption: DockerContainerFilterOption = .all
+    @State private var isLoading = false
+    @State private var selectedContainer: DockerContainer?
+    @State private var errorMessage = ""
+    @State private var showingError = false
+
+    init(
+        docker: DockerStats,
+        loadDockerStats: (() async throws -> DockerStats)?,
+        performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+    ) {
+        self.loadDockerStats = loadDockerStats
+        self.performDockerAction = performDockerAction
+        _docker = State(initialValue: docker)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    DockerSummaryRows(docker: docker)
+                }
+
+                if !docker.isAvailable {
+                    Section {
+                        Text(docker.availability.message)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section(footer: DockerContainerListFooter(
+                    visibleCount: visibleContainers.count,
+                    totalCount: docker.containers.count,
+                    isFiltered: isFiltered
+                )) {
+                    if isLoading {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(String(localized: "Loading containers"))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if visibleContainers.isEmpty, !isLoading {
+                        EmptyDockerContainerRow(isFiltered: isFiltered, isAvailable: docker.isAvailable)
+                    }
+
+                    ForEach(visibleContainers) { container in
+                        Button {
+                            selectedContainer = container
+                        } label: {
+                            DockerContainerSheetRow(container: container)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle(Text("Docker"))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .searchable(text: $searchText, prompt: Text("Search Containers"))
+            .toolbar {
+                ToolbarItem(placement: controlsPlacement) {
+                    Menu {
+                        Picker(String(localized: "Sort By"), selection: $sortOption) {
+                            ForEach(DockerContainerSortOption.allCases) { option in
+                                Label(option.title, systemImage: option.systemImage)
+                                    .tag(option)
+                            }
+                        }
+
+                        Picker(String(localized: "Filter"), selection: $filterOption) {
+                            ForEach(DockerContainerFilterOption.allCases) { option in
+                                Label(option.title, systemImage: option.systemImage)
+                                    .tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .accessibilityLabel(Text("Sort and Filter"))
+                }
+            }
+            .statsSheetCloseToolbar()
+            .alert(String(localized: "Could Not Load Containers"), isPresented: $showingError) {
+                Button(String(localized: "OK"), role: .cancel) {}
+            } message: {
+                Text(errorMessage)
+            }
+            .sheet(item: $selectedContainer) { container in
+                DockerContainerDetailsSheet(
+                    container: container,
+                    performAction: performDockerAction
+                ) { updatedDocker in
+                    docker = updatedDocker
+                }
+            }
+        }
+        .task {
+            await refresh()
+        }
+        .adaptiveSoftScrollEdges()
+    }
+
+    private var controlsPlacement: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarLeading
+        #else
+        .automatic
+        #endif
+    }
+
+    private var isFiltered: Bool {
+        !normalizedSearchText.isEmpty || filterOption != .all
+    }
+
+    private var normalizedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var visibleContainers: [DockerContainer] {
+        let query = normalizedSearchText
+        var result = docker.containers.filter { filterOption.includes($0) }
+
+        if !query.isEmpty {
+            result = result.filter { container in
+                container.matches(query)
+            }
+        }
+
+        return result.sorted { lhs, rhs in
+            sortOption.areInIncreasingOrder(lhs, rhs)
+        }
+    }
+
+    private func refresh() async {
+        guard let loadDockerStats else { return }
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            docker = try await loadDockerStats()
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+            showingError = true
+        }
+    }
+}
+
+private enum DockerContainerSortOption: String, CaseIterable, Identifiable {
+    case cpu
+    case memory
+    case name
+    case state
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cpu:
+            return String(localized: "CPU")
+        case .memory:
+            return String(localized: "Memory")
+        case .name:
+            return String(localized: "Name")
+        case .state:
+            return String(localized: "State")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .cpu:
+            return "cpu"
+        case .memory:
+            return "memorychip"
+        case .name:
+            return "textformat"
+        case .state:
+            return "circle.dotted"
+        }
+    }
+
+    func areInIncreasingOrder(_ lhs: DockerContainer, _ rhs: DockerContainer) -> Bool {
+        switch self {
+        case .cpu:
+            if lhs.cpuPercent == rhs.cpuPercent {
+                return lhs.memoryPercent > rhs.memoryPercent
+            }
+            return lhs.cpuPercent > rhs.cpuPercent
+        case .memory:
+            if lhs.memoryPercent == rhs.memoryPercent {
+                return lhs.cpuPercent > rhs.cpuPercent
+            }
+            return lhs.memoryPercent > rhs.memoryPercent
+        case .name:
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        case .state:
+            if lhs.state == rhs.state {
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+            return dockerStateTitle(lhs.state).localizedCaseInsensitiveCompare(dockerStateTitle(rhs.state)) == .orderedAscending
+        }
+    }
+}
+
+private enum DockerContainerFilterOption: String, CaseIterable, Identifiable {
+    case all
+    case running
+    case unhealthy
+    case stopped
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return String(localized: "All")
+        case .running:
+            return String(localized: "Running")
+        case .unhealthy:
+            return String(localized: "Unhealthy")
+        case .stopped:
+            return String(localized: "Stopped")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all:
+            return "line.3.horizontal"
+        case .running:
+            return "play.circle"
+        case .unhealthy:
+            return "exclamationmark.triangle"
+        case .stopped:
+            return "stop.circle"
+        }
+    }
+
+    func includes(_ container: DockerContainer) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .running:
+            return container.isRunning
+        case .unhealthy:
+            return container.health == .unhealthy
+        case .stopped:
+            return !container.isRunning
+        }
+    }
+}
+
+private struct DockerSummaryRows: View {
+    let docker: DockerStats
+
+    var body: some View {
+        InfoRow(title: String(localized: "Status"), value: dockerSummaryStatus)
+        InfoRow(title: String(localized: "Running"), value: "\(docker.runningCount)")
+        InfoRow(title: String(localized: "Stopped"), value: "\(docker.stoppedCount)")
+        InfoRow(title: String(localized: "Unhealthy"), value: "\(docker.unhealthyCount)")
+        InfoRow(title: String(localized: "CPU"), value: formatPercent(docker.aggregateCPUPercent))
+        InfoRow(title: String(localized: "Memory"), value: formatUsedCapacity(docker.memoryUsed, total: docker.memoryLimit))
+        InfoRow(title: String(localized: "Received"), value: formatBytes(docker.networkRx))
+        InfoRow(title: String(localized: "Sent"), value: formatBytes(docker.networkTx))
+    }
+
+    private var dockerSummaryStatus: String {
+        docker.isAvailable ? String(localized: "Available") : docker.availability.message
+    }
+}
+
+private struct DockerContainerSheetRow: View {
+    let container: DockerContainer
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Circle()
+                .fill(dockerStatusColor(container))
+                .frame(width: 10, height: 10)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(container.displayName)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(container.image)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(dockerStateTitle(container.state))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 8) {
+                ProcessSheetMetric(title: String(localized: "CPU"), value: container.cpuPercent, color: .pink)
+                ProcessSheetMetric(title: String(localized: "MEM"), value: container.memoryPercent, color: .blue)
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct DockerContainerDetailsSheet: View {
+    let performAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+    let onDockerUpdated: (DockerStats) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var container: DockerContainer
+    @State private var activeAction: DockerContainerAction?
+    @State private var actionTask: Task<Void, Never>?
+    @State private var errorMessage = ""
+    @State private var showingError = false
+
+    init(
+        container: DockerContainer,
+        performAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?,
+        onDockerUpdated: @escaping (DockerStats) -> Void
+    ) {
+        self.performAction = performAction
+        self.onDockerUpdated = onDockerUpdated
+        _container = State(initialValue: container)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section(String(localized: "Overview")) {
+                    InfoRow(title: String(localized: "Name"), value: container.displayName)
+                    InfoRow(title: String(localized: "Container ID"), value: container.shortID)
+                    InfoRow(title: String(localized: "Image"), value: container.image)
+                    InfoRow(title: String(localized: "State"), value: dockerStateTitle(container.state))
+                    InfoRow(title: String(localized: "Health"), value: dockerHealthTitle(container.health))
+                    InfoRow(title: String(localized: "Status"), value: container.status)
+                    InfoRow(title: String(localized: "Running For"), value: container.runningFor)
+                }
+
+                if performAction != nil {
+                    Section(String(localized: "Actions")) {
+                        ForEach(availableActions, id: \.self) { action in
+                            Button(role: dockerActionRole(action)) {
+                                run(action)
+                            } label: {
+                                HStack {
+                                    Label(dockerActionTitle(action), systemImage: dockerActionSystemImage(action))
+                                    Spacer()
+                                    if activeAction == action {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
+                                }
+                            }
+                            .disabled(activeAction != nil)
+                        }
+                    }
+                }
+
+                Section(String(localized: "Usage")) {
+                    InfoRow(title: String(localized: "CPU"), value: formatPercent(container.cpuPercent))
+                    InfoRow(title: String(localized: "Memory"), value: formatDockerMemory(container))
+                    InfoRow(title: String(localized: "PIDs"), value: optionalInteger(container.pids))
+                }
+
+                Section(String(localized: "Network")) {
+                    InfoRow(title: String(localized: "Received"), value: optionalBytes(container.networkRx))
+                    InfoRow(title: String(localized: "Sent"), value: optionalBytes(container.networkTx))
+                }
+
+                Section(String(localized: "Storage")) {
+                    InfoRow(title: String(localized: "Read"), value: optionalBytes(container.blockRead))
+                    InfoRow(title: String(localized: "Write"), value: optionalBytes(container.blockWrite))
+                }
+
+                if !container.ports.isEmpty {
+                    Section(String(localized: "Ports")) {
+                        Text(container.ports)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                if !container.command.isEmpty {
+                    Section(String(localized: "Command")) {
+                        Text(container.command)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(nil)
+                    }
+                }
+            }
+            .navigationTitle(Text("Container Details"))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .statsSheetCloseToolbar()
+            .alert(String(localized: "Could Not Update Container"), isPresented: $showingError) {
+                Button(String(localized: "OK"), role: .cancel) {}
+            } message: {
+                Text(errorMessage)
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        #endif
+        .onDisappear {
+            actionTask?.cancel()
+            actionTask = nil
+            activeAction = nil
+        }
+        .adaptiveSoftScrollEdges()
+    }
+
+    private var availableActions: [DockerContainerAction] {
+        if container.isRunning {
+            return [.restart, .stop]
+        }
+        return [.start]
+    }
+
+    private func run(_ action: DockerContainerAction) {
+        guard let performAction else { return }
+        guard activeAction == nil, actionTask == nil else { return }
+        activeAction = action
+        let currentContainer = container
+        actionTask = Task { @MainActor in
+            defer {
+                actionTask = nil
+                activeAction = nil
+            }
+            do {
+                let updatedDocker = try await performAction(action, currentContainer)
+                guard !Task.isCancelled else { return }
+                onDockerUpdated(updatedDocker)
+                if let updatedContainer = updatedDocker.container(matching: currentContainer) {
+                    container = updatedContainer
+                } else {
+                    dismiss()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+                showingError = true
+            }
+        }
+    }
+
+    private func optionalBytes(_ value: UInt64?) -> String {
+        guard let value else { return String(localized: "No live data") }
+        return formatBytes(value)
+    }
+
+    private func optionalInteger(_ value: Int?) -> String {
+        guard let value else { return String(localized: "No live data") }
+        return "\(value)"
+    }
+
+    private func formatDockerMemory(_ container: DockerContainer) -> String {
+        guard let used = container.memoryUsed else { return String(localized: "No live data") }
+        return formatUsedCapacity(used, total: container.memoryLimit ?? 0)
+    }
+}
+
+private struct DockerContainerListFooter: View {
+    let visibleCount: Int
+    let totalCount: Int
+    let isFiltered: Bool
+
+    var body: some View {
+        if isFiltered {
+            Text(String(
+                format: String(localized: "%lld of %lld containers"),
+                Int64(visibleCount),
+                Int64(totalCount)
+            ))
+        }
+    }
+}
+
+private struct EmptyDockerContainerRow: View {
+    let isFiltered: Bool
+    let isAvailable: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var title: String {
+        if isFiltered {
+            return String(localized: "No Matching Containers")
+        }
+        return isAvailable ? String(localized: "No Containers") : String(localized: "Docker Unavailable")
+    }
+
+    private var message: String {
+        if isFiltered {
+            return String(localized: "Try a different search or filter.")
+        }
+        return isAvailable
+            ? String(localized: "No containers were reported by Docker.")
+            : String(localized: "Docker metrics are unavailable on this server.")
+    }
+}
+
+private extension DockerContainer {
+    func matches(_ query: String) -> Bool {
+        let fields = [
+            id,
+            name,
+            image,
+            command,
+            status,
+            ports,
+            dockerStateTitle(state),
+            dockerHealthTitle(health)
+        ]
+
+        return fields.contains { field in
+            field.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    func hasSameIdentity(as other: DockerContainer) -> Bool {
+        let ownKeys = Set([id, shortID, name].map { $0.lowercased() }.filter { !$0.isEmpty })
+        let otherKeys = Set([other.id, other.shortID, other.name].map { $0.lowercased() }.filter { !$0.isEmpty })
+        return !ownKeys.isDisjoint(with: otherKeys)
+    }
+}
+
+private extension DockerStats {
+    func container(matching container: DockerContainer) -> DockerContainer? {
+        containers.first { $0.hasSameIdentity(as: container) }
+    }
+}
+
 private extension ProcessInfo {
     func matches(_ query: String) -> Bool {
         let fields = [
@@ -3490,6 +4502,86 @@ private struct ConnectionErrorOverlay: View {
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
+}
+
+// MARK: - Docker Helpers
+
+private func dockerStatusColor(_ container: DockerContainer) -> Color {
+    if container.health == .unhealthy {
+        return .red
+    }
+    switch container.state {
+    case .running:
+        return .green
+    case .restarting:
+        return .orange
+    case .paused:
+        return .yellow
+    case .exited, .dead, .removing:
+        return .secondary
+    case .created, .unknown:
+        return .blue
+    }
+}
+
+private func dockerStateTitle(_ state: DockerContainerState) -> String {
+    switch state {
+    case .running:
+        return String(localized: "Running")
+    case .exited:
+        return String(localized: "Exited")
+    case .paused:
+        return String(localized: "Paused")
+    case .restarting:
+        return String(localized: "Restarting")
+    case .created:
+        return String(localized: "Created")
+    case .dead:
+        return String(localized: "Dead")
+    case .removing:
+        return String(localized: "Removing")
+    case .unknown:
+        return String(localized: "Unknown")
+    }
+}
+
+private func dockerHealthTitle(_ health: DockerHealthStatus) -> String {
+    switch health {
+    case .healthy:
+        return String(localized: "Healthy")
+    case .unhealthy:
+        return String(localized: "Unhealthy")
+    case .starting:
+        return String(localized: "Starting")
+    case .none:
+        return ""
+    }
+}
+
+private func dockerActionTitle(_ action: DockerContainerAction) -> String {
+    switch action {
+    case .start:
+        return String(localized: "Start Container")
+    case .stop:
+        return String(localized: "Stop Container")
+    case .restart:
+        return String(localized: "Restart Container")
+    }
+}
+
+private func dockerActionSystemImage(_ action: DockerContainerAction) -> String {
+    switch action {
+    case .start:
+        return "play.fill"
+    case .stop:
+        return "stop.fill"
+    case .restart:
+        return "arrow.clockwise"
+    }
+}
+
+private func dockerActionRole(_ action: DockerContainerAction) -> ButtonRole? {
+    action == .stop ? .destructive : nil
 }
 
 // MARK: - Formatting

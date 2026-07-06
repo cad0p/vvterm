@@ -59,6 +59,8 @@ final class StatsCollectionContext: @unchecked Sendable {
     var prevCpuCoreValues: [String: LinuxCpuValues] = [:]
     var lastGPUCollectionTimestamp: Date?
     var lastGPUSamples: [GPUSample] = []
+    var lastDockerCollectionTimestamp: Date?
+    var lastDockerStats = DockerStats()
 
     private let lock = NSLock()
 
@@ -77,6 +79,8 @@ final class StatsCollectionContext: @unchecked Sendable {
             prevCpuCoreValues = [:]
             lastGPUCollectionTimestamp = nil
             lastGPUSamples = []
+            lastDockerCollectionTimestamp = nil
+            lastDockerStats = DockerStats()
         }
     }
 
@@ -141,6 +145,26 @@ final class StatsCollectionContext: @unchecked Sendable {
     func getGPUSamples() -> [GPUSample] {
         withLock {
             lastGPUSamples
+        }
+    }
+
+    func shouldCollectDocker(now: Date = Date(), minimumInterval: TimeInterval = 10) -> Bool {
+        withLock {
+            guard let lastDockerCollectionTimestamp else { return true }
+            return now.timeIntervalSince(lastDockerCollectionTimestamp) >= minimumInterval
+        }
+    }
+
+    func updateDockerStats(_ stats: DockerStats, timestamp: Date = Date()) {
+        withLock {
+            lastDockerCollectionTimestamp = timestamp
+            lastDockerStats = stats
+        }
+    }
+
+    func getDockerStats() -> DockerStats {
+        withLock {
+            lastDockerStats
         }
     }
 }
