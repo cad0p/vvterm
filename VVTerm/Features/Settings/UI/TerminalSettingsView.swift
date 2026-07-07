@@ -1174,20 +1174,10 @@ private struct ManageCustomThemesSheet: View {
     }
 
     private func importThemeFromClipboard() {
-        #if os(iOS)
-        guard let text = UIPasteboard.general.string else {
+        guard let text = Clipboard.readString() else {
             customThemeErrorMessage = String(localized: "Clipboard does not contain text.")
             return
         }
-        #elseif os(macOS)
-        guard let text = NSPasteboard.general.string(forType: .string) else {
-            customThemeErrorMessage = String(localized: "Clipboard does not contain text.")
-            return
-        }
-        #else
-        customThemeErrorMessage = String(localized: "Clipboard import is not supported on this platform.")
-        return
-        #endif
 
         preparePendingCustomTheme(content: text, suggestedName: String(localized: "Pasted Theme"))
     }
