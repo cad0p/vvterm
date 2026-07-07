@@ -139,6 +139,15 @@ For every feature:
 - prefer view-owned dependencies to be injected from the app/screen boundary instead of created inside leaf views
 - if shared cross-feature primitives are needed, extract them into `Core` instead of creating new app-wide bucket folders
 
+Apple platform UI split pattern:
+- Follow `docs/specs/apple-platform-ui-split-pattern.md` for iOS/macOS UI ownership and migration details.
+- Do not let shared SwiftUI files accumulate large inline `#if os(iOS)` / `#if os(macOS)` branches. If platform layout, lifecycle, modifiers, or state diverge, keep the shared feature shell neutral and move platform presentation into `Type+iOS.swift` and `Type+macOS.swift` files with file-level compile gates.
+- Because VVTerm uses one multiplatform target, platform-specific files must still be guarded with `#if os(...)` unless target membership is explicitly changed; folder names such as `iOS/` or `macOS/` are not enough.
+- Avoid `iOS`, `Mac`, `macOS`, and `MacOS` prefixes in product UI type names. Prefer feature/domain names and put platform ownership in the filename or folder.
+- Platform prefixes are acceptable for true platform adapters and app-shell bridges, such as `NSViewRepresentable`, `UIViewRepresentable`, AppKit/UIKit delegates, toolbar/window/menu bridges, and Ghostty platform terminal views.
+- Platform-specific stored SwiftUI state should usually live in platform child views or small platform models. Swift extensions cannot add stored properties, so do not keep long-term gated `@State` in shared views just to make an extension split compile.
+- After platform UI splits, validate both iOS and macOS builds unless the change is documentation-only.
+
 ## Refactoring Rules
 
 When doing architectural refactors:
