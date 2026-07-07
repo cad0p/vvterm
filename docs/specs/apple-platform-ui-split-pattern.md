@@ -481,7 +481,7 @@ Initial implementation status:
 
 Current issues:
 
-- `TerminalContainerView.swift` still mixes shared connection lifecycle with voice recording presentation and small platform presentation modifiers.
+- `TerminalContainerView.swift` keeps shared connection lifecycle, common voice state, and a few small platform gates; voice presentation and platform lifecycle modifiers live in platform/voice extension files.
 - `ConnectionTabsView.swift` keeps shared tab/session composition and one temporary macOS gated state value for zen safe-area insets; platform body hooks, tab rendering, window chrome, and toolbar/command bridge helpers live in platform files.
 - `SSHTerminalWrapper.swift` has been split into shared, iOS, and macOS files.
 - `ZenModeControls.swift` keeps shared controls while `ZenModeControls+iOS.swift` and `ZenModeControls+macOS.swift` own the platform panels.
@@ -538,12 +538,13 @@ Migration notes:
 - Keep platform zen panels in `ZenModeControls+iOS.swift` and `ZenModeControls+macOS.swift`.
 - Keep AppKit zen chrome, toolbar, command bridge, and macOS tab presentation in `ConnectionTabsView+macOS.swift`.
 - Keep macOS `NSEvent` key monitoring in `TerminalContainerView+macOS.swift`.
+- Keep common voice recording actions in `TerminalVoicePresentation.swift`; platform overlay placement and key-monitor lifecycle belong in `TerminalContainerView+iOS.swift` / `TerminalContainerView+macOS.swift`.
 - Keep terminal content non-glassy.
 
 Initial implementation status:
 
-- Done: split `SSHTerminalWrapper.swift`, split zen mode platform panels, renamed the platform zen panel product UI types/helpers to neutral names, moved macOS zen chrome bridges into `ConnectionTabsView+macOS.swift`, moved terminal tab rendering hooks into `ConnectionTabsView+iOS.swift` / `ConnectionTabsView+macOS.swift`, extracted macOS tab components into `ConnectionTabComponents+macOS.swift`, moved macOS toolbar and command bridge helpers into `ConnectionTabsView+macOS.swift`, moved macOS `NSEvent` key monitoring plus platform fallback colors into `TerminalContainerView+macOS.swift` / `TerminalContainerView+iOS.swift`, moved terminal render lifecycle hooks into platform files, and made the shared wrapper construction platform-neutral by putting the iOS keyboard-preservation default in `SSHTerminalWrapper+iOS.swift`.
-- Remaining: move voice recording presentation and remaining temporary platform state/modifiers out of shared terminal session UI files.
+- Done: split `SSHTerminalWrapper.swift`, split zen mode platform panels, renamed the platform zen panel product UI types/helpers to neutral names, moved macOS zen chrome bridges into `ConnectionTabsView+macOS.swift`, moved terminal tab rendering hooks into `ConnectionTabsView+iOS.swift` / `ConnectionTabsView+macOS.swift`, extracted macOS tab components into `ConnectionTabComponents+macOS.swift`, moved macOS toolbar and command bridge helpers into `ConnectionTabsView+macOS.swift`, moved macOS `NSEvent` key monitoring plus platform fallback colors into `TerminalContainerView+macOS.swift` / `TerminalContainerView+iOS.swift`, moved terminal render lifecycle hooks into platform files, split terminal voice presentation into `TerminalVoicePresentation.swift` plus platform overlay hooks, and made the shared wrapper construction platform-neutral by putting the iOS keyboard-preservation default in `SSHTerminalWrapper+iOS.swift`.
+- Remaining: move remaining temporary platform state/modifiers out of shared terminal session UI files where Swift stored-property constraints allow it, and split small terminal tab/core chrome residue when it grows beyond simple platform styling.
 
 ### App Shell
 
@@ -762,7 +763,8 @@ Steps:
 3. Done: move the iOS terminal wrapper option out of shared `TerminalContainerView.swift` by making the iOS wrapper default preserve keyboard state during reconnect.
 4. Done: split zen mode panels into platform files with neutral product UI names.
 5. Done: move terminal tab body/rendering hooks, macOS tab components, and macOS toolbar/command bridge helpers into platform files.
-6. Build iOS and macOS.
+6. Done: split terminal voice presentation into common and platform extension files.
+7. Done: build iOS and macOS.
 
 Acceptance:
 
