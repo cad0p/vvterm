@@ -1,5 +1,5 @@
 //
-//  iOSServerComponents.swift
+//  ServerComponents+iOS.swift
 //  VVTerm
 //
 
