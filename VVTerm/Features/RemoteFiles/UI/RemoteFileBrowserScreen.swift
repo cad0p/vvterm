@@ -174,30 +174,20 @@ struct RemoteFileBrowserScreen: View {
 
     @ViewBuilder
     func renameSheet(entry: RemoteFileEntry) -> some View {
-        RemoteFileRenameSheet(
+        platformRenameSheetSizing(RemoteFileRenameSheet(
             entry: entry,
             proposedName: $renameName,
             isSubmitting: isRenameSubmitting,
             onCancel: resetRenamePrompt,
             onRename: { renameEntry() }
-        )
-        #if os(macOS)
-        .frame(
-            minWidth: 460,
-            idealWidth: 500,
-            maxWidth: 560,
-            minHeight: 220,
-            idealHeight: 240,
-            maxHeight: 280
-        )
-        #endif
+        ))
     }
 
     func moveSheet(entry: RemoteFileEntry) -> some View {
         let fileBrowser = browser
         let fileServer = server
 
-        return RemoteFileMoveSheet(
+        return platformMoveSheetSizing(RemoteFileMoveSheet(
             entry: entry,
             destinationDirectory: $moveDestinationDirectory,
             onLoadDirectories: { path in
@@ -206,17 +196,7 @@ struct RemoteFileBrowserScreen: View {
             isSubmitting: isMoveSubmitting,
             onCancel: resetMovePrompt,
             onMove: moveEntry
-        )
-        #if os(macOS)
-        .frame(
-            minWidth: 460,
-            idealWidth: 500,
-            maxWidth: 560,
-            minHeight: 420,
-            idealHeight: 520,
-            maxHeight: 620
-        )
-        #endif
+        ))
     }
 
     @ViewBuilder
@@ -231,7 +211,7 @@ struct RemoteFileBrowserScreen: View {
 
     @ViewBuilder
     func permissionSheet(entry: RemoteFileEntry) -> some View {
-        RemoteFilePermissionEditorSheet(
+        platformPermissionSheetSizing(RemoteFilePermissionEditorSheet(
             entry: entry,
             draft: $permissionDraft,
             originalAccessBits: permissionOriginalAccessBits,
@@ -240,17 +220,7 @@ struct RemoteFileBrowserScreen: View {
             isSubmitting: isPermissionSubmitting,
             onCancel: resetPermissionEditor,
             onApply: applyPermissions
-        )
-        #if os(macOS)
-        .frame(
-            minWidth: 460,
-            idealWidth: 500,
-            maxWidth: 560,
-            minHeight: 520,
-            idealHeight: 580,
-            maxHeight: 680
-        )
-        #endif
+        ))
     }
 
     var body: some View {

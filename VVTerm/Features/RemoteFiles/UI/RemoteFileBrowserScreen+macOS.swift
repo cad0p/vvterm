@@ -124,6 +124,39 @@ extension RemoteFileBrowserScreen {
             }
     }
 
+    func platformRenameSheetSizing<Content: View>(_ content: Content) -> some View {
+        content.frame(
+            minWidth: 460,
+            idealWidth: 500,
+            maxWidth: 560,
+            minHeight: 220,
+            idealHeight: 240,
+            maxHeight: 280
+        )
+    }
+
+    func platformMoveSheetSizing<Content: View>(_ content: Content) -> some View {
+        content.frame(
+            minWidth: 460,
+            idealWidth: 500,
+            maxWidth: 560,
+            minHeight: 420,
+            idealHeight: 520,
+            maxHeight: 620
+        )
+    }
+
+    func platformPermissionSheetSizing<Content: View>(_ content: Content) -> some View {
+        content.frame(
+            minWidth: 460,
+            idealWidth: 500,
+            maxWidth: 560,
+            minHeight: 520,
+            idealHeight: 580,
+            maxHeight: 680
+        )
+    }
+
     func platformTransferCompletionAction(fileURL: URL?) -> NoticeAction? {
         guard let fileURL else { return nil }
 

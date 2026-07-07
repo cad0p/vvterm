@@ -82,6 +82,18 @@ extension RemoteFileBrowserScreen {
         content
     }
 
+    func platformRenameSheetSizing<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
+    func platformMoveSheetSizing<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
+    func platformPermissionSheetSizing<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
     func platformTransferCompletionAction(fileURL: URL?) -> NoticeAction? {
         nil
     }
