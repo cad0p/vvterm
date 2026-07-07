@@ -636,6 +636,11 @@ Migration notes:
 - Do not split every small row just because it has one platform value.
 - Split complete controls or presentation clusters: font picker, theme picker, keychain credential action rows, server auth field behavior.
 
+Initial implementation status:
+
+- Done: moved direct pasteboard reads/writes in `TerminalSettingsView.swift` and `KeychainSettingsView.swift` through the shared `Clipboard` helper so UIKit/AppKit pasteboard access stays in `Core/Terminal/Clipboard.swift`.
+- Remaining: split larger platform presentation clusters for terminal settings, server forms, and keychain settings into platform extension files once each cluster can move as a coherent unit.
+
 ### Store And Support
 
 Current issues:
