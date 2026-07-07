@@ -2,6 +2,10 @@
 import SwiftUI
 
 extension ConnectionTerminalContainer {
+    var platformBody: some View {
+        sharedBody
+    }
+
     func platformChrome<Content: View>(
         _ content: Content,
         backgroundColor: Color

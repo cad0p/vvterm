@@ -27,11 +27,11 @@ struct ConnectionTerminalContainer: View {
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
 
     /// Disconnect confirmation
-    @State private var showingDisconnectConfirmation = false
+    @State var showingDisconnectConfirmation = false
     /// Confirmation before closing the focused split pane via a command/panel
     /// (the in-pane close button has its own confirmation in TerminalTabView).
-    @State private var showingPaneCloseConfirmation = false
-    @State private var serverToEdit: Server?
+    @State var showingPaneCloseConfirmation = false
+    @State var serverToEdit: Server?
 
     /// Tab limit alert
     @State private var showingTabLimitAlert = false
@@ -51,7 +51,7 @@ struct ConnectionTerminalContainer: View {
         viewTabConfig.currentVisibleTabs
     }
 
-    private var shouldShowViewPicker: Bool {
+    var shouldShowViewPicker: Bool {
         visibleViewTabs.count > 1
     }
 
@@ -104,11 +104,11 @@ struct ConnectionTerminalContainer: View {
         return serverTabs.first { $0.id == id } ?? serverTabs.first
     }
 
-    private var serverFileTabs: [RemoteFileTab] {
+    var serverFileTabs: [RemoteFileTab] {
         fileTabManager.tabs(for: server.id)
     }
 
-    private var selectedFileTabId: UUID? {
+    var selectedFileTabId: UUID? {
         fileTabManager.selectedTab(for: server.id)?.id
     }
 
@@ -150,7 +150,7 @@ struct ConnectionTerminalContainer: View {
         ThemeColorParser.backgroundColor(for: effectiveThemeName)!
     }
 
-    private var sharedBody: some View {
+    var sharedBody: some View {
         platformChrome(
             contentLayer
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -246,14 +246,10 @@ struct ConnectionTerminalContainer: View {
     }
 
     var body: some View {
-        #if os(macOS)
-        macOSBody
-        #else
-        sharedBody
-        #endif
+        platformBody
     }
 
-    private func handleNewTabCommand() {
+    func handleNewTabCommand() {
         if selectedView == ConnectionViewTab.files.id {
             openNewFileTab(selectFilesViewOnSuccess: true)
         } else {
@@ -386,7 +382,7 @@ struct ConnectionTerminalContainer: View {
         fileBrowser.removeState(for: removedTab.id)
     }
 
-    private func serverViewTabActions() -> ServerViewTabActions {
+    func serverViewTabActions() -> ServerViewTabActions {
         ServerViewTabActions(
             openNew: handleNewTabCommand,
             closeSelected: {
@@ -444,7 +440,7 @@ struct ConnectionTerminalContainer: View {
         showingPaneCloseConfirmation = true
     }
 
-    private func closeFocusedPaneConfirmed() {
+    func closeFocusedPaneConfirmed() {
         guard let selectedTab else { return }
         tabManager.closePane(tab: selectedTab, paneId: selectedTab.focusedPaneId)
     }
@@ -462,70 +458,9 @@ struct ConnectionTerminalContainer: View {
     // MARK: - Toolbar Items (macOS)
 
     #if os(macOS)
-    private var macOSBody: some View {
-        sharedBody
-            .focusedValue(\.openTerminalTab, handleNewTabCommand)
-            .focusedValue(\.serverViewTabActions, serverViewTabActions())
-            // The connected-server toolbar is rendered by the AppKit NSToolbar
-            // (see MacConnectionToolbar). This pane publishes its sections into
-            // the shared bridge; the toolbar hosts them.
-            .onAppear { activateToolbarBridge(); updateCommandBridge() }
-            .onDisappear {
-                MacToolbarBridge.shared.deactivate(ownerId: server.id.uuidString)
-                MacShellCommandBridge.shared.clear(ownerId: server.id.uuidString)
-            }
-            .onChange(of: selectedView) { _ in activateToolbarBridge(); updateCommandBridge() }
-            .onChange(of: shouldShowViewPicker) { _ in activateToolbarBridge() }
-            .onChange(of: serverTabs.count) { _ in activateToolbarBridge() }
-            .onChange(of: serverFileTabs.count) { _ in activateToolbarBridge() }
-            .onChange(of: selectedFileTabId) { _ in activateToolbarBridge() }
-            .onChange(of: selectedTabId) { _ in activateToolbarBridge(); updateCommandBridge() }
-            .onChange(of: isZenModeEnabled) { _ in activateToolbarBridge() }
-            .alert(
-                disconnectAlertTitle,
-                isPresented: $showingDisconnectConfirmation,
-            ) {
-                Button("Cancel", role: .cancel) {}
-                Button(disconnectActionTitle, role: .destructive) {
-                    disconnectFromServer()
-                }
-                .keyboardShortcut(.defaultAction)
-            } message: {
-                Text(disconnectAlertMessage)
-            }
-            .alert("Close this terminal?", isPresented: $showingPaneCloseConfirmation) {
-                Button("Cancel", role: .cancel) {}
-                Button("Close", role: .destructive) {
-                    closeFocusedPaneConfirmed()
-                }
-                .keyboardShortcut(.defaultAction)
-            } message: {
-                Text("The SSH connection will be terminated.")
-            }
-            .sheet(item: $serverToEdit) { editingServer in
-                ServerFormSheet(
-                    serverManager: serverManager,
-                    workspace: serverManager.workspaces.first { $0.id == editingServer.workspaceId },
-                    server: editingServer,
-                    onSave: { _ in
-                        serverToEdit = nil
-                    }
-                )
-                .adaptiveSoftScrollEdges()
-                .frame(
-                    minWidth: 640,
-                    idealWidth: 700,
-                    maxWidth: 760,
-                    minHeight: 520,
-                    idealHeight: 620,
-                    maxHeight: 680
-                )
-            }
-    }
-
     /// Publishes this server's toolbar content to the AppKit toolbar bridge,
     /// which renders it with native controls.
-    private func activateToolbarBridge() {
+    func activateToolbarBridge() {
         MacToolbarBridge.shared.activate(
             ownerId: server.id.uuidString,
             showsViewPicker: shouldShowViewPicker,
@@ -570,7 +505,7 @@ struct ConnectionTerminalContainer: View {
 
     /// Publishes this server's keyboard-command actions to the command bridge,
     /// which ContentView republishes as scene focus values for the menu commands.
-    private func updateCommandBridge() {
+    func updateCommandBridge() {
         MacShellCommandBridge.shared.update(
             ownerId: server.id.uuidString,
             serverViewTabActions: serverViewTabActions(),
@@ -922,7 +857,7 @@ struct ConnectionTerminalContainer: View {
             .frame(width: 360)
     }
 
-    private func disconnectFromServer() {
+    func disconnectFromServer() {
         tabManager.closeAllTabs(for: server.id)
         fileBrowser.disconnect(serverId: server.id)
         fileTabManager.disconnect(serverId: server.id)
@@ -952,7 +887,7 @@ struct ConnectionTerminalContainer: View {
 }
 
 #if os(macOS)
-private extension ConnectionTerminalContainer {
+extension ConnectionTerminalContainer {
     var zenIndicatorColor: Color {
         guard let state = selectedTab.flatMap({ tabManager.paneStates[$0.focusedPaneId] }) else {
             if selectedView == ConnectionViewTab.files.id {

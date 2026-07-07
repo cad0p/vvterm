@@ -131,6 +131,67 @@ struct MacOSToolbarBackdrop: View {
 }
 
 extension ConnectionTerminalContainer {
+    var platformBody: some View {
+        sharedBody
+            .focusedValue(\.openTerminalTab, handleNewTabCommand)
+            .focusedValue(\.serverViewTabActions, serverViewTabActions())
+            // The connected-server toolbar is rendered by the AppKit NSToolbar
+            // (see MacConnectionToolbar). This pane publishes its sections into
+            // the shared bridge; the toolbar hosts them.
+            .onAppear { activateToolbarBridge(); updateCommandBridge() }
+            .onDisappear {
+                MacToolbarBridge.shared.deactivate(ownerId: server.id.uuidString)
+                MacShellCommandBridge.shared.clear(ownerId: server.id.uuidString)
+            }
+            .onChange(of: selectedView) { _ in activateToolbarBridge(); updateCommandBridge() }
+            .onChange(of: shouldShowViewPicker) { _ in activateToolbarBridge() }
+            .onChange(of: serverTabs.count) { _ in activateToolbarBridge() }
+            .onChange(of: serverFileTabs.count) { _ in activateToolbarBridge() }
+            .onChange(of: selectedFileTabId) { _ in activateToolbarBridge() }
+            .onChange(of: selectedTabId) { _ in activateToolbarBridge(); updateCommandBridge() }
+            .onChange(of: isZenModeEnabled) { _ in activateToolbarBridge() }
+            .alert(
+                disconnectAlertTitle,
+                isPresented: $showingDisconnectConfirmation,
+            ) {
+                Button("Cancel", role: .cancel) {}
+                Button(disconnectActionTitle, role: .destructive) {
+                    disconnectFromServer()
+                }
+                .keyboardShortcut(.defaultAction)
+            } message: {
+                Text(disconnectAlertMessage)
+            }
+            .alert("Close this terminal?", isPresented: $showingPaneCloseConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Close", role: .destructive) {
+                    closeFocusedPaneConfirmed()
+                }
+                .keyboardShortcut(.defaultAction)
+            } message: {
+                Text("The SSH connection will be terminated.")
+            }
+            .sheet(item: $serverToEdit) { editingServer in
+                ServerFormSheet(
+                    serverManager: serverManager,
+                    workspace: serverManager.workspaces.first { $0.id == editingServer.workspaceId },
+                    server: editingServer,
+                    onSave: { _ in
+                        serverToEdit = nil
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+                .frame(
+                    minWidth: 640,
+                    idealWidth: 700,
+                    maxWidth: 760,
+                    minHeight: 520,
+                    idealHeight: 620,
+                    maxHeight: 680
+                )
+            }
+    }
+
     func platformChrome<Content: View>(
         _ content: Content,
         backgroundColor: Color
