@@ -1,10 +1,17 @@
+#if os(iOS)
 import SwiftUI
+import UIKit
 
-// MARK: - Support Sheet
+extension SupportSheet {
+    func openURL(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        UIApplication.shared.open(url)
+    }
+}
 
-struct SupportSheet: View {
-    @Environment(\.dismiss) private var dismiss
+// MARK: - Support Settings View (iOS)
 
+struct SupportSettingsView: View {
     private struct ContactOption: Identifiable {
         let id = UUID()
         let title: String
@@ -25,35 +32,8 @@ struct SupportSheet: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            ZStack(alignment: .topTrailing) {
-                VStack(spacing: 8) {
-                    Image(systemName: "bubble.left.and.bubble.right.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.blue)
-
-                    Text("Get in Touch")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-
-                    Text("Questions, feedback, or issues?\nReach out anytime.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 24)
-                .padding(.bottom, 20)
-
-                DetailCloseButton { dismiss() }
-                    .padding(12)
-            }
-
-            Divider()
-
-            // Options
-            VStack(spacing: 0) {
+        List {
+            Section {
                 ForEach(contactOptions) { option in
                     Button {
                         openURL(option.url)
@@ -77,7 +57,6 @@ struct SupportSheet: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.title)
                                     .font(.body)
-                                    .fontWeight(.medium)
                                     .foregroundStyle(.primary)
 
                                 Text(option.subtitle)
@@ -91,43 +70,34 @@ struct SupportSheet: View {
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Questions, feedback, or issues? Reach out anytime.")
+                    .textCase(nil)
+            }
 
-                    if option.id != contactOptions.last?.id {
-                        Divider()
-                            .padding(.leading, 58)
+            Section {
+                Button {
+                    openURL("https://x.com/vivytech")
+                } label: {
+                    HStack {
+                        Text("Vivy Technologies Co., Limited")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
                     }
                 }
             }
-
-            // Company footer
-            Button {
-                openURL("https://x.com/vivytech")
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Vivy Technologies Co., Limited")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.quaternary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.plain)
         }
-        .frame(width: 340)
         .adaptiveSoftScrollEdges()
     }
-}
 
-// MARK: - Preview
-
-#Preview {
-    SupportSheet()
+    private func openURL(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        UIApplication.shared.open(url)
+    }
 }
+#endif
