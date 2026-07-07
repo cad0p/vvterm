@@ -482,7 +482,7 @@ Initial implementation status:
 Current issues:
 
 - `TerminalContainerView.swift` mixes shared connection lifecycle with iOS/macOS terminal wrapper differences, macOS key monitoring, voice recording presentation, and render pause/resume.
-- `ConnectionTabsView.swift` contains a macOS toolbar body, macOS zen chrome bridge, and shared tab/session composition in one file.
+- `ConnectionTabsView.swift` still contains a macOS toolbar body and shared tab/session composition; the macOS zen chrome bridge has moved to `ConnectionTabsView+macOS.swift`.
 - `SSHTerminalWrapper.swift` has been split into shared, iOS, and macOS files.
 - `ZenModeControls.swift` keeps shared controls while `ZenModeControls+iOS.swift` and `ZenModeControls+macOS.swift` own the platform panels.
 
@@ -535,6 +535,7 @@ Migration notes:
 
 - Keep `SSHTerminalWrapper.swift` shared-only; platform wrappers belong in `SSHTerminalWrapper+iOS.swift` and `SSHTerminalWrapper+macOS.swift`.
 - Keep platform zen panels in `ZenModeControls+iOS.swift` and `ZenModeControls+macOS.swift`.
+- Keep AppKit zen chrome bridges in `ConnectionTabsView+macOS.swift`.
 - Move macOS `NSEvent` key monitoring out of `TerminalContainerView.swift`.
 - Keep terminal content non-glassy.
 
