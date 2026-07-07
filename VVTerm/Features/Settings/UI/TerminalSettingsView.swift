@@ -625,32 +625,6 @@ struct TerminalSettingsView: View {
         knownHostCount = KnownHostsManager.shared.entries().count
     }
 
-    #if os(macOS)
-    private func loadSystemFonts() -> [String] {
-        let fontManager = NSFontManager.shared
-        return fontManager.availableFontFamilies.filter { familyName in
-            guard let font = NSFont(name: familyName, size: 12) else { return false }
-            return font.isFixedPitch
-        }.sorted()
-    }
-    #else
-    private func loadSystemFonts() -> [String] {
-        var fonts = ["Menlo", "SF Mono", "Courier New"]
-        let nerdFonts = [
-            "JetBrainsMono Nerd Font",
-            "Hack Nerd Font",
-            "FiraCode Nerd Font",
-            "MesloLGS Nerd Font"
-        ]
-
-        for fontFamily in nerdFonts where UIFont(name: fontFamily, size: 12) != nil {
-            fonts.append(fontFamily)
-        }
-
-        return fonts.sorted()
-    }
-    #endif
-
     private func ensureThemeSelectionIsValid() {
         let available = Set(allThemeNames)
         if !available.contains(themeName) {
