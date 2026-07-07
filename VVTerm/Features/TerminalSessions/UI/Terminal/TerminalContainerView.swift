@@ -403,15 +403,11 @@ struct TerminalContainerView: View {
                         if terminalAlreadyExists {
                             isReady = true
                         }
-                        #if os(macOS)
-                        ConnectionSessionManager.shared.peekTerminal(for: session.id)?.resumeRendering()
-                        #endif
+                        platformTerminalWrapperDidAppear()
                     }
-                    #if os(macOS)
                     .onDisappear {
-                        ConnectionSessionManager.shared.peekTerminal(for: session.id)?.pauseRendering()
+                        platformTerminalWrapperDidDisappear()
                     }
-                    #endif
                 }
 
                 terminalInitializationOverlay

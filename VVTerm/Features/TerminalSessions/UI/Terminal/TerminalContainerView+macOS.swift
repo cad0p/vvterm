@@ -54,5 +54,13 @@ extension TerminalContainerView {
     static func platformFallbackBackgroundColor() -> Color {
         Color(NSColor.windowBackgroundColor)
     }
+
+    func platformTerminalWrapperDidAppear() {
+        ConnectionSessionManager.shared.peekTerminal(for: session.id)?.resumeRendering()
+    }
+
+    func platformTerminalWrapperDidDisappear() {
+        ConnectionSessionManager.shared.peekTerminal(for: session.id)?.pauseRendering()
+    }
 }
 #endif
