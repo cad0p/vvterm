@@ -639,6 +639,7 @@ Migration notes:
 Initial implementation status:
 
 - Done: moved direct pasteboard reads/writes in `TerminalSettingsView.swift` and `KeychainSettingsView.swift` through the shared `Clipboard` helper so UIKit/AppKit pasteboard access stays in `Core/Terminal/Clipboard.swift`.
+- Done: split terminal settings font discovery into `TerminalSettingsView+iOS.swift` and `TerminalSettingsView+macOS.swift`, leaving the shared file responsible only for preserving the selected font in the picker list.
 - Done: split keychain settings row action presentation into `KeychainSettingsView+iOS.swift` and `KeychainSettingsView+macOS.swift`, leaving common action contents and keychain operations in the shared file.
 - Remaining: split larger platform presentation clusters for terminal settings, server forms, and keychain settings into platform extension files once each cluster can move as a coherent unit.
 
