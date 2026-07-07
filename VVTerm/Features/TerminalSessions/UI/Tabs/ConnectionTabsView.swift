@@ -591,19 +591,6 @@ struct ConnectionTerminalContainer: View {
         ]
     }
 
-    private var viewPickerControl: some View {
-        Picker("View", selection: selectedViewBinding) {
-            ForEach(visibleViewTabs) { tab in
-                Label(tab.localizedKey, systemImage: tab.icon)
-                    .tag(tab.id)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .padding(.horizontal, 4)
-    }
-
     @ViewBuilder
     private var tabsToolbarView: some View {
             if selectedView == ConnectionViewTab.files.id {
@@ -654,108 +641,6 @@ struct ConnectionTerminalContainer: View {
                     tabManager: tabManager
                 )
             }
-    }
-
-    private var zenModeToolbarButton: some View {
-        Button {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                isZenModeEnabled = true
-            }
-        } label: {
-            Label("Zen", systemImage: "arrow.up.left.and.arrow.down.right")
-                .labelStyle(.iconOnly)
-        }
-        .help(Text("Enter Zen Mode"))
-    }
-
-    private var filesActionsToolbarButton: some View {
-        let currentPath = selectedFileTab.map { fileBrowser.currentPath(for: $0) } ?? "/"
-        let areHiddenFilesVisible = selectedFileTab.map { fileBrowser.showHiddenFiles(for: $0) } ?? false
-
-        return Menu {
-            Button {
-                guard let selectedFileTab else { return }
-                Task { await fileBrowser.goUp(in: selectedFileTab, server: server) }
-            } label: {
-                Label("Parent", systemImage: "arrow.turn.up.left")
-            }
-            .disabled(selectedFileTab == nil || currentPath == "/")
-
-            Button {
-                guard let selectedFileTab else { return }
-                Task { await fileBrowser.refresh(server: server, tab: selectedFileTab) }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(selectedFileTab == nil)
-
-            Divider()
-
-            Button {
-                guard let selectedFileTab else { return }
-                fileBrowser.requestUploadPicker(for: selectedFileTab, destinationPath: currentPath)
-            } label: {
-                Label("Upload…", systemImage: "square.and.arrow.up")
-            }
-            .disabled(selectedFileTab == nil)
-
-            Button {
-                guard let selectedFileTab else { return }
-                fileBrowser.requestCreateFolder(for: selectedFileTab, destinationPath: currentPath)
-            } label: {
-                Label("New Folder…", systemImage: "folder.badge.plus")
-            }
-            .disabled(selectedFileTab == nil)
-
-            Button {
-                guard let selectedFileTab else { return }
-                fileBrowser.setShowHiddenFiles(!areHiddenFilesVisible, for: selectedFileTab)
-            } label: {
-                Label(
-                    areHiddenFilesVisible ? "Hide Hidden Files" : "Show Hidden Files",
-                    systemImage: areHiddenFilesVisible ? "eye.slash" : "eye"
-                )
-            }
-            .disabled(selectedFileTab == nil)
-
-            Divider()
-
-            Button {
-                Clipboard.copy(currentPath)
-            } label: {
-                Label("Copy Path", systemImage: "document.on.document")
-            }
-        } label: {
-            Label("Files", systemImage: "folder")
-                .labelStyle(.titleAndIcon)
-        }
-        .help(Text("Files Menu"))
-    }
-
-    private var serverMenuToolbarButton: some View {
-        Menu {
-            Button {
-                SettingsWindowManager.shared.show()
-            } label: {
-                Label("Settings", systemImage: "gear")
-            }
-
-            Button {
-                serverToEdit = server
-            } label: {
-                Label("Edit Server", systemImage: "pencil")
-            }
-
-            Button(role: .destructive) {
-                showingDisconnectConfirmation = true
-            } label: {
-                Label("Disconnect", systemImage: "xmark.circle")
-            }
-        } label: {
-            Label("Server", systemImage: "ellipsis.circle")
-                .labelStyle(.iconOnly)
-        }
-        .help(Text("Server Options"))
     }
 
     /// The rich Zen controls panel, hosted inside the native zen toolbar
