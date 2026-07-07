@@ -474,8 +474,8 @@ Migration notes:
 
 Initial implementation status:
 
-- Done: renamed the platform screen files, split `RemoteFileBrowserSupport.swift`, moved macOS AppKit upload/download/delete helpers into `RemoteFileBrowserScreen+macOS.swift`, removed AppKit/UIKit imports from `RemoteFileBrowserScreen.swift`, and moved body-level platform content/presentation modifiers into `RemoteFileBrowserScreen+iOS.swift` / `RemoteFileBrowserScreen+macOS.swift`.
-- Remaining: move platform stored state and remaining platform action-routing modifiers out of `RemoteFileBrowserScreen.swift`.
+- Done: renamed the platform screen files, split `RemoteFileBrowserSupport.swift`, moved macOS AppKit upload/download/delete helpers into `RemoteFileBrowserScreen+macOS.swift`, removed AppKit/UIKit imports from `RemoteFileBrowserScreen.swift`, moved body-level platform content/presentation modifiers into `RemoteFileBrowserScreen+iOS.swift` / `RemoteFileBrowserScreen+macOS.swift`, and moved platform action routing into those files.
+- Remaining: move platform stored state and macOS sheet sizing out of `RemoteFileBrowserScreen.swift`.
 
 ### Terminal Sessions
 
