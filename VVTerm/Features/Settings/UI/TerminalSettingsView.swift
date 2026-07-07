@@ -969,7 +969,7 @@ private struct ManageCustomThemesSheet: View {
                 } else {
                     List {
                         ForEach(sortedThemes) { theme in
-                            iOSThemeRow(theme)
+                            themeRow(theme)
                         }
                     }
                 }
@@ -995,7 +995,7 @@ private struct ManageCustomThemesSheet: View {
         }
     }
 
-    private func iOSThemeRow(_ theme: TerminalTheme) -> some View {
+    private func themeRow(_ theme: TerminalTheme) -> some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(theme.name)
