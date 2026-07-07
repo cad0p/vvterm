@@ -1,4 +1,14 @@
 {
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
   "identifier" : "F8E8E8E8-1234-5678-9ABC-DEF012345678",
   "nonRenewingSubscriptions" : [
 
@@ -22,59 +32,94 @@
   ],
   "settings" : {
     "_applicationInternalID" : "1234567890",
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
     "_developerTeamID" : "QW4U57CXJX",
+    "_disableDialogs" : false,
     "_failTransactionsEnabled" : false,
-    "_lastSynchronizedDate" : null,
     "_locale" : "en_US",
+    "_renewalBillingIssuesEnabled" : false,
     "_storefront" : "USA",
     "_storeKitErrors" : [
       {
-        "current" : null,
+        "current" : {
+          "index" : 2,
+          "type" : "generic"
+        },
         "enabled" : false,
         "name" : "Load Products"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 1,
+          "type" : "purchase"
+        },
         "enabled" : false,
         "name" : "Purchase"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 0,
+          "type" : "verification"
+        },
         "enabled" : false,
         "name" : "Verification"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 2,
+          "type" : "generic"
+        },
         "enabled" : false,
         "name" : "App Store Sync"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 2,
+          "type" : "generic"
+        },
         "enabled" : false,
         "name" : "Subscription Status"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 3,
+          "type" : "generic"
+        },
         "enabled" : false,
         "name" : "App Transaction"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 3,
+          "type" : "generic"
+        },
         "enabled" : false,
         "name" : "Manage Subscriptions Sheet"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 0,
+          "type" : "refund request"
+        },
         "enabled" : false,
         "name" : "Refund Request Sheet"
       },
       {
-        "current" : null,
+        "current" : {
+          "index" : 4,
+          "type" : "generic"
+        },
         "enabled" : false,
         "name" : "Offer Code Redeem Sheet"
       }
-    ]
+    ],
+    "_timeRate" : 0
   },
+  "subscriptionBundleGroups" : [
+
+  ],
   "subscriptionGroups" : [
     {
       "id" : "vivyterm_pro",
@@ -91,6 +136,15 @@
           "adHocOffers" : [
 
           ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "6.49",
+              "displayPrice" : "6.49",
+              "internalID" : "347DEB46",
+              "isEnabled" : true
+            }
+          ],
           "codeOffers" : [
 
           ],
@@ -98,7 +152,9 @@
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "MONTHLY001",
-          "introductoryOffer" : null,
+          "introductoryOffers" : [
+
+          ],
           "localizations" : [
             {
               "description" : "Unlimited servers, workspaces, and simultaneous connections. Cancel anytime.",
@@ -119,6 +175,15 @@
           "adHocOffers" : [
 
           ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "24.99",
+              "displayPrice" : "24.99",
+              "internalID" : "2BD8E2AE",
+              "isEnabled" : true
+            }
+          ],
           "codeOffers" : [
 
           ],
@@ -126,7 +191,9 @@
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "YEARLY001",
-          "introductoryOffer" : null,
+          "introductoryOffers" : [
+
+          ],
           "localizations" : [
             {
               "description" : "Unlimited servers, workspaces, and simultaneous connections. Save 68% compared to monthly.",
@@ -146,8 +213,11 @@
       ]
     }
   ],
+  "subscriptionSuiteGroups" : [
+
+  ],
   "version" : {
-    "major" : 4,
-    "minor" : 0
+    "major" : 6,
+    "minor" : 3
   }
 }

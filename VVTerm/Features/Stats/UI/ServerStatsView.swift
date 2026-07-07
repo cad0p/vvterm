@@ -74,7 +74,8 @@ private struct StatsVisualStyle {
 
     init(
         preferencesStyle: StatsPreferences.Style = .cardsCompact,
-        surface: Surface = .dashboard
+        surface: Surface = .dashboard,
+        colorScheme: ColorScheme = .dark
     ) {
         switch preferencesStyle {
         case .cardsCompact:
@@ -88,7 +89,7 @@ private struct StatsVisualStyle {
         switch surface {
         case .dashboard:
             #if os(macOS)
-            pageBackground = .clear
+            pageBackground = colorScheme == .light ? Self.nativeGroupedBackground : .clear
             #else
             pageBackground = Self.nativeGroupedBackground
             #endif
@@ -96,18 +97,30 @@ private struct StatsVisualStyle {
                 cardFill = Color.white.opacity(0.08)
                 cardStroke = Color.white.opacity(0.06)
             } else {
-                #if os(macOS)
-                cardFill = Color.white.opacity(0.045)
-                cardStroke = Color.white.opacity(0.075)
-                #else
-                cardFill = Color(red: 0.11, green: 0.11, blue: 0.12)
-                cardStroke = Color.white.opacity(0.04)
-                #endif
+                if colorScheme == .light {
+                    cardFill = Self.nativeGroupedCardFill
+                    cardStroke = Self.nativeGroupedCardStroke
+                } else {
+                    #if os(macOS)
+                    cardFill = Color.white.opacity(0.045)
+                    cardStroke = Color.white.opacity(0.075)
+                    #else
+                    cardFill = Color(red: 0.11, green: 0.11, blue: 0.12)
+                    cardStroke = Color.white.opacity(0.04)
+                    #endif
+                }
             }
-            primaryText = Color.white
-            secondaryText = Color.white.opacity(0.58)
-            tertiaryText = Color.white.opacity(0.34)
-            meterTrack = Color.white.opacity(0.10)
+            if colorScheme == .light, preferencesStyle != .classic {
+                primaryText = Color.primary
+                secondaryText = Color.secondary
+                tertiaryText = Color.secondary.opacity(0.45)
+                meterTrack = Color.primary.opacity(0.10)
+            } else {
+                primaryText = Color.white
+                secondaryText = Color.white.opacity(0.58)
+                tertiaryText = Color.white.opacity(0.34)
+                meterTrack = Color.white.opacity(0.10)
+            }
         case .grouped:
             pageBackground = Self.nativeGroupedBackground
             cardFill = Self.nativeGroupedCardFill
@@ -234,9 +247,27 @@ private struct StatsVisualStyle {
     }
 }
 
+private enum StatsResolvedAppearance {
+    static let storageKey = "appearanceMode"
+
+    static func colorScheme(from rawValue: String, fallback: ColorScheme) -> ColorScheme {
+        switch rawValue {
+        case "light":
+            return .light
+        case "dark":
+            return .dark
+        default:
+            return fallback
+        }
+    }
+}
+
 // MARK: - Server Stats View
 
 struct ServerStatsView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(StatsResolvedAppearance.storageKey) private var appearanceMode = "system"
+
     let server: Server
     let isVisible: Bool
     let backgroundColor: Color
@@ -264,6 +295,7 @@ struct ServerStatsView: View {
 
     var body: some View {
         let currentPreferences = preferences.preferences
+        let resolvedColorScheme = StatsResolvedAppearance.colorScheme(from: appearanceMode, fallback: colorScheme)
 
         ServerStatsDashboard(
             server: server,
@@ -279,7 +311,13 @@ struct ServerStatsView: View {
             isShowingDockerUpgrade = true
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(StatsBlocksContent.pageBackground(for: currentPreferences.style, backgroundColor: backgroundColor))
+        .background(
+            StatsBlocksContent.pageBackground(
+                for: currentPreferences.style,
+                backgroundColor: backgroundColor,
+                colorScheme: resolvedColorScheme
+            )
+        )
         .proUpgradePresentation(isPresented: $isShowingDockerUpgrade, source: .dockerStats)
         .statsDetailPresentation(isPresented: $isShowingAppearanceSettings, size: StatsPresentationSize.large) {
             appearanceSettingsContent
@@ -428,6 +466,9 @@ struct StatsAppearancePreviewContent: View {
 }
 
 private struct StatsBlocksContent: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(StatsResolvedAppearance.storageKey) private var appearanceMode = "system"
+
     let serverName: String
     let stats: ServerStats
     let cpuHistory: [StatsPoint]
@@ -451,19 +492,30 @@ private struct StatsBlocksContent: View {
     let loadDockerStats: (() async throws -> DockerStats)?
     let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
 
-    static func pageBackground(for preferencesStyle: StatsPreferences.Style, backgroundColor: Color) -> Color {
+    static func pageBackground(
+        for preferencesStyle: StatsPreferences.Style,
+        backgroundColor: Color,
+        colorScheme: ColorScheme = .dark
+    ) -> Color {
         if preferencesStyle == .classic {
             return ClassicStatsCardSurfaceStyle.make(for: backgroundColor).pageBackground
         }
         #if os(macOS)
-        return backgroundColor
+        return colorScheme == .light
+            ? StatsVisualStyle(preferencesStyle: preferencesStyle, colorScheme: colorScheme).pageBackground
+            : backgroundColor
         #else
-        return StatsVisualStyle(preferencesStyle: preferencesStyle).pageBackground
+        return StatsVisualStyle(preferencesStyle: preferencesStyle, colorScheme: colorScheme).pageBackground
         #endif
     }
 
     var body: some View {
-        let style = StatsVisualStyle(preferencesStyle: preferences.style, surface: surface)
+        let resolvedColorScheme = StatsResolvedAppearance.colorScheme(from: appearanceMode, fallback: colorScheme)
+        let style = StatsVisualStyle(
+            preferencesStyle: preferences.style,
+            surface: surface,
+            colorScheme: resolvedColorScheme
+        )
         let classicSurfaceStyle = ClassicStatsCardSurfaceStyle.make(for: backgroundColor)
 
         if preferences.style == .classic {
@@ -485,13 +537,12 @@ private struct StatsBlocksContent: View {
             .drawingGroup()
             .frame(maxWidth: constrainsWidth ? nil : .infinity)
         } else {
-            LazyVGrid(columns: gridColumns(for: style), alignment: .leading, spacing: style.cardSpacing) {
-                ForEach(renderedBlocks, id: \.self) { blockID in
-                    statsBlock(blockID, style: style)
-                }
+            VStack(spacing: style.cardSpacing) {
+                responsiveGrid(style: style)
 
                 if showsCustomizationEntryPoint, let customizeAction {
-                    StatsCustomizeCard(style: style, action: customizeAction)
+                    StatsCustomizeButton(style: style, action: customizeAction)
+                        .padding(.top, 2)
                 }
             }
             .padding(.horizontal, usesPagePadding ? style.horizontalPadding : 0)
@@ -506,14 +557,89 @@ private struct StatsBlocksContent: View {
         preferences.visibleBlocks.filter(shouldRenderBlock)
     }
 
-    private func gridColumns(for style: StatsVisualStyle) -> [GridItem] {
-        [
-            GridItem(
-                .adaptive(minimum: style.gridMinimumColumnWidth),
-                spacing: style.cardSpacing,
-                alignment: .top
-            )
-        ]
+    @ViewBuilder
+    private func responsiveGrid(style: StatsVisualStyle) -> some View {
+        ViewThatFits(in: .horizontal) {
+            statsGrid(style: style, columnCount: 3)
+                .frame(minWidth: minimumGridWidth(for: 3, style: style))
+            statsGrid(style: style, columnCount: 2)
+                .frame(minWidth: minimumGridWidth(for: 2, style: style))
+            statsGrid(style: style, columnCount: 1)
+        }
+    }
+
+    private func statsGrid(style: StatsVisualStyle, columnCount: Int) -> some View {
+        let rows = gridRows(for: renderedBlocks, columnCount: columnCount)
+
+        return Grid(alignment: .topLeading, horizontalSpacing: style.cardSpacing, verticalSpacing: style.cardSpacing) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                GridRow(alignment: .top) {
+                    ForEach(row, id: \.self) { blockID in
+                        statsBlock(blockID, style: style)
+                            .gridCellColumns(gridSpan(for: blockID, columnCount: columnCount))
+                    }
+
+                    ForEach(0..<emptyCells(in: row, columnCount: columnCount), id: \.self) { _ in
+                        Color.clear
+                            .frame(minWidth: 0, minHeight: 0)
+                            .gridCellUnsizedAxes([.horizontal, .vertical])
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func minimumGridWidth(for columnCount: Int, style: StatsVisualStyle) -> CGFloat {
+        CGFloat(columnCount) * style.gridMinimumColumnWidth
+            + CGFloat(max(0, columnCount - 1)) * style.cardSpacing
+    }
+
+    private func gridRows(for items: [StatsPreferences.BlockID], columnCount: Int) -> [[StatsPreferences.BlockID]] {
+        var rows: [[StatsPreferences.BlockID]] = []
+        var currentRow: [StatsPreferences.BlockID] = []
+        var remainingColumns = columnCount
+
+        for blockID in items {
+            let span = gridSpan(for: blockID, columnCount: columnCount)
+
+            if span > remainingColumns, !currentRow.isEmpty {
+                rows.append(currentRow)
+                currentRow = []
+                remainingColumns = columnCount
+            }
+
+            currentRow.append(blockID)
+            remainingColumns -= span
+
+            if remainingColumns == 0 {
+                rows.append(currentRow)
+                currentRow = []
+                remainingColumns = columnCount
+            }
+        }
+
+        if !currentRow.isEmpty {
+            rows.append(currentRow)
+        }
+
+        return rows
+    }
+
+    private func emptyCells(in row: [StatsPreferences.BlockID], columnCount: Int) -> Int {
+        let occupiedColumns = row.reduce(0) { partialResult, blockID in
+            partialResult + gridSpan(for: blockID, columnCount: columnCount)
+        }
+        return max(0, columnCount - occupiedColumns)
+    }
+
+    private func gridSpan(for blockID: StatsPreferences.BlockID, columnCount: Int) -> Int {
+        switch blockID {
+        case .docker:
+            return isDockerUnlocked && columnCount >= 3 ? 2 : 1
+        case .system, .cpu, .memory, .gpu, .network, .storage, .processes:
+            return 1
+        }
     }
 
     private func shouldRenderBlock(_ blockID: StatsPreferences.BlockID) -> Bool {
@@ -841,52 +967,38 @@ private struct AppleCard<Content: View>: View {
     }
 }
 
-private struct StatsCustomizeCard: View {
+private struct StatsCustomizeButton: View {
     let style: StatsVisualStyle
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            HStack(spacing: 9) {
                 Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 42, height: 42)
-                    .background(Color.accentColor.opacity(0.12), in: Circle())
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Customize Stats")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(style.primaryText)
-                    Text("Cards, order, visibility")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(style.secondaryText)
-                }
-
-                Spacer(minLength: 12)
+                    .font(.subheadline.weight(.bold))
+                Text(String(localized: "Customize"))
+                    .font(.subheadline.weight(.bold))
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(style.tertiaryText)
+                    .font(.caption.weight(.bold))
             }
-            .padding(style.cardPadding)
-            .frame(maxWidth: .infinity, minHeight: style.density == .detailed ? 104 : 92, alignment: .leading)
-            .background(style.cardFill.opacity(0.38), in: RoundedRectangle(cornerRadius: style.cardCornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: style.cardCornerRadius, style: .continuous)
-                    .stroke(
-                        style: StrokeStyle(
-                            lineWidth: 1.5,
-                            lineCap: .round,
-                            lineJoin: .round,
-                            dash: [7, 7]
-                        )
-                    )
-                    .foregroundStyle(style.tertiaryText.opacity(0.7))
-            }
+            .foregroundStyle(Color.accentColor)
+            .lineLimit(1)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.accentColor.opacity(0.12), in: Capsule())
+            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(StatsCardButtonStyle())
         .accessibilityLabel(Text("Customize Stats"))
+    }
+}
+
+private struct StatsCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.975 : 1)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -2540,39 +2652,184 @@ private struct LockedDockerCard: View {
 
     var body: some View {
         Button(action: action) {
-            AppleCard(style: style, minHeight: style.density == .detailed ? 148 : 126) {
-                HStack(spacing: 16) {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(Color.blue)
-                        .frame(width: 46, height: 46)
-                        .background(Color.blue.opacity(0.16), in: Circle())
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text(String(localized: "Docker"))
-                                .font(.headline.weight(.bold))
-                            ProBadge(compact: true)
-                        }
-                        .foregroundStyle(style.primaryText)
-
-                        Text(String(localized: "Monitor containers, health, CPU, and memory."))
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(style.secondaryText)
-                            .lineLimit(2)
-                    }
-
-                    Spacer(minLength: 12)
-
-                    Image(systemName: "chevron.right")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(style.tertiaryText)
+            AppleCard(style: style) {
+                ViewThatFits(in: .horizontal) {
+                    wideLayout
+                        .frame(minWidth: 560, alignment: .topLeading)
+                    compactLayout
                 }
                 .padding(style.cardPadding)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(StatsCardButtonStyle())
         .accessibilityLabel(Text("Unlock Docker monitoring"))
+    }
+
+    private var wideLayout: some View {
+        HStack(alignment: .top, spacing: 26) {
+            VStack(alignment: .leading, spacing: 14) {
+                header
+
+                Text(String(localized: "Inspect containers, catch unhealthy services, and control Docker without leaving your session."))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(style.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                unlockPill
+            }
+            .frame(maxWidth: 360, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 13) {
+                featureRows
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var compactLayout: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                header
+                Spacer(minLength: 8)
+                compactUnlockPill
+            }
+
+            Text(String(localized: "Inspect containers, catch unhealthy services, and control Docker."))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(style.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                featureRows
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 13) {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(Color.blue)
+                    .frame(width: 46, height: 46)
+                    .background(Color.blue.opacity(0.14), in: Circle())
+
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 17, height: 17)
+                    .background(Color.blue, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(style.cardFill, lineWidth: 2)
+                    }
+                    .offset(x: 2, y: 2)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(String(localized: "Docker"))
+                        .font(.headline.weight(.bold))
+                    ProBadge(compact: true)
+                }
+                .foregroundStyle(style.primaryText)
+
+                Text(String(localized: "Pro monitoring"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(style.secondaryText)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var unlockPill: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "lock.open")
+                .font(.caption.weight(.bold))
+            Text(String(localized: "Unlock Docker"))
+                .font(.subheadline.weight(.bold))
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+        }
+        .foregroundStyle(Color.blue)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.blue.opacity(0.12), in: Capsule())
+    }
+
+    private var compactUnlockPill: some View {
+        ViewThatFits(in: .horizontal) {
+            unlockPill
+            HStack(spacing: 6) {
+                Image(systemName: "lock.open")
+                    .font(.caption.weight(.bold))
+                Text(String(localized: "Unlock"))
+                    .font(.subheadline.weight(.bold))
+            }
+            .foregroundStyle(Color.blue)
+            .lineLimit(1)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background(Color.blue.opacity(0.12), in: Capsule())
+        }
+    }
+
+    @ViewBuilder
+    private var featureRows: some View {
+        LockedDockerFeature(
+            systemImage: "list.bullet.rectangle",
+            title: String(localized: "Containers"),
+            subtitle: String(localized: "Search, sort, and inspect state"),
+            color: .blue,
+            style: style
+        )
+        LockedDockerFeature(
+            systemImage: "waveform.path.ecg",
+            title: String(localized: "Health"),
+            subtitle: String(localized: "Spot unhealthy services fast"),
+            color: .green,
+            style: style
+        )
+        LockedDockerFeature(
+            systemImage: "power",
+            title: String(localized: "Actions"),
+            subtitle: String(localized: "Start, stop, and restart"),
+            color: .orange,
+            style: style
+        )
+    }
+}
+
+private struct LockedDockerFeature: View {
+    let systemImage: String
+    let title: String
+    let subtitle: String
+    let color: Color
+    let style: StatsVisualStyle
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 11) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 28, height: 28)
+                .background(color.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(style.primaryText)
+                Text(subtitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(style.secondaryText)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
     }
 }
 
