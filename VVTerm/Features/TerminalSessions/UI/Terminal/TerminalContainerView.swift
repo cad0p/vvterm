@@ -16,7 +16,7 @@ struct TerminalContainerView: View {
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    @State private var isReady = false
+    @State var isReady = false
     @State private var credentialLoadErrorMessage: String?
     @State private var credentials: ServerCredentials?
     @State private var reconnectToken = UUID()
@@ -39,16 +39,16 @@ struct TerminalContainerView: View {
 
     // Voice input state
     #if os(macOS) || os(iOS)
-    @StateObject private var audioService = AudioService()
-    @State private var showingVoiceRecording = false
-    @State private var voiceProcessing = false
-    @State private var showingPermissionError = false
-    @State private var permissionErrorMessage = ""
-    @AppStorage("terminalVoiceButtonEnabled") private var voiceButtonEnabled = true
+    @StateObject var audioService = AudioService()
+    @State var showingVoiceRecording = false
+    @State var voiceProcessing = false
+    @State var showingPermissionError = false
+    @State var permissionErrorMessage = ""
+    @AppStorage("terminalVoiceButtonEnabled") var voiceButtonEnabled = true
     #endif
 
     #if os(macOS)
-    @State private var keyMonitor = TerminalVoiceKeyMonitor()
+    @State var keyMonitor = TerminalVoiceKeyMonitor()
     #endif
 
     /// Terminal background color from theme
@@ -142,12 +142,6 @@ struct TerminalContainerView: View {
         shouldShowInitializing && hasServerAndCredentials
     }
 
-    #if os(macOS) || os(iOS)
-    private var voiceTriggerHandler: (() -> Void)? {
-        voiceButtonEnabled ? { handleVoiceTrigger() } : nil
-    }
-    #endif
-
     private var reconnectBannerMessage: String? {
         guard shouldUseInlineReconnectPresentation else { return nil }
 
@@ -183,7 +177,7 @@ struct TerminalContainerView: View {
         return richPasteUI.topBannerNotice
     }
 
-    private var bottomOperationNotice: NoticeItem? {
+    var bottomOperationNotice: NoticeItem? {
         if session.tmuxStatus == .installing {
             return NoticeItem(
                 id: "terminal-tmux-install-\(session.id.uuidString)",
@@ -213,11 +207,41 @@ struct TerminalContainerView: View {
         return richPasteUI.bottomOperationNotice
     }
 
-    private var voiceOverlayBottomInset: CGFloat {
-        bottomOperationNotice == nil ? 0 : 104
+    var body: some View {
+        platformVoicePresentation(terminalBodyContent)
+        .alert("Install tmux?", isPresented: $showingTmuxInstallPrompt) {
+            Button("Install") {
+                Task {
+                    await ConnectionSessionManager.shared.startTmuxInstall(for: session.id)
+                }
+            }
+            Button("Continue without persistence", role: .cancel) {
+                disableTmuxForServer()
+            }
+        } message: {
+            Text("tmux keeps your terminal session alive across app restarts and disconnects.")
+        }
+        .alert("Install mosh-server?", isPresented: $showingMoshInstallPrompt) {
+            Button("Install") {
+                Task {
+                    await installMoshServerAndReconnect()
+                }
+            }
+            Button("Continue with SSH", role: .cancel) {}
+        } message: {
+            Text("Mosh is selected for this server, but mosh-server is missing on the host.")
+        }
+        .alert("Replace Trusted Host?", isPresented: $showingRetrustHostConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Replace and Reconnect", role: .destructive) {
+                retrustHostAndRetry()
+            }
+        } message: {
+            Text(retrustHostConfirmationMessage)
+        }
     }
 
-    var body: some View {
+    private var terminalBodyContent: some View {
         NoticeHost(
             topBanner: topBannerNotice,
             bottomOperation: bottomOperationNotice,
@@ -228,7 +252,7 @@ struct TerminalContainerView: View {
                 terminalBackgroundLayer
                 terminalSurfaceLayer
                 stateOverlayLayer
-                voiceOverlayLayer
+                platformVoiceOverlayLayer
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -311,70 +335,6 @@ struct TerminalContainerView: View {
             dismissFallbackBanner = true
         }
         .terminalRichPastePrompt(using: richPasteUI)
-        #if os(macOS) || os(iOS)
-        .alert("Voice Input Unavailable", isPresented: $showingPermissionError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(permissionErrorMessage)
-        }
-        .onChange(of: showingVoiceRecording) { isRecording in
-            onVoiceRecordingChange?(isRecording)
-        }
-        #endif
-        .alert("Install tmux?", isPresented: $showingTmuxInstallPrompt) {
-            Button("Install") {
-                Task {
-                    await ConnectionSessionManager.shared.startTmuxInstall(for: session.id)
-                }
-            }
-            Button("Continue without persistence", role: .cancel) {
-                disableTmuxForServer()
-            }
-        } message: {
-            Text("tmux keeps your terminal session alive across app restarts and disconnects.")
-        }
-        .alert("Install mosh-server?", isPresented: $showingMoshInstallPrompt) {
-            Button("Install") {
-                Task {
-                    await installMoshServerAndReconnect()
-                }
-            }
-            Button("Continue with SSH", role: .cancel) {}
-        } message: {
-            Text("Mosh is selected for this server, but mosh-server is missing on the host.")
-        }
-        .alert("Replace Trusted Host?", isPresented: $showingRetrustHostConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Replace and Reconnect", role: .destructive) {
-                retrustHostAndRetry()
-            }
-        } message: {
-            Text(retrustHostConfirmationMessage)
-        }
-        #if os(macOS)
-        .onAppear {
-            setupKeyMonitor()
-        }
-        .onDisappear {
-            cleanupKeyMonitor()
-            if showingVoiceRecording {
-                audioService.cancelRecording()
-                showingVoiceRecording = false
-                voiceProcessing = false
-            }
-            onVoiceRecordingChange?(false)
-        }
-        #endif
-        #if os(iOS)
-        .onDisappear {
-            if showingVoiceRecording {
-                audioService.cancelRecording()
-                showingVoiceRecording = false
-                voiceProcessing = false
-            }
-            onVoiceRecordingChange?(false)
-        }
-        #endif
     }
 
     @ViewBuilder
@@ -567,36 +527,6 @@ struct TerminalContainerView: View {
         }
     }
 
-    @ViewBuilder
-    private var voiceOverlayLayer: some View {
-        #if os(macOS)
-        if session.connectionState.isConnected && isReady {
-            if showingVoiceRecording {
-                voiceOverlay
-                    .padding(.bottom, voiceOverlayBottomInset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if voiceButtonEnabled {
-                voiceTriggerButton
-                    .padding(.bottom, voiceOverlayBottomInset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .transition(.opacity)
-            }
-        }
-        #endif
-
-        #if os(iOS)
-        if session.connectionState.isConnected && isReady && showingVoiceRecording {
-            voiceOverlay
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.horizontal, 16)
-                .padding(.bottom, voiceOverlayBottomInset)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .zIndex(1)
-        }
-        #endif
-    }
-
     private func updateTerminalBackgroundColor() {
         if let color = ThemeColorParser.backgroundColor(for: effectiveThemeName) {
             terminalBackgroundColor = color
@@ -732,120 +662,7 @@ struct TerminalContainerView: View {
         }
     }
 
-    // MARK: - Voice Input (macOS / iOS)
-
-    #if os(macOS) || os(iOS)
-    private var voiceOverlay: some View {
-        VoiceRecordingView(
-            audioService: audioService,
-            onSend: { transcribedText in
-                handleVoiceTranscription(transcribedText)
-                showingVoiceRecording = false
-                voiceProcessing = false
-            },
-            onCancel: {
-                showingVoiceRecording = false
-                voiceProcessing = false
-            },
-            isProcessing: $voiceProcessing
-        )
-    }
-    #endif
-
-    #if os(macOS)
-    private var voiceTriggerButton: some View {
-        Button {
-            startVoiceRecording()
-        } label: {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .help(Text("Voice input (Command+Shift+M)"))
-        .padding(14)
-    }
-    #endif
-
-    #if os(macOS)
-    private func setupKeyMonitor() {
-        keyMonitor.start(
-            isRecording: {
-                showingVoiceRecording
-            },
-            cancelRecording: {
-                audioService.cancelRecording()
-                showingVoiceRecording = false
-                voiceProcessing = false
-            },
-            submitRecording: {
-                toggleVoiceRecording()
-            },
-            toggleRecording: {
-                toggleVoiceRecording()
-            }
-        )
-    }
-
-    private func cleanupKeyMonitor() {
-        keyMonitor.stop()
-    }
-    #endif
-
-    #if os(macOS) || os(iOS)
-    private func toggleVoiceRecording() {
-        if showingVoiceRecording {
-            Task {
-                let text = await audioService.stopRecording()
-                await MainActor.run {
-                    let fallback = text.isEmpty ? audioService.partialTranscription : text
-                    handleVoiceTranscription(fallback)
-                    showingVoiceRecording = false
-                    voiceProcessing = false
-                }
-            }
-        } else {
-            startVoiceRecording()
-        }
-    }
-    #endif
-
-    #if os(macOS) || os(iOS)
-    private func startVoiceRecording() {
-        Task {
-            do {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    showingVoiceRecording = true
-                }
-                try await audioService.startRecording()
-            } catch {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    showingVoiceRecording = false
-                }
-                voiceProcessing = false
-                if let recordingError = error as? AudioService.RecordingError {
-                    permissionErrorMessage = recordingError.localizedDescription
-                        + "\n\n"
-                        + String(localized: "Enable Microphone and Speech Recognition in System Settings.")
-                } else {
-                    permissionErrorMessage = error.localizedDescription
-                }
-                showingPermissionError = true
-            }
-        }
-    }
-    #endif
-
-    #if os(macOS) || os(iOS)
-    private func handleVoiceTrigger() {
-        guard session.connectionState.isConnected, isReady else { return }
-        guard !showingVoiceRecording else { return }
-        startVoiceRecording()
-    }
-    #endif
-
-    private func handleVoiceTranscription(_ text: String) {
+    func handleVoiceTranscription(_ text: String) {
         if sendTranscriptionToTerminal(text) {
             onVoiceTranscriptionSent?()
         }
