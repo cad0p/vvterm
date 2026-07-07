@@ -687,6 +687,7 @@ Initial implementation status:
 
 - Done: split support URL opening and the iOS-only support settings view into `SupportSheet+iOS.swift` and `SupportSheet+macOS.swift`, removing direct AppKit/UIKit imports from `SupportSheet.swift`.
 - Done: split Pro upgrade subscription management, platform colors, and the macOS window presenter/configurator into `ProUpgradeSheet+iOS.swift` and `ProUpgradeSheet+macOS.swift`, leaving entitlement state and purchase/restore behavior in the shared sheet.
+- Done: split Pro upgrade presentation modifier behavior into `ProUpgradeSheet+iOS.swift` and `ProUpgradeSheet+macOS.swift`, leaving the shared modifier as a platform handoff and preserving the iOS sheet path and macOS window path.
 - Remaining: split the remaining `ProUpgradeSheet.swift` presentation/body shell gates once the iOS wrapper and macOS sheet content can move as coherent platform units without widening shared UI internals unnecessarily.
 
 ### Stats
