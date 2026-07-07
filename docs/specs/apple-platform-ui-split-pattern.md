@@ -649,7 +649,7 @@ Initial implementation status:
 Current issues:
 
 - `ProUpgradeSheet.swift` has platform presentation and restore/purchase UI differences inline.
-- `SupportSheet.swift` has separate platform sections.
+- `SupportSheet.swift` is shared sheet content; platform URL-opening and the iOS-only settings view live in platform files.
 
 Target shape:
 
@@ -677,6 +677,11 @@ Platform responsibilities:
 - macOS window/sheet sizing
 - iOS sheet/navigation wrapping
 - platform-specific close/cancel affordances
+
+Initial implementation status:
+
+- Done: split support URL opening and the iOS-only support settings view into `SupportSheet+iOS.swift` and `SupportSheet+macOS.swift`, removing direct AppKit/UIKit imports from `SupportSheet.swift`.
+- Remaining: split `ProUpgradeSheet.swift` presentation clusters when purchase/restore behavior can stay shared and each platform shell can move as a coherent unit.
 
 ### Stats
 
