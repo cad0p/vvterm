@@ -16,7 +16,7 @@ extension RemoteFileBrowserScreen {
                         Button {
                             handleIOSEntryTap(entry)
                         } label: {
-                            RemoteFileIOSRow(entry: entry)
+                            RemoteFileRow(entry: entry)
                         }
                         .buttonStyle(.plain)
                         .onDrag {
