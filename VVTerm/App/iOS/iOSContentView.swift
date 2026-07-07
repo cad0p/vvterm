@@ -1232,7 +1232,7 @@ struct iOSTerminalView: View {
             }
 
             if selectedView == "files" && serverFileTabs.count > 1 {
-                iOSRemoteFileTabsBar(
+                RemoteFileTabsBar(
                     tabs: serverFileTabs,
                     selectedTabId: selectedFileTabIdBinding,
                     titleForTab: displayedFileTabTitle(for:),
