@@ -128,6 +128,28 @@ extension ManageCustomThemesSheet {
     }
 }
 
+extension CustomThemeSaveSheet {
+    var platformBody: some View {
+        NavigationStack {
+            formContent
+                .navigationTitle("Save Custom Theme")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            save()
+                        }
+                        .disabled(!canSave)
+                    }
+                }
+        }
+        .adaptiveSoftScrollEdges()
+    }
+}
+
 extension ThemeBuilderSheet {
     var platformBody: some View {
         NavigationStack {

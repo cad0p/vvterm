@@ -627,12 +627,12 @@ struct TerminalSettingsView: View {
     }
 }
 
-private struct CustomThemeSaveSheet: View {
+struct CustomThemeSaveSheet: View {
     let suggestedName: String
     let usePerAppearanceTheme: Bool
     let onSave: (String, CustomThemeApplyTarget) throws -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss) var dismiss
     @State private var name: String
     @State private var applyTarget: CustomThemeApplyTarget = .dark
     @State private var errorMessage: String?
@@ -648,49 +648,15 @@ private struct CustomThemeSaveSheet: View {
         _name = State(initialValue: suggestedName)
     }
 
-    private var canSave: Bool {
+    var canSave: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
-        #if os(iOS)
-        NavigationStack {
-            formContent
-            .navigationTitle("Save Custom Theme")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        save()
-                    }
-                    .disabled(!canSave)
-                }
-            }
-        }
-        .adaptiveSoftScrollEdges()
-        #else
-        VStack(spacing: 0) {
-            DialogSheetHeader(title: "Save Custom Theme") {
-                dismiss()
-            }
-
-            Divider()
-
-            formContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-
-            macActionRow
-        }
-        .frame(width: 700, height: usePerAppearanceTheme ? 300 : 250)
-        #endif
+        platformBody
     }
 
-    private var formContent: some View {
+    var formContent: some View {
         Form {
             Section {
                 #if os(iOS)
@@ -741,27 +707,7 @@ private struct CustomThemeSaveSheet: View {
         #endif
     }
 
-    #if os(macOS)
-    private var macActionRow: some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 0)
-
-            Button("Cancel") {
-                dismiss()
-            }
-
-            Button("Save") {
-                save()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canSave)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-    #endif
-
-    private func save() {
+    func save() {
         do {
             try onSave(
                 name.trimmingCharacters(in: .whitespacesAndNewlines),
