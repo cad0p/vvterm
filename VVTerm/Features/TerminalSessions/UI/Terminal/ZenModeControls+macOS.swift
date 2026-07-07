@@ -2,7 +2,7 @@
 import SwiftUI
 import Foundation
 
-struct MacOSZenModePanel: View {
+struct ZenModePanel: View {
     let width: CGFloat
     let serverName: String
     let statusText: String
@@ -105,7 +105,7 @@ struct MacOSZenModePanel: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(fileTabs) { tab in
-                            macOSFileTabRow(tab)
+                            fileTabRow(tab)
                         }
                     }
                 }
@@ -117,7 +117,7 @@ struct MacOSZenModePanel: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(terminalTabs) { tab in
-                        macOSTabRow(tab)
+                        terminalTabRow(tab)
                     }
                 }
             }
@@ -211,7 +211,7 @@ struct MacOSZenModePanel: View {
         }
     }
 
-    private func macOSTabRow(_ tab: TerminalTab) -> some View {
+    private func terminalTabRow(_ tab: TerminalTab) -> some View {
         let state = paneState(tab)
         let tint = state?.connectionState.statusTintColor ?? .secondary
         let isSelected = selectedTerminalTabId.wrappedValue == tab.id
@@ -265,7 +265,7 @@ struct MacOSZenModePanel: View {
         }
     }
 
-    private func macOSFileTabRow(_ tab: RemoteFileTab) -> some View {
+    private func fileTabRow(_ tab: RemoteFileTab) -> some View {
         let isSelected = selectedFileTabId.wrappedValue == tab.id
 
         return HStack(spacing: 8) {

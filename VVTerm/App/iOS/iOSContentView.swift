@@ -1805,7 +1805,7 @@ struct iOSTerminalView: View {
             isPanelPresented: $showingZenPanel,
             indicatorColor: selectedSession?.connectionState.statusTintColor ?? .secondary
         ) { panelWidth in
-            IOSZenModePanel(
+            ZenModePanel(
                 width: panelWidth,
                 serverName: selectedServer?.name ?? String(localized: "Terminal"),
                 selectedView: selectedView,

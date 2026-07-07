@@ -877,7 +877,7 @@ struct ConnectionTerminalContainer: View {
     /// button's menu (NSMenuItem.view) so we get a native circle button AND the
     /// full panel.
     private var zenPanelView: some View {
-            MacOSZenModePanel(
+            ZenModePanel(
                 width: 360,
                 serverName: server.name,
                 statusText: tabsStatusText,

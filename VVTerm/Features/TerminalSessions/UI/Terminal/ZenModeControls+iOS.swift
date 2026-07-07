@@ -2,7 +2,7 @@
 import SwiftUI
 import Foundation
 
-struct IOSZenModePanel: View {
+struct ZenModePanel: View {
     let width: CGFloat
     let serverName: String
     let selectedView: String
@@ -65,7 +65,7 @@ struct IOSZenModePanel: View {
                     } else {
                         VStack(spacing: 8) {
                             ForEach(fileTabs) { tab in
-                                iosFileTabRow(tab)
+                                fileTabRow(tab)
                             }
                         }
                     }
@@ -77,7 +77,7 @@ struct IOSZenModePanel: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(sessions) { session in
-                            iosSessionRow(session)
+                            sessionRow(session)
                         }
                     }
                 }
@@ -120,7 +120,7 @@ struct IOSZenModePanel: View {
         }
     }
 
-    private func iosSessionRow(_ session: ConnectionSession) -> some View {
+    private func sessionRow(_ session: ConnectionSession) -> some View {
         let isSelected = selectedSessionId.wrappedValue == session.id
 
         return HStack(spacing: 8) {
@@ -168,7 +168,7 @@ struct IOSZenModePanel: View {
         }
     }
 
-    private func iosFileTabRow(_ tab: RemoteFileTab) -> some View {
+    private func fileTabRow(_ tab: RemoteFileTab) -> some View {
         let isSelected = selectedFileTabId.wrappedValue == tab.id
 
         return HStack(spacing: 8) {
