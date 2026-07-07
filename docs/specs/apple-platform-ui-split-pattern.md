@@ -412,12 +412,12 @@ Do not create platform files for every single value. Split when ownership gets c
 
 ### Remote Files
 
-Current issues:
+Current implementation:
 
-- `RemoteFileBrowserScreen.swift` still owns shared operation logic plus platform routing modifiers and some platform state.
-- iOS search state is stored in the shared screen.
-- macOS selection, inline edit state, and titlebar inset state are still stored in the shared screen until platform child views or platform state models own them.
-- `RemoteFileBrowserScreen+iOS.swift` and `RemoteFileBrowserScreen+macOS.swift` exist, but the shared screen still owns too much platform state.
+- `RemoteFileBrowserScreen.swift` owns shared operation logic, snapshot creation, common sheets, and neutral platform hook calls.
+- iOS search state lives in `RemoteFileBrowserPlatformState` in `RemoteFileBrowserScreen+iOS.swift`.
+- macOS selection, inline edit state, and titlebar inset state live in `RemoteFileBrowserPlatformState` in `RemoteFileBrowserScreen+macOS.swift`.
+- `RemoteFileBrowserScreen+iOS.swift` and `RemoteFileBrowserScreen+macOS.swift` own platform presentation, action routing, sheet sizing, and platform state.
 - `RemoteFileBrowserSupport.swift` now holds shared support only; platform-specific support lives in `Platform/RemoteFileBrowserSupport+iOS.swift` and `Platform/RemoteFileBrowserSupport+macOS.swift`.
 
 Target files:
@@ -468,14 +468,14 @@ macOS responsibilities:
 
 Migration notes:
 
-- Move platform state into platform child views before removing gated stored properties from the shared screen.
+- Move platform state into platform child views or platform state models before removing gated stored properties from the shared screen.
 - Do not reintroduce the old `RemoteFileBrowserMacScreen.swift` or `RemoteFileBrowserIOSScreen.swift` names; use the existing `RemoteFileBrowserScreen+macOS.swift` and `RemoteFileBrowserScreen+iOS.swift` files.
 - Preserve the existing SFTP Files feature-first spec as the behavioral contract.
 
 Initial implementation status:
 
-- Done: renamed the platform screen files, split `RemoteFileBrowserSupport.swift`, moved macOS AppKit upload/download/delete helpers into `RemoteFileBrowserScreen+macOS.swift`, removed AppKit/UIKit imports from `RemoteFileBrowserScreen.swift`, moved body-level platform content/presentation modifiers into `RemoteFileBrowserScreen+iOS.swift` / `RemoteFileBrowserScreen+macOS.swift`, and moved platform action routing into those files.
-- Remaining: move platform stored state out of `RemoteFileBrowserScreen.swift`.
+- Done: renamed the platform screen files, split `RemoteFileBrowserSupport.swift`, moved macOS AppKit upload/download/delete helpers into `RemoteFileBrowserScreen+macOS.swift`, removed AppKit/UIKit imports and platform gates from `RemoteFileBrowserScreen.swift`, moved body-level platform content/presentation modifiers into `RemoteFileBrowserScreen+iOS.swift` / `RemoteFileBrowserScreen+macOS.swift`, moved platform action routing and sheet sizing into those files, and moved platform-specific state into platform state models.
+- Remaining: remove product UI platform prefixes where the type or helper is not a platform adapter.
 
 ### Terminal Sessions
 
@@ -734,10 +734,10 @@ Steps:
 
 1. Done: introduce `RemoteFileBrowserScreen+iOS.swift` and `RemoteFileBrowserScreen+macOS.swift`.
 2. Done: move platform content selection and body-level presentation modifiers into those files.
-3. Move platform-specific stored state into platform child views or small platform models.
+3. Done: move platform-specific stored state into platform child views or small platform models.
 4. Done: split `RemoteFileBrowserSupport.swift` by platform.
 5. In progress: remove product UI platform prefixes where the type is not a bridge.
-6. Build iOS and macOS.
+6. Done: build iOS and macOS.
 
 Acceptance:
 
