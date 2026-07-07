@@ -414,11 +414,11 @@ Do not create platform files for every single value. Split when ownership gets c
 
 Current issues:
 
-- `RemoteFileBrowserScreen.swift` owns both shared operation logic and platform UI.
+- `RemoteFileBrowserScreen.swift` still owns shared operation logic plus platform routing modifiers and some platform state.
 - iOS search state is stored in the shared screen.
-- macOS selection, inline edit state, titlebar inset state, AppKit panels, AppKit alerts, and context menu flow are mixed into the shared screen.
-- `RemoteFileBrowserMacScreen.swift` and `RemoteFileBrowserIOSScreen.swift` already exist, but the shared screen still owns too much platform state.
-- `RemoteFileBrowserSupport.swift` mixes iOS row UI and macOS AppKit table/menu support in one platform support file.
+- macOS selection, inline edit state, and titlebar inset state are still stored in the shared screen until platform child views or platform state models own them.
+- `RemoteFileBrowserScreen+iOS.swift` and `RemoteFileBrowserScreen+macOS.swift` exist, but the shared screen still owns too much platform state.
+- `RemoteFileBrowserSupport.swift` now holds shared support only; platform-specific support lives in `Platform/RemoteFileBrowserSupport+iOS.swift` and `Platform/RemoteFileBrowserSupport+macOS.swift`.
 
 Target files:
 
@@ -469,17 +469,22 @@ macOS responsibilities:
 Migration notes:
 
 - Move platform state into platform child views before removing gated stored properties from the shared screen.
-- Rename existing `RemoteFileBrowserMacScreen.swift` to `RemoteFileBrowserScreen+macOS.swift` and `RemoteFileBrowserIOSScreen.swift` to `RemoteFileBrowserScreen+iOS.swift` during the same phase if it keeps history understandable.
+- Do not reintroduce the old `RemoteFileBrowserMacScreen.swift` or `RemoteFileBrowserIOSScreen.swift` names; use the existing `RemoteFileBrowserScreen+macOS.swift` and `RemoteFileBrowserScreen+iOS.swift` files.
 - Preserve the existing SFTP Files feature-first spec as the behavioral contract.
+
+Initial implementation status:
+
+- Done: renamed the platform screen files, split `RemoteFileBrowserSupport.swift`, moved macOS AppKit upload/download/delete helpers into `RemoteFileBrowserScreen+macOS.swift`, and removed AppKit/UIKit imports from `RemoteFileBrowserScreen.swift`.
+- Remaining: move platform stored state, iOS search/sheet/drop presentation, and remaining platform routing modifiers out of `RemoteFileBrowserScreen.swift`.
 
 ### Terminal Sessions
 
 Current issues:
 
 - `TerminalContainerView.swift` mixes shared connection lifecycle with iOS/macOS terminal wrapper differences, macOS key monitoring, voice recording presentation, and render pause/resume.
-- `SSHTerminalWrapper.swift` has one large macOS branch and one large iOS branch.
 - `ConnectionTabsView.swift` contains a macOS toolbar body, macOS zen chrome bridge, and shared tab/session composition in one file.
-- `ZenModeControls.swift` defines `MacOSZenModePanel` and `IOSZenModePanel`.
+- `SSHTerminalWrapper.swift` has been split into shared, iOS, and macOS files.
+- `ZenModeControls.swift` keeps shared controls while `ZenModeControls+iOS.swift` and `ZenModeControls+macOS.swift` own the platform panels.
 
 Target files:
 
@@ -528,7 +533,8 @@ macOS responsibilities:
 
 Migration notes:
 
-- Split `SSHTerminalWrapper.swift` early because it already has a clean file-level platform divide.
+- Keep `SSHTerminalWrapper.swift` shared-only; platform wrappers belong in `SSHTerminalWrapper+iOS.swift` and `SSHTerminalWrapper+macOS.swift`.
+- Keep platform zen panels in `ZenModeControls+iOS.swift` and `ZenModeControls+macOS.swift`.
 - Move macOS `NSEvent` key monitoring out of `TerminalContainerView.swift`.
 - Keep terminal content non-glassy.
 
@@ -720,11 +726,11 @@ Reason: highest-value ownership cleanup. The feature already has partial platfor
 
 Steps:
 
-1. Introduce `RemoteFileBrowserScreen+iOS.swift` and `RemoteFileBrowserScreen+macOS.swift`.
-2. Move platform content methods into those files.
+1. Done: introduce `RemoteFileBrowserScreen+iOS.swift` and `RemoteFileBrowserScreen+macOS.swift`.
+2. In progress: move platform content methods into those files.
 3. Move platform-specific stored state into platform child views or small platform models.
-4. Split `RemoteFileBrowserSupport.swift` by platform.
-5. Remove product UI platform prefixes where the type is not a bridge.
+4. Done: split `RemoteFileBrowserSupport.swift` by platform.
+5. In progress: remove product UI platform prefixes where the type is not a bridge.
 6. Build iOS and macOS.
 
 Acceptance:
@@ -740,10 +746,10 @@ Reason: terminal lifecycle is sensitive, and platform behavior should be explici
 
 Steps:
 
-1. Split `SSHTerminalWrapper.swift` into platform files.
+1. Done: split `SSHTerminalWrapper.swift` into platform files.
 2. Move macOS key monitoring and render pause/resume hooks out of shared `TerminalContainerView.swift`.
 3. Move iOS terminal wrapper options into `TerminalContainerView+iOS.swift`.
-4. Split zen mode panels into platform files.
+4. Done: split zen mode panels into platform files.
 5. Build iOS and macOS.
 
 Acceptance:

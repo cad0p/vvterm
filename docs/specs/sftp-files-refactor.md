@@ -136,8 +136,8 @@ VVTerm/
 │       │   └── RemoteFilePreviewLoader.swift
 │       ├── UI/
 │       │   ├── RemoteFileBrowserScreen.swift
-│       │   ├── RemoteFileBrowserMacScreen.swift
-│       │   ├── RemoteFileBrowserIOSScreen.swift
+│       │   ├── RemoteFileBrowserScreen+macOS.swift
+│       │   ├── RemoteFileBrowserScreen+iOS.swift
 │       │   ├── Components/
 │       │   ├── Sheets/
 │       │   ├── Preview/
@@ -340,10 +340,10 @@ Non-responsibilities:
 - preview loading policy
 - SSH transport behavior
 
-#### `RemoteFileBrowserMacScreen.swift`
+#### `RemoteFileBrowserScreen+macOS.swift`
 - macOS-specific layout and AppKit wiring only
 
-#### `RemoteFileBrowserIOSScreen.swift`
+#### `RemoteFileBrowserScreen+iOS.swift`
 - iOS-specific layout and UIKit wiring only
 
 #### `UI/Components/`
