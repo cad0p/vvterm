@@ -254,18 +254,12 @@ struct RemoteFileBrowserScreen: View {
     }
 
     var body: some View {
-        NoticeHost(
+        let base = NoticeHost(
             topBanner: noticeHost.topBanner,
             bottomOperation: noticeHost.bottomOperation
         ) {
             ZStack {
-                Group {
-                    #if os(macOS)
-                    macOSContent(snapshot)
-                    #else
-                    iOSContent(snapshot)
-                    #endif
-                }
+                platformContent(snapshot)
 
                 if isDropTargeted {
                     RemoteFileDropOverlay()
@@ -281,22 +275,10 @@ struct RemoteFileBrowserScreen: View {
         .onAppear {
             onCurrentPathChange(browser.lastVisitedPath(for: fileTab))
         }
-        #if os(macOS)
-        .fileImporter(
-            isPresented: uploadImporterBinding,
-            allowedContentTypes: [.item, .folder],
-            allowsMultipleSelection: true
-        ) { result in
-            handleUploadSelection(result)
-        }
-        #else
-        .sheet(item: $uploadImportRequest) { request in
-            RemoteFileImportPicker { result in
-                handleUploadSelection(result, for: request)
-            }
-            .adaptiveSoftScrollEdges()
-        }
-        #endif
+
+        let withUploadImport = platformUploadImportPresentation(base)
+
+        let withDownloadExport = withUploadImport
         .fileExporter(
             isPresented: $isDownloadExporterPresented,
             document: downloadExportDocument,
@@ -305,114 +287,51 @@ struct RemoteFileBrowserScreen: View {
         ) { result in
             handleDownloadExportCompletion(result)
         }
-        #if os(iOS)
-        .searchable(text: $iOSSearchQuery, prompt: String(localized: "Search Files"))
-        #endif
-        #if os(macOS)
-        .overlay(alignment: .topTrailing) {
-            if let shareItem {
-                RemoteFileSharePicker(item: shareItem) {
-                    finishSharing(shareItem)
-                }
-                .frame(width: 1, height: 1)
-                .padding(.top, 12)
-                .padding(.trailing, 12)
-            }
-        }
-        #else
-        .sheet(item: $shareItem) { item in
-            RemoteFileShareSheet(item: item) {
-                finishSharing(item)
-            }
-            .adaptiveSoftScrollEdges()
-        }
-        #endif
-        #if os(iOS)
-        .onDrop(of: remoteRowDropTypeIdentifiers, isTargeted: $isDropTargeted) { providers in
-            handleCurrentDirectoryDrop(providers, to: snapshot.currentPath)
-        }
-        #endif
-        #if os(iOS)
-        .sheet(isPresented: newFolderPromptBinding, onDismiss: resetNewFolderPrompt) {
-            if let destinationPath = newFolderDestinationPath {
-                RemoteFileCreateFolderSheet(
-                    destinationPath: destinationPath,
-                    folderName: $newFolderName,
-                    isSubmitting: isCreateFolderSubmitting,
-                    onCancel: resetNewFolderPrompt,
-                    onCreate: createFolder
-                )
-                .adaptiveSoftScrollEdges()
-            }
-        }
-        #endif
+
+        let withSearch = platformSearchPresentation(withDownloadExport)
+        let withShare = platformSharePresentation(withSearch)
+        let withDrop = platformDropPresentation(withShare, snapshot: snapshot)
+        let withNewFolder = platformNewFolderPresentation(withDrop)
+
+        let withOperationError = withNewFolder
         .alert(
             String(localized: "Files"),
             isPresented: operationErrorBinding,
             actions: { operationErrorActions },
             message: { operationErrorMessageView }
         )
-        #if os(iOS)
-        .sheet(item: $renameTargetEntry, onDismiss: resetRenamePrompt) { entry in
-            renameSheet(entry: entry)
-                .adaptiveSoftScrollEdges()
-        }
-        #endif
+
+        let withRename = platformRenamePresentation(withOperationError)
+
+        let withMove = withRename
         .sheet(item: $moveTargetEntry, onDismiss: resetMovePrompt) { entry in
             moveSheet(entry: entry)
                 .adaptiveSoftScrollEdges()
         }
-        #if os(iOS)
-        .sheet(item: $deleteTargetEntry, onDismiss: { deleteTargetEntry = nil }) { entry in
-            deleteSheet(entry: entry)
-                .adaptiveSoftScrollEdges()
-        }
-        #endif
+
+        let withDelete = platformDeletePresentation(withMove)
+
+        let withPermission = withDelete
         .sheet(item: $permissionTargetEntry, onDismiss: resetPermissionEditor) { entry in
             permissionSheet(entry: entry)
                 .adaptiveSoftScrollEdges()
         }
+
+        let withPathTracking = withPermission
         .onChange(of: snapshot.currentPath) { newValue in
             onCurrentPathChange(newValue)
             if let destination = newFolderDestinationPath, destination != newValue {
                 resetNewFolderPrompt()
             }
-            #if os(macOS)
-            cancelMacOSInlineEdit()
-            macOSSelectedPaths.removeAll()
-            #endif
+            platformCurrentPathDidChange()
         }
+
+        let withToolbarCommands = withPathTracking
         .onChange(of: browser.pendingToolbarCommand?.id) { _ in
             handlePendingToolbarCommand()
         }
-        #if os(macOS)
-        .onChange(of: snapshot.entries.map(\.id)) { visiblePaths in
-            let nextSelection = macOSSelectedPaths.intersection(Set(visiblePaths))
-            if nextSelection != macOSSelectedPaths {
-                macOSSelectedPaths = nextSelection
-            }
 
-            if let inlineRenamePath = macOSInlineEditor?.renameEntryPath,
-               !visiblePaths.contains(inlineRenamePath),
-               macOSInlineEditor?.isSubmitting == false {
-                macOSInlineEditor = nil
-            }
-        }
-        .onChange(of: snapshot.selectedPath) { newValue in
-            guard macOSSelectedPaths.count <= 1 else { return }
-
-            guard let newValue, snapshot.entries.contains(where: { $0.id == newValue }) else {
-                if !macOSSelectedPaths.isEmpty {
-                    macOSSelectedPaths = []
-                }
-                return
-            }
-
-            if macOSSelectedPaths != [newValue] {
-                macOSSelectedPaths = [newValue]
-            }
-        }
-        #endif
+        platformSelectionTrackingPresentation(withToolbarCommands, snapshot: snapshot)
     }
 
     var uploadImporterBinding: Binding<Bool> {

@@ -5,6 +5,84 @@ import UIKit
 
 extension RemoteFileBrowserScreen {
     @ViewBuilder
+    func platformContent(_ snapshot: Snapshot) -> some View {
+        iOSContent(snapshot)
+    }
+
+    func platformUploadImportPresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(item: $uploadImportRequest) { request in
+                RemoteFileImportPicker { result in
+                    handleUploadSelection(result, for: request)
+                }
+                .adaptiveSoftScrollEdges()
+            }
+    }
+
+    func platformSearchPresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .searchable(text: $iOSSearchQuery, prompt: String(localized: "Search Files"))
+    }
+
+    func platformSharePresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(item: $shareItem) { item in
+                RemoteFileShareSheet(item: item) {
+                    finishSharing(item)
+                }
+                .adaptiveSoftScrollEdges()
+            }
+    }
+
+    func platformDropPresentation<Content: View>(_ content: Content, snapshot: Snapshot) -> some View {
+        content
+            .onDrop(of: remoteRowDropTypeIdentifiers, isTargeted: $isDropTargeted) { providers in
+                handleCurrentDirectoryDrop(providers, to: snapshot.currentPath)
+            }
+    }
+
+    func platformNewFolderPresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(isPresented: newFolderPromptBinding, onDismiss: resetNewFolderPrompt) {
+                if let destinationPath = newFolderDestinationPath {
+                    RemoteFileCreateFolderSheet(
+                        destinationPath: destinationPath,
+                        folderName: $newFolderName,
+                        isSubmitting: isCreateFolderSubmitting,
+                        onCancel: resetNewFolderPrompt,
+                        onCreate: createFolder
+                    )
+                    .adaptiveSoftScrollEdges()
+                }
+            }
+    }
+
+    func platformRenamePresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(item: $renameTargetEntry, onDismiss: resetRenamePrompt) { entry in
+                renameSheet(entry: entry)
+                    .adaptiveSoftScrollEdges()
+            }
+    }
+
+    func platformDeletePresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(item: $deleteTargetEntry, onDismiss: { deleteTargetEntry = nil }) { entry in
+                deleteSheet(entry: entry)
+                    .adaptiveSoftScrollEdges()
+            }
+    }
+
+    func platformCurrentPathDidChange() {}
+
+    func platformSelectionTrackingPresentation<Content: View>(
+        _ content: Content,
+        snapshot: Snapshot
+    ) -> some View {
+        content
+    }
+
+    @ViewBuilder
     func iOSContent(_ snapshot: Snapshot) -> some View {
         let displayedEntries = iOSDisplayedEntries(snapshot)
         let emptyState = iOSEmptyStateContent(snapshot, displayedEntries: displayedEntries)

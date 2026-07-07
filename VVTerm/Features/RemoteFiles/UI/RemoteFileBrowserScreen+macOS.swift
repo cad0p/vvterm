@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(macOS)
 import AppKit
@@ -33,6 +34,94 @@ extension RemoteFileBrowserScreen {
             guard case .rename(let entryPath, _, _, _) = self else { return nil }
             return entryPath
         }
+    }
+
+    @ViewBuilder
+    func platformContent(_ snapshot: Snapshot) -> some View {
+        macOSContent(snapshot)
+    }
+
+    func platformUploadImportPresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .fileImporter(
+                isPresented: uploadImporterBinding,
+                allowedContentTypes: [.item, .folder],
+                allowsMultipleSelection: true
+            ) { result in
+                handleUploadSelection(result)
+            }
+    }
+
+    func platformSearchPresentation<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
+    func platformSharePresentation<Content: View>(_ content: Content) -> some View {
+        content
+            .overlay(alignment: .topTrailing) {
+                if let shareItem {
+                    RemoteFileSharePicker(item: shareItem) {
+                        finishSharing(shareItem)
+                    }
+                    .frame(width: 1, height: 1)
+                    .padding(.top, 12)
+                    .padding(.trailing, 12)
+                }
+            }
+    }
+
+    func platformDropPresentation<Content: View>(_ content: Content, snapshot: Snapshot) -> some View {
+        content
+    }
+
+    func platformNewFolderPresentation<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
+    func platformRenamePresentation<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
+    func platformDeletePresentation<Content: View>(_ content: Content) -> some View {
+        content
+    }
+
+    func platformCurrentPathDidChange() {
+        cancelMacOSInlineEdit()
+        macOSSelectedPaths.removeAll()
+    }
+
+    func platformSelectionTrackingPresentation<Content: View>(
+        _ content: Content,
+        snapshot: Snapshot
+    ) -> some View {
+        content
+            .onChange(of: snapshot.entries.map(\.id)) { visiblePaths in
+                let nextSelection = macOSSelectedPaths.intersection(Set(visiblePaths))
+                if nextSelection != macOSSelectedPaths {
+                    macOSSelectedPaths = nextSelection
+                }
+
+                if let inlineRenamePath = macOSInlineEditor?.renameEntryPath,
+                   !visiblePaths.contains(inlineRenamePath),
+                   macOSInlineEditor?.isSubmitting == false {
+                    macOSInlineEditor = nil
+                }
+            }
+            .onChange(of: snapshot.selectedPath) { newValue in
+                guard macOSSelectedPaths.count <= 1 else { return }
+
+                guard let newValue, snapshot.entries.contains(where: { $0.id == newValue }) else {
+                    if !macOSSelectedPaths.isEmpty {
+                        macOSSelectedPaths = []
+                    }
+                    return
+                }
+
+                if macOSSelectedPaths != [newValue] {
+                    macOSSelectedPaths = [newValue]
+                }
+            }
     }
 
     func macOSContent(_ snapshot: Snapshot) -> some View {
