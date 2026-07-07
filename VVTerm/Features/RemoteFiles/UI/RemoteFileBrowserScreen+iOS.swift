@@ -82,6 +82,62 @@ extension RemoteFileBrowserScreen {
         content
     }
 
+    func platformTransferCompletionAction(fileURL: URL?) -> NoticeAction? {
+        nil
+    }
+
+    func platformBeginUpload(to remotePath: String) {
+        uploadImportRequest = UploadImportRequest(destinationPath: remotePath)
+    }
+
+    func platformBeginDownload(_ entry: RemoteFileEntry) {
+        cleanupDownloadExport()
+
+        performTransfer(
+            title: String(localized: "Downloading"),
+            initialMessage: String(localized: "Preparing remote file."),
+            successMessage: String(localized: "Download ready to export.")
+        ) {
+            let temporaryURL = try temporaryDownloadURL(for: entry)
+            try await browser.downloadFile(
+                at: entry.path,
+                to: temporaryURL,
+                server: server
+            )
+
+            await MainActor.run {
+                downloadExportDocument = RemoteFileDownloadDocument(sourceURL: temporaryURL)
+                downloadExportFilename = entry.name
+                isDownloadExporterPresented = true
+            }
+        }
+    }
+
+    func platformBeginCreateFolder(in remotePath: String) {
+        newFolderDestinationPath = remotePath
+        newFolderName = ""
+        isCreateFolderSubmitting = false
+    }
+
+    func platformBeginRename(_ entry: RemoteFileEntry) {
+        renameTargetEntry = entry
+        renameName = entry.name
+        isRenameSubmitting = false
+    }
+
+    func platformDidActivatePreviewEntry(_ entry: RemoteFileEntry) async {
+        guard browser.selectedEntryPath(for: fileTab) == entry.path else { return }
+
+        await MainActor.run {
+            presentedPreviewPath = entry.path
+        }
+    }
+
+    func platformRequestDelete(_ entries: [RemoteFileEntry]) {
+        guard entries.count == 1, let entry = entries.first else { return }
+        deleteTargetEntry = entry
+    }
+
     @ViewBuilder
     func iOSContent(_ snapshot: Snapshot) -> some View {
         let displayedEntries = iOSDisplayedEntries(snapshot)

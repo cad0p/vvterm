@@ -124,6 +124,43 @@ extension RemoteFileBrowserScreen {
             }
     }
 
+    func platformTransferCompletionAction(fileURL: URL?) -> NoticeAction? {
+        guard let fileURL else { return nil }
+
+        return NoticeAction(id: "show-in-finder", title: String(localized: "Show in Finder")) {
+            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+        }
+    }
+
+    func platformBeginUpload(to remotePath: String) {
+        presentMacOSUploadPanel(for: remotePath)
+    }
+
+    func platformBeginDownload(_ entry: RemoteFileEntry) {
+        presentMacOSDownloadPanel(for: entry)
+    }
+
+    func platformBeginCreateFolder(in remotePath: String) {
+        beginMacOSInlineCreateFolder(in: remotePath)
+    }
+
+    func platformBeginRename(_ entry: RemoteFileEntry) {
+        macOSSelectedPaths = [entry.id]
+        browser.focus(entry, in: fileTab)
+        macOSInlineEditor = .rename(
+            entryPath: entry.path,
+            originalName: entry.name,
+            proposedName: entry.name,
+            isSubmitting: false
+        )
+    }
+
+    func platformDidActivatePreviewEntry(_ entry: RemoteFileEntry) async {}
+
+    func platformRequestDelete(_ entries: [RemoteFileEntry]) {
+        presentMacOSDeleteConfirmation(for: entries)
+    }
+
     func macOSContent(_ snapshot: Snapshot) -> some View {
         GeometryReader { proxy in
             let splitMetrics = macOSSplitMetrics(

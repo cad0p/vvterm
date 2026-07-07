@@ -524,15 +524,7 @@ struct RemoteFileBrowserScreen: View {
     }
 
     func transferCompletionAction(fileURL: URL?) -> NoticeAction? {
-        #if os(macOS)
-        guard let fileURL else { return nil }
-
-        return NoticeAction(id: "show-in-finder", title: String(localized: "Show in Finder")) {
-            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
-        }
-        #else
-        return nil
-        #endif
+        platformTransferCompletionAction(fileURL: fileURL)
     }
 
     func performTransfer(
@@ -865,40 +857,12 @@ struct RemoteFileBrowserScreen: View {
     }
 
     func beginUpload(to remotePath: String) {
-        #if os(macOS)
-        presentMacOSUploadPanel(for: remotePath)
-        #else
-        uploadImportRequest = UploadImportRequest(destinationPath: remotePath)
-        #endif
+        platformBeginUpload(to: remotePath)
     }
 
     func beginDownload(_ entry: RemoteFileEntry) {
         guard entry.type != .directory else { return }
-
-        #if os(macOS)
-        presentMacOSDownloadPanel(for: entry)
-        #else
-        cleanupDownloadExport()
-
-        performTransfer(
-            title: String(localized: "Downloading"),
-            initialMessage: String(localized: "Preparing remote file."),
-            successMessage: String(localized: "Download ready to export.")
-        ) {
-            let temporaryURL = try temporaryDownloadURL(for: entry)
-            try await browser.downloadFile(
-                at: entry.path,
-                to: temporaryURL,
-                server: server
-            )
-
-            await MainActor.run {
-                downloadExportDocument = RemoteFileDownloadDocument(sourceURL: temporaryURL)
-                downloadExportFilename = entry.name
-                isDownloadExporterPresented = true
-            }
-        }
-        #endif
+        platformBeginDownload(entry)
     }
 
     func beginShare(_ entry: RemoteFileEntry) {
@@ -928,30 +892,11 @@ struct RemoteFileBrowserScreen: View {
     }
 
     func beginCreateFolder(in remotePath: String) {
-        #if os(macOS)
-        beginMacOSInlineCreateFolder(in: remotePath)
-        #else
-        newFolderDestinationPath = remotePath
-        newFolderName = ""
-        isCreateFolderSubmitting = false
-        #endif
+        platformBeginCreateFolder(in: remotePath)
     }
 
     func beginRename(_ entry: RemoteFileEntry) {
-        #if os(macOS)
-        macOSSelectedPaths = [entry.id]
-        browser.focus(entry, in: fileTab)
-        macOSInlineEditor = .rename(
-            entryPath: entry.path,
-            originalName: entry.name,
-            proposedName: entry.name,
-            isSubmitting: false
-        )
-        #else
-        renameTargetEntry = entry
-        renameName = entry.name
-        isRenameSubmitting = false
-        #endif
+        platformBeginRename(entry)
     }
 
     func beginMove(_ entry: RemoteFileEntry) {
@@ -984,13 +929,7 @@ struct RemoteFileBrowserScreen: View {
     func previewEntry(_ entry: RemoteFileEntry) {
         Task {
             await browser.activate(entry, in: fileTab, server: server)
-            #if os(iOS)
-            if browser.selectedEntryPath(for: fileTab) == entry.path {
-                await MainActor.run {
-                    presentedPreviewPath = entry.path
-                }
-            }
-            #endif
+            await platformDidActivatePreviewEntry(entry)
         }
     }
 
@@ -1550,13 +1489,7 @@ struct RemoteFileBrowserScreen: View {
 
     func requestDelete(_ entries: [RemoteFileEntry]) {
         guard !entries.isEmpty else { return }
-
-        #if os(macOS)
-        presentMacOSDeleteConfirmation(for: entries)
-        #else
-        guard entries.count == 1, let entry = entries.first else { return }
-        deleteTargetEntry = entry
-        #endif
+        platformRequestDelete(entries)
     }
 
     func resetNewFolderPrompt() {
