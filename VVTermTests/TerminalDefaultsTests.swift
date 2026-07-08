@@ -21,7 +21,7 @@ struct TerminalDefaultsTests {
             TerminalDefaults.macOSFallbackFontFamilies == ["Apple SD Gothic Neo", "JetBrainsMono Nerd Font"]
         )
         #else
-        throw Skip("macOS-only default font policy")
+        return
         #endif
     }
 
@@ -67,7 +67,7 @@ struct TerminalDefaultsTests {
         #expect(defaults.string(forKey: TerminalDefaults.fontNameKey) == "Menlo")
         #expect(defaults.object(forKey: TerminalDefaults.fontSizeKey) as? Double == 15.0)
         #else
-        throw Skip("macOS-only migration policy")
+        return
         #endif
     }
 
@@ -81,7 +81,7 @@ struct TerminalDefaultsTests {
 
         #expect(normalizedFontName == TerminalDefaults.legacyDefaultFontName)
         #else
-        throw Skip("macOS-only legacy font preservation")
+        return
         #endif
     }
 
@@ -95,7 +95,7 @@ struct TerminalDefaultsTests {
 
         #expect(normalizedFontName == TerminalDefaults.defaultPrimaryFontName)
         #else
-        throw Skip("macOS-only legacy font normalization")
+        return
         #endif
     }
 
@@ -109,7 +109,7 @@ struct TerminalDefaultsTests {
 
         #expect(normalizedFontName == "Installed But Misclassified Font")
         #else
-        throw Skip("macOS-only font normalization")
+        return
         #endif
     }
 
@@ -126,7 +126,7 @@ struct TerminalDefaultsTests {
         #expect(defaults.string(forKey: TerminalDefaults.fontNameKey) == TerminalDefaults.defaultPrimaryFontName)
         #expect(defaults.object(forKey: TerminalDefaults.fontSizeKey) as? Double == 16.0)
         #else
-        throw Skip("macOS-only migration policy")
+        return
         #endif
     }
 }
