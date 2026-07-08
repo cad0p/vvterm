@@ -222,6 +222,8 @@ extension Ghostty {
         }
 
         private func start() {
+            ensureProcessEnvironment()
+
             // CRITICAL: Initialize libghostty first
             let initResult = ghostty_init(0, nil)
             if initResult != GHOSTTY_SUCCESS {
@@ -311,6 +313,29 @@ extension Ghostty {
             }
 
             Ghostty.logger.info("Ghostty app initialized successfully")
+        }
+
+        private func ensureProcessEnvironment() {
+            #if os(iOS)
+            let homeDirectory = NSHomeDirectory()
+            if !homeDirectory.isEmpty {
+                if let currentHome = getenv("HOME"), !String(cString: currentHome).isEmpty {
+                    // Keep the system-provided value when it exists.
+                } else {
+                    setenv("HOME", homeDirectory, 1)
+                }
+            }
+
+            let temporaryDirectory = NSTemporaryDirectory()
+            if !temporaryDirectory.isEmpty {
+                if let currentTemporaryDirectory = getenv("TMPDIR"),
+                   !String(cString: currentTemporaryDirectory).isEmpty {
+                    // Keep the system-provided value when it exists.
+                } else {
+                    setenv("TMPDIR", temporaryDirectory, 1)
+                }
+            }
+            #endif
         }
 
         #if os(macOS)
@@ -779,7 +804,7 @@ extension Ghostty {
                 DispatchQueue.main.async {
                     guard let terminalView = terminalView else { return }
                     // Convert from backing (pixel) coordinates to points
-                    let scale = terminalView.window?.screen.scale ?? UIScreen.main.scale
+                    let scale = terminalView.window?.screen.scale ?? max(terminalView.traitCollection.displayScale, 1)
                     terminalView.cellSize = CGSize(
                         width: Double(cellSize.width) / scale,
                         height: Double(cellSize.height) / scale

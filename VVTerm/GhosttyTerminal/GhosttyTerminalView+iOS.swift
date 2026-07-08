@@ -20,6 +20,14 @@ private struct IMEProxySnapshot: Equatable {
     var markedRange: NSRange?
 }
 
+struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
+    var windowAttached: Bool
+    var windowIsKey: Bool
+    var sceneActivationState: String
+    var isFirstResponder: Bool
+    var isSoftwareInputActive: Bool
+}
+
 private extension UIViewController {
     var topMostPresentedViewController: UIViewController {
         var controller = self
@@ -98,7 +106,10 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     var isDictationSessionActive: Bool { dictationSessionOrigin != nil }
 
-    static let dictationLogger = Logger.forCategory("Dictation")
+    // Per-keystroke IME tracing floods the console; opt in only while debugging dictation.
+    static let dictationLogger: Logger = Foundation.ProcessInfo.processInfo.environment["VVTERM_DICTATION_LOG"] != nil
+        ? Logger.forCategory("Dictation")
+        : Logger(.disabled)
 
     private var currentPrimaryLanguage: String {
         textInputMode?.primaryLanguage ?? "nil"
@@ -1120,8 +1131,10 @@ class GhosttyTerminalView: UIView {
         let initialFrame = frame.width > 0 && frame.height > 0 ? frame : CGRect(x: 0, y: 0, width: 800, height: 600)
         super.init(frame: initialFrame)
 
-        // Set content scale factor for retina rendering (important before surface creation)
-        self.contentScaleFactor = UIScreen.main.scale
+        // Set content scale factor for retina rendering (important before surface
+        // creation). Avoid UIScreen.main (stale instance risk on iOS 26); the
+        // window's screen scale is applied again in didMoveToWindow.
+        self.contentScaleFactor = max(UITraitCollection.current.displayScale, 1)
 
         setupSurface()
         addSubview(imeProxyTextView)
@@ -1237,7 +1250,10 @@ class GhosttyTerminalView: UIView {
         onPwdChange = nil
         onProgressReport = nil
         onResize = nil
-        onKeyboardBrowseModeChange = nil
+        onWindowAttachmentChange = nil
+        onHardwareKeyboardChange = nil
+        onTerminalDirectTouch = nil
+        onKeyboardAccessoryHideRequested = nil
         onFindNavigatorVisibilityChange = nil
         richPasteInterceptor = nil
         writeCallback = nil
@@ -1335,9 +1351,6 @@ class GhosttyTerminalView: UIView {
             return
         }
         invalidateLocalTextInputSession()
-        if hasHardwareKeyboardAttached {
-            focusForHardwareKeyboardIfNeeded()
-        }
         guard imeProxyTextView.isFirstResponder, isTextInputSessionEligible else { return }
         Task { @MainActor [weak self] in
             guard let self, !self.isShuttingDown else { return }
@@ -1694,26 +1707,46 @@ class GhosttyTerminalView: UIView {
     }
 
     var acceptsTerminalInput = true
-    private var keyboardFocusPolicy = TerminalKeyboardFocusPolicy()
-    private var suppressDirectTouchKeyboardFocusUntil = Date.distantPast
-    var onKeyboardBrowseModeChange: ((Bool) -> Void)?
+    var onWindowAttachmentChange: ((Bool) -> Void)?
+    var onHardwareKeyboardChange: ((Bool) -> Void)?
+    var onTerminalDirectTouch: (() -> Void)?
+    var onKeyboardAccessoryHideRequested: (() -> Void)?
     var onFindNavigatorVisibilityChange: ((Bool) -> Void)?
     private var findNavigatorLifecycle = TerminalFindNavigatorLifecycle()
 
-    var shouldRestoreKeyboardFocusOnReconnect: Bool {
-        keyboardFocusPolicy.shouldRestoreOnReconnect
-    }
-
-    var allowsAutomaticKeyboardFocus: Bool {
-        keyboardFocusPolicy.allowsAutomaticFocus && !isFindNavigatorActive
-    }
-
-    var isKeyboardInBrowseMode: Bool {
-        keyboardFocusPolicy.isBrowsing
-    }
-
     var isFindNavigatorVisible: Bool {
         isFindNavigatorActive
+    }
+
+    var isHardwareKeyboardAttached: Bool {
+        hasHardwareKeyboardAttached
+    }
+
+    var terminalInputAccessoryEnabled = true
+
+    func setTerminalInputAccessoryEnabled(_ enabled: Bool) {
+        guard terminalInputAccessoryEnabled != enabled else { return }
+        terminalInputAccessoryEnabled = enabled
+        if imeProxyTextView.isFirstResponder {
+            imeProxyTextView.reloadInputViews()
+        }
+        if super.isFirstResponder {
+            reloadInputViews()
+        }
+    }
+
+    func keyboardCoordinatorDiagnosticSnapshot() -> TerminalKeyboardCoordinatorDiagnosticSnapshot {
+        TerminalKeyboardCoordinatorDiagnosticSnapshot(
+            windowAttached: window != nil,
+            windowIsKey: window?.isKeyWindow == true,
+            sceneActivationState: window?.windowScene.map { String(describing: $0.activationState) } ?? "nil",
+            isFirstResponder: isFirstResponder,
+            // The view itself can hold first responder for native selection,
+            // which shows the accessory bar without any keyboard. Keyboard
+            // policy must compare against the IME proxy's session, not the
+            // combined responder state.
+            isSoftwareInputActive: imeProxyTextView.isFirstResponder
+        )
     }
 
     private var isFindNavigatorActive: Bool {
@@ -1730,22 +1763,11 @@ class GhosttyTerminalView: UIView {
         canRouteTerminalInput
     }
 
-    func markKeyboardFocusForReconnect() {
-        keyboardFocusPolicy.markForReconnect()
-    }
-
-    func clearKeyboardFocusForReconnect() {
-        keyboardFocusPolicy.clearReconnect()
-    }
-
     @discardableResult
-    func requestKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
+    func acquireTerminalInput() -> Bool {
         guard !isFindNavigatorActive else { return false }
-        guard keyboardFocusPolicy.requestFocus(for: reason) else { return false }
         clearNativeSelectionStateForTerminalInput()
-        notifyKeyboardBrowseModeChange()
-        _ = becomeFirstResponder()
-        return true
+        return becomeFirstResponder()
     }
 
     @discardableResult
@@ -1753,8 +1775,9 @@ class GhosttyTerminalView: UIView {
         guard isNativeSelectionTextInputContext else { return true }
         guard !isFindNavigatorActive else { return false }
 
-        nativeSelectionInteractionActive = false
-        return requestKeyboardFocus(for: .explicitUserRequest)
+        clearNativeSelectionStateForTerminalInput()
+        notifyDirectTouchOnTerminal()
+        return true
     }
 
     private func clearNativeSelectionStateForTerminalInput() {
@@ -1775,50 +1798,30 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    @discardableResult
-    func requestKeyboardFocus() -> Bool {
-        requestKeyboardFocus(for: .explicitUserRequest)
-    }
+    func releaseTerminalInput() {
+        // A forced leave must always end the input session; an active
+        // unexpected-resign suppression window would otherwise refuse it and
+        // keep the accessory bar alive across navigation.
+        suppressUnexpectedIMEProxyResignUntil = 0
 
-    func dismissKeyboardForUser(suppressDirectTouchRefocus: Bool = false) {
-        if hasHardwareKeyboardAttached {
-            focusForHardwareKeyboardIfNeeded()
-            return
-        }
-        keyboardFocusPolicy.dismissForUser()
-        notifyKeyboardBrowseModeChange()
-        if suppressDirectTouchRefocus {
-            // Tapping the dismiss button can leak one direct-touch event through to the
-            // terminal view underneath. Suppress immediate touch-driven refocus briefly
-            // so the software keyboard stays dismissed on handheld devices.
-            suppressDirectTouchKeyboardFocusUntil = Date().addingTimeInterval(0.35)
-        }
+        let previous = allowIMEProxyProgrammaticResign
+        allowIMEProxyProgrammaticResign = true
+        defer { allowIMEProxyProgrammaticResign = previous }
+
         _ = resignFirstResponder()
     }
 
     func dismissKeyboardFromToolbar() {
-        dismissKeyboardForUser(suppressDirectTouchRefocus: true)
-    }
-
-    func shouldAutoFocusKeyboard(for touches: Set<UITouch>) -> Bool {
-        guard !isFindNavigatorActive else { return false }
-        guard keyboardFocusPolicy.allowsAutomaticFocus else { return false }
-        guard touches.contains(where: { $0.type == .direct }) else { return true }
-        return Date() >= suppressDirectTouchKeyboardFocusUntil
-    }
-
-    private func notifyKeyboardBrowseModeChange() {
-        onKeyboardBrowseModeChange?(keyboardFocusPolicy.isBrowsing)
-        if imeProxyTextView.isFirstResponder {
-            imeProxyTextView.reloadInputViews()
-        }
-        if super.isFirstResponder {
-            reloadInputViews()
-        }
+        onKeyboardAccessoryHideRequested?()
     }
 
     private func notifyFindNavigatorVisibilityChange() {
         onFindNavigatorVisibilityChange?(isFindNavigatorVisible)
+    }
+
+    private func notifyDirectTouchOnTerminal() {
+        guard !isFindNavigatorActive else { return }
+        onTerminalDirectTouch?()
     }
 
     override var textInputContextIdentifier: String? {
@@ -1895,12 +1898,11 @@ class GhosttyTerminalView: UIView {
         if let surface = surface?.unsafeCValue {
             ghostty_surface_set_occlusion(surface, isVisible)
         }
+        onWindowAttachmentChange?(isVisible)
 
         if isVisible {
             updateHardwareKeyboardState(reloadInputViewsIfNeeded: true)
             sizeDidChange(frame.size)
-            // Note: becomeFirstResponder is now handled by SSHTerminalWrapper.updateUIView
-            // based on isActive flag to avoid keyboard showing when terminal is hidden
             requestRender()
         }
     }
@@ -1958,19 +1960,18 @@ class GhosttyTerminalView: UIView {
     }
 
     private func updateHardwareKeyboardState(reloadInputViewsIfNeeded: Bool) {
+        // Presence-based detection on all idioms: mirroring/BT typing arrives
+        // via remote text input, never as key presses, so a keypress latch
+        // cannot see it. Hardware state only gates the accessory bar and
+        // floating buttons — never the input session — so a false positive
+        // costs a hidden bar, not a dead keyboard.
         let hasHardwareKeyboard = GCKeyboard.coalesced != nil
         let didChange = hasHardwareKeyboard != hasHardwareKeyboardAttached
         hasHardwareKeyboardAttached = hasHardwareKeyboard
-        if hasHardwareKeyboard {
-            focusForHardwareKeyboardIfNeeded()
-        } else if didChange {
-            if imeProxyTextView.isFirstResponder, isTextInputSessionEligible, !isFindNavigatorActive {
-                _ = requestKeyboardFocus(for: .explicitUserRequest)
-            } else {
-                notifyKeyboardBrowseModeChange()
-            }
+        if didChange {
+            onHardwareKeyboardChange?(hasHardwareKeyboard)
         }
-        if reloadInputViewsIfNeeded, imeProxyTextView.isFirstResponder, isTextInputSessionEligible {
+        if reloadInputViewsIfNeeded, imeProxyTextView.isFirstResponder {
             imeProxyTextView.reloadInputViews()
         }
     }
@@ -1978,18 +1979,10 @@ class GhosttyTerminalView: UIView {
     private func markHardwareKeyboardDetectedFromKeyPress() {
         guard !hasHardwareKeyboardAttached else { return }
         hasHardwareKeyboardAttached = true
-        focusForHardwareKeyboardIfNeeded()
-        if imeProxyTextView.isFirstResponder, isTextInputSessionEligible {
+        onHardwareKeyboardChange?(true)
+        if imeProxyTextView.isFirstResponder {
             imeProxyTextView.reloadInputViews()
         }
-    }
-
-    private func focusForHardwareKeyboardIfNeeded() {
-        guard hasHardwareKeyboardAttached, isTextInputSessionEligible, !isFindNavigatorActive else { return }
-        guard keyboardFocusPolicy.isBrowsing || !imeProxyTextView.isFirstResponder else {
-            return
-        }
-        _ = requestKeyboardFocus(for: .hardwareKeyboard)
     }
 
     // MARK: - Touch Input
@@ -2005,8 +1998,9 @@ class GhosttyTerminalView: UIView {
                 return
             }
             clearNativeSelectionStateForTerminalInput()
-            guard shouldAutoFocusKeyboard(for: touches) else { return }
-            requestKeyboardFocus(for: .directTouch)
+            // Indirect pointer touches (trackpad, iPhone Mirroring) must
+            // focus the terminal too, matching pre-refactor behavior.
+            notifyDirectTouchOnTerminal()
             return
         }
         if usesAppOwnedTouchSelection,
@@ -2018,9 +2012,9 @@ class GhosttyTerminalView: UIView {
         if let location, isPointOnTouchSelectionHandle(location) {
             return
         }
-        // Tap just focuses keyboard - no mouse events (avoids accidental selection)
-        guard shouldAutoFocusKeyboard(for: touches) else { return }
-        requestKeyboardFocus(for: .directTouch)
+        // Tap just focuses keyboard - no mouse events (avoids accidental selection).
+        // Applies to indirect pointer touches (trackpad, iPhone Mirroring) as well.
+        notifyDirectTouchOnTerminal()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -2946,7 +2940,7 @@ class GhosttyTerminalView: UIView {
         let pos = ghosttyPoint(location)
 
         clearTouchSelection()
-        requestKeyboardFocus(for: .selectionGesture)
+        notifyDirectTouchOnTerminal()
 
         // Double-click to select word (no modifiers)
         surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
@@ -2969,7 +2963,7 @@ class GhosttyTerminalView: UIView {
         let pos = ghosttyPoint(location)
 
         clearTouchSelection()
-        requestKeyboardFocus(for: .selectionGesture)
+        notifyDirectTouchOnTerminal()
 
         // Triple-click to select line
         surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
@@ -2994,7 +2988,7 @@ class GhosttyTerminalView: UIView {
             case .began:
                 dismissEditMenuIfNeeded()
                 startTouchSelection(at: location)
-                requestKeyboardFocus(for: .selectionGesture)
+                notifyDirectTouchOnTerminal()
                 updateTouchSelectionLoupe(at: location)
             case .changed:
                 updateTouchSelection(at: location)
@@ -3017,7 +3011,7 @@ class GhosttyTerminalView: UIView {
         switch recognizer.state {
         case .began:
             isSelecting = true
-            requestKeyboardFocus(for: .selectionGesture)
+            notifyDirectTouchOnTerminal()
             // Start selection with click (no shift for initial position)
             surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
             surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
@@ -4099,7 +4093,7 @@ class GhosttyTerminalView: UIView {
     }
 
     private func updateContentScaleIfNeeded() {
-        let targetScale = window?.screen.scale ?? UIScreen.main.scale
+        let targetScale = window?.screen.scale ?? max(traitCollection.displayScale, 1)
         if contentScaleFactor != targetScale {
             contentScaleFactor = targetScale
         }
@@ -4230,10 +4224,7 @@ extension GhosttyTerminalView: UIFindInteractionDelegate {
         notifyFindNavigatorVisibilityChange()
         endGhosttyFindSearchForNavigatorDismissal()
         if shouldRestoreTerminalFocus {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isFindNavigatorActive else { return }
-                self.requestKeyboardFocus(for: .explicitUserRequest)
-            }
+            notifyDirectTouchOnTerminal()
         }
     }
 }
@@ -4460,13 +4451,11 @@ extension GhosttyTerminalView {
     }
 
     private var shouldHideKeyboardAccessoryBar: Bool {
-        hasHardwareKeyboardAttached || keyboardFocusPolicy.isBrowsing
+        hasHardwareKeyboardAttached || !terminalInputAccessoryEnabled
     }
 
     fileprivate func resolvedInputAccessoryView() -> UIView? {
-        guard !isFindNavigatorActive, !shouldHideKeyboardAccessoryBar else {
-            return nil
-        }
+        guard !isFindNavigatorActive, !shouldHideKeyboardAccessoryBar else { return nil }
         if keyboardToolbar == nil {
             let toolbar = TerminalInputAccessoryView(onKey: { [weak self] key in
                 self?.handleToolbarKey(key)
@@ -4708,7 +4697,12 @@ private class TerminalInputAccessoryView: UIInputView {
         self.onCustomAction = onCustomAction
         self.onVoice = onVoice
         self.onDismissKeyboard = onDismissKeyboard
-        super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 48), inputViewStyle: .keyboard)
+        // Never reference UIScreen.main here: on iOS 26 it can be a different
+        // instance than the hosting window's screen, and the input assistant
+        // fails converting the bar's frame between screen coordinate spaces,
+        // which kills keyboard presentation. The system sizes UIInputView to
+        // the keyboard width; the initial width is a placeholder.
+        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 48), inputViewStyle: .keyboard)
         setupView()
         observeThemeChanges()
         observeAccessoryProfileChanges()
