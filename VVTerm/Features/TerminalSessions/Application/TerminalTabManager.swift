@@ -36,8 +36,9 @@ final class TerminalTabManager: ObservableObject {
         }
     }
 
-    /// Servers that are currently "connected" (have at least one tab open)
+    /// Servers with at least one live terminal shell.
     @Published var connectedServerIds: Set<UUID> = []
+    @Published private(set) var isSuspendingForBackground = false
 
     /// Selected view type per server (stats/terminal)
     @Published var selectedViewByServer: [UUID: String] = [:] {
@@ -56,6 +57,12 @@ final class TerminalTabManager: ObservableObject {
     @Published var paneStates: [UUID: TerminalPaneState] = [:]
     @Published private(set) var runtimeTitleByPane: [UUID: String] = [:]
     @Published private(set) var titleOverrideByPane: [UUID: String] = [:]
+    #if os(iOS)
+    @Published private(set) var terminalFindNavigatorVisibleByPane: [UUID: Bool] = [:]
+    @Published private(set) var terminalVoiceRecordingByPane: [UUID: Bool] = [:]
+    @Published private(set) var terminalPendingVoiceReturnByPane: [UUID: Bool] = [:]
+    let keyboardCoordinator = TerminalKeyboardCoordinator()
+    #endif
 
     @Published var tmuxAttachPrompt: TmuxAttachPrompt?
 
@@ -74,6 +81,11 @@ final class TerminalTabManager: ObservableObject {
     private var isRestoring = false
 
     private init() {
+        #if os(iOS)
+        keyboardCoordinator.terminalProvider = { [weak self] paneId in
+            self?.terminalViews[paneId]
+        }
+        #endif
         restoreSnapshot()
     }
 
@@ -150,6 +162,22 @@ final class TerminalTabManager: ObservableObject {
         return totalTabs < FreeTierLimits.maxTabs
     }
 
+    private func hasLiveTerminalShell(for serverId: UUID) -> Bool {
+        paneStates.contains { _, state in
+            state.serverId == serverId
+                && state.connectionState.isConnected
+                && shellId(for: state.paneId) != nil
+        }
+    }
+
+    private func refreshConnectedServerState(for serverId: UUID) {
+        if hasLiveTerminalShell(for: serverId) {
+            connectedServerIds.insert(serverId)
+        } else {
+            connectedServerIds.remove(serverId)
+        }
+    }
+
     /// Open a new tab for a server
     @discardableResult
     func openTab(for server: Server) async throws -> TerminalTab {
@@ -191,9 +219,6 @@ final class TerminalTabManager: ObservableObject {
         // Select the new tab
         selectedTabByServer[server.id] = tab.id
 
-        // Mark server as connected
-        connectedServerIds.insert(server.id)
-
         logger.info("Opened new tab for \(server.name), pane: \(tab.rootPaneId)")
         return tab
     }
@@ -209,20 +234,25 @@ final class TerminalTabManager: ObservableObject {
         if var serverTabs = tabsByServer[tab.serverId] {
             let closingIndex = serverTabs.firstIndex { $0.id == tab.id }
             serverTabs.removeAll { $0.id == tab.id }
-            tabsByServer[tab.serverId] = serverTabs
 
             // Select the closest neighbor when the selected tab is closed: the
             // tab that shifted into its slot, or the new last tab if it was last.
+            if serverTabs.isEmpty {
+                tabsByServer.removeValue(forKey: tab.serverId)
+                selectedTabByServer.removeValue(forKey: tab.serverId)
+            } else {
+                tabsByServer[tab.serverId] = serverTabs
+            }
+
             if selectedTabByServer[tab.serverId] == tab.id {
                 if let closingIndex, !serverTabs.isEmpty {
                     selectedTabByServer[tab.serverId] = serverTabs[min(closingIndex, serverTabs.count - 1)].id
                 } else {
-                    selectedTabByServer[tab.serverId] = serverTabs.first?.id
+                    selectedTabByServer.removeValue(forKey: tab.serverId)
                 }
             }
 
-            // Note: Don't remove from connectedServerIds here
-            // User might still be viewing stats. Explicit disconnect handles that.
+            refreshConnectedServerState(for: tab.serverId)
         }
 
         EngagementTracker.shared.noteTerminalSessionEnded(
@@ -239,6 +269,60 @@ final class TerminalTabManager: ObservableObject {
         for tab in serverTabs {
             closeTab(tab)
         }
+    }
+
+    /// Disconnect all terminal tabs for a specific server.
+    func disconnectServer(_ serverId: UUID) {
+        closeAllTabs(for: serverId)
+        tabsByServer.removeValue(forKey: serverId)
+        selectedTabByServer.removeValue(forKey: serverId)
+        selectedViewByServer.removeValue(forKey: serverId)
+        connectedServerIds.remove(serverId)
+        persistSnapshot()
+        logger.info("Disconnected all terminal tabs for server \(serverId.uuidString, privacy: .public)")
+    }
+
+    /// Disconnect every active terminal tab.
+    func disconnectAll() {
+        let serverIds = Set(tabsByServer.keys).union(connectedServerIds)
+        for serverId in serverIds {
+            disconnectServer(serverId)
+        }
+        connectedServerIds.removeAll()
+        persistSnapshot()
+        logger.info("Disconnected all terminal tabs")
+    }
+
+    /// Disconnect SSH shells without removing tabs. Used when iOS backgrounds so
+    /// the foreground path can reconnect into the same terminal surfaces.
+    func suspendAllForBackground() async {
+        guard !isSuspendingForBackground else { return }
+        isSuspendingForBackground = true
+        defer { isSuspendingForBackground = false }
+
+        let paneIds = Array(paneStates.keys)
+        #if os(iOS)
+        keyboardCoordinator.setViewActive(false)
+        #endif
+        for paneId in paneIds {
+            if let terminal = terminalViews[paneId] {
+                terminal.pauseRendering()
+            }
+            if paneStates[paneId]?.connectionState.isConnected == true
+                || paneStates[paneId]?.connectionState.isConnecting == true {
+                updatePaneState(paneId, connectionState: .disconnected)
+            }
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for paneId in paneIds {
+                group.addTask { [weak self] in
+                    await self?.unregisterSSHClient(for: paneId)
+                }
+            }
+        }
+
+        logger.info("Suspended all terminal tabs for background")
     }
 
     // MARK: - Split Management
@@ -389,6 +473,7 @@ final class TerminalTabManager: ObservableObject {
 
         // Now clean up the pane (after layout is updated)
         cleanupPane(paneId)
+        refreshConnectedServerState(for: tab.serverId)
         logger.info("Closed pane \(paneId)")
     }
 
@@ -405,17 +490,96 @@ final class TerminalTabManager: ObservableObject {
 
     /// Register a terminal view for a pane
     func registerTerminal(_ terminal: GhosttyTerminalView, for paneId: UUID) {
+        #if os(iOS)
+        terminal.onWindowAttachmentChange = { [weak self] isAttached in
+            Task { @MainActor [weak self] in
+                self?.keyboardCoordinator.setWindowAttached(isAttached, for: paneId)
+            }
+        }
+        terminal.onHardwareKeyboardChange = { [weak self] isAttached in
+            Task { @MainActor [weak self] in
+                self?.keyboardCoordinator.setHardwareKeyboard(isAttached)
+            }
+        }
+        terminal.onTerminalDirectTouch = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.keyboardCoordinator.directTouchOnTerminal()
+            }
+        }
+        terminal.onKeyboardAccessoryHideRequested = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.keyboardCoordinator.userRequestedHide()
+            }
+        }
+        terminal.onFindNavigatorVisibilityChange = { [weak self] isVisible in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.setTerminalFindNavigatorVisible(isVisible, for: paneId)
+                self.keyboardCoordinator.setFindNavigatorActive(isVisible)
+            }
+        }
+        #endif
         terminalViews[paneId] = terminal
+        #if os(iOS)
+        Task { @MainActor [weak self, weak terminal] in
+            guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
+            self.keyboardCoordinator.setWindowAttached(terminal.window != nil, for: paneId)
+            self.keyboardCoordinator.setPaneConnected(self.paneStates[paneId]?.connectionState.isConnected == true, for: paneId)
+            self.keyboardCoordinator.setHardwareKeyboard(terminal.isHardwareKeyboardAttached)
+            self.setTerminalFindNavigatorVisible(terminal.isFindNavigatorVisible, for: paneId)
+            self.keyboardCoordinator.setFindNavigatorActive(terminal.isFindNavigatorVisible)
+        }
+        #endif
         scheduleTerminalRegistryVersionUpdate()
     }
 
     /// Unregister a terminal view
     func unregisterTerminal(for paneId: UUID) {
         if let terminal = terminalViews.removeValue(forKey: paneId) {
+            #if os(iOS)
+            terminal.onWindowAttachmentChange = nil
+            terminal.onHardwareKeyboardChange = nil
+            terminal.onTerminalDirectTouch = nil
+            terminal.onKeyboardAccessoryHideRequested = nil
+            terminal.onFindNavigatorVisibilityChange = nil
+            terminalFindNavigatorVisibleByPane.removeValue(forKey: paneId)
+            terminalVoiceRecordingByPane.removeValue(forKey: paneId)
+            terminalPendingVoiceReturnByPane.removeValue(forKey: paneId)
+            keyboardCoordinator.setWindowAttached(false, for: paneId)
+            keyboardCoordinator.removePane(paneId)
+            #endif
             terminal.cleanup()
         }
         scheduleTerminalRegistryVersionUpdate()
     }
+
+    #if os(iOS)
+    private func setTerminalFindNavigatorVisible(_ isVisible: Bool, for paneId: UUID) {
+        if terminalFindNavigatorVisibleByPane[paneId] != isVisible {
+            terminalFindNavigatorVisibleByPane[paneId] = isVisible
+        }
+    }
+
+    func setTerminalVoiceRecording(_ isRecording: Bool, for paneId: UUID) {
+        if isRecording {
+            if terminalVoiceRecordingByPane[paneId] != true {
+                terminalVoiceRecordingByPane[paneId] = true
+            }
+        } else {
+            terminalVoiceRecordingByPane.removeValue(forKey: paneId)
+        }
+    }
+
+    func setTerminalPendingVoiceReturn(_ isPending: Bool, for paneId: UUID) {
+        if isPending {
+            if terminalPendingVoiceReturnByPane[paneId] != true {
+                terminalPendingVoiceReturnByPane[paneId] = true
+            }
+        } else {
+            terminalPendingVoiceReturnByPane.removeValue(forKey: paneId)
+        }
+    }
+    #endif
 
     private func scheduleTerminalRegistryVersionUpdate() {
         Task { @MainActor [weak self] in
@@ -626,6 +790,9 @@ final class TerminalTabManager: ObservableObject {
 
         clearTmuxRuntimeState(for: paneId)
         unregisterTerminal(for: paneId)
+        #if os(iOS)
+        keyboardCoordinator.removePane(paneId)
+        #endif
         paneStates.removeValue(forKey: paneId)
         runtimeTitleByPane.removeValue(forKey: paneId)
         titleOverrideByPane.removeValue(forKey: paneId)
@@ -642,7 +809,11 @@ final class TerminalTabManager: ObservableObject {
 
     /// Update connection state for a pane
     func updatePaneState(_ paneId: UUID, connectionState: ConnectionState) {
+        let serverId = paneStates[paneId]?.serverId
         paneStates[paneId]?.connectionState = connectionState
+        #if os(iOS)
+        keyboardCoordinator.setPaneConnected(connectionState.isConnected, for: paneId)
+        #endif
         switch connectionState {
         case .connecting, .reconnecting:
             setPaneTransport(.ssh, fallbackReason: nil, for: paneId)
@@ -652,13 +823,21 @@ final class TerminalTabManager: ObservableObject {
             if paneTmuxStatus(for: paneId) == .foreground {
                 setPaneTmuxStatus(.background, for: paneId)
             }
+            if let serverId {
+                refreshConnectedServerState(for: serverId)
+            }
         case .connected:
+            if let serverId {
+                refreshConnectedServerState(for: serverId)
+            }
             EngagementTracker.shared.recordSuccessfulConnection(
                 id: paneId,
                 transport: paneStates[paneId]?.activeTransport.rawValue ?? ShellTransport.ssh.rawValue
             )
         case .idle:
-            break
+            if let serverId {
+                refreshConnectedServerState(for: serverId)
+            }
         }
     }
 
@@ -1080,8 +1259,9 @@ final class TerminalTabManager: ObservableObject {
     // MARK: - Persistence
 
     private func makeServerSnapshots() -> [TerminalTabsSnapshot.ServerSnapshot] {
-        tabsByServer.map { serverId, tabs in
-            TerminalTabsSnapshot.ServerSnapshot(
+        tabsByServer.compactMap { serverId, tabs in
+            guard !tabs.isEmpty else { return nil }
+            return TerminalTabsSnapshot.ServerSnapshot(
                 serverId: serverId,
                 tabs: tabs.map { TerminalTabsSnapshot.TabSnapshot(from: $0, paneStates: paneStates) },
                 selectedTabId: selectedTabByServer[serverId],
@@ -1108,6 +1288,7 @@ final class TerminalTabManager: ObservableObject {
                         tabId: tab.id,
                         serverId: tab.serverId
                     )
+                    paneState.connectionState = .disconnected
                     if !tmuxResolver.isTmuxEnabled(for: tab.serverId) {
                         paneState.tmuxStatus = .off
                     }
@@ -1131,6 +1312,7 @@ final class TerminalTabManager: ObservableObject {
                 snapshotsByTabId[tabSnapshot.id] = tabSnapshot
             }
             let tabs = server.tabs.map { $0.toTerminalTab() }
+            guard !tabs.isEmpty else { continue }
             restoredTabsByServer[server.serverId] = tabs
             if let selected = server.selectedTabId {
                 restoredSelectedTabs[server.serverId] = selected
@@ -1147,7 +1329,7 @@ final class TerminalTabManager: ObservableObject {
             from: restoredTabsByServer,
             snapshotsByTabId: snapshotsByTabId
         )
-        connectedServerIds = Set(restoredTabsByServer.keys)
+        connectedServerIds = []
     }
 
     private func schedulePersist() {
@@ -1269,6 +1451,13 @@ extension TerminalTabManager {
         paneStates = [:]
         runtimeTitleByPane = [:]
         titleOverrideByPane = [:]
+        #if os(iOS)
+        terminalFindNavigatorVisibleByPane = [:]
+        terminalVoiceRecordingByPane = [:]
+        terminalPendingVoiceReturnByPane = [:]
+        keyboardCoordinator.setActivePane(nil)
+        keyboardCoordinator.setViewActive(false)
+        #endif
         tmuxAttachPrompt = nil
         terminalRegistryVersion = 0
         terminalViews.removeAll()

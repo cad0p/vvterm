@@ -67,9 +67,7 @@ struct ConnectionTerminalContainer: View {
                 let current = viewTabConfig.effectiveView(for: tabManager.selectedViewByServer[server.id])
                 guard current != newValue else { return }
                 DispatchQueue.main.async {
-                    tabManager.selectedViewByServer[server.id] = viewTabConfig.isTabVisible(newValue)
-                        ? newValue
-                        : viewTabConfig.effectiveDefaultTab()
+                    tabManager.selectedViewByServer[server.id] = viewTabConfig.effectiveView(for: newValue)
                 }
             }
         )
@@ -80,20 +78,24 @@ struct ConnectionTerminalContainer: View {
         tabManager.tabs(for: server.id)
     }
 
-    /// Selected tab ID for this server
+    /// Effective selected tab ID for this server.
     var selectedTabId: UUID? {
-        tabManager.selectedTabByServer[server.id]
+        if let selectedId = tabManager.selectedTabByServer[server.id],
+           serverTabs.contains(where: { $0.id == selectedId }) {
+            return selectedId
+        }
+        return serverTabs.first?.id
     }
 
     var selectedTabIdBinding: Binding<UUID?> {
         Binding(
-            get: { tabManager.selectedTabByServer[server.id] },
+            get: { selectedTabId },
             set: { newValue in
-                let current = tabManager.selectedTabByServer[server.id]
-                guard current != newValue else { return }
-                DispatchQueue.main.async {
-                    tabManager.selectedTabByServer[server.id] = newValue
+                let validId = newValue.flatMap { requestedId in
+                    serverTabs.contains(where: { $0.id == requestedId }) ? requestedId : serverTabs.first?.id
                 }
+                guard tabManager.selectedTabByServer[server.id] != validId else { return }
+                tabManager.selectedTabByServer[server.id] = validId
             }
         )
     }
@@ -151,18 +153,18 @@ struct ConnectionTerminalContainer: View {
     }
 
     var sharedBody: some View {
-        platformChrome(
+        let backgroundColor = liveTerminalBackgroundColor
+
+        return platformChrome(
             contentLayer
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(liveTerminalBackgroundColor),
-            backgroundColor: liveTerminalBackgroundColor
+                .background(backgroundColor),
+            backgroundColor: backgroundColor
         )
             .onAppear {
                 updateTerminalBackgroundColor()
-                // Select first tab if none selected
-                if selectedTabId == nil {
-                    selectedTabIdBinding.wrappedValue = serverTabs.first?.id
-                }
+                repairSelectedTabSelectionIfNeeded()
+                handleSelectedViewChange(selectedView)
                 ensureInitialFileTabIfNeeded()
             }
             .onChange(of: terminalThemeName) { _ in
@@ -177,14 +179,12 @@ struct ConnectionTerminalContainer: View {
             .onChange(of: colorScheme) { _ in
                 updateTerminalBackgroundColor()
             }
-            .onChange(of: selectedView) { _ in
+            .onChange(of: selectedView) { newValue in
+                handleSelectedViewChange(newValue)
                 ensureInitialFileTabIfNeeded()
             }
-            .onChange(of: serverTabs.count) { _ in
-                // Auto-select if current selection is invalid
-                if let currentId = selectedTabId, !serverTabs.contains(where: { $0.id == currentId }) {
-                    selectedTabIdBinding.wrappedValue = serverTabs.first?.id
-                }
+            .onChangeCompat(of: serverTabs.map(\.id)) { _ in
+                repairSelectedTabSelectionIfNeeded()
             }
             .onChange(of: isZenModeEnabled) { newValue in
                 if !newValue {
@@ -207,42 +207,84 @@ struct ConnectionTerminalContainer: View {
 
     @ViewBuilder
     private var contentLayer: some View {
+        #if os(iOS)
+        // View switches must swap content without implicit animations: animating
+        // the insertion of the Metal-backed terminal view during the segmented
+        // picker's transition hangs the main thread in a trait-update loop.
+        platformContentStack
+            .transaction { transaction in
+                transaction.animation = nil
+            }
+        #else
+        contentStack
+        #endif
+    }
+
+    @ViewBuilder
+    private var contentStack: some View {
         ZStack {
-            // Stats view - always in hierarchy, visibility controlled by opacity
-            // Pass isVisible to pause/resume collection when hidden
-            ServerStatsView(
-                server: server,
-                isVisible: selectedView == "stats",
-                backgroundColor: liveTerminalBackgroundColor,
-                sharedClientProvider: { tabManager.sharedStatsClient(for: server.id) },
-                statsCollector: ServerStatsCollector()
-            )
-                .opacity(selectedView == "stats" ? 1 : 0)
-                .allowsHitTesting(selectedView == "stats")
-                .zIndex(selectedView == "stats" ? 1 : 0)
+            statsLayer
 
             if selectedView == "files" {
-                if let selectedFileTab {
-                    RemoteFileBrowserScreen(
-                        browser: fileBrowser,
-                        server: server,
-                        fileTab: selectedFileTab,
-                        initialPath: selectedFileTab.seedPath
-                    ) { currentPath in
-                        fileTabManager.updateLastKnownPath(currentPath, for: selectedFileTab.id)
-                    }
-                    .id(selectedFileTab.id)
-                    .zIndex(1)
-                } else {
-                    RemoteFileTabsEmptyState(server: server) {
-                        openNewFileTab(selectFilesViewOnSuccess: false)
-                    }
-                    .zIndex(1)
-                }
+                filesLayer
             }
 
             terminalLayer
         }
+    }
+
+    @ViewBuilder
+    var filesLayer: some View {
+        if let selectedFileTab {
+            RemoteFileBrowserScreen(
+                browser: fileBrowser,
+                server: server,
+                fileTab: selectedFileTab,
+                initialPath: selectedFileTab.seedPath
+            ) { currentPath in
+                fileTabManager.updateLastKnownPath(currentPath, for: selectedFileTab.id)
+            }
+            .id(selectedFileTab.id)
+            .zIndex(1)
+        } else {
+            RemoteFileTabsEmptyState(server: server) {
+                openNewFileTab(selectFilesViewOnSuccess: false)
+            }
+            .zIndex(1)
+        }
+    }
+
+    @ViewBuilder
+    var statsLayer: some View {
+        #if os(iOS)
+        // Mount stats only while selected. The dashboard nests ViewThatFits,
+        // Grid, and lazy stacks; keeping it in the ZStack at opacity 0 makes
+        // every layout pass of the other views re-measure it, which explodes
+        // combinatorially and hangs the main thread when the terminal mounts.
+        if selectedView == "stats" {
+            ServerStatsView(
+                server: server,
+                isVisible: true,
+                backgroundColor: liveTerminalBackgroundColor,
+                sharedClientProvider: { tabManager.sharedStatsClient(for: server.id) },
+                statsCollector: ServerStatsCollector()
+            )
+            .zIndex(1)
+        }
+        #else
+        // Stats view - always in hierarchy, visibility controlled by opacity
+        // Pass isVisible to pause/resume collection when hidden
+        ServerStatsView(
+            server: server,
+            isVisible: selectedView == "stats",
+            backgroundColor: liveTerminalBackgroundColor,
+            sharedClientProvider: { tabManager.sharedStatsClient(for: server.id) },
+            statsCollector: ServerStatsCollector()
+        )
+            .opacity(selectedView == "stats" ? 1 : 0)
+            .allowsHitTesting(selectedView == "stats")
+            .zIndex(selectedView == "stats" ? 1 : 0)
+        #endif
     }
 
     var body: some View {
@@ -268,6 +310,24 @@ struct ConnectionTerminalContainer: View {
         }
     }
 
+    private func repairSelectedTabSelectionIfNeeded() {
+        let currentId = tabManager.selectedTabByServer[server.id]
+        let repairedId = selectedTabId
+        guard currentId != repairedId else { return }
+        tabManager.selectedTabByServer[server.id] = repairedId
+    }
+
+    private func handleSelectedViewChange(_ selectedView: String) {
+        #if os(iOS)
+        guard selectedView != ConnectionViewTab.terminal.id else { return }
+        for tab in serverTabs {
+            for paneId in tab.allPaneIds {
+                tabManager.setTerminalPendingVoiceReturn(false, for: paneId)
+            }
+        }
+        #endif
+    }
+
     func openNewTab(selectTerminalViewOnSuccess: Bool = false) {
         guard tabManager.canOpenNewTab else {
             showingTabLimitAlert = true
@@ -279,9 +339,7 @@ struct ConnectionTerminalContainer: View {
                 let tab = try await tabManager.openTab(for: server)
                 await MainActor.run {
                     if selectTerminalViewOnSuccess {
-                        tabManager.selectedViewByServer[server.id] = viewTabConfig.isTabVisible(ConnectionViewTab.terminal.id)
-                            ? ConnectionViewTab.terminal.id
-                            : viewTabConfig.effectiveDefaultTab()
+                        tabManager.selectedViewByServer[server.id] = viewTabConfig.effectiveView(for: ConnectionViewTab.terminal.id)
                     }
                     selectedTabIdBinding.wrappedValue = tab.id
                 }
@@ -307,9 +365,7 @@ struct ConnectionTerminalContainer: View {
         fileBrowser.prepareNewTab(newTab, duplicating: sourceTab)
 
         if selectFilesViewOnSuccess {
-            tabManager.selectedViewByServer[server.id] = viewTabConfig.isTabVisible(ConnectionViewTab.files.id)
-                ? ConnectionViewTab.files.id
-                : viewTabConfig.effectiveDefaultTab()
+            tabManager.selectedViewByServer[server.id] = viewTabConfig.effectiveView(for: ConnectionViewTab.files.id)
         }
     }
 

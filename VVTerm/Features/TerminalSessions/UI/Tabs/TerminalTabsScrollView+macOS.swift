@@ -47,7 +47,7 @@ struct TerminalTabsScrollView: View {
     }
 }
 
-struct TerminalTabButton: View {
+private struct TerminalTabButton: View {
     let tab: TerminalTab
     let isSelected: Bool
     let width: CGFloat
@@ -64,10 +64,14 @@ struct TerminalTabButton: View {
     private var statusColor: Color {
         guard let state = paneState else { return .secondary }
         switch state.connectionState {
-        case .connected: return .green
-        case .connecting, .reconnecting: return .orange
-        case .disconnected, .idle: return .secondary
-        case .failed: return .red
+        case .connected:
+            return .green
+        case .connecting, .reconnecting:
+            return .orange
+        case .disconnected, .idle:
+            return .secondary
+        case .failed:
+            return .red
         }
     }
 

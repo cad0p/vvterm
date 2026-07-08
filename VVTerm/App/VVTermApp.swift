@@ -139,8 +139,7 @@ struct VVTermApp: App {
 private extension VVTermApp {
     static func makeRemoteFileBrowserStore() -> RemoteFileBrowserStore {
         let adapter = SSHSFTPAdapter(borrowedClientProvider: { serverId in
-            ConnectionSessionManager.shared.sharedStatsClient(for: serverId)
-                ?? TerminalTabManager.shared.sharedStatsClient(for: serverId)
+            TerminalTabManager.shared.sharedStatsClient(for: serverId)
         })
 
         return RemoteFileBrowserStore(
@@ -149,16 +148,6 @@ private extension VVTermApp {
                 ServerManager.shared.servers.first { $0.id == serverId }
             },
             workingDirectoryProvider: { serverId in
-                if let selectedSessionId = ConnectionSessionManager.shared.selectedSessionByServer[serverId],
-                   let path = ConnectionSessionManager.shared.workingDirectory(for: selectedSessionId) {
-                    return path
-                }
-
-                if let anySession = ConnectionSessionManager.shared.sessions.first(where: { $0.serverId == serverId }),
-                   let path = ConnectionSessionManager.shared.workingDirectory(for: anySession.id) {
-                    return path
-                }
-
                 if let selectedTab = TerminalTabManager.shared.selectedTab(for: serverId),
                    let path = TerminalTabManager.shared.workingDirectory(for: selectedTab.focusedPaneId) {
                     return path

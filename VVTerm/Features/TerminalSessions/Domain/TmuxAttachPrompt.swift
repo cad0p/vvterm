@@ -9,7 +9,7 @@ struct TmuxAttachSessionInfo: Identifiable, Equatable {
 }
 
 struct TmuxAttachPrompt: Identifiable, Equatable {
-    /// Session ID (ConnectionSession.id or Terminal paneId) that is waiting for selection.
+    /// Terminal pane ID that is waiting for selection.
     let id: UUID
     let serverId: UUID
     let serverName: String

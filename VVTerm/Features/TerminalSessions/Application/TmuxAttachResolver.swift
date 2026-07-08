@@ -144,8 +144,8 @@ final class TmuxAttachResolver {
 
         if currentPrompt?.id == entityId {
             currentPrompt = nil
-            continuation.resume(returning: selection)
             advancePromptQueue(setPrompt: setPrompt)
+            continuation.resume(returning: selection)
             return
         }
 

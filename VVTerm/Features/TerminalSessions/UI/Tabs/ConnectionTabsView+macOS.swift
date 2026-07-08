@@ -2,7 +2,7 @@
 import SwiftUI
 import AppKit
 
-struct MacOSZenWindowChromeBridge: NSViewRepresentable {
+struct ZenWindowChromeBridge: NSViewRepresentable {
     @Binding var contentInsets: EdgeInsets
 
     func makeNSView(context: Context) -> WindowObserverView {
@@ -115,7 +115,7 @@ struct MacOSZenWindowChromeBridge: NSViewRepresentable {
     }
 }
 
-struct MacOSToolbarBackdrop: View {
+struct ToolbarBackdrop: View {
     let color: Color
 
     var body: some View {
@@ -477,10 +477,9 @@ extension ConnectionTerminalContainer {
     }
 
     private func disconnectFromServer() {
-        tabManager.closeAllTabs(for: server.id)
         fileBrowser.disconnect(serverId: server.id)
         fileTabManager.disconnect(serverId: server.id)
-        tabManager.connectedServerIds.remove(server.id)
+        tabManager.disconnectServer(server.id)
     }
 
     private func splitFocusedPane(_ placement: TerminalSplitPlacement) {
@@ -593,16 +592,16 @@ extension ConnectionTerminalContainer {
         content
             .overlay(alignment: .top) {
                 if !isZenModeEnabled {
-                    MacOSToolbarBackdrop(color: backgroundColor)
+                    ToolbarBackdrop(color: backgroundColor)
                 }
             }
             .background {
                 if isZenModeEnabled {
-                    MacOSZenWindowChromeBridge(contentInsets: $zenWindowSafeAreaInsets)
+                    ZenWindowChromeBridge(contentInsets: $zenWindowSafeAreaInsets)
                         .frame(width: 0, height: 0)
                 }
             }
-            .macOSZenExpandedTopSafeArea(isZenModeEnabled && selectedView == "terminal")
+            .zenExpandedTopSafeArea(isZenModeEnabled && selectedView == "terminal")
     }
 
     private var terminalContentInsets: EdgeInsets {
@@ -636,7 +635,7 @@ extension ConnectionTerminalContainer {
 
 private extension View {
     @ViewBuilder
-    func macOSZenExpandedTopSafeArea(_ isEnabled: Bool) -> some View {
+    func zenExpandedTopSafeArea(_ isEnabled: Bool) -> some View {
         if isEnabled {
             self.ignoresSafeArea(.container, edges: .top)
         } else {

@@ -149,8 +149,9 @@ struct ServerListRow: View {
 // MARK: - Active Connection List Row
 
 struct ActiveConnectionListRow: View {
-    let session: ConnectionSession
     let title: String
+    let status: ConnectionState
+    let tmuxStatus: TmuxStatus
     let tabCount: Int
     let onOpen: () -> Void
     let onDisconnect: () -> Void
@@ -171,15 +172,15 @@ struct ActiveConnectionListRow: View {
                         .font(.body)
                         .foregroundStyle(.primary)
 
-                    Text(session.connectionState.statusString)
+                    Text(status.statusString)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                if !session.tmuxStatus.shortLabel.isEmpty {
-                    Text(session.tmuxStatus.shortLabel)
+                if !tmuxStatus.shortLabel.isEmpty {
+                    Text(tmuxStatus.shortLabel)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
@@ -207,7 +208,7 @@ struct ActiveConnectionListRow: View {
     }
 
     private var statusColor: Color {
-        switch session.connectionState {
+        switch status {
         case .connected: return .green
         case .connecting, .reconnecting: return .orange
         case .disconnected: return .gray

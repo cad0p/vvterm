@@ -48,7 +48,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func applicationWillTerminate(_ application: UIApplication) {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            ConnectionSessionManager.shared.disconnectAll()
+            TerminalTabManager.shared.disconnectAll()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 2)
@@ -56,7 +56,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         Task { @MainActor in
-            await ConnectionSessionManager.shared.suspendAllForBackground()
+            await TerminalTabManager.shared.suspendAllForBackground()
             AppLockManager.shared.lockIfNeededForBackground()
         }
     }
