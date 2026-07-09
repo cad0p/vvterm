@@ -43,26 +43,51 @@ struct TerminalKeyboardUITestHarness: View {
             .allowsHitTesting(false)
             .accessibilityElement(children: .contain)
 
-            HStack(spacing: 8) {
-                Button("Terminal") {
-                    terminalReady = false
-                    showsTerminal = true
-                    focusRequestID += 1
-                }
-                .accessibilityIdentifier("vvterm.keyboardTest.mode.terminal")
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    Button("Terminal") {
+                        terminalReady = false
+                        showsTerminal = true
+                        focusRequestID += 1
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.mode.terminal")
 
-                Button("Other") {
-                    terminalView?.releaseTerminalInput()
-                    terminalView = nil
-                    terminalReady = false
-                    showsTerminal = false
-                }
-                .accessibilityIdentifier("vvterm.keyboardTest.mode.other")
+                    Button("Other") {
+                        terminalView?.releaseTerminalInput()
+                        terminalView = nil
+                        terminalReady = false
+                        showsTerminal = false
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.mode.other")
 
-                Button("Hide") {
-                    terminalView?.dismissKeyboardFromToolbar()
+                    Button("Hide") {
+                        terminalView?.dismissKeyboardFromToolbar()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.hideViaToolbar")
+
+                    Button("Keyboard") {
+                        terminalView?.requestKeyboardFocus(for: .explicitUserRequest)
+                        focusRequestID += 1
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.showKeyboard")
                 }
-                .accessibilityIdentifier("vvterm.keyboardTest.hideViaToolbar")
+
+                HStack(spacing: 8) {
+                    Button("Mark") {
+                        terminalView?.keyboardUITestSetMarkedText("nihon")
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.ime.mark")
+
+                    Button("Del") {
+                        terminalView?.keyboardUITestDeleteBackwardThroughIMEProxy()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.ime.delete")
+
+                    Button("Commit") {
+                        terminalView?.keyboardUITestCommitMarkedText()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.ime.commit")
+                }
             }
             .font(.system(size: 12, weight: .semibold))
             .padding(.horizontal, 10)

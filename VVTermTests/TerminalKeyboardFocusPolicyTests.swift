@@ -3,7 +3,7 @@ import Testing
 
 struct TerminalKeyboardFocusPolicyTests {
     @Test
-    func userDismissEntersBrowseModeUntilExplicitTypingIntent() {
+    func userDismissEntersBrowseModeUntilExplicitShow() {
         var policy = TerminalKeyboardFocusPolicy()
 
         let initialActivationAccepted = policy.requestFocus(for: .initialActivation)
@@ -18,34 +18,47 @@ struct TerminalKeyboardFocusPolicyTests {
         #expect(!policy.shouldRestoreOnReconnect)
 
         let automaticActivationAccepted = policy.requestFocus(for: .initialActivation)
+        let directTouchAccepted = policy.requestFocus(for: .directTouch)
         let selectionGestureAccepted = policy.requestFocus(for: .selectionGesture)
         let reconnectRestoreAccepted = policy.requestFocus(for: .reconnectRestore)
         #expect(!automaticActivationAccepted)
+        #expect(!directTouchAccepted)
         #expect(!selectionGestureAccepted)
         #expect(!reconnectRestoreAccepted)
         #expect(policy.isBrowsing)
 
-        let directTouchAccepted = policy.requestFocus(for: .directTouch)
-        #expect(directTouchAccepted)
+        let explicitRequestAccepted = policy.requestFocus(for: .explicitUserRequest)
+        #expect(explicitRequestAccepted)
         #expect(policy.allowsAutomaticFocus)
         #expect(!policy.isBrowsing)
         #expect(policy.shouldRestoreOnReconnect)
     }
 
     @Test
-    func explicitShowAndHardwareFocusLeaveBrowseMode() {
-        for reason in [TerminalKeyboardFocusReason.explicitUserRequest, .hardwareKeyboard] {
-            var policy = TerminalKeyboardFocusPolicy()
+    func explicitShowLeavesBrowseMode() {
+        var policy = TerminalKeyboardFocusPolicy()
 
-            policy.dismissForUser()
-            #expect(policy.isBrowsing)
+        policy.dismissForUser()
+        #expect(policy.isBrowsing)
 
-            let requestAccepted = policy.requestFocus(for: reason)
-            #expect(requestAccepted)
-            #expect(policy.allowsAutomaticFocus)
-            #expect(!policy.isBrowsing)
-            #expect(policy.shouldRestoreOnReconnect)
-        }
+        let requestAccepted = policy.requestFocus(for: .explicitUserRequest)
+        #expect(requestAccepted)
+        #expect(policy.allowsAutomaticFocus)
+        #expect(!policy.isBrowsing)
+        #expect(policy.shouldRestoreOnReconnect)
+    }
+
+    @Test
+    func hardwareFocusDoesNotLeaveBrowseModeAfterUserDismiss() {
+        var policy = TerminalKeyboardFocusPolicy()
+
+        policy.dismissForUser()
+
+        let requestAccepted = policy.requestFocus(for: .hardwareKeyboard)
+        #expect(!requestAccepted)
+        #expect(!policy.allowsAutomaticFocus)
+        #expect(policy.isBrowsing)
+        #expect(!policy.shouldRestoreOnReconnect)
     }
 
     @Test

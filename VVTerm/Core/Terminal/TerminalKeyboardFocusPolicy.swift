@@ -26,11 +26,11 @@ struct TerminalKeyboardFocusPolicy {
 
     mutating func requestFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
         switch reason {
-        case .explicitUserRequest, .directTouch, .hardwareKeyboard:
+        case .explicitUserRequest:
             mode = .typing
             shouldRestoreOnReconnect = true
             return true
-        case .initialActivation, .selectionGesture:
+        case .initialActivation, .directTouch, .selectionGesture, .hardwareKeyboard:
             guard mode == .typing else { return false }
             shouldRestoreOnReconnect = true
             return true

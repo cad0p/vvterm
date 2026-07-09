@@ -53,8 +53,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     /// (~44-72pt); a real software keyboard is far taller on every device.
     private let softwareKeyboardMinimumHeight: CGFloat = 100
     private var keyboardObservers: [NSObjectProtocol] = []
+    private let lifecycleLoggingEnabled: Bool
 
-    init() {
+    init(lifecycleLoggingEnabled: Bool = TerminalKeyboardCoordinator.defaultLifecycleLoggingEnabled) {
+        self.lifecycleLoggingEnabled = lifecycleLoggingEnabled
+
         let center = NotificationCenter.default
         // willShow/willHide fire at animation START so the bar travels with
         // the keyboard instead of trailing it; willChangeFrame catches
@@ -112,6 +115,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
         category: "KeyboardCoordinator"
     )
+
+    nonisolated private static var defaultLifecycleLoggingEnabled: Bool {
+        DebugLogConfiguration.isEnabled("keyboard")
+    }
 
     /// Whether the terminal should hold the text-input session (first
     /// responder). Hardware keyboards are irrelevant here: key events need
@@ -187,12 +194,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     func directTouchOnTerminal(isFocusTap: Bool = false) {
         if isUserHidden {
-            // A plain tap on the terminal means "I want to type": restore a
-            // user-hidden keyboard instead of leaving the user stranded in
-            // hidden mode. Selection/menu touches (isFocusTap == false)
-            // still respect the hidden state.
-            guard isFocusTap else { return }
-            isUserHidden = false
+            return
         }
         wantsPresentationRefresh = true
         // See userRequestedShow: user actions get a fresh repair budget.
@@ -288,7 +290,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
         guard let activePaneId,
               let terminal = terminalProvider?(activePaneId) else {
-            logger.info("command=none reason=\(self.pendingReason, privacy: .public) desired=\(desired) noActiveTerminal=true viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive)")
+            logNoActiveTerminal(desired: desired, inputs: inputs)
             return
         }
         lastManagedPaneId = activePaneId
@@ -315,10 +317,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
                 terminal.rebuildTerminalInputSession()
                 schedulePresentationVerify()
                 let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
-                logger.info("command=refresh repair=asyncRebuild reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
+                logAsyncRebuild(inputs: inputs, after: after)
                 return
             }
-            logger.info("command=steady reason=\(self.pendingReason, privacy: .public) desired=\(desired) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) window=\(before.windowAttached) keyWindow=\(before.windowIsKey) scene=\(before.sceneActivationState, privacy: .public) firstResponder=\(before.isFirstResponder) softwareInput=\(before.isSoftwareInputActive) kbVisible=\(self.isSoftwareKeyboardVisible)")
+            logSteady(desired: desired, inputs: inputs, before: before)
             return
         }
 
@@ -370,8 +372,37 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             // software keyboard frame arrives or the user tries focus again.
             terminal.setTerminalInputAccessorySuppressed(true)
             let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
-            self.logger.info("command=verifySuppressed kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
+            self.logVerifySuppressed(after: after)
         }
+    }
+
+    private func logNoActiveTerminal(desired: Bool, inputs: StateInputs) {
+        guard lifecycleLoggingEnabled else { return }
+        logger.info("command=none reason=\(self.pendingReason, privacy: .public) desired=\(desired) noActiveTerminal=true viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive)")
+    }
+
+    private func logAsyncRebuild(
+        inputs: StateInputs,
+        after: TerminalKeyboardCoordinatorDiagnosticSnapshot
+    ) {
+        guard lifecycleLoggingEnabled else { return }
+        logger.info("command=refresh repair=asyncRebuild reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
+    }
+
+    private func logSteady(
+        desired: Bool,
+        inputs: StateInputs,
+        before: TerminalKeyboardCoordinatorDiagnosticSnapshot
+    ) {
+        guard lifecycleLoggingEnabled else { return }
+        logger.info("command=steady reason=\(self.pendingReason, privacy: .public) desired=\(desired) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) window=\(before.windowAttached) keyWindow=\(before.windowIsKey) scene=\(before.sceneActivationState, privacy: .public) firstResponder=\(before.isFirstResponder) softwareInput=\(before.isSoftwareInputActive) kbVisible=\(self.isSoftwareKeyboardVisible)")
+    }
+
+    private func logVerifySuppressed(
+        after: TerminalKeyboardCoordinatorDiagnosticSnapshot
+    ) {
+        guard lifecycleLoggingEnabled else { return }
+        logger.info("command=verifySuppressed kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
     }
 
     private func logCommand(
@@ -381,6 +412,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         before: TerminalKeyboardCoordinatorDiagnosticSnapshot,
         after: TerminalKeyboardCoordinatorDiagnosticSnapshot
     ) {
+        guard lifecycleLoggingEnabled else { return }
         logger.info(
             "command=\(desired ? "acquire" : "release", privacy: .public) desired=\(desired) reason=\(reason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) beforeWindow=\(before.windowAttached) beforeKeyWindow=\(before.windowIsKey) beforeScene=\(before.sceneActivationState, privacy: .public) beforeFirstResponder=\(before.isFirstResponder) beforeSoftwareInput=\(before.isSoftwareInputActive) afterWindow=\(after.windowAttached) afterKeyWindow=\(after.windowIsKey) afterScene=\(after.sceneActivationState, privacy: .public) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)"
         )

@@ -103,7 +103,7 @@ struct TerminalKeyboardCoordinatorTests {
 
     @Test
     @MainActor
-    func focusTapRestoresKeyboardAfterUserHide() {
+    func directTouchDoesNotRestoreKeyboardAfterUserHide() {
         let coordinator = TerminalKeyboardCoordinator()
 
         coordinator.userRequestedHide()
@@ -113,7 +113,7 @@ struct TerminalKeyboardCoordinatorTests {
         #expect(coordinator.isUserHidden)
 
         coordinator.directTouchOnTerminal(isFocusTap: true)
-        #expect(!coordinator.isUserHidden)
+        #expect(coordinator.isUserHidden)
     }
 
     @Test
