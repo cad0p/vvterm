@@ -131,7 +131,7 @@ struct ServerTerminalRoute: View {
             && selectedView == ConnectionViewTab.terminal.id
             && focusedPaneId != nil
             && keyboardCoordinator.isUserHidden
-            && !keyboardCoordinator.isHardwareKeyboardAttached
+            && focusedTerminal?.isHardwareKeyboardAttached != true
             && !isFocusedTerminalFindNavigatorVisible
             && !isFocusedTerminalVoiceRecording
     }
@@ -373,6 +373,7 @@ struct ServerTerminalRoute: View {
         guard selectedView == ConnectionViewTab.terminal.id else { return }
         clearPendingVoiceReturnForFocusedPane()
         keyboardCoordinator.userRequestedShow()
+        focusedTerminal?.requestKeyboardFocus(for: .explicitUserRequest)
     }
 
     private func startVoiceInputForFocusedTerminal() {

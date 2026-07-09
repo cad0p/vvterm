@@ -16,7 +16,6 @@ struct TerminalKeyboardCoordinatorTests {
             activePaneConnected: true,
             activePaneWindowAttached: true,
             userHidKeyboard: false,
-            hardwareKeyboardAttached: false,
             findNavigatorActive: false
         )
 
@@ -29,7 +28,6 @@ struct TerminalKeyboardCoordinatorTests {
                     activePaneConnected: true,
                     activePaneWindowAttached: true,
                     userHidKeyboard: true,
-                    hardwareKeyboardAttached: false,
                     findNavigatorActive: false
                 ),
                 expected: false
@@ -40,28 +38,12 @@ struct TerminalKeyboardCoordinatorTests {
                 expected: true
             ),
             Case(
-                // The input session stays ACTIVE with a hardware keyboard:
-                // key events need a responder. UIKit suppresses the software
-                // keyboard itself; the accessory bar is gated separately.
-                name: "hardware keyboard keeps input session",
-                inputs: .init(
-                    viewActive: true,
-                    activePaneConnected: true,
-                    activePaneWindowAttached: true,
-                    userHidKeyboard: false,
-                    hardwareKeyboardAttached: true,
-                    findNavigatorActive: false
-                ),
-                expected: true
-            ),
-            Case(
                 name: "left terminal view",
                 inputs: .init(
                     viewActive: false,
                     activePaneConnected: true,
                     activePaneWindowAttached: true,
                     userHidKeyboard: false,
-                    hardwareKeyboardAttached: false,
                     findNavigatorActive: false
                 ),
                 expected: false
@@ -73,7 +55,6 @@ struct TerminalKeyboardCoordinatorTests {
                     activePaneConnected: true,
                     activePaneWindowAttached: false,
                     userHidKeyboard: false,
-                    hardwareKeyboardAttached: false,
                     findNavigatorActive: false
                 ),
                 expected: false
@@ -90,7 +71,6 @@ struct TerminalKeyboardCoordinatorTests {
                     activePaneConnected: true,
                     activePaneWindowAttached: true,
                     userHidKeyboard: false,
-                    hardwareKeyboardAttached: false,
                     findNavigatorActive: true
                 ),
                 expected: false
@@ -107,7 +87,6 @@ struct TerminalKeyboardCoordinatorTests {
                     activePaneConnected: true,
                     activePaneWindowAttached: true,
                     userHidKeyboard: true,
-                    hardwareKeyboardAttached: false,
                     findNavigatorActive: false
                 ),
                 expected: false
@@ -120,6 +99,33 @@ struct TerminalKeyboardCoordinatorTests {
                 "\(testCase.name)"
             )
         }
+    }
+
+    @Test
+    @MainActor
+    func focusTapRestoresKeyboardAfterUserHide() {
+        let coordinator = TerminalKeyboardCoordinator()
+
+        coordinator.userRequestedHide()
+        #expect(coordinator.isUserHidden)
+
+        coordinator.directTouchOnTerminal(isFocusTap: false)
+        #expect(coordinator.isUserHidden)
+
+        coordinator.directTouchOnTerminal(isFocusTap: true)
+        #expect(!coordinator.isUserHidden)
+    }
+
+    @Test
+    @MainActor
+    func explicitShowRestoresKeyboardAfterUserHide() {
+        let coordinator = TerminalKeyboardCoordinator()
+
+        coordinator.userRequestedHide()
+        #expect(coordinator.isUserHidden)
+
+        coordinator.userRequestedShow()
+        #expect(!coordinator.isUserHidden)
     }
 }
 #endif

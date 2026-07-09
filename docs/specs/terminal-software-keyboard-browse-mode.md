@@ -6,7 +6,7 @@ Status: draft, updated for current vendored Ghostty baseline
 ## Summary
 This spec defines the iPhone terminal interaction work we will do next.
 
-- Phase 1 stays entirely in VVTerm app code and finishes the software-keyboard browse-mode behavior.
+- Phase 1 stays entirely in VVTerm app code and finishes the post-dismiss software-keyboard behavior.
 - Phase 2 moves iPhone touch selection toward a native-feeling app-owned interaction model while keeping Ghostty as the renderer.
 - No additional Ghostty fork work is planned up front.
 - We only reopen fork work later if the app-side selection spike proves that the current APIs are still missing a concrete geometry primitive we need.
@@ -28,14 +28,14 @@ The recent Ghostty vendor update changes the plan in one important way: we now h
   - `ghostty_surface_read_text(...)`
 
 ### What Is Still Wrong On iPhone
-- Plain touch still reopens the software keyboard from `touchesBegan`.
-- Selection gestures still call keyboard-focus helpers and can reopen the keyboard.
+- Touch handling must distinguish terminal focus taps from selection/scroll gestures.
+- Selection gestures must not call keyboard-focus helpers that reopen the keyboard accidentally.
 - iPhone selection is still Ghostty-style terminal selection plus a custom menu, not a native-feeling text-selection flow.
 - `supports_selection_clipboard` is still enabled, so touch selection still behaves too much like copy-on-select.
 - `selectionRects(for:)` still returns `[]`, so UIKit does not yet have real selection geometry from VVTerm.
 
 ## Product Goals
-- After explicit keyboard dismissal, keep the software keyboard hidden until the user explicitly asks for it again.
+- After explicit keyboard dismissal, keep the software keyboard hidden until the user asks for typing again by tapping the terminal or the floating Keyboard control.
 - Preserve scroll and selection while the keyboard is hidden.
 - Keep fast initial typing on terminal open and active-terminal restore.
 - Make iPhone touch selection feel closer to native text selection.
@@ -59,10 +59,10 @@ Scope:
 - no additional Ghostty fork changes
 
 Outcome:
-- explicit dismiss puts the session into `browse`
-- plain taps do not reopen the keyboard while in `browse`
-- selection and scrolling still work while in `browse`
-- keyboard returns only from explicit `Show Keyboard`
+- explicit dismiss hides the software keyboard and accessory together
+- plain terminal focus taps reopen the keyboard and accessory together
+- selection and scrolling still work while the software keyboard is hidden
+- keyboard returns from the floating `Keyboard` control or a terminal focus tap
 
 ### Phase 2: App-Owned iPhone Selection
 Scope:
@@ -84,13 +84,13 @@ Trigger:
 ## UX Decision
 
 ### Keyboard
-Use an explicit post-dismiss browse mode.
+Use an explicit post-dismiss keyboard-hidden mode.
 
 Rules:
 1. When a terminal first opens or becomes active, VVTerm may still auto-focus the keyboard.
-2. When the user explicitly hides the software keyboard, that session enters `browse`.
-3. While in `browse`, incidental touch interactions do not reopen the keyboard.
-4. The keyboard returns only from an explicit `Show Keyboard` action.
+2. When the user explicitly hides the software keyboard, the keyboard and accessory bar go down together and floating terminal controls appear.
+3. Incidental selection/scroll interactions do not reopen the keyboard.
+4. A plain terminal focus tap or explicit `Show Keyboard` action reopens the keyboard and accessory together.
 5. Once the user explicitly shows the keyboard again, the session returns to normal typing mode.
 
 ### Selection
@@ -131,21 +131,21 @@ We do not need to expose this exact type publicly, but we do need this distincti
 
 Policy:
 - explicit requests are allowed when the terminal is eligible for text input
-- incidental requests are denied while in `browse`
-- reconnect restore is denied while in `browse`
+- incidental selection/scroll requests are denied while the keyboard is hidden
+- reconnect restore is denied while the keyboard was explicitly hidden by the user
 
 ### Phase 1 Keyboard Work
 We will tighten the existing implementation instead of redesigning it.
 
 Required changes:
 - `GhosttyTerminalView+iOS.swift`
-  - treat plain touch as incidental focus
-  - keep plain touch from reopening the keyboard while in `browse`
+  - distinguish plain terminal focus taps from selection/scroll touches
+  - let plain terminal focus taps reopen the keyboard after explicit dismiss
   - treat double tap, triple tap, and long-press selection as incidental focus
   - let selection proceed without reopening the keyboard
 - `SSHTerminalWrapper.swift`
   - keep auto-focus and reconnect restore gated by the shared policy
-  - do not reclaim keyboard focus just because the terminal is visible if the session is in `browse`
+  - do not reclaim keyboard focus just because the terminal is visible if the session was explicitly hidden by the user
 - `iOSContentView.swift`
   - keep explicit dismiss routed through `dismissKeyboardForUser()`
   - expose an explicit `Show Keyboard` action for the active terminal
@@ -207,7 +207,7 @@ Expected app-owned responsibilities:
 - own anchor and focus state
 - position the selection menu and future handles
 - read selected text for explicit actions
-- cooperate with keyboard browse mode so selection never forces keyboard reopen
+- cooperate with keyboard-hidden mode so selection never forces keyboard reopen
 
 ### How The Updated Ghostty Vendor Helps
 The updated vendored headers now give us better read-side metadata for selection/text reads.
@@ -253,12 +253,12 @@ Likely implementation step:
 
 ### Phase 1
 - refine the existing keyboard focus policy instead of replacing it
-- gate direct-touch refocus while in `browse`
-- gate selection-triggered refocus while in `browse`
+- allow direct terminal focus taps to restore typing after explicit dismiss
+- gate selection-triggered refocus while the keyboard is hidden
 - keep reconnect restore policy-aware
 - add explicit `Show Keyboard` in iPhone terminal chrome
 - add explicit `Show Keyboard` in iPhone zen mode
-- verify browse mode survives normal session reuse and tab switching
+- verify keyboard-hidden mode survives normal session reuse and tab switching
 
 ### Phase 2
 - add an iPhone touch-selection controller under `VVTerm/GhosttyTerminal/`
@@ -285,12 +285,12 @@ Likely implementation step:
 
 ### Phase 1
 - terminal open still auto-focuses for fast typing
-- explicit dismiss enters `browse`
-- plain tap does not reopen the keyboard in `browse`
-- double tap still selects without reopening the keyboard in `browse`
-- long press still selects without reopening the keyboard in `browse`
-- explicit `Show Keyboard` returns to typing mode
-- reconnect restore stays suppressed while in `browse`
+- explicit dismiss hides keyboard and accessory together
+- plain terminal focus tap restores keyboard and accessory
+- double tap still selects without reopening the keyboard accidentally
+- long press still selects without reopening the keyboard accidentally
+- floating `Keyboard` returns to typing mode
+- reconnect restore stays suppressed after explicit keyboard dismiss
 
 ### Phase 2
 - selecting text does not implicitly copy it on iPhone

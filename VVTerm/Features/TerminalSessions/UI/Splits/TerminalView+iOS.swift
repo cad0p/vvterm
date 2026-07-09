@@ -201,6 +201,9 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         context.coordinator.wasActive = shouldRenderTerminal
 
         let state = TerminalTabManager.shared.paneStates[paneId]?.connectionState ?? .idle
+        let shouldRestoreKeyboardFocus = state.isConnecting
+            && terminalView.shouldRestoreKeyboardFocusOnReconnect
+        let shouldKeepExistingKeyboardFocus = terminalView.isFirstResponder && shouldRestoreKeyboardFocus
         terminalView.acceptsTerminalInput = state.isConnected
 
         let autoReconnectEnabled = TerminalDefaults.sshAutoReconnectEnabled()
@@ -228,6 +231,25 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
             }
         } else if !shouldStartSSHConnection {
             context.coordinator.lastStartRequestState = nil
+        }
+
+        if shouldRenderTerminal, context.coordinator.isTerminalReady {
+            let focusReason: TerminalKeyboardFocusReason?
+            if shouldRestoreKeyboardFocus {
+                focusReason = .reconnectRestore
+            } else if state.isConnected && terminalView.allowsAutomaticKeyboardFocus {
+                focusReason = .initialActivation
+            } else {
+                focusReason = nil
+            }
+
+            if let focusReason, terminalView.window != nil, !terminalView.isFirstResponder {
+                terminalView.requestKeyboardFocus(for: focusReason)
+            }
+        } else if scenePhase == .active,
+                  terminalView.isFirstResponder,
+                  !shouldKeepExistingKeyboardFocus {
+            _ = terminalView.resignFirstResponder()
         }
     }
 

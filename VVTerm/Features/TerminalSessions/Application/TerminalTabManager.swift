@@ -496,14 +496,9 @@ final class TerminalTabManager: ObservableObject {
                 self?.keyboardCoordinator.setWindowAttached(isAttached, for: paneId)
             }
         }
-        terminal.onHardwareKeyboardChange = { [weak self] isAttached in
+        terminal.onTerminalDirectTouch = { [weak self] isFocusTap in
             Task { @MainActor [weak self] in
-                self?.keyboardCoordinator.setHardwareKeyboard(isAttached)
-            }
-        }
-        terminal.onTerminalDirectTouch = { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.keyboardCoordinator.directTouchOnTerminal()
+                self?.keyboardCoordinator.directTouchOnTerminal(isFocusTap: isFocusTap)
             }
         }
         terminal.onKeyboardAccessoryHideRequested = { [weak self] in
@@ -525,7 +520,6 @@ final class TerminalTabManager: ObservableObject {
             guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
             self.keyboardCoordinator.setWindowAttached(terminal.window != nil, for: paneId)
             self.keyboardCoordinator.setPaneConnected(self.paneStates[paneId]?.connectionState.isConnected == true, for: paneId)
-            self.keyboardCoordinator.setHardwareKeyboard(terminal.isHardwareKeyboardAttached)
             self.setTerminalFindNavigatorVisible(terminal.isFindNavigatorVisible, for: paneId)
             self.keyboardCoordinator.setFindNavigatorActive(terminal.isFindNavigatorVisible)
         }
@@ -538,7 +532,6 @@ final class TerminalTabManager: ObservableObject {
         if let terminal = terminalViews.removeValue(forKey: paneId) {
             #if os(iOS)
             terminal.onWindowAttachmentChange = nil
-            terminal.onHardwareKeyboardChange = nil
             terminal.onTerminalDirectTouch = nil
             terminal.onKeyboardAccessoryHideRequested = nil
             terminal.onFindNavigatorVisibilityChange = nil

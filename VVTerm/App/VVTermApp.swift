@@ -64,6 +64,12 @@ struct VVTermApp: App {
         return "\(darkVersion)"
     }
 
+    #if os(iOS) && DEBUG
+    private var usesTerminalKeyboardUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-keyboard-harness")
+    }
+    #endif
+
     var body: some Scene {
         WindowGroup("", id: "main") {
             let appLocale = AppLanguage(rawValue: appLanguage)?.locale ?? Locale.current
@@ -71,24 +77,32 @@ struct VVTermApp: App {
                 NoticeAppHost {
                     Group {
                         #if os(iOS)
-                        iOSContentView(
-                            fileTabs: remoteFileTabManager,
-                            fileBrowser: remoteFileBrowserStore
-                        )
-                            .environmentObject(ghosttyApp)
-                            .environmentObject(terminalThemeManager)
-                            .environmentObject(terminalAccessoryPreferencesManager)
-                            .modifier(AppearanceModifier())
-                            .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalCursorStyle)\(terminalCursorBlink)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
-                                ghosttyApp.reloadConfig()
-                            }
-                            .sheet(isPresented: .init(
-                                get: { !hasSeenWelcome },
-                                set: { if !$0 { hasSeenWelcome = true } }
-                            )) {
-                                WelcomeView(hasSeenWelcome: $hasSeenWelcome)
-                                    .adaptiveSoftScrollEdges()
-                            }
+                        if usesTerminalKeyboardUITestHarness {
+                            TerminalKeyboardUITestHarness()
+                                .environmentObject(ghosttyApp)
+                                .environmentObject(terminalThemeManager)
+                                .environmentObject(terminalAccessoryPreferencesManager)
+                                .modifier(AppearanceModifier())
+                        } else {
+                            iOSContentView(
+                                fileTabs: remoteFileTabManager,
+                                fileBrowser: remoteFileBrowserStore
+                            )
+                                .environmentObject(ghosttyApp)
+                                .environmentObject(terminalThemeManager)
+                                .environmentObject(terminalAccessoryPreferencesManager)
+                                .modifier(AppearanceModifier())
+                                .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalCursorStyle)\(terminalCursorBlink)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
+                                    ghosttyApp.reloadConfig()
+                                }
+                                .sheet(isPresented: .init(
+                                    get: { !hasSeenWelcome },
+                                    set: { if !$0 { hasSeenWelcome = true } }
+                                )) {
+                                    WelcomeView(hasSeenWelcome: $hasSeenWelcome)
+                                        .adaptiveSoftScrollEdges()
+                                }
+                        }
                         #else
                         ContentView(
                             fileTabs: remoteFileTabManager,
