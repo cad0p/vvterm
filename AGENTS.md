@@ -172,6 +172,19 @@ Safe refactor expectation:
 - same user-facing flows
 - smaller files, clearer boundaries, better ownership
 
+## Testing and Regression Policy
+
+- Every bug fix and regression fix must include automated test coverage unless it is genuinely not automatable. If coverage is not added, explain the blocker and the manual validation that was used.
+- For regressions, write or update a deterministic failing test first when feasible, then fix the production path.
+- Match test level to risk:
+  - use unit tests for domain rules, parser behavior, state machines, focus policies, coordinators, and model logic
+  - use UI tests/XCUITest for SwiftUI/UIKit lifecycle, keyboard behavior, navigation, accessibility, focus, sheet, and platform integration regressions
+  - use integration or end-to-end tests when behavior crosses SSH/session/terminal rendering boundaries and can be exercised locally or in simulator
+- Refactors must keep existing tests passing and should add coverage before simplifying risky or previously untested behavior.
+- Keyboard and terminal input changes require focused regression coverage. At minimum, cover the relevant policy/model path in unit tests and the user-visible iOS behavior in XCUITest when software keyboard, accessory bar, hardware keyboard, IME/preedit, backspace repeat, find UI, floating controls, focus, or tab/view switching behavior is touched.
+- Do not rely on "checked on my phone" or manual Xcode testing as the only validation for keyboard/input regressions. Keep simulator UI tests or unit tests that can be rerun by future agents.
+- Before finishing non-documentation code changes, run the narrowest reliable build/test commands that exercise the touched behavior and report exactly what was run. If a test cannot run because of tooling or environment issues, report that as a residual risk.
+
 ## Commits
 
 - Use **atomic commits**.
