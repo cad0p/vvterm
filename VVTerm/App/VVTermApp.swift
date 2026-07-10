@@ -4,11 +4,17 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import WidgetKit
+#endif
 
 @main
 struct VVTermApp: App {
     init() {
         TerminalDefaults.applyIfNeeded()
+        #if os(iOS)
+        VVTermLauncherWidgetRefresh.refreshIfNeeded()
+        #endif
     }
 
     #if os(macOS)
@@ -171,6 +177,21 @@ struct VVTermApp: App {
         #endif
     }
 }
+
+#if os(iOS)
+private enum VVTermLauncherWidgetRefresh {
+    private static let renderingRevision = 1
+    private static let renderingRevisionKey = "launcherWidgetRenderingRevision"
+
+    static func refreshIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.integer(forKey: renderingRevisionKey) < renderingRevision else { return }
+
+        WidgetCenter.shared.reloadTimelines(ofKind: VVTermWidgetKind.launcher)
+        defaults.set(renderingRevision, forKey: renderingRevisionKey)
+    }
+}
+#endif
 
 private extension VVTermApp {
     static func makeRemoteFileBrowserStore() -> RemoteFileBrowserStore {
