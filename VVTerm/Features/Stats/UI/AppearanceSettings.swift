@@ -1,5 +1,28 @@
 import SwiftUI
 
+struct StatsAppearanceSettingsSheet: View {
+    var body: some View {
+        #if os(macOS)
+        StatsDetailShell(
+            String(localized: "Stats Appearance"),
+            systemImage: "slider.horizontal.3",
+            tint: .blue
+        ) {
+            AppearanceSettings()
+        }
+        #else
+        NavigationStack {
+            AppearanceSettings()
+                .navigationTitle(Text("Stats Appearance"))
+                .navigationBarTitleDisplayMode(.inline)
+                .statsSheetCloseToolbar(placement: .leading)
+        }
+        .presentationDetents([.large])
+        .adaptiveSoftScrollEdges()
+        #endif
+    }
+}
+
 struct AppearanceSettings: View {
     @StateObject private var store = PreferencesStore.shared
     @State private var preferences: StatsPreferences

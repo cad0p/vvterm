@@ -58,29 +58,7 @@ struct ServerStatsView: View {
         )
         .proUpgradePresentation(isPresented: $isShowingDockerUpgrade, source: .dockerStats)
         .statsDetailPresentation(isPresented: $isShowingAppearanceSettings, size: StatsPresentationSize.large) {
-            appearanceSettingsContent
+            StatsAppearanceSettingsSheet()
         }
-    }
-
-    @ViewBuilder
-    private var appearanceSettingsContent: some View {
-        #if os(macOS)
-        StatsDetailShell(
-            String(localized: "Stats Appearance"),
-            systemImage: "slider.horizontal.3",
-            tint: .blue
-        ) {
-            AppearanceSettings()
-        }
-        #else
-        NavigationStack {
-            AppearanceSettings()
-                .navigationTitle(Text("Stats Appearance"))
-                .navigationBarTitleDisplayMode(.inline)
-                .statsSheetCloseToolbar(placement: .leading)
-        }
-        .presentationDetents([.large])
-        .adaptiveSoftScrollEdges()
-        #endif
     }
 }

@@ -271,6 +271,7 @@ struct GeneralSettingsView: View {
     @AppStorage(AnalyticsTracker.enabledKey) private var analyticsEnabled = true
     @EnvironmentObject private var appLockManager: AppLockManager
     @StateObject private var viewTabConfig = ViewTabConfigurationManager.shared
+    @State private var isShowingStatsAppearance = false
 
     private let authGraceOptions = [0, 15, 30, 60, 120, 300]
 
@@ -350,12 +351,14 @@ struct GeneralSettingsView: View {
             }
 
             Section(String(localized: "Stats")) {
-                NavigationLink {
-                    AppearanceSettings()
-                        .navigationTitle(Text("Stats Appearance"))
+                Button {
+                    isShowingStatsAppearance = true
                 } label: {
                     Label(String(localized: "Stats Appearance"), systemImage: "chart.bar.xaxis")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
 
             Section {
@@ -421,6 +424,12 @@ struct GeneralSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+        }
+        .statsDetailPresentation(
+            isPresented: $isShowingStatsAppearance,
+            size: StatsPresentationSize.large
+        ) {
+            StatsAppearanceSettingsSheet()
         }
         .formStyle(.grouped)
         .onAppear {
