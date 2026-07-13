@@ -50,6 +50,12 @@ extension ConnectionTerminalContainer {
             content
         }
         .background(backgroundColor.ignoresSafeArea(.all))
+        .modifier(
+            TerminalKeyboardSafeAreaModifier(
+                isEnabled: preservesTerminalSizeForKeyboard
+                    && selectedView == ConnectionViewTab.terminal.id
+            )
+        )
     }
 
     @ViewBuilder
@@ -146,6 +152,19 @@ extension ConnectionTerminalContainer {
         }
 
         return String(localized: "All terminal tabs for this server will be closed.")
+    }
+}
+
+private struct TerminalKeyboardSafeAreaModifier: ViewModifier {
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.ignoresSafeArea(.keyboard, edges: .bottom)
+        } else {
+            content
+        }
     }
 }
 

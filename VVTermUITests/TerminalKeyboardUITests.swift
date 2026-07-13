@@ -131,13 +131,65 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchKeyboardHarness() -> XCUIApplication {
+    func testDefaultKeyboardAvoidanceResizesTerminalGrid() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        app.buttons["vvterm.keyboardTest.hideViaToolbar"].tap()
+        assertKeyboardAndAccessoryHidden(in: app)
+        let expandedRows = try requiredDiagnosticMetric("gridRows", in: app)
+
+        app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+        waitForDiagnosticMetrics(in: app) { metrics in
+            guard let rows = metrics["gridRows"] else { return false }
+            return rows < expandedRows
+        }
+    }
+
+    @MainActor
+    func testPreservedTerminalGridMovesCursorAboveKeyboard() throws {
+        let app = launchKeyboardHarness(preservesTerminalSize: true)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        app.buttons["vvterm.keyboardTest.hideViaToolbar"].tap()
+        assertKeyboardAndAccessoryHidden(in: app)
+        let expandedRows = try requiredDiagnosticMetric("gridRows", in: app)
+        let restingTerminalTop = try requiredDiagnosticMetric("terminalTop", in: app)
+
+        app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+        app.buttons["vvterm.keyboardTest.cursor.bottom"].tap()
+
+        waitForDiagnosticMetrics(in: app) { metrics in
+            guard let rows = metrics["gridRows"],
+                  let terminalTop = metrics["terminalTop"],
+                  let cursorBottom = metrics["cursorBottom"],
+                  let keyboardTop = metrics["keyboardTop"]
+            else {
+                return false
+            }
+            return rows == expandedRows
+                && terminalTop < restingTerminalTop
+                && cursorBottom <= keyboardTop
+        }
+    }
+
+    @MainActor
+    private func launchKeyboardHarness(preservesTerminalSize: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "--vvterm-ui-test-terminal-keyboard-harness",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US"
         ]
+        if preservesTerminalSize {
+            app.launchArguments.append("--vvterm-ui-test-preserve-terminal-size")
+        }
         app.launch()
 
         let ready = app.staticTexts["vvterm.keyboardTest.ready"]
@@ -250,5 +302,49 @@ final class TerminalKeyboardUITests: XCTestCase {
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
         guard diagnostics.exists else { return "diagnostics=<missing>" }
         return "diagnostics=\(diagnostics.label)"
+    }
+
+    private func requiredDiagnosticMetric(
+        _ name: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> Double {
+        let metrics = diagnosticMetrics(in: app)
+        guard let value = metrics[name] else {
+            XCTFail("Missing diagnostic metric \(name). \(diagnosticsText(in: app))", file: file, line: line)
+            throw DiagnosticMetricError.missing(name)
+        }
+        return value
+    }
+
+    private func waitForDiagnosticMetrics(
+        in app: XCUIApplication,
+        timeout: TimeInterval = 8,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        predicate: ([String: Double]) -> Bool
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate(diagnosticMetrics(in: app)) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTFail("Timed out waiting for terminal geometry. \(diagnosticsText(in: app))", file: file, line: line)
+    }
+
+    private func diagnosticMetrics(in app: XCUIApplication) -> [String: Double] {
+        let label = app.staticTexts["vvterm.keyboardTest.diagnostics"].label
+        return label.split(separator: " ").reduce(into: [:]) { result, token in
+            let parts = token.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, let value = Double(parts[1]) else { return }
+            result[String(parts[0])] = value
+        }
+    }
+
+    private enum DiagnosticMetricError: Error {
+        case missing(String)
     }
 }

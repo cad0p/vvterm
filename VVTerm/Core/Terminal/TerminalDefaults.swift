@@ -131,6 +131,7 @@ enum TerminalDefaults {
     static let cursorBlinkKey = "terminalCursorBlink"
     static let sshAutoReconnectKey = "sshAutoReconnect"
     static let optionAsAltModeKey = "terminalOptionAsAltMode"
+    static let preserveTerminalSizeForKeyboardKey = "terminalPreserveSizeForKeyboard"
     static let legacyDefaultFontName = "JetBrainsMono Nerd Font"
     static let minimumFontSize = 4.0
     static let maximumFontSize = 32.0

@@ -32,6 +32,7 @@ private struct TerminalKeyboardSettingsSection: View {
     let accessoryCustomizationEnabled: Bool
     @Binding var keyboardDismissButtonEnabled: Bool
     @AppStorage(TerminalDefaults.optionAsAltModeKey) private var optionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
+    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var preserveTerminalSizeForKeyboard = false
 
     private var optionAsAltModeBinding: Binding<TerminalOptionAsAltMode> {
         Binding(
@@ -47,6 +48,8 @@ private struct TerminalKeyboardSettingsSection: View {
                     Text(mode.displayName).tag(mode)
                 }
             }
+
+            Toggle("Keep terminal size when keyboard opens", isOn: $preserveTerminalSizeForKeyboard)
 
             if accessoryCustomizationEnabled {
                 Toggle("Show keyboard dismiss button", isOn: $keyboardDismissButtonEnabled)
@@ -66,9 +69,12 @@ private struct TerminalKeyboardSettingsSection: View {
         } header: {
             Text("Keyboard")
         } footer: {
-            Text("Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters.")
+                Text("Keeping the terminal size prevents keyboard-driven window resizes in remote apps such as tmux. VVTerm moves the terminal to keep the cursor visible instead.")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 }

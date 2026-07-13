@@ -29,6 +29,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     /// is on screen or animating in. Used to clear the terminal's accessory
     /// suppression once UIKit proves the keyboard is really present.
     @Published private(set) var isSoftwareKeyboardVisible = false
+    /// The observed software-keyboard frame in the screen coordinate space.
+    /// Layout consumers convert this into their own window before using it.
+    @Published private(set) var softwareKeyboardEndFrame: CGRect?
+    private(set) var keyboardAnimationDuration: TimeInterval = 0.25
+    private(set) var keyboardAnimationCurve: UIView.AnimationCurve = .easeInOut
 
     var terminalProvider: ((UUID) -> GhosttyTerminalView?)?
 
@@ -71,8 +76,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?
                         .cgRectValue
+                    let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval
+                    let curveRawValue = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
                     Task { @MainActor [weak self] in
-                        self?.noteKeyboardEndFrame(frame)
+                        self?.noteKeyboardEndFrame(
+                            frame,
+                            animationDuration: duration,
+                            animationCurveRawValue: curveRawValue
+                        )
                     }
                 }
             )
@@ -82,9 +93,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             UIResponder.keyboardDidHideNotification,
         ] {
             keyboardObservers.append(
-                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval
+                    let curveRawValue = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
                     Task { @MainActor [weak self] in
-                        self?.noteSoftwareKeyboardVisible(false)
+                        self?.noteSoftwareKeyboardHidden(
+                            animationDuration: duration,
+                            animationCurveRawValue: curveRawValue
+                        )
                     }
                 }
             )
@@ -207,8 +223,13 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         markDirty(reason: "directTouch")
     }
 
-    private func noteKeyboardEndFrame(_ frame: CGRect?) {
+    private func noteKeyboardEndFrame(
+        _ frame: CGRect?,
+        animationDuration: TimeInterval?,
+        animationCurveRawValue: Int?
+    ) {
         guard let frame else { return }
+        updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
         guard let screenBounds = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.screen.bounds })
             .first(where: { $0.intersects(frame) }) ?? (UIApplication.shared.connectedScenes
@@ -216,7 +237,29 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         else { return }
         let overlap = screenBounds.intersection(frame)
         let visible = !overlap.isNull && overlap.height >= softwareKeyboardMinimumHeight
+        let visibleFrame = visible ? frame : nil
+        if softwareKeyboardEndFrame != visibleFrame {
+            softwareKeyboardEndFrame = visibleFrame
+        }
         noteSoftwareKeyboardVisible(visible)
+    }
+
+    private func noteSoftwareKeyboardHidden(
+        animationDuration: TimeInterval?,
+        animationCurveRawValue: Int?
+    ) {
+        updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
+        softwareKeyboardEndFrame = nil
+        noteSoftwareKeyboardVisible(false)
+    }
+
+    private func updateKeyboardAnimation(duration: TimeInterval?, curveRawValue: Int?) {
+        if let duration, duration > 0 {
+            keyboardAnimationDuration = duration
+        }
+        if let curveRawValue, let curve = UIView.AnimationCurve(rawValue: curveRawValue) {
+            keyboardAnimationCurve = curve
+        }
     }
 
     private func noteSoftwareKeyboardVisible(_ visible: Bool) {

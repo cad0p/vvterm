@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import Foundation
 import SwiftUI
 import UIKit
@@ -10,6 +11,199 @@ extension View {
         splitActions: TerminalSplitActions?
     ) -> some View {
         self
+    }
+
+    func terminalKeyboardAvoidance(
+        focusedPaneId: UUID?,
+        paneIds: [UUID],
+        terminalRegistryVersion: Int,
+        terminalProvider: @escaping (UUID) -> GhosttyTerminalView?,
+        enabledOverride: Bool? = nil
+    ) -> some View {
+        modifier(
+            TerminalKeyboardAvoidanceModifier(
+                focusedPaneId: focusedPaneId,
+                paneIds: paneIds,
+                terminalRegistryVersion: terminalRegistryVersion,
+                terminalProvider: terminalProvider,
+                enabledOverride: enabledOverride
+            )
+        )
+    }
+}
+
+@MainActor
+private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
+    @Published private(set) var verticalOffset: CGFloat = 0
+
+    private weak var terminal: GhosttyTerminalView?
+    private var keyboardFrame: CGRect?
+    private var cursorRect: CGRect = .zero
+
+    func update(
+        enabled: Bool,
+        terminal newTerminal: GhosttyTerminalView?,
+        keyboardFrame: CGRect?,
+        animation: Animation?
+    ) {
+        self.keyboardFrame = keyboardFrame
+
+        guard enabled, let newTerminal else {
+            detachTerminal()
+            setVerticalOffset(0, animation: animation)
+            return
+        }
+
+        if terminal !== newTerminal {
+            detachTerminal()
+            terminal = newTerminal
+            newTerminal.onKeyboardAvoidanceCursorRectChange = { [weak self, weak newTerminal] cursorRect in
+                guard let self, let newTerminal, self.terminal === newTerminal else { return }
+                self.cursorRect = cursorRect
+                self.recalculate(animation: .easeOut(duration: 0.12))
+            }
+        }
+
+        newTerminal.setKeyboardAvoidanceSizePreservationEnabled(keyboardFrame != nil)
+        cursorRect = newTerminal.keyboardAvoidanceCursorRect()
+        recalculate(animation: animation)
+    }
+
+    func detach() {
+        detachTerminal()
+        verticalOffset = 0
+    }
+
+    private func detachTerminal() {
+        terminal?.disableKeyboardAvoidanceSizePreservation()
+        terminal?.onKeyboardAvoidanceCursorRectChange = nil
+        terminal = nil
+        cursorRect = .zero
+    }
+
+    private func recalculate(animation: Animation?) {
+        guard let terminal, let window = terminal.window else {
+            setVerticalOffset(0, animation: animation)
+            return
+        }
+
+        let currentTerminalFrame = terminal.convert(terminal.keyboardAvoidanceTerminalRect(), to: window)
+        let currentCursorFrame = terminal.convert(cursorRect, to: window)
+        let baseTerminalFrame = currentTerminalFrame.offsetBy(dx: 0, dy: -verticalOffset)
+        let baseCursorFrame = currentCursorFrame.offsetBy(dx: 0, dy: -verticalOffset)
+        let keyboardFrameInWindow = keyboardFrame.map {
+            window.convert($0, from: window.screen.coordinateSpace)
+        }
+        let newOffset = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: baseTerminalFrame,
+            cursorFrame: baseCursorFrame,
+            keyboardFrame: keyboardFrameInWindow
+        )
+        setVerticalOffset(newOffset, animation: animation)
+    }
+
+    private func setVerticalOffset(_ newValue: CGFloat, animation: Animation?) {
+        guard abs(verticalOffset - newValue) >= 0.5 else { return }
+        if let animation {
+            withAnimation(animation) {
+                verticalOffset = newValue
+            }
+        } else {
+            verticalOffset = newValue
+        }
+    }
+}
+
+private struct TerminalKeyboardAvoidanceModifier: ViewModifier {
+    let focusedPaneId: UUID?
+    let paneIds: [UUID]
+    let terminalRegistryVersion: Int
+    let terminalProvider: (UUID) -> GhosttyTerminalView?
+    let enabledOverride: Bool?
+
+    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var storedEnabled = false
+    @ObservedObject private var keyboardCoordinator: TerminalKeyboardCoordinator
+    @StateObject private var model = TerminalKeyboardAvoidanceViewModel()
+
+    init(
+        focusedPaneId: UUID?,
+        paneIds: [UUID],
+        terminalRegistryVersion: Int,
+        terminalProvider: @escaping (UUID) -> GhosttyTerminalView?,
+        enabledOverride: Bool?
+    ) {
+        self.focusedPaneId = focusedPaneId
+        self.paneIds = paneIds
+        self.terminalRegistryVersion = terminalRegistryVersion
+        self.terminalProvider = terminalProvider
+        self.enabledOverride = enabledOverride
+        _keyboardCoordinator = ObservedObject(
+            wrappedValue: TerminalTabManager.shared.keyboardCoordinator
+        )
+    }
+
+    private var isEnabled: Bool {
+        enabledOverride ?? storedEnabled
+    }
+
+    func body(content: Content) -> some View {
+        Group {
+            if isEnabled {
+                content
+                    .offset(y: model.verticalOffset)
+                    .clipped()
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
+            } else {
+                content
+            }
+        }
+        .onAppear {
+            refresh(animation: nil)
+        }
+        .onDisappear {
+            for paneId in paneIds {
+                terminalProvider(paneId)?.onKeyboardAvoidanceCursorRectChange = nil
+            }
+            model.detach()
+        }
+        .onChange(of: isEnabled) { _ in
+            refresh(animation: keyboardAnimation)
+        }
+        .onChange(of: focusedPaneId) { _ in
+            refresh(animation: .easeOut(duration: 0.12))
+        }
+        .onChange(of: terminalRegistryVersion) { _ in
+            refresh(animation: nil)
+        }
+        .onChange(of: keyboardCoordinator.softwareKeyboardEndFrame) { _ in
+            refresh(animation: keyboardAnimation)
+        }
+    }
+
+    private var keyboardAnimation: Animation {
+        let duration = keyboardCoordinator.keyboardAnimationDuration
+        switch keyboardCoordinator.keyboardAnimationCurve {
+        case .easeIn:
+            return .easeIn(duration: duration)
+        case .easeOut:
+            return .easeOut(duration: duration)
+        case .linear:
+            return .linear(duration: duration)
+        case .easeInOut:
+            return .easeInOut(duration: duration)
+        @unknown default:
+            return .easeInOut(duration: duration)
+        }
+    }
+
+    private func refresh(animation: Animation?) {
+        let terminal = focusedPaneId.flatMap(terminalProvider)
+        model.update(
+            enabled: isEnabled,
+            terminal: terminal,
+            keyboardFrame: keyboardCoordinator.softwareKeyboardEndFrame,
+            animation: animation
+        )
     }
 }
 

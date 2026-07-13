@@ -4,6 +4,8 @@ import SwiftUI
 import UIKit
 
 struct TerminalKeyboardUITestHarness: View {
+    private static let paneId = UUID(uuidString: "B54F29D8-7C3E-4DB8-B3D7-9D9F1604B755")!
+
     @EnvironmentObject private var ghosttyApp: Ghostty.App
     @State private var terminalView: GhosttyTerminalView?
     @State private var terminalReady = false
@@ -11,7 +13,12 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var focusRequestID = 0
     @State private var keyboardVisible = false
     @State private var keyboardHeight: CGFloat = 0
+    @State private var keyboardFrame: CGRect?
     @State private var diagnostics = "notReady"
+
+    private var preservesTerminalSize: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-preserve-terminal-size")
+    }
 
     private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
@@ -23,7 +30,14 @@ struct TerminalKeyboardUITestHarness: View {
                     terminalReady: $terminalReady,
                     focusRequestID: focusRequestID
                 )
-                .ignoresSafeArea()
+                .terminalKeyboardAvoidance(
+                    focusedPaneId: Self.paneId,
+                    paneIds: [Self.paneId],
+                    terminalRegistryVersion: terminalView == nil ? 0 : 1,
+                    terminalProvider: { _ in terminalView },
+                    enabledOverride: preservesTerminalSize
+                )
+                .ignoresSafeArea(.container)
                 .accessibilityIdentifier("vvterm.keyboardTest.container")
             } else {
                 nonTerminalSurface
@@ -103,6 +117,11 @@ struct TerminalKeyboardUITestHarness: View {
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.hardware.detach")
                 }
+
+                Button("Cursor Bottom") {
+                    terminalView?.keyboardUITestMoveCursorToBottom()
+                }
+                .accessibilityIdentifier("vvterm.keyboardTest.cursor.bottom")
             }
             .font(.system(size: 12, weight: .semibold))
             .padding(.horizontal, 10)
@@ -129,11 +148,13 @@ struct TerminalKeyboardUITestHarness: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardVisible = false
             keyboardHeight = 0
+            keyboardFrame = nil
             refreshDiagnostics()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
             keyboardVisible = false
             keyboardHeight = 0
+            keyboardFrame = nil
             refreshDiagnostics()
         }
     }
@@ -155,6 +176,7 @@ struct TerminalKeyboardUITestHarness: View {
         let height = overlap.isNull ? 0 : overlap.height
         keyboardHeight = height
         keyboardVisible = height >= 100
+        keyboardFrame = keyboardVisible ? frame : nil
         refreshDiagnostics()
     }
 
@@ -166,7 +188,29 @@ struct TerminalKeyboardUITestHarness: View {
         diagnostics = terminalView.keyboardUITestDiagnostics(
             keyboardVisible: keyboardVisible,
             keyboardHeight: keyboardHeight
-        )
+        ) + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+    }
+
+    private func keyboardAvoidanceDiagnostics(for terminal: GhosttyTerminalView) -> String {
+        guard let window = terminal.window else {
+            return "preserveSize=\(preservesTerminalSize) terminalTop=unavailable cursorBottom=unavailable keyboardTop=unavailable"
+        }
+
+        let terminalFrame = terminal.convert(terminal.bounds, to: window)
+        let cursorFrame = terminal.convert(terminal.keyboardAvoidanceCursorRect(), to: window)
+        let keyboardTop = keyboardFrame.map {
+            window.convert($0, from: window.screen.coordinateSpace).minY
+        }
+        return [
+            "preserveSize=\(preservesTerminalSize)",
+            "terminalTop=\(metricText(terminalFrame.minY))",
+            "cursorBottom=\(metricText(cursorFrame.maxY))",
+            "keyboardTop=\(keyboardTop.map(metricText) ?? "none")"
+        ].joined(separator: " ")
+    }
+
+    private func metricText(_ value: CGFloat) -> String {
+        String(format: "%.1f", Double(value))
     }
 }
 

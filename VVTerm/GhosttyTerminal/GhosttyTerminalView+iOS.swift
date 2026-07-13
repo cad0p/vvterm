@@ -896,6 +896,13 @@ class GhosttyTerminalView: UIView {
     /// In custom I/O mode (SSH), the embedder should send a window-change.
     var onResize: ((Int, Int) -> Void)?
 
+    /// Optional UI-layer observer used by the opt-in keyboard viewport policy.
+    /// It is called only when the rendered cursor rect changes.
+    var onKeyboardAvoidanceCursorRectChange: ((CGRect) -> Void)?
+    private var keyboardAvoidancePreservedSurfaceSize: CGSize?
+    private var keyboardAvoidanceReferenceSurfaceSize: CGSize?
+    private var tracksKeyboardAvoidanceReferenceSize = false
+
     /// Callback invoked when a pinch gesture requests terminal pane zoom.
     var onZoomAction: ((TerminalZoomAction) -> TerminalZoomResult?)?
 
@@ -949,6 +956,7 @@ class GhosttyTerminalView: UIView {
     private var lastPixelSize: CGSize = .zero
     private var lastContentScale: CGFloat = 0
     private var lastReportedGrid: (cols: Int, rows: Int) = (0, 0)
+    private var lastKeyboardAvoidanceCursorRect: CGRect?
     /// Cell size in points for row-to-pixel conversion
     var cellSize: CGSize = .zero
 
@@ -1155,6 +1163,7 @@ class GhosttyTerminalView: UIView {
             ghostty_surface_refresh(surface)
             ghostty_surface_draw(surface)
             self.markIOSurfaceLayersForDisplay()
+            self.notifyKeyboardAvoidanceCursorRectIfNeeded()
         }
     }
 
@@ -1304,6 +1313,10 @@ class GhosttyTerminalView: UIView {
         onPwdChange = nil
         onProgressReport = nil
         onResize = nil
+        onKeyboardAvoidanceCursorRectChange = nil
+        keyboardAvoidancePreservedSurfaceSize = nil
+        keyboardAvoidanceReferenceSurfaceSize = nil
+        tracksKeyboardAvoidanceReferenceSize = false
         onWindowAttachmentChange = nil
         onTerminalDirectTouch = nil
         onKeyboardAccessoryHideRequested = nil
@@ -1460,16 +1473,21 @@ class GhosttyTerminalView: UIView {
     func sizeDidChange(_ size: CGSize) {
         if isShuttingDown { return }
         guard let surface = surface?.unsafeCValue else { return }
-        guard size.width > 0 && size.height > 0 else { return }
+        let surfaceSize = keyboardAvoidancePreservedSurfaceSize ?? size
+        guard surfaceSize.width > 0 && surfaceSize.height > 0 else { return }
 
         updateContentScaleIfNeeded()
-        configureIOSurfaceLayers(size: size)
+        configureIOSurfaceLayers(size: surfaceSize)
 
         let scale = self.contentScaleFactor
-        let pixelWidth = floor(size.width * scale)
-        let pixelHeight = floor(size.height * scale)
+        let pixelWidth = floor(surfaceSize.width * scale)
+        let pixelHeight = floor(surfaceSize.height * scale)
         guard pixelWidth > 0 && pixelHeight > 0 else { return }
         let pixelSize = CGSize(width: pixelWidth, height: pixelHeight)
+
+        if tracksKeyboardAvoidanceReferenceSize {
+            updateKeyboardAvoidanceReferenceSize(surfaceSize)
+        }
 
         let sizeChanged = pixelSize != lastPixelSize || scale != lastContentScale
         if sizeChanged {
@@ -1488,6 +1506,7 @@ class GhosttyTerminalView: UIView {
         if !isPaused {
             ghostty_surface_refresh(surface)
             ghostty_surface_draw(surface)
+            notifyKeyboardAvoidanceCursorRectIfNeeded()
             if usesNativeTouchSelection {
                 refreshNativeSelectionSnapshot()
             }
@@ -1742,6 +1761,66 @@ class GhosttyTerminalView: UIView {
             width: max(CGFloat(width), cellWidth),
             height: max(CGFloat(height), cellHeight)
         )
+    }
+
+    func keyboardAvoidanceCursorRect() -> CGRect {
+        textInputCaretRect(for: textInputModel.cursorIndex)
+    }
+
+    func setKeyboardAvoidanceSizePreservationEnabled(_ isEnabled: Bool) {
+        if isEnabled {
+            guard keyboardAvoidancePreservedSurfaceSize == nil else { return }
+            tracksKeyboardAvoidanceReferenceSize = false
+            keyboardAvoidancePreservedSurfaceSize = keyboardAvoidanceReferenceSurfaceSize
+                ?? renderedSurfaceSize
+            if let preservedSize = keyboardAvoidancePreservedSurfaceSize {
+                sizeDidChange(preservedSize)
+            }
+        } else {
+            tracksKeyboardAvoidanceReferenceSize = true
+            keyboardAvoidancePreservedSurfaceSize = nil
+            sizeDidChange(bounds.size)
+        }
+    }
+
+    func disableKeyboardAvoidanceSizePreservation() {
+        tracksKeyboardAvoidanceReferenceSize = false
+        keyboardAvoidanceReferenceSurfaceSize = nil
+        guard keyboardAvoidancePreservedSurfaceSize != nil else { return }
+        keyboardAvoidancePreservedSurfaceSize = nil
+        sizeDidChange(bounds.size)
+    }
+
+    func keyboardAvoidanceTerminalRect() -> CGRect {
+        CGRect(origin: .zero, size: keyboardAvoidancePreservedSurfaceSize ?? bounds.size)
+    }
+
+    private var renderedSurfaceSize: CGSize {
+        let scale = lastContentScale > 0 ? lastContentScale : contentScaleFactor
+        let size = CGSize(
+            width: scale > 0 ? lastPixelSize.width / scale : 0,
+            height: scale > 0 ? lastPixelSize.height / scale : 0
+        )
+        return size.width > 0 && size.height > 0 ? size : bounds.size
+    }
+
+    private func updateKeyboardAvoidanceReferenceSize(_ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        guard let reference = keyboardAvoidanceReferenceSurfaceSize else {
+            keyboardAvoidanceReferenceSurfaceSize = size
+            return
+        }
+        if abs(reference.width - size.width) >= 0.5 || size.height > reference.height {
+            keyboardAvoidanceReferenceSurfaceSize = size
+        }
+    }
+
+    private func notifyKeyboardAvoidanceCursorRectIfNeeded() {
+        guard let onKeyboardAvoidanceCursorRectChange else { return }
+        let cursorRect = keyboardAvoidanceCursorRect()
+        guard cursorRect != lastKeyboardAvoidanceCursorRect else { return }
+        lastKeyboardAvoidanceCursorRect = cursorRect
+        onKeyboardAvoidanceCursorRectChange(cursorRect)
     }
 
     // MARK: - UIView Overrides
@@ -5093,6 +5172,7 @@ extension GhosttyTerminalView {
         let snapshot = keyboardCoordinatorDiagnosticSnapshot()
         let accessoryAttached = keyboardToolbar?.window != nil
         let keyboardHeightText = String(format: "%.1f", Double(keyboardHeight))
+        let size = terminalSize()
         return [
             "windowAttached=\(snapshot.windowAttached)",
             "keyWindow=\(snapshot.windowIsKey)",
@@ -5103,6 +5183,8 @@ extension GhosttyTerminalView {
             "viewFirstResponder=\(super.isFirstResponder)",
             "keyboardVisible=\(keyboardVisible)",
             "keyboardHeight=\(keyboardHeightText)",
+            "gridCols=\(size.map { String($0.columns) } ?? "0")",
+            "gridRows=\(size.map { String($0.rows) } ?? "0")",
             "accessoryAttached=\(accessoryAttached)",
             "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
             "accessoryHidden=\(shouldHideKeyboardAccessoryBar)",
@@ -5115,6 +5197,11 @@ extension GhosttyTerminalView {
             "imeModelText=\(keyboardUITestToken(textInputModel.text))",
             "hideRequests=\(keyboardHideRequestCount)"
         ].joined(separator: " ")
+    }
+
+    func keyboardUITestMoveCursorToBottom() {
+        let lines = (0..<200).map { "line-\($0)" }.joined(separator: "\r\n") + "\r\n"
+        feedData(Data(lines.utf8))
     }
 
     func keyboardUITestSetMarkedText(_ text: String) {

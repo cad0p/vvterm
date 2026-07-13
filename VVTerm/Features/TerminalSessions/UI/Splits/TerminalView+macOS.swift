@@ -14,6 +14,15 @@ extension View {
             .focusedValue(\.activePaneId, activePaneId)
             .focusedSceneValue(\.terminalSplitActions, splitActions)
     }
+
+    func terminalKeyboardAvoidance(
+        focusedPaneId: UUID?,
+        paneIds: [UUID],
+        terminalRegistryVersion: Int,
+        terminalProvider: @escaping (UUID) -> GhosttyTerminalView?
+    ) -> some View {
+        self
+    }
 }
 
 // MARK: - SSH Terminal Pane Wrapper

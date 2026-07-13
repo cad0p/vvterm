@@ -106,6 +106,12 @@ struct TerminalTabView: View {
             activePaneId: isSelected ? tab.focusedPaneId : nil,
             splitActions: splitActions
         )
+        .terminalKeyboardAvoidance(
+            focusedPaneId: isSelected ? tab.focusedPaneId : nil,
+            paneIds: tab.allPaneIds,
+            terminalRegistryVersion: tabManager.terminalRegistryVersion,
+            terminalProvider: { tabManager.getTerminal(for: $0) }
+        )
         .alert("Close this terminal?", isPresented: $showingCloseConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Close", role: .destructive) {
