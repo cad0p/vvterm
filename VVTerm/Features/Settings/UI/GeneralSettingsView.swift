@@ -370,7 +370,18 @@ struct GeneralSettingsView: View {
             Section {
                 Toggle("Privacy Mode", isOn: $privacyModeEnabled)
 
-                Toggle("Help Improve VVTerm", isOn: $analyticsEnabled)
+                Toggle(
+                    "Help Improve VVTerm",
+                    isOn: Binding(
+                        get: { analyticsEnabled },
+                        set: { newValue in
+                            if analyticsEnabled && !newValue {
+                                AnalyticsTracker.shared.trackAnalyticsDisabled()
+                            }
+                            analyticsEnabled = newValue
+                        }
+                    )
+                )
 
                 Toggle(
                     String(format: String(localized: "Require %@ to open VVTerm"), appLockManager.biometryDisplayName),

@@ -132,6 +132,10 @@ final class AnalyticsTracker {
         send(name: "review_prompt_requested", url: "/app/review")
     }
 
+    func trackAnalyticsDisabled() {
+        send(name: "analytics_disabled", url: "/app/settings")
+    }
+
     // MARK: - Transport
 
     private func send(name: String, url: String, data: [String: JSONValue] = [:]) {
