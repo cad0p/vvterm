@@ -1225,7 +1225,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "Oprávnění složky určují, kdo může tuto složku prohlížet, měnit a vstupovat do ní.";
 "Font Size" = "Velikost písma";
 "Free" = "Zdarma";
-"Free covers one machine. Pro works across all of them." = "Zdarma pokrývá jeden stroj. Pro funguje napříč všemi.";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "Bezplatný plán umožňuje %lld aktivní připojení. Odpojte jiný server nebo upgradujte.";
 "From" = "Od";
 "Group" = "Skupina";
@@ -1499,7 +1498,6 @@
 "YAML Document" = "Dokument YAML";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "Nyní máte doživotní přístup. Abyste předešli poplatkům, měli byste zrušit své stávající předplatné.";
 "You now have unlimited access." = "Nyní máte neomezený přístup.";
-"You're connected" = "Jste připojeni";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "Dosáhli jste bezplatného limitu %@. Pro odemyká neomezený počet serverů, připojení a rozdělených panelů.";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "Dosáhli jste bezplatného limitu %@. Pro odemyká neomezené servery, pracovní prostory, současná připojení a rozdělené panely.";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "Dosáhli jste bezplatného limitu %lld pracovního prostoru. Pro odemyká neomezené pracovní prostory, servery, současná připojení a rozdělené panely.";

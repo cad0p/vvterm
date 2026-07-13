@@ -256,8 +256,7 @@ final class TerminalTabManager: ObservableObject {
         }
 
         EngagementTracker.shared.noteTerminalSessionEnded(
-            otherTerminalsActive: hasConnectedPanes,
-            isPro: StoreManager.shared.isPro
+            otherTerminalsActive: hasConnectedPanes
         )
 
         logger.info("Closed tab \(tab.id)")

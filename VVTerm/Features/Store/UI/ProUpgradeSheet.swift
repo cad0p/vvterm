@@ -663,8 +663,6 @@ extension PaywallSource {
             return String(localized: "Unlock custom environments")
         case .snippetLimit:
             return String(localized: "Unlock unlimited custom actions")
-        case .postFirstConnection:
-            return String(localized: "You're connected")
         case .welcome:
             return String(localized: "VVTerm Pro")
         case .dockerStats:
@@ -690,8 +688,6 @@ extension PaywallSource {
             return String(localized: "Organize servers with your own environments.")
         case .snippetLimit:
             return String(localized: "Keep every command one tap away.")
-        case .postFirstConnection:
-            return String(localized: "Free covers one machine. Pro works across all of them.")
         case .dockerStats:
             return String(localized: "Track containers, health, CPU, memory, and network from Stats.")
         }

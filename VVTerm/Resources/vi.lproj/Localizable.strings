@@ -1269,7 +1269,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "Kiểm soát quyền của thư mục ai có thể xem, thay đổi và nhập thư mục này.";
 "Font Size" = "Cỡ chữ";
 "Free" = "miễn phí";
-"Free covers one machine. Pro works across all of them." = "Miễn phí bao gồm một máy. Pro hoạt động trên tất cả chúng.";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "Gói miễn phí cho phép %lld kết nối hoạt động. Ngắt kết nối máy chủ khác hoặc nâng cấp.";
 "From" = "Từ";
 "Group" = "Nhóm";
@@ -1543,7 +1542,6 @@
 "YAML Document" = "Tài liệu YAML";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "Bây giờ bạn có quyền truy cập trọn đời. Bạn nên hủy đăng ký hiện tại để tránh bị tính phí.";
 "You now have unlimited access." = "Bây giờ bạn có quyền truy cập không giới hạn.";
-"You're connected" = "Bạn đã kết nối";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "Bạn đã đạt đến giới hạn miễn phí %@. Pro mở khóa máy chủ, kết nối và bảng phân chia không giới hạn.";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "Bạn đã đạt đến giới hạn miễn phí %@. Pro mở khóa không giới hạn máy chủ, không gian làm việc, kết nối đồng thời và bảng phân chia.";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "Bạn đã đạt đến giới hạn không gian làm việc %lld miễn phí. Pro mở khóa không gian làm việc, máy chủ, kết nối đồng thời và bảng phân chia không giới hạn.";

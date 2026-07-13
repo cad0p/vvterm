@@ -1223,7 +1223,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "Folder permissions control who can view, change, and enter this folder.";
 "Font Size" = "Font Size";
 "Free" = "Free";
-"Free covers one machine. Pro works across all of them." = "Free covers one machine. Pro works across all of them.";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "Free plan allows %lld active connection. Disconnect another server or upgrade.";
 "From" = "From";
 "Group" = "Group";
@@ -1497,7 +1496,6 @@
 "YAML Document" = "YAML Document";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "You now have lifetime access. You should cancel your existing subscription to avoid being charged.";
 "You now have unlimited access." = "You now have unlimited access.";
-"You're connected" = "You're connected";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes.";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes.";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes.";

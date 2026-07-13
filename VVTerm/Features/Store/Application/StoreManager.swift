@@ -79,9 +79,6 @@ final class StoreManager: ObservableObject {
         activePaywallSource = source
         hasPresentedPaywallThisLaunch = true
         EngagementTracker.shared.notePaywallPresented()
-        if source == .postFirstConnection {
-            EngagementTracker.shared.markProIntroShown()
-        }
         AnalyticsTracker.shared.trackPaywallViewed(source: source.rawValue)
     }
 

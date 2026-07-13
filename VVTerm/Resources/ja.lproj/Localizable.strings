@@ -1224,7 +1224,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "フォルダーのアクセス許可は、このフォルダーを表示、変更、および入力できるユーザーを制御します。";
 "Font Size" = "フォントサイズ";
 "Free" = "無料";
-"Free covers one machine. Pro works across all of them." = "無料で 1 台のマシンがカバーされます。 Pro はそれらすべてに対応します。";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "無料プランでは %lld アクティブ接続が可能です。別のサーバーを切断するか、アップグレードします。";
 "From" = "から";
 "Group" = "グループ";
@@ -1498,7 +1497,6 @@
 "YAML Document" = "YAMLドキュメント";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "これで生涯アクセスできるようになりました。請求を避けるには、既存のサブスクリプションをキャンセルする必要があります。";
 "You now have unlimited access." = "これで無制限にアクセスできるようになりました。";
-"You're connected" = "つながっています";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "無料制限の %@ に達しました。 Pro では、無制限のサーバー、接続、分割ペインのロックが解除されます。";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "無料制限の %@ に達しました。 Pro では、無制限のサーバー、ワークスペース、同時接続、分割ペインのロックが解除されます。";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "%lld ワークスペースの無料制限に達しました。 Pro では、無制限のワークスペース、サーバー、同時接続、分割ペインのロックが解除されます。";

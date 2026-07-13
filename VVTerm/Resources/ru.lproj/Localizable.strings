@@ -1224,7 +1224,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "Разрешения для папки определяют, кто может просматривать, изменять и входить в эту папку.";
 "Font Size" = "Размер шрифта";
 "Free" = "Бесплатно";
-"Free covers one machine. Pro works across all of them." = "Бесплатно покрывает одну машину. Pro работает во всех из них.";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "Бесплатный план допускает активное соединение %lld. Отключите другой сервер или обновите его.";
 "From" = "От";
 "Group" = "Группа";
@@ -1498,7 +1497,6 @@
 "YAML Document" = "YAML-документ";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "Теперь у вас есть пожизненный доступ. Вам следует отменить существующую подписку, чтобы избежать списания средств.";
 "You now have unlimited access." = "Теперь у вас есть неограниченный доступ.";
-"You're connected" = "Вы подключены";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "Вы достигли бесплатного лимита %@. Pro открывает неограниченное количество серверов, подключений и разделенных панелей.";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "Вы достигли бесплатного лимита %@. Pro открывает неограниченное количество серверов, рабочих пространств, одновременных подключений и разделенных панелей.";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "Вы достигли бесплатного лимита рабочей области %lld. Pro открывает неограниченное количество рабочих пространств, серверов, одновременных подключений и разделенных панелей.";

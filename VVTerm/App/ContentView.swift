@@ -301,7 +301,6 @@ struct ContentView: View {
     var body: some View {
         #if os(macOS)
         macShellContent
-            .proUpgradePresentation(isPresented: $engagementTracker.shouldShowProIntro, source: .postFirstConnection)
             .onChange(of: engagementTracker.reviewRequestToken) { _ in
                 requestReview()
             }

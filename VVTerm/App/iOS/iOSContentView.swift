@@ -140,12 +140,10 @@ struct iOSContentView: View {
             }
         }
         .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
-        .proUpgradePresentation(isPresented: $engagementTracker.shouldShowProIntro, source: .postFirstConnection)
         .onChange(of: showingTerminal) { isShowing in
             if !isShowing {
                 engagementTracker.noteTerminalSessionEnded(
-                    otherTerminalsActive: false,
-                    isPro: StoreManager.shared.isPro
+                    otherTerminalsActive: false
                 )
             }
         }

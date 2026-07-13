@@ -1226,7 +1226,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "Les autorisations de dossier contrôlent qui peut afficher, modifier et accéder à ce dossier.";
 "Font Size" = "Taille de la police";
 "Free" = "Gratuit";
-"Free covers one machine. Pro works across all of them." = "Gratuit couvre une machine. Pro fonctionne sur tous.";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "Le forfait gratuit permet une connexion active %lld. Déconnectez un autre serveur ou effectuez une mise à niveau.";
 "From" = "De";
 "Group" = "Groupe";
@@ -1500,7 +1499,6 @@
 "YAML Document" = "Document YAML";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "Vous avez désormais un accès à vie. Vous devez annuler votre abonnement existant pour éviter d'être facturé.";
 "You now have unlimited access." = "Vous disposez désormais d'un accès illimité.";
-"You're connected" = "Vous êtes connecté";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "Vous avez atteint la limite gratuite de %@. Pro déverrouille un nombre illimité de serveurs, de connexions et de volets divisés.";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "Vous avez atteint la limite gratuite de %@. Pro déverrouille un nombre illimité de serveurs, d'espaces de travail, de connexions simultanées et de volets divisés.";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "Vous avez atteint la limite gratuite de %lld espace de travail. Pro déverrouille un nombre illimité d'espaces de travail, de serveurs, de connexions simultanées et de volets divisés.";

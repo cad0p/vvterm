@@ -1221,7 +1221,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "文件夹权限控制谁可以查看、更改和进入该文件夹。";
 "Font Size" = "字体大小";
 "Free" = "免费";
-"Free covers one machine. Pro works across all of them." = "免费版适用于一台设备。Pro 可覆盖所有设备。";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "免费计划允许 %lld 主动连接。断开另一台服务器的连接或升级。";
 "From" = "从";
 "Group" = "集团";
@@ -1495,7 +1494,6 @@
 "YAML Document" = "YAML 文档";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "你现在已拥有终身访问权限。请取消现有订阅，以免继续扣费。";
 "You now have unlimited access." = "你现在已拥有无限访问权限。";
-"You're connected" = "已连接";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "您已达到 %@ 的免费限制。 Pro 解锁无限的服务器、连接和分割窗格。";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "您已达到 %@ 的免费限制。 Pro 可解锁无限的服务器、工作区、同时连接和分割窗格。";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "您已达到 %lld 工作区的免费限制。 Pro 可解锁无限的工作区、服务器、同时连接和分割窗格。";

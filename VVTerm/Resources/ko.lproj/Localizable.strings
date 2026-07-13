@@ -1223,7 +1223,6 @@
 "Folder permissions control who can view, change, and enter this folder." = "폴더 권한은 이 폴더를 보고, 변경하고, 들어갈 수 있는 사람을 제어합니다.";
 "Font Size" = "글꼴 크기";
 "Free" = "무료";
-"Free covers one machine. Pro works across all of them." = "한 대의 기계에 무료로 적용됩니다. Pro는 모든 기능에서 작동합니다.";
 "Free plan allows %lld active connection. Disconnect another server or upgrade." = "무료 플랜에서는 %lld 활성 연결을 허용합니다. 다른 서버의 연결을 끊거나 업그레이드하세요.";
 "From" = "에서";
 "Group" = "그룹";
@@ -1497,7 +1496,6 @@
 "YAML Document" = "YAML 문서";
 "You now have lifetime access. You should cancel your existing subscription to avoid being charged." = "이제 평생 이용 가능합니다. 요금이 청구되지 않도록 하려면 기존 구독을 취소해야 합니다.";
 "You now have unlimited access." = "이제 무제한으로 액세스할 수 있습니다.";
-"You're connected" = "연결되었습니다";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, connections, and split panes." = "무료 한도인 %@에 도달했습니다. Pro는 무제한 서버, 연결 및 분할 창을 잠금 해제합니다.";
 "You've reached the free limit of %@. Pro unlocks unlimited servers, workspaces, simultaneous connections, and split panes." = "무료 한도인 %@에 도달했습니다. Pro는 무제한 서버, 작업 공간, 동시 연결 및 분할 창을 잠금 해제합니다.";
 "You've reached the free limit of %lld workspace. Pro unlocks unlimited workspaces, servers, simultaneous connections, and split panes." = "%lld 작업 공간의 무료 한도에 도달했습니다. Pro는 무제한 작업 공간, 서버, 동시 연결 및 분할 창을 잠금 해제합니다.";
