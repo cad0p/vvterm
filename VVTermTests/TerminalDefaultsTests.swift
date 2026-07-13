@@ -42,6 +42,19 @@ struct TerminalDefaultsTests {
     }
 
     @Test
+    func optionAsAltModeDefaultsToNeitherAndResolvesStoredSides() {
+        let defaults = makeDefaults()
+
+        #expect(TerminalDefaults.optionAsAltMode(defaults: defaults) == .none)
+        defaults.set(TerminalOptionAsAltMode.left.rawValue, forKey: TerminalDefaults.optionAsAltModeKey)
+        #expect(TerminalDefaults.optionAsAltMode(defaults: defaults) == .left)
+        #expect(TerminalOptionAsAltMode.left.usesOptionKeyAsAlt(.left))
+        #expect(!TerminalOptionAsAltMode.left.usesOptionKeyAsAlt(.right))
+        #expect(TerminalOptionAsAltMode.both.usesOptionKeyAsAlt(.left))
+        #expect(TerminalOptionAsAltMode.both.usesOptionKeyAsAlt(.right))
+    }
+
+    @Test
     func applyIfNeededNormalizesBlankFontNameWithoutOverwritingExistingFontSize() {
         let defaults = makeDefaults()
 

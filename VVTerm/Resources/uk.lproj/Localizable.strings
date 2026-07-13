@@ -1574,3 +1574,9 @@
 "Restart Container" = "Перезапустити контейнер";
 "Start Container" = "Запустити контейнер";
 "Stop Container" = "Зупинити контейнер";
+"Option as Alt" = "Option як Alt";
+"Neither Option Key" = "Жодна клавіша Option";
+"Left Option Key" = "Ліва клавіша Option";
+"Right Option Key" = "Права клавіша Option";
+"Both Option Keys" = "Обидві клавіші Option";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "Виберіть фізичну клавішу Option, яка надсилає Alt до термінальних програм. Інші клавіші Option залишаються доступними для символів розкладки клавіатури.";

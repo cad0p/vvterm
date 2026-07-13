@@ -52,7 +52,8 @@ final class TerminalKeyboardUITests: XCTestCase {
     @MainActor
     func testKeyboardIsScopedToTerminalSurface() throws {
         let app = launchKeyboardHarness()
-        _ = waitForTerminal(in: app)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
         assertKeyboardAndAccessoryVisible(in: app)
 
         app.buttons["vvterm.keyboardTest.mode.other"].tap()
@@ -63,8 +64,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         assertKeyboardAndAccessoryHidden(in: app)
 
         app.buttons["vvterm.keyboardTest.mode.terminal"].tap()
-        let terminal = waitForTerminal(in: app)
-        terminal.tap()
+        _ = waitForTerminal(in: app)
         assertKeyboardAndAccessoryVisible(in: app)
     }
 

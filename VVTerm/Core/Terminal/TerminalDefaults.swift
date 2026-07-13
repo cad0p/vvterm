@@ -34,6 +34,37 @@ enum TerminalZoomAction {
     case reset
 }
 
+enum TerminalOptionAsAltMode: String, CaseIterable, Identifiable {
+    case none
+    case left
+    case right
+    case both
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .none: return String(localized: "Neither Option Key")
+        case .left: return String(localized: "Left Option Key")
+        case .right: return String(localized: "Right Option Key")
+        case .both: return String(localized: "Both Option Keys")
+        }
+    }
+
+    func usesOptionKeyAsAlt(_ side: TerminalOptionKeySide) -> Bool {
+        switch (self, side) {
+        case (.none, _): false
+        case (.left, .left), (.right, .right), (.both, _): true
+        default: false
+        }
+    }
+}
+
+enum TerminalOptionKeySide {
+    case left
+    case right
+}
+
 struct TerminalZoomResult: Hashable {
     let presentationOverrides: TerminalPresentationOverrides
     let effectiveFontSize: Double
@@ -99,6 +130,7 @@ enum TerminalDefaults {
     static let cursorStyleKey = "terminalCursorStyle"
     static let cursorBlinkKey = "terminalCursorBlink"
     static let sshAutoReconnectKey = "sshAutoReconnect"
+    static let optionAsAltModeKey = "terminalOptionAsAltMode"
     static let legacyDefaultFontName = "JetBrainsMono Nerd Font"
     static let minimumFontSize = 4.0
     static let maximumFontSize = 32.0
@@ -138,6 +170,11 @@ enum TerminalDefaults {
 
     static func sshAutoReconnectEnabled(defaults: UserDefaults = .standard) -> Bool {
         (defaults.object(forKey: sshAutoReconnectKey) as? Bool) ?? true
+    }
+
+    static func optionAsAltMode(defaults: UserDefaults = .standard) -> TerminalOptionAsAltMode {
+        guard let rawValue = defaults.string(forKey: optionAsAltModeKey) else { return .none }
+        return TerminalOptionAsAltMode(rawValue: rawValue) ?? .none
     }
 
     static var defaultFontSize: Double {

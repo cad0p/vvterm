@@ -1567,3 +1567,9 @@
 "Restart Container" = "Reiniciar contenedor";
 "Start Container" = "Iniciar contenedor";
 "Stop Container" = "Detener contenedor";
+"Option as Alt" = "Opción como Alt";
+"Neither Option Key" = "Ninguna tecla Opción";
+"Left Option Key" = "Tecla Opción izquierda";
+"Right Option Key" = "Tecla Opción derecha";
+"Both Option Keys" = "Ambas teclas Opción";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "Elige qué tecla Opción física envía Alt a las apps de terminal. Las demás teclas Opción siguen disponibles para los caracteres de la distribución del teclado.";

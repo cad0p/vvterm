@@ -1612,3 +1612,9 @@
 "Restart Container" = "Khởi động lại container";
 "Start Container" = "Khởi động container";
 "Stop Container" = "Dừng container";
+"Option as Alt" = "Dùng Option làm Alt";
+"Neither Option Key" = "Không dùng phím Option";
+"Left Option Key" = "Phím Option trái";
+"Right Option Key" = "Phím Option phải";
+"Both Option Keys" = "Cả hai phím Option";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "Chọn phím Option vật lý sẽ gửi Alt đến ứng dụng terminal. Các phím Option khác vẫn dùng được để nhập ký tự theo bố cục bàn phím.";

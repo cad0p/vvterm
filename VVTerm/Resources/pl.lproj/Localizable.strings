@@ -1569,3 +1569,9 @@
 "Restart Container" = "Uruchom ponownie kontener";
 "Start Container" = "Uruchom kontener";
 "Stop Container" = "Zatrzymaj kontener";
+"Option as Alt" = "Option jako Alt";
+"Neither Option Key" = "Żaden klawisz Option";
+"Left Option Key" = "Lewy klawisz Option";
+"Right Option Key" = "Prawy klawisz Option";
+"Both Option Keys" = "Oba klawisze Option";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "Wybierz fizyczny klawisz Option, który wysyła Alt do aplikacji terminalowych. Pozostałe klawisze Option nadal służą do wpisywania znaków układu klawiatury.";

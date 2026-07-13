@@ -1568,3 +1568,9 @@
 "Restart Container" = "Restartovat kontejner";
 "Start Container" = "Spustit kontejner";
 "Stop Container" = "Zastavit kontejner";
+"Option as Alt" = "Option jako Alt";
+"Neither Option Key" = "Žádná klávesa Option";
+"Left Option Key" = "Levá klávesa Option";
+"Right Option Key" = "Pravá klávesa Option";
+"Both Option Keys" = "Obě klávesy Option";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "Vyberte fyzickou klávesu Option, která odesílá Alt do terminálových aplikací. Ostatní klávesy Option zůstanou dostupné pro znaky rozložení klávesnice.";

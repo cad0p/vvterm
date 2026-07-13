@@ -127,6 +127,40 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
     }
 
     @Test
+    func keepsConfiguredOptionAsAltKeysOnDirectGhosttyPath() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
+                hasControlModifier: false,
+                hasAlternateModifier: true,
+                usesAlternateModifierAsTerminalAlt: true,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: false,
+                hasTerminalFallbackKey: false,
+                keyProducesText: true
+            ) == false
+        )
+    }
+
+    @Test
+    func keepsConfiguredOptionModifierPressOutOfSystemTextInput() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
+                hasControlModifier: false,
+                hasAlternateModifier: true,
+                usesAlternateModifierAsTerminalAlt: true,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false,
+                isTextInputModifierOnlyKey: true,
+                hasTerminalFallbackKey: true,
+                keyProducesText: false
+            ) == false
+        )
+    }
+
+    @Test
     func keepsOptionModifiedNavigationKeysOnDirectGhosttyPath() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(

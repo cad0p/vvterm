@@ -1116,6 +1116,7 @@ class GhosttyTerminalView: UIView {
     private var fallbackHardwarePressKeys: [UInt16: Ghostty.Input.Key] = [:]
     private var fallbackHardwarePressModifiers: [UInt16: UIKeyModifierFlags] = [:]
     private var systemTextInputPresses: Set<UInt16> = []
+    private var terminalAltOptionKeyCodes: Set<UInt16> = []
 
     fileprivate struct HardwarePressResult {
         var forwardedToSystem: Set<UIPress> = []
@@ -3972,6 +3973,27 @@ class GhosttyTerminalView: UIView {
         }
     }
 
+    private func optionKeySide(for key: UIKey) -> TerminalOptionKeySide? {
+        switch key.keyCode {
+        case .keyboardLeftAlt: .left
+        case .keyboardRightAlt: .right
+        default: nil
+        }
+    }
+
+    private func shouldUseOptionKeyAsTerminalAlt(_ key: UIKey) -> Bool {
+        guard let side = optionKeySide(for: key) else { return false }
+        return TerminalDefaults.optionAsAltMode().usesOptionKeyAsAlt(side)
+    }
+
+    private func usesActiveOptionKeyAsTerminalAlt(for key: UIKey) -> Bool {
+        guard key.modifierFlags.contains(.alternate) else { return false }
+        if optionKeySide(for: key) != nil {
+            return shouldUseOptionKeyAsTerminalAlt(key)
+        }
+        return !terminalAltOptionKeyCodes.isEmpty
+    }
+
     @discardableResult
     private func sendHardwarePressToGhostty(
         _ key: UIKey,
@@ -4010,6 +4032,7 @@ class GhosttyTerminalView: UIView {
         return TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
             hasControlModifier: key.modifierFlags.contains(.control),
             hasAlternateModifier: key.modifierFlags.contains(.alternate),
+            usesAlternateModifierAsTerminalAlt: usesActiveOptionKeyAsTerminalAlt(for: key),
             hasCommandModifier: key.modifierFlags.contains(.command),
             hasActiveIMEComposition: textInputModel.hasActiveIMEComposition,
             isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock,
@@ -4052,6 +4075,9 @@ class GhosttyTerminalView: UIView {
                 continue
             }
             let keyCode = UInt16(key.keyCode.rawValue)
+            if shouldUseOptionKeyAsTerminalAlt(key) {
+                terminalAltOptionKeyCodes.insert(keyCode)
+            }
             if shouldRoutePressToSystemTextInput(key) {
                 let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
                 systemTextInputPresses.insert(keyCode)
@@ -4117,6 +4143,7 @@ class GhosttyTerminalView: UIView {
             }
             let keyCode = UInt16(key.keyCode.rawValue)
             let shouldForwardToSystem = systemTextInputPresses.remove(keyCode) != nil
+            terminalAltOptionKeyCodes.remove(keyCode)
             guard hardwarePressesSentToGhostty.contains(keyCode) else {
                 fallbackHardwarePressKeys.removeValue(forKey: keyCode)
                 fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
@@ -4159,6 +4186,7 @@ class GhosttyTerminalView: UIView {
             fallbackHardwarePressKeys.removeValue(forKey: keyCode)
             fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
             systemTextInputPresses.remove(keyCode)
+            terminalAltOptionKeyCodes.remove(keyCode)
         }
         stopKeyRepeat()
     }

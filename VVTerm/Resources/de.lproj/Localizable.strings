@@ -1567,3 +1567,9 @@
 "Restart Container" = "Container neu starten";
 "Start Container" = "Container starten";
 "Stop Container" = "Container stoppen";
+"Option as Alt" = "Option als Alt";
+"Neither Option Key" = "Keine Wahltaste";
+"Left Option Key" = "Linke Wahltaste";
+"Right Option Key" = "Rechte Wahltaste";
+"Both Option Keys" = "Beide Wahltasten";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "Wähle, welche physische Wahltaste Alt an Terminal-Apps sendet. Andere Wahltasten bleiben für Zeichen des Tastaturlayouts verfügbar.";

@@ -21,9 +21,35 @@ extension TerminalSettingsView {
 
     @ViewBuilder
     var keyboardAccessorySection: some View {
-        if terminalAccessoryCustomizationEnabled {
-            Section {
-                Toggle("Show keyboard dismiss button", isOn: $terminalKeyboardDismissButtonEnabled)
+        TerminalKeyboardSettingsSection(
+            accessoryCustomizationEnabled: terminalAccessoryCustomizationEnabled,
+            keyboardDismissButtonEnabled: $terminalKeyboardDismissButtonEnabled
+        )
+    }
+}
+
+private struct TerminalKeyboardSettingsSection: View {
+    let accessoryCustomizationEnabled: Bool
+    @Binding var keyboardDismissButtonEnabled: Bool
+    @AppStorage(TerminalDefaults.optionAsAltModeKey) private var optionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
+
+    private var optionAsAltModeBinding: Binding<TerminalOptionAsAltMode> {
+        Binding(
+            get: { TerminalOptionAsAltMode(rawValue: optionAsAltModeRaw) ?? .none },
+            set: { optionAsAltModeRaw = $0.rawValue }
+        )
+    }
+
+    var body: some View {
+        Section {
+            Picker("Option as Alt", selection: optionAsAltModeBinding) {
+                ForEach(TerminalOptionAsAltMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+
+            if accessoryCustomizationEnabled {
+                Toggle("Show keyboard dismiss button", isOn: $keyboardDismissButtonEnabled)
 
                 NavigationLink {
                     TerminalAccessoryCustomizationView()
@@ -36,13 +62,13 @@ extension TerminalSettingsView {
                 } label: {
                     Text("Manage Custom Actions")
                 }
-            } header: {
-                Text("Keyboard Accessory")
-            } footer: {
-                Text("Reorder actions, add custom actions, show or hide the keyboard dismiss button, and sync your accessory bar across devices.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+        } header: {
+            Text("Keyboard")
+        } footer: {
+            Text("Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

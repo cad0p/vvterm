@@ -4,6 +4,7 @@ enum TerminalHardwareTextInputRoutingPolicy {
     static func shouldRoutePressToSystemTextInput(
         hasControlModifier: Bool,
         hasAlternateModifier: Bool,
+        usesAlternateModifierAsTerminalAlt: Bool = false,
         hasCommandModifier: Bool,
         hasActiveIMEComposition: Bool,
         isSystemTextInputToggleKey: Bool,
@@ -12,6 +13,9 @@ enum TerminalHardwareTextInputRoutingPolicy {
         keyProducesText: Bool
     ) -> Bool {
         if hasCommandModifier {
+            return false
+        }
+        if usesAlternateModifierAsTerminalAlt {
             return false
         }
         if isTextInputModifierOnlyKey {

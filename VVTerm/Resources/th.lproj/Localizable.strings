@@ -1567,3 +1567,9 @@
 "Restart Container" = "รีสตาร์ทคอนเทนเนอร์";
 "Start Container" = "เริ่มคอนเทนเนอร์";
 "Stop Container" = "หยุดคอนเทนเนอร์";
+"Option as Alt" = "ใช้ Option เป็น Alt";
+"Neither Option Key" = "ไม่ใช้ปุ่ม Option";
+"Left Option Key" = "ปุ่ม Option ซ้าย";
+"Right Option Key" = "ปุ่ม Option ขวา";
+"Both Option Keys" = "ปุ่ม Option ทั้งสอง";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "เลือกปุ่ม Option จริงที่จะส่ง Alt ไปยังแอปเทอร์มินัล ปุ่ม Option อื่นยังคงใช้พิมพ์อักขระตามผังแป้นพิมพ์ได้";

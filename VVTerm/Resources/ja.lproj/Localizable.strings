@@ -1567,3 +1567,9 @@
 "Restart Container" = "コンテナを再起動";
 "Start Container" = "コンテナを開始";
 "Stop Container" = "コンテナを停止";
+"Option as Alt" = "OptionをAltとして使用";
+"Neither Option Key" = "どちらのOptionキーも使用しない";
+"Left Option Key" = "左Optionキー";
+"Right Option Key" = "右Optionキー";
+"Both Option Keys" = "両方のOptionキー";
+"Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters." = "ターミナルアプリにAltを送信する物理Optionキーを選択します。その他のOptionキーはキーボード配列の文字入力に引き続き使用できます。";
