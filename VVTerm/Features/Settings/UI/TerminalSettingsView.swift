@@ -171,6 +171,7 @@ struct TerminalSettingsView: View {
     // Cursor settings
     @AppStorage(TerminalDefaults.cursorStyleKey) private var cursorStyleRaw = TerminalDefaults.defaultCursorStyle.rawValue
     @AppStorage(TerminalDefaults.cursorBlinkKey) private var cursorBlink = TerminalDefaults.defaultCursorBlink
+    @AppStorage(TerminalDefaults.optionAsAltModeKey) private var optionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
 
     @EnvironmentObject private var terminalThemeManager: TerminalThemeManager
     @Environment(\.colorScheme) private var colorScheme
@@ -235,6 +236,13 @@ struct TerminalSettingsView: View {
 
     private var selectedCursorStyle: TerminalCursorStyle {
         TerminalCursorStyle(rawValue: cursorStyleRaw) ?? TerminalDefaults.defaultCursorStyle
+    }
+
+    var optionAsAltModeBinding: Binding<TerminalOptionAsAltMode> {
+        Binding(
+            get: { TerminalOptionAsAltMode(rawValue: optionAsAltModeRaw) ?? .none },
+            set: { optionAsAltModeRaw = $0.rawValue }
+        )
     }
 
     private var cursorPreviewThemeName: String {

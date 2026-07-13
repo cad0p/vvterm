@@ -22,6 +22,7 @@ extension TerminalSettingsView {
     @ViewBuilder
     var keyboardAccessorySection: some View {
         TerminalKeyboardSettingsSection(
+            optionAsAltMode: optionAsAltModeBinding,
             accessoryCustomizationEnabled: terminalAccessoryCustomizationEnabled,
             keyboardDismissButtonEnabled: $terminalKeyboardDismissButtonEnabled
         )
@@ -29,21 +30,14 @@ extension TerminalSettingsView {
 }
 
 private struct TerminalKeyboardSettingsSection: View {
+    @Binding var optionAsAltMode: TerminalOptionAsAltMode
     let accessoryCustomizationEnabled: Bool
     @Binding var keyboardDismissButtonEnabled: Bool
-    @AppStorage(TerminalDefaults.optionAsAltModeKey) private var optionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
     @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var preserveTerminalSizeForKeyboard = false
-
-    private var optionAsAltModeBinding: Binding<TerminalOptionAsAltMode> {
-        Binding(
-            get: { TerminalOptionAsAltMode(rawValue: optionAsAltModeRaw) ?? .none },
-            set: { optionAsAltModeRaw = $0.rawValue }
-        )
-    }
 
     var body: some View {
         Section {
-            Picker("Option as Alt", selection: optionAsAltModeBinding) {
+            Picker("Option as Alt", selection: $optionAsAltMode) {
                 ForEach(TerminalOptionAsAltMode.allCases) { mode in
                     Text(mode.displayName).tag(mode)
                 }

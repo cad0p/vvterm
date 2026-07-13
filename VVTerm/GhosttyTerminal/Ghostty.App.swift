@@ -86,15 +86,31 @@ extension Ghostty {
                 .joined(separator: "\n")
         }
 
+        static func optionAsAltConfigValue(_ mode: TerminalOptionAsAltMode) -> String {
+            switch mode {
+            case .none: "false"
+            case .left: "left"
+            case .right: "right"
+            case .both: "true"
+            }
+        }
+
         static func configContent(
             primaryFontFamily: String,
             fontSize: Double,
             shellName: String,
             themeName: String,
             cursorStyle: TerminalCursorStyle = TerminalDefaults.defaultCursorStyle,
-            cursorBlink: Bool = TerminalDefaults.defaultCursorBlink
+            cursorBlink: Bool = TerminalDefaults.defaultCursorBlink,
+            optionAsAltMode: TerminalOptionAsAltMode = .none
         ) -> String {
-            """
+            #if os(macOS)
+            let platformInputConfig = "macos-option-as-alt = \(optionAsAltConfigValue(optionAsAltMode))"
+            #else
+            let platformInputConfig = ""
+            #endif
+
+            return """
             \(fontFamilyLines(primaryFamily: primaryFontFamily))
             font-size = \(Int(fontSize))
             window-inherit-font-size = false
@@ -125,6 +141,8 @@ extension Ghostty {
 
             # Custom keybinds
             keybind = shift+enter=text:\\n
+
+            \(platformInputConfig)
 
             """
         }
@@ -165,6 +183,9 @@ extension Ghostty {
         @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
         @AppStorage(TerminalDefaults.cursorStyleKey) private var terminalCursorStyleRaw = TerminalDefaults.defaultCursorStyle.rawValue
         @AppStorage(TerminalDefaults.cursorBlinkKey) private var terminalCursorBlink = TerminalDefaults.defaultCursorBlink
+        #if os(macOS)
+        @AppStorage(TerminalDefaults.optionAsAltModeKey) private var terminalOptionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
+        #endif
         @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
         @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
         @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
@@ -194,6 +215,14 @@ extension Ghostty {
             TerminalCursorStyle(rawValue: terminalCursorStyleRaw) ?? TerminalDefaults.defaultCursorStyle
         }
 
+        private var terminalOptionAsAltMode: TerminalOptionAsAltMode {
+            #if os(macOS)
+            TerminalOptionAsAltMode(rawValue: terminalOptionAsAltModeRaw) ?? .none
+            #else
+            .none
+            #endif
+        }
+
         // MARK: - Initialization
 
         private var didStart = false
@@ -204,6 +233,7 @@ extension Ghostty {
             let themeName: String
             let cursorStyleRaw: String
             let cursorBlink: Bool
+            let optionAsAltModeRaw: String
         }
 
         init(autoStart: Bool = true) {
@@ -496,7 +526,8 @@ extension Ghostty {
                 fontSize: presentationOverrides.resolvedFontSize(),
                 themeName: effectiveThemeName,
                 cursorStyleRaw: terminalCursorStyle.rawValue,
-                cursorBlink: terminalCursorBlink
+                cursorBlink: terminalCursorBlink,
+                optionAsAltModeRaw: terminalOptionAsAltMode.rawValue
             )
 
             if let cachedConfig = surfaceConfigCache[key] {
@@ -551,7 +582,8 @@ extension Ghostty {
                     shellName: shellName,
                     themeName: effectiveThemeName,
                     cursorStyle: terminalCursorStyle,
-                    cursorBlink: terminalCursorBlink
+                    cursorBlink: terminalCursorBlink,
+                    optionAsAltMode: terminalOptionAsAltMode
                 )
 
                 Ghostty.logger.info("Loading Ghostty theme: \(self.effectiveThemeName)")

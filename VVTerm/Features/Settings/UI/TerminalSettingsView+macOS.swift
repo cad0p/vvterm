@@ -11,8 +11,20 @@ extension TerminalSettingsView {
         }.sorted()
     }
 
-    var keyboardAccessorySection: EmptyView {
-        EmptyView()
+    var keyboardAccessorySection: some View {
+        Section {
+            Picker("Option as Alt", selection: optionAsAltModeBinding) {
+                ForEach(TerminalOptionAsAltMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+        } header: {
+            Text("Keyboard")
+        } footer: {
+            Text("Choose which physical Option key sends Alt to terminal apps. Other Option keys remain available for keyboard-layout characters.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
