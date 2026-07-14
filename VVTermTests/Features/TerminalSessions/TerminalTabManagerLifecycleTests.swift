@@ -100,6 +100,24 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func onlyCurrentPaneClientCanContinueConnecting() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Pending")
+            installTab(tab, in: manager)
+            let activeClient = SSHClient()
+            let staleClient = SSHClient()
+
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: activeClient))
+            #expect(manager.isCurrentShellOwner(for: tab.rootPaneId, client: activeClient))
+            #expect(!manager.isCurrentShellOwner(for: tab.rootPaneId, client: staleClient))
+
+            await manager.unregisterSSHClient(for: tab.rootPaneId)
+
+            #expect(!manager.isCurrentShellOwner(for: tab.rootPaneId, client: activeClient))
+        }
+    }
+
+    @Test
     func shellStartFailsWhenPaneIsMissing() async {
         await withCleanManager { manager in
             let missingPaneId = UUID()
@@ -207,6 +225,195 @@ struct TerminalTabManagerLifecycleTests {
             #expect(manager.shellId(for: tab.rootPaneId) == nil)
             #expect(!manager.connectedServerIds.contains(tab.serverId))
             #expect(!TerminalConnectionStartPolicy.shouldStart(connectionState: .disconnected))
+        }
+    }
+
+    @Test
+    func managedTmuxEndClosesItsLastPaneAndTab() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Managed tmux")
+            installTab(tab, in: manager, connectionState: .connected)
+            manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_test"
+            manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+            manager.updatePaneTmuxStatus(tab.rootPaneId, status: .foreground)
+
+            manager.handleShellEnd(for: tab.rootPaneId, reason: .tmuxEnded(.managed))
+
+            #expect(manager.tabs(for: tab.serverId).isEmpty)
+            #expect(manager.paneStates[tab.rootPaneId] == nil)
+            #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == nil)
+        }
+    }
+
+    @Test
+    func managedTmuxEndClosesOnlyItsPaneInSplitTab() async {
+        await withCleanManager { manager in
+            let secondPaneId = UUID()
+            var tab = TerminalTab(serverId: UUID(), title: "Split tmux")
+            tab.layout = .split(.init(
+                direction: .horizontal,
+                ratio: 0.5,
+                left: .leaf(paneId: tab.rootPaneId),
+                right: .leaf(paneId: secondPaneId)
+            ))
+            installTab(tab, in: manager, connectionState: .connected)
+            manager.paneStates[secondPaneId] = TerminalPaneState(
+                paneId: secondPaneId,
+                tabId: tab.id,
+                serverId: tab.serverId
+            )
+            manager.tmuxResolver.sessionNames[secondPaneId] = "vvterm_second"
+            manager.tmuxResolver.sessionOwnership[secondPaneId] = .managed
+            manager.updatePaneTmuxStatus(secondPaneId, status: .background)
+
+            manager.handleShellEnd(for: secondPaneId, reason: .tmuxEnded(.managed))
+
+            let remainingTab = manager.tabs(for: tab.serverId).first
+            #expect(remainingTab?.allPaneIds == [tab.rootPaneId])
+            #expect(manager.paneStates[tab.rootPaneId] != nil)
+            #expect(manager.paneStates[secondPaneId] == nil)
+        }
+    }
+
+    @Test
+    func managedTmuxDetachPreservesPaneAndSuppressesAutomaticReconnect() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Detached tmux")
+            installTab(tab, in: manager, connectionState: .connected)
+            manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_test"
+            manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+            manager.updatePaneTmuxStatus(tab.rootPaneId, status: .foreground)
+
+            manager.handleShellEnd(for: tab.rootPaneId, reason: .tmuxDetached(.managed))
+
+            #expect(manager.tabs(for: tab.serverId) == [tab])
+            #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .disconnected)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason == .tmuxDetached)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason?.allowsAutomaticReconnect == false)
+            #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == "vvterm_test")
+            #expect(manager.tmuxResolver.hasConfirmedManagedSession(for: tab.rootPaneId))
+        }
+    }
+
+    @Test
+    func managedReattachRequiresExplicitSessionConfirmation() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Unconfirmed tmux")
+            installTab(tab, in: manager, connectionState: .connected)
+            manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_test"
+            manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+
+            #expect(!manager.shouldReattachManagedTmuxSession(for: tab.rootPaneId))
+
+            manager.tmuxResolver.confirmManagedSession(for: tab.rootPaneId)
+
+            #expect(manager.shouldReattachManagedTmuxSession(for: tab.rootPaneId))
+        }
+    }
+
+    @Test
+    func managedSessionConfirmationRoundTripsWithoutPromotingUnconfirmedSessions() async {
+        await withCleanManager { manager in
+            let confirmedTab = TerminalTab(serverId: UUID(), title: "Confirmed tmux")
+            let unconfirmedTab = TerminalTab(serverId: UUID(), title: "Unconfirmed tmux")
+            installTab(confirmedTab, in: manager, connectionState: .connected)
+            installTab(unconfirmedTab, in: manager, connectionState: .connected)
+
+            manager.tmuxResolver.sessionNames[confirmedTab.rootPaneId] = "vvterm_confirmed"
+            manager.tmuxResolver.sessionOwnership[confirmedTab.rootPaneId] = .managed
+            manager.tmuxResolver.confirmManagedSession(for: confirmedTab.rootPaneId)
+            manager.tmuxResolver.sessionNames[unconfirmedTab.rootPaneId] = "vvterm_unconfirmed"
+            manager.tmuxResolver.sessionOwnership[unconfirmedTab.rootPaneId] = .managed
+
+            manager.persistAndRestoreSnapshotForTesting()
+
+            #expect(manager.shouldReattachManagedTmuxSession(for: confirmedTab.rootPaneId))
+            #expect(!manager.shouldReattachManagedTmuxSession(for: unconfirmedTab.rootPaneId))
+        }
+    }
+
+    @Test
+    func managedTmuxCreationFailurePreservesPaneAndClearsUnprovenAttachment() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Failed tmux")
+            installTab(tab, in: manager, connectionState: .connected)
+            manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_test"
+            manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+            manager.updatePaneTmuxStatus(tab.rootPaneId, status: .foreground)
+
+            manager.handleShellEnd(for: tab.rootPaneId, reason: .tmuxCreationFailed)
+
+            #expect(manager.tabs(for: tab.serverId) == [tab])
+            #expect(
+                manager.paneStates[tab.rootPaneId]?.connectionState
+                    == .failed(String(localized: "Unable to start tmux session."))
+            )
+            #expect(manager.paneStates[tab.rootPaneId]?.tmuxStatus == .unknown)
+            #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == nil)
+            #expect(manager.tmuxResolver.sessionOwnership[tab.rootPaneId] == nil)
+        }
+    }
+
+    @Test
+    func successfulTmuxInstallTriggersExplicitReconnect() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Installed tmux")
+            installTab(tab, in: manager, connectionState: .connected)
+            manager.paneStates[tab.rootPaneId]?.disconnectReason = .tmuxDetached
+            var reconnectRequested = false
+
+            manager.completeTmuxInstall(
+                for: tab.rootPaneId,
+                sessionName: "vvterm_installed",
+                onInstalled: { reconnectRequested = true }
+            )
+
+            #expect(reconnectRequested)
+            #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == "vvterm_installed")
+            #expect(manager.tmuxResolver.sessionOwnership[tab.rootPaneId] == .managed)
+        }
+    }
+
+    @Test
+    func transportEndPreservesPaneAndAllowsAutomaticReconnect() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Dropped transport")
+            installTab(tab, in: manager, connectionState: .connected)
+
+            manager.handleShellEnd(for: tab.rootPaneId, reason: .transportEnded)
+
+            #expect(manager.tabs(for: tab.serverId) == [tab])
+            #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .disconnected)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason == .transportEnded)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason?.allowsAutomaticReconnect == true)
+        }
+    }
+
+    @Test
+    func staleShellEndCannotDisconnectReplacementShell() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Replacement")
+            installTab(tab, in: manager, connectionState: .connected)
+            let activeClient = SSHClient()
+            let activeShellId = UUID()
+            manager.registerSSHClient(
+                activeClient,
+                shellId: activeShellId,
+                for: tab.rootPaneId,
+                serverId: tab.serverId,
+                skipTmuxLifecycle: true
+            )
+
+            manager.handleShellEnd(
+                for: tab.rootPaneId,
+                client: SSHClient(),
+                shellId: UUID(),
+                reason: .transportEnded
+            )
+
+            #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .connected)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason == nil)
+            #expect(manager.shellId(for: tab.rootPaneId) == activeShellId)
         }
     }
 

@@ -1511,6 +1511,8 @@
 "mosh-server is not installed on the remote host" = "mosh-server is not installed on the remote host";
 "tmux keeps your terminal session alive across app restarts and disconnects." = "tmux keeps your terminal session alive across app restarts and disconnects.";
 "tmux session is still running on the server." = "tmux session is still running on the server.";
+"The tmux session has ended." = "The tmux session has ended.";
+"Unable to start tmux session." = "Unable to start tmux session.";
 "⌘\\(shortcutNumber)" = "⌘\\(shortcutNumber)";
 
 /* Docker Stats */

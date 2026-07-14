@@ -162,7 +162,6 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
             paneId: paneId,
             server: server,
             credentials: credentials,
-            onProcessExit: onProcessExit,
             sshClient: client,
             richPasteUIModel: richPasteUIModel
         )

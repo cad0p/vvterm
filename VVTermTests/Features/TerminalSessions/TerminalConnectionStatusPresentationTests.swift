@@ -32,12 +32,30 @@ struct TerminalConnectionStatusPresentationTests {
         let presentation = resolve(
             connectionState: .disconnected,
             hasEstablishedConnection: true,
-            autoReconnectEnabled: true,
+            automaticReconnectAllowed: true,
             terminalExists: true,
             isReady: true
         )
 
         #expect(presentation == .hidden)
+    }
+
+    @Test
+    func intentionalTmuxDetachShowsDisconnectedStateInsteadOfReconnectBanner() {
+        let presentation = resolve(
+            connectionState: .disconnected,
+            hasEstablishedConnection: true,
+            automaticReconnectAllowed: false,
+            terminalExists: true,
+            isReady: true,
+            disconnectedMessage: "tmux session is still running on the server."
+        )
+
+        #expect(
+            presentation == .disconnected(
+                message: "tmux session is still running on the server."
+            )
+        )
     }
 
     @Test
@@ -170,6 +188,19 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
+    func tmuxDisconnectMessagesReflectLifecycleReason() {
+        #expect(
+            TerminalDisconnectReason.externalTmuxEnded.statusMessage
+                == String(localized: "The tmux session has ended.")
+        )
+        #expect(
+            TerminalDisconnectReason.tmuxDetached.statusMessage
+                == String(localized: "tmux session is still running on the server.")
+        )
+        #expect(TerminalDisconnectReason.transportEnded.statusMessage == nil)
+    }
+
+    @Test
     func hostKeyFailureEnablesReplacementAction() {
         let presentation = resolve(
             connectionState: .failed("Host key verification failed"),
@@ -205,7 +236,7 @@ struct TerminalConnectionStatusPresentationTests {
         credentialLoadErrorMessage: String? = nil,
         connectionState: ConnectionState,
         hasEstablishedConnection: Bool = false,
-        autoReconnectEnabled: Bool = false,
+        automaticReconnectAllowed: Bool = false,
         isReconnectPreparationInFlight: Bool = false,
         isAwaitingTmuxSelection: Bool = false,
         terminalExists: Bool = true,
@@ -218,7 +249,7 @@ struct TerminalConnectionStatusPresentationTests {
             connectionState: connectionState,
             serverName: "Test Server",
             hasEstablishedConnection: hasEstablishedConnection,
-            autoReconnectEnabled: autoReconnectEnabled,
+            automaticReconnectAllowed: automaticReconnectAllowed,
             isReconnectPreparationInFlight: isReconnectPreparationInFlight,
             isAwaitingTmuxSelection: isAwaitingTmuxSelection,
             terminalExists: terminalExists,

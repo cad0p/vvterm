@@ -6,7 +6,6 @@ final class TerminalPaneSSHCoordinator {
     let paneId: UUID
     let server: Server
     let credentials: ServerCredentials
-    let onProcessExit: () -> Void
     weak var terminal: GhosttyTerminalView?
     let sshClient: SSHClient
     var shellId: UUID?
@@ -25,14 +24,12 @@ final class TerminalPaneSSHCoordinator {
         paneId: UUID,
         server: Server,
         credentials: ServerCredentials,
-        onProcessExit: @escaping () -> Void,
         sshClient: SSHClient,
         richPasteUIModel: TerminalRichPasteUIModel
     ) {
         self.paneId = paneId
         self.server = server
         self.credentials = credentials
-        self.onProcessExit = onProcessExit
         self.sshClient = sshClient
         self.richPasteRuntime = .terminalPane(
             paneId: paneId,
@@ -122,11 +119,10 @@ final class TerminalPaneSSHCoordinator {
         let sshClient = self.sshClient
         let server = self.server
         let credentials = self.credentials
-        let onProcessExit = self.onProcessExit
         let logger = self.logger
         let hasEstablishedConnection = TerminalTabManager.shared.paneStates[paneId]?.hasEstablishedConnection == true
 
-        shellTask = Task.detached(priority: .userInitiated) { [weak self, weak terminal, sshClient, server, credentials, paneId, onProcessExit, logger] in
+        shellTask = Task.detached(priority: .userInitiated) { [weak self, weak terminal, sshClient, server, credentials, paneId, logger] in
             defer {
                 Task { @MainActor [weak self] in
                     TerminalTabManager.shared.finishShellStart(for: paneId, client: sshClient)
@@ -141,6 +137,9 @@ final class TerminalPaneSSHCoordinator {
                 sshClient: sshClient,
                 terminal: terminal,
                 logger: logger,
+                shouldContinueConnection: {
+                    TerminalTabManager.shared.isCurrentShellOwner(for: paneId, client: sshClient)
+                },
                 onAttempt: { attempt in
                     TerminalTabManager.shared.updatePaneState(
                         paneId,
@@ -201,8 +200,13 @@ final class TerminalPaneSSHCoordinator {
                         return false
                     }
                 },
-                onProcessExit: {
-                    onProcessExit()
+                onProcessExit: { shellId, reason in
+                    TerminalTabManager.shared.handleShellEnd(
+                        for: paneId,
+                        client: sshClient,
+                        shellId: shellId,
+                        reason: reason
+                    )
                 },
                 onFailure: { error, terminal in
                     let errorMsg = "\r\n\u{001B}[31mSSH Error: \(error.localizedDescription)\u{001B}[0m\r\n"

@@ -91,6 +91,52 @@ struct RemoteTmuxManagerParserTests {
     }
 
     @Test
+    func managedLifecycleCommandReportsDetachOrSessionEnd() {
+        let command = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_managed",
+            workingDirectory: "/work",
+            lifecycleMarkerToken: "marker-token"
+        )
+
+        #expect(command.contains("new-session -A -s"))
+        #expect(command.contains("has-session -t '=vvterm_managed'"))
+        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .detached)))
+        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
+        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .creationFailed)))
+        #expect(command.contains("vvtermTmuxCreateStatus=$?"))
+        #expect(!command.contains("exec tmux"))
+    }
+
+    @Test
+    func unixSessionPresenceProbeUsesExactSessionAndPrivateMarkers() {
+        let command = RemoteTmuxManager.shared.sessionPresenceProbeCommand(
+            sessionName: "vvterm_managed",
+            backend: .unixTmux,
+            existsMarker: "private-exists",
+            missingMarker: "private-missing"
+        )
+
+        #expect(command.contains("has-session -t"))
+        #expect(command.contains("=vvterm_managed"))
+        #expect(command.contains("private-exists"))
+        #expect(command.contains("private-missing"))
+    }
+
+    @Test
+    func managedReattachDoesNotRecreateMissingSession() {
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "vvterm_managed",
+            lifecycleMarkerToken: "marker-token"
+        )
+
+        #expect(command.contains("attach-session"))
+        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
+        #expect(!command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .creationFailed)))
+        #expect(!command.contains("new-session"))
+        #expect(!command.contains("exec \"${SHELL:-/bin/sh}\" -l"))
+    }
+
+    @Test
     func installAndAttachScriptIncludesSessionAndConfig() {
         let script = RemoteTmuxManager.shared.installAndAttachScript(
             sessionName: "vvterm_demo",
@@ -106,6 +152,22 @@ struct RemoteTmuxManagerParserTests {
         #expect(script.contains("set -gq allow-set-title on"))
         #expect(!script.contains("%if"))
         #expect(!script.contains("#{version}"))
+    }
+
+    @Test
+    func installOnlyScriptDoesNotEnterUntrackedTmuxSession() {
+        let script = RemoteTmuxManager.shared.installAndAttachScript(
+            sessionName: "vvterm_demo",
+            workingDirectory: "/tmp/work",
+            terminalType: .xtermGhostty,
+            attachAfterInstall: false
+        )
+
+        #expect(script.contains("apt-get install -y tmux"))
+        #expect(script.contains("~/.vvterm/tmux.conf"))
+        #expect(!script.contains("new-session"))
+        #expect(!script.contains("attach-session"))
+        #expect(!script.contains("exec tmux"))
     }
 
     @Test
@@ -165,6 +227,30 @@ struct RemoteTmuxManagerParserTests {
         #expect(!command.contains("printf"))
         #expect(!command.contains("uname"))
         #expect(!command.contains("exec tmux"))
+    }
+
+    @Test
+    func windowsPsmuxLifecycleCommandReportsDetachOrSessionEnd() {
+        let backend = RemoteTmuxBackend.windowsPsmux(
+            commandName: "psmux",
+            shellFamily: .powershell,
+            powerShellExecutable: "pwsh"
+        )
+
+        let command = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_demo",
+            workingDirectory: "C:/work",
+            backend: backend,
+            lifecycleMarkerToken: "marker-token"
+        )
+
+        #expect(command.contains("has-session -t $vvtermSession"))
+        #expect(command.contains("[Console]::Out.Write"))
+        #expect(command.contains("marker-token"))
+        #expect(command.contains("detached"))
+        #expect(command.contains("ended"))
+        #expect(command.contains("creationFailed"))
+        #expect(command.contains("$vvtermTmuxCreateStatus = $LASTEXITCODE"))
     }
 
     @Test

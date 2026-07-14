@@ -257,7 +257,6 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
             paneId: paneId,
             server: server,
             credentials: credentials,
-            onProcessExit: onProcessExit,
             sshClient: SSHClient(),
             richPasteUIModel: richPasteUIModel
         )

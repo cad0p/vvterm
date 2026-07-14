@@ -569,9 +569,14 @@ struct TerminalPaneView: View {
         TerminalConnectionPresentationPolicy.usesReconnectBanner(
             connectionState: connectionState,
             hasEstablishedConnection: paneState?.hasEstablishedConnection == true,
-            autoReconnectEnabled: autoReconnectEnabled,
+            automaticReconnectAllowed: automaticReconnectAllowed,
             isReconnectPreparationInFlight: reconnectInFlight
         )
+    }
+
+    private var automaticReconnectAllowed: Bool {
+        autoReconnectEnabled
+            && (paneState?.disconnectReason?.allowsAutomaticReconnect ?? true)
     }
 
     private var isAwaitingTmuxSelection: Bool {
@@ -586,6 +591,10 @@ struct TerminalPaneView: View {
     }
 
     private var disconnectedStatusMessage: String? {
+        if let message = paneState?.disconnectReason?.statusMessage {
+            return message
+        }
+
         if paneState?.tmuxStatus.indicatesTmux == true {
             return String(localized: "tmux session is still running on the server.")
         }
@@ -603,7 +612,7 @@ struct TerminalPaneView: View {
             connectionState: connectionState,
             serverName: server.name,
             hasEstablishedConnection: paneState?.hasEstablishedConnection == true,
-            autoReconnectEnabled: autoReconnectEnabled,
+            automaticReconnectAllowed: automaticReconnectAllowed,
             isReconnectPreparationInFlight: reconnectInFlight,
             isAwaitingTmuxSelection: isAwaitingTmuxSelection,
             terminalExists: terminalExists,
@@ -794,7 +803,9 @@ struct TerminalPaneView: View {
         .alert("Install tmux?", isPresented: $showingTmuxInstallPrompt) {
             Button("Install") {
                 Task {
-                    await TerminalTabManager.shared.startTmuxInstall(for: paneId)
+                    await TerminalTabManager.shared.startTmuxInstall(for: paneId) {
+                        retryConnection()
+                    }
                 }
             }
             Button("Continue without persistence", role: .cancel) {
@@ -889,7 +900,7 @@ struct TerminalPaneView: View {
 
     private func attemptAutoReconnectIfNeeded() {
         guard scenePhase == .active else { return }
-        guard autoReconnectEnabled else { return }
+        guard automaticReconnectAllowed else { return }
         guard !reconnectInFlight else { return }
         guard connectionState == .disconnected else { return }
         retryConnection()

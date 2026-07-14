@@ -197,15 +197,6 @@ struct ConnectionTerminalContainer: View {
             .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
             .limitReachedAlert(.fileTabs, isPresented: $showingFileTabLimitAlert)
             .splitPaneProFeatureAlert(isPresented: $showingSplitPaneUpgradeAlert)
-            .sheet(item: tmuxAttachPromptBinding) { prompt in
-                TmuxAttachPromptSheet(
-                    prompt: prompt,
-                    onConfirm: { selection in
-                        tabManager.resolveTmuxAttachPrompt(paneId: prompt.id, selection: selection)
-                    }
-                )
-                .adaptiveSoftScrollEdges()
-            }
     }
 
     @ViewBuilder
@@ -292,6 +283,15 @@ struct ConnectionTerminalContainer: View {
 
     var body: some View {
         platformBody
+            .sheet(item: tmuxAttachPromptBinding) { prompt in
+                TmuxAttachPromptSheet(
+                    prompt: prompt,
+                    onConfirm: { selection in
+                        tabManager.resolveTmuxAttachPrompt(paneId: prompt.id, selection: selection)
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            }
     }
 
     func handleNewTabCommand() {

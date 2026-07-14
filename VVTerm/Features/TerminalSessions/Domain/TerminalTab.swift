@@ -69,6 +69,7 @@ struct TerminalPaneState {
     let tabId: UUID
     let serverId: UUID
     var connectionState: ConnectionState
+    var disconnectReason: TerminalDisconnectReason?
     private(set) var hasEstablishedConnection: Bool
     var lastActivity: Date
     var tmuxStatus: TmuxStatus
@@ -85,6 +86,7 @@ struct TerminalPaneState {
         self.tabId = tabId
         self.serverId = serverId
         self.connectionState = .connecting
+        self.disconnectReason = nil
         self.hasEstablishedConnection = false
         self.lastActivity = Date()
         self.tmuxStatus = .unknown

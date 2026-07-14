@@ -1,5 +1,18 @@
 import Foundation
 
+extension TerminalDisconnectReason {
+    var statusMessage: String? {
+        switch self {
+        case .transportEnded:
+            return nil
+        case .tmuxDetached:
+            return String(localized: "tmux session is still running on the server.")
+        case .externalTmuxEnded:
+            return String(localized: "The tmux session has ended.")
+        }
+    }
+}
+
 enum TerminalConnectionStatusPresentation: Equatable {
     case hidden
     case connecting(serverName: String)
@@ -11,7 +24,7 @@ enum TerminalConnectionStatusPresentation: Equatable {
         connectionState: ConnectionState,
         serverName: String,
         hasEstablishedConnection: Bool,
-        autoReconnectEnabled: Bool,
+        automaticReconnectAllowed: Bool,
         isReconnectPreparationInFlight: Bool,
         isAwaitingTmuxSelection: Bool,
         terminalExists: Bool,
@@ -33,7 +46,7 @@ enum TerminalConnectionStatusPresentation: Equatable {
         if TerminalConnectionPresentationPolicy.usesReconnectBanner(
             connectionState: connectionState,
             hasEstablishedConnection: hasEstablishedConnection,
-            autoReconnectEnabled: autoReconnectEnabled,
+            automaticReconnectAllowed: automaticReconnectAllowed,
             isReconnectPreparationInFlight: isReconnectPreparationInFlight
         ) {
             return .hidden
@@ -61,7 +74,7 @@ enum TerminalConnectionPresentationPolicy {
     static func usesReconnectBanner(
         connectionState: ConnectionState,
         hasEstablishedConnection: Bool,
-        autoReconnectEnabled: Bool,
+        automaticReconnectAllowed: Bool,
         isReconnectPreparationInFlight: Bool
     ) -> Bool {
         if isReconnectPreparationInFlight {
@@ -78,7 +91,7 @@ enum TerminalConnectionPresentationPolicy {
             return true
         }
 
-        return connectionState == .disconnected && autoReconnectEnabled
+        return connectionState == .disconnected && automaticReconnectAllowed
     }
 }
 

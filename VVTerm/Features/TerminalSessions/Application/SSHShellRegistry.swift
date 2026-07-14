@@ -136,6 +136,23 @@ struct SSHShellRegistry {
         registrations[entityId]?.shellId
     }
 
+    func owns(client: SSHClient, shellId: UUID, for entityId: UUID) -> Bool {
+        guard let registration = registrations[entityId] else { return false }
+        return ObjectIdentifier(registration.client) == ObjectIdentifier(client)
+            && registration.shellId == shellId
+    }
+
+    func ownsConnection(client: SSHClient, for entityId: UUID) -> Bool {
+        let identifier = ObjectIdentifier(client)
+        if let registration = registrations[entityId] {
+            return ObjectIdentifier(registration.client) == identifier
+        }
+        if let context = startsInFlight[entityId] {
+            return ObjectIdentifier(context.client) == identifier
+        }
+        return false
+    }
+
     func client(for entityId: UUID) -> SSHClient? {
         registrations[entityId]?.client
     }

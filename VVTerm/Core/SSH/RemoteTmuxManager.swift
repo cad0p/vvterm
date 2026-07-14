@@ -116,13 +116,15 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         context: CommandContext = .startupExec,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        lifecycleMarkerToken: String? = nil
     ) -> String {
         let body = attachOrCreateBody(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
             context: context,
-            backend: backend
+            backend: backend,
+            lifecycleMarkerToken: lifecycleMarkerToken
         )
         return commandString(for: body, context: context, backend: backend)
     }
@@ -130,12 +132,16 @@ actor RemoteTmuxManager {
     nonisolated func attachExistingCommand(
         sessionName: String,
         context: CommandContext = .startupExec,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        lifecycleMarkerToken: String? = nil
     ) -> String {
         let body = attachExistingBody(
             sessionName: sessionName,
-            missingCommand: missingSessionCommand(for: context, backend: backend),
-            backend: backend
+            missingCommand: lifecycleMarkerToken == nil
+                ? missingSessionCommand(for: context, backend: backend)
+                : lifecycleMissingSessionCommand(backend: backend),
+            backend: backend,
+            lifecycleMarkerToken: lifecycleMarkerToken
         )
         return commandString(for: body, context: context, backend: backend)
     }
@@ -145,6 +151,39 @@ actor RemoteTmuxManager {
         backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         attachExistingCommand(sessionName: sessionName, context: .interactiveShell, backend: backend)
+    }
+
+    nonisolated func sessionPresenceProbeCommand(
+        sessionName: String,
+        backend: RemoteTmuxBackend = .unixTmux,
+        existsMarker: String,
+        missingMarker: String
+    ) -> String {
+        if case .windowsPsmux(let commandName, _, _) = backend {
+            let script = """
+            $vvtermPsmux = \(powerShellQuoted(commandName))
+            $vvtermSession = \(powerShellQuoted(sessionName))
+            & $vvtermPsmux has-session -t $vvtermSession 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              [Console]::Out.Write(\(powerShellQuoted(existsMarker)))
+            } else {
+              [Console]::Out.Write(\(powerShellQuoted(missingMarker)))
+            }
+            """
+            return windowsShellCommand(powerShellScript: script, backend: backend)
+        }
+
+        let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
+        let plainSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
+        let exists = RemoteTerminalBootstrap.shellQuoted(existsMarker)
+        let missing = RemoteTerminalBootstrap.shellQuoted(missingMarker)
+        let tmuxProbe = tmuxCommand(includeUTF8: false, includeConfig: false)
+        let body = """
+        \(RemoteTerminalBootstrap.shellPathExport()); \
+        if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
+        printf '%s' \(exists); else printf '%s' \(missing); fi
+        """
+        return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
     nonisolated func attachExecCommand(
@@ -164,14 +203,16 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         terminalType: RemoteTerminalType,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        attachAfterInstall: Bool = true
     ) -> String {
         if backend.isWindows {
             return windowsInstallAndAttachScript(
                 sessionName: sessionName,
                 workingDirectory: workingDirectory,
                 terminalType: terminalType,
-                backend: backend
+                backend: backend,
+                attachAfterInstall: attachAfterInstall
             )
         }
 
@@ -182,49 +223,53 @@ actor RemoteTmuxManager {
             backend: backend
         )
         let configWrite = configWriteCommand(terminalType: terminalType, backend: backend)
+        let afterInstall = attachAfterInstall ? attach : ":"
 
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
         \(configWrite);
-        if command -v tmux >/dev/null 2>&1; then \(attach); fi;
-        if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi;
-        OS_NAME="$(uname -s)";
-        if [ "$OS_NAME" = "Darwin" ]; then
-          if command -v brew >/dev/null 2>&1; then
-            brew install tmux;
-          elif command -v port >/dev/null 2>&1; then
-            $SUDO port install tmux;
-          else
-            echo "No supported package manager found for macOS.";
-          fi;
-        elif [ "$OS_NAME" = "Linux" ]; then
-          if command -v apt-get >/dev/null 2>&1; then
-            $SUDO apt-get update && $SUDO apt-get install -y tmux;
-          elif command -v dnf >/dev/null 2>&1; then
-            $SUDO dnf install -y tmux;
-          elif command -v yum >/dev/null 2>&1; then
-            $SUDO yum install -y tmux;
-          elif command -v pacman >/dev/null 2>&1; then
-            $SUDO pacman -Sy --noconfirm tmux;
-          elif command -v apk >/dev/null 2>&1; then
-            $SUDO apk add tmux;
-          elif command -v zypper >/dev/null 2>&1; then
-            $SUDO zypper -n install tmux;
-          elif command -v xbps-install >/dev/null 2>&1; then
-            $SUDO xbps-install -Sy tmux;
-          elif command -v opkg >/dev/null 2>&1; then
-            $SUDO opkg update && $SUDO opkg install tmux;
-          elif command -v emerge >/dev/null 2>&1; then
-            $SUDO emerge app-misc/tmux;
-          elif command -v pkg >/dev/null 2>&1; then
-            $SUDO pkg install -y tmux;
-          else
-            echo "No supported package manager found for Linux.";
-          fi;
+        if command -v tmux >/dev/null 2>&1; then
+          \(afterInstall);
         else
-          echo "Unsupported OS: $OS_NAME";
+          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi;
+          OS_NAME="$(uname -s)";
+          if [ "$OS_NAME" = "Darwin" ]; then
+            if command -v brew >/dev/null 2>&1; then
+              brew install tmux;
+            elif command -v port >/dev/null 2>&1; then
+              $SUDO port install tmux;
+            else
+              echo "No supported package manager found for macOS.";
+            fi;
+          elif [ "$OS_NAME" = "Linux" ]; then
+            if command -v apt-get >/dev/null 2>&1; then
+              $SUDO apt-get update && $SUDO apt-get install -y tmux;
+            elif command -v dnf >/dev/null 2>&1; then
+              $SUDO dnf install -y tmux;
+            elif command -v yum >/dev/null 2>&1; then
+              $SUDO yum install -y tmux;
+            elif command -v pacman >/dev/null 2>&1; then
+              $SUDO pacman -Sy --noconfirm tmux;
+            elif command -v apk >/dev/null 2>&1; then
+              $SUDO apk add tmux;
+            elif command -v zypper >/dev/null 2>&1; then
+              $SUDO zypper -n install tmux;
+            elif command -v xbps-install >/dev/null 2>&1; then
+              $SUDO xbps-install -Sy tmux;
+            elif command -v opkg >/dev/null 2>&1; then
+              $SUDO opkg update && $SUDO opkg install tmux;
+            elif command -v emerge >/dev/null 2>&1; then
+              $SUDO emerge app-misc/tmux;
+            elif command -v pkg >/dev/null 2>&1; then
+              $SUDO pkg install -y tmux;
+            else
+              echo "No supported package manager found for Linux.";
+            fi;
+          else
+            echo "Unsupported OS: $OS_NAME";
+          fi;
         fi;
-        if command -v tmux >/dev/null 2>&1; then \(attach); else echo "tmux installation failed."; fi
+        if command -v tmux >/dev/null 2>&1; then \(afterInstall); else echo "tmux installation failed."; fi
         """
         return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
@@ -339,38 +384,47 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         context: CommandContext = .startupExec,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        lifecycleMarkerToken: String? = nil
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachOrCreateCommand(
                 sessionName: sessionName,
                 workingDirectory: workingDirectory,
-                backend: backend
+                backend: backend,
+                lifecycleMarkerToken: lifecycleMarkerToken
             )
         }
 
         let createCommand = createSessionCommand(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
-            backend: backend
+            backend: backend,
+            lifecycleMarkerToken: lifecycleMarkerToken
         )
         return attachExistingBody(
             sessionName: sessionName,
             missingCommand: createCommand,
-            backend: backend
+            backend: backend,
+            lifecycleMarkerToken: lifecycleMarkerToken,
+            reportsCreationFailure: true
         )
     }
 
     nonisolated private func attachExistingBody(
         sessionName: String,
         missingCommand: String,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        lifecycleMarkerToken: String? = nil,
+        reportsCreationFailure: Bool = false
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachExistingCommand(
                 sessionName: sessionName,
                 missingCommand: missingCommand,
-                backend: backend
+                backend: backend,
+                lifecycleMarkerToken: lifecycleMarkerToken,
+                reportsCreationFailure: reportsCreationFailure
             )
         }
 
@@ -379,21 +433,53 @@ actor RemoteTmuxManager {
         let tmuxProbe = tmuxCommand(includeUTF8: false, includeConfig: false)
         let tmuxAttach = tmuxCommand(includeUTF8: true, includeConfig: true)
         let tmuxSource = tmuxCommand(includeUTF8: false, includeConfig: false)
+        let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
+        let creationStatusCapture = reportsCreationFailure && lifecycleMarkerToken != nil
+            ? "; vvtermTmuxCreateStatus=$?"
+            : ""
+
+        let lifecycleReport: String
+        if let lifecycleMarkerToken {
+            let detached = RemoteTerminalBootstrap.shellQuoted(
+                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .detached)
+            )
+            let ended = RemoteTerminalBootstrap.shellQuoted(
+                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .ended)
+            )
+            if reportsCreationFailure {
+                let creationFailed = RemoteTerminalBootstrap.shellQuoted(
+                    TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .creationFailed)
+                )
+                lifecycleReport = """
+                ; if [ "${vvtermTmuxCreateStatus:-0}" -ne 0 ]; then printf '%s' \(creationFailed); \
+                elif \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
+                printf '%s' \(detached); else printf '%s' \(ended); fi
+                """
+            } else {
+                lifecycleReport = """
+                ; if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
+                printf '%s' \(detached); else printf '%s' \(ended); fi
+                """
+            }
+        } else {
+            lifecycleReport = ""
+        }
 
         return """
         \(RemoteTerminalBootstrap.shellPathExport()); \
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null; then \
-        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; exec \(tmuxAttach) attach-session -t \(exactSession); \
+        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(exactSession); \
         elif \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; exec \(tmuxAttach) attach-session -t \(plainSession); \
-        else \(missingCommand); fi
+        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(plainSession); \
+        else \(missingCommand)\(creationStatusCapture); fi\(lifecycleReport)
         """
     }
 
     nonisolated private func createSessionCommand(
         sessionName: String,
         workingDirectory: String,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        lifecycleMarkerToken: String? = nil
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsCreateSessionCommand(
@@ -406,7 +492,12 @@ actor RemoteTmuxManager {
         let escapedDir = shellDirectoryArgument(workingDirectory)
         let escapedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
         let tmux = tmuxCommand(includeUTF8: true, includeConfig: true)
-        return "exec \(tmux) new-session -A -s \(escapedSession) -c \(escapedDir)"
+        let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
+        return "\(processReplacement)\(tmux) new-session -A -s \(escapedSession) -c \(escapedDir)"
+    }
+
+    nonisolated private func lifecycleMissingSessionCommand(backend: RemoteTmuxBackend) -> String {
+        backend.isWindows ? "$null" : ":"
     }
 
     nonisolated private func tmuxCommand(
@@ -702,13 +793,15 @@ actor RemoteTmuxManager {
     nonisolated private func windowsAttachOrCreateCommand(
         sessionName: String,
         workingDirectory: String,
-        backend: RemoteTmuxBackend
+        backend: RemoteTmuxBackend,
+        lifecycleMarkerToken: String?
     ) -> String {
         windowsShellCommand(
             powerShellScript: windowsAttachOrCreatePowerShell(
                 sessionName: sessionName,
                 workingDirectory: workingDirectory,
-                backend: backend
+                backend: backend,
+                lifecycleMarkerToken: lifecycleMarkerToken
             ),
             backend: backend
         )
@@ -717,13 +810,17 @@ actor RemoteTmuxManager {
     nonisolated private func windowsAttachExistingCommand(
         sessionName: String,
         missingCommand: String,
-        backend: RemoteTmuxBackend
+        backend: RemoteTmuxBackend,
+        lifecycleMarkerToken: String?,
+        reportsCreationFailure: Bool = false
     ) -> String {
         windowsShellCommand(
             powerShellScript: windowsAttachExistingPowerShell(
                 sessionName: sessionName,
                 missingCommand: missingCommand,
-                backend: backend
+                backend: backend,
+                lifecycleMarkerToken: lifecycleMarkerToken,
+                reportsCreationFailure: reportsCreationFailure
             ),
             backend: backend
         )
@@ -733,7 +830,8 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         backend: RemoteTmuxBackend,
-        commandExpression: String? = nil
+        commandExpression: String? = nil,
+        lifecycleMarkerToken: String? = nil
     ) -> String {
         let createCommand = windowsCreateSessionPowerShell(
             sessionName: sessionName,
@@ -745,7 +843,9 @@ actor RemoteTmuxManager {
             sessionName: sessionName,
             missingCommand: createCommand,
             backend: backend,
-            commandExpression: commandExpression
+            commandExpression: commandExpression,
+            lifecycleMarkerToken: lifecycleMarkerToken,
+            reportsCreationFailure: true
         )
     }
 
@@ -753,10 +853,46 @@ actor RemoteTmuxManager {
         sessionName: String,
         missingCommand: String,
         backend: RemoteTmuxBackend,
-        commandExpression: String? = nil
+        commandExpression: String? = nil,
+        lifecycleMarkerToken: String? = nil,
+        reportsCreationFailure: Bool = false
     ) -> String {
         guard case .windowsPsmux(let commandName, _, _) = backend else { return missingCommand }
         let psmuxExpression = commandExpression ?? powerShellQuoted(commandName)
+        let lifecycleReport: String
+        if let lifecycleMarkerToken {
+            let detached = powerShellQuoted(
+                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .detached)
+            )
+            let ended = powerShellQuoted(
+                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .ended)
+            )
+            let sessionPresenceReport = """
+            & $vvtermPsmux has-session -t $vvtermSession 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              [Console]::Out.Write(\(detached))
+            } else {
+              [Console]::Out.Write(\(ended))
+            }
+            """
+            if reportsCreationFailure {
+                let creationFailed = powerShellQuoted(
+                    TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .creationFailed)
+                )
+                lifecycleReport = """
+                if ($null -ne $vvtermTmuxCreateStatus -and $vvtermTmuxCreateStatus -ne 0) {
+                  [Console]::Out.Write(\(creationFailed))
+                } else {
+                  \(sessionPresenceReport)
+                }
+                """
+            } else {
+                lifecycleReport = sessionPresenceReport
+            }
+        } else {
+            lifecycleReport = ""
+        }
+
         return """
         $vvtermPsmux = \(psmuxExpression)
         $vvtermConfig = \(windowsConfigPathPowerShellExpression())
@@ -767,7 +903,9 @@ actor RemoteTmuxManager {
           & $vvtermPsmux -u -f $vvtermConfig attach-session -d -t $vvtermSession
         } else {
         \(indentPowerShell(missingCommand, spaces: 2))
+        \(reportsCreationFailure && lifecycleMarkerToken != nil ? "  $vvtermTmuxCreateStatus = $LASTEXITCODE" : "")
         }
+        \(lifecycleReport)
         """
     }
 
@@ -945,7 +1083,8 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         terminalType: RemoteTerminalType,
-        backend: RemoteTmuxBackend
+        backend: RemoteTmuxBackend,
+        attachAfterInstall: Bool
     ) -> String {
         let configWrite = windowsConfigWritePowerShell(terminalType: terminalType)
         let attach = windowsAttachOrCreatePowerShell(
@@ -954,6 +1093,7 @@ actor RemoteTmuxManager {
             backend: backend,
             commandExpression: "$vvtermPsmuxCommand.Source"
         )
+        let afterInstall = attachAfterInstall ? attach : "Write-Output 'psmux installation completed.'"
         let script = """
         \(configWrite)
         function Get-VVTermPsmuxCommand {
@@ -987,7 +1127,7 @@ actor RemoteTmuxManager {
           $vvtermPsmuxInstalled = $null -ne $vvtermPsmuxCommand
         }
         if ($vvtermPsmuxInstalled) {
-        \(indentPowerShell(attach, spaces: 2))
+        \(indentPowerShell(afterInstall, spaces: 2))
         } else {
           Write-Output 'psmux installation failed or no supported package manager was found.'
         }

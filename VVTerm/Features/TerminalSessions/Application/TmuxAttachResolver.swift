@@ -2,14 +2,9 @@ import Foundation
 
 @MainActor
 final class TmuxAttachResolver {
-
-    enum SessionOwnership {
-        case managed
-        case external
-    }
-
     var sessionNames: [UUID: String] = [:]
-    var sessionOwnership: [UUID: SessionOwnership] = [:]
+    var sessionOwnership: [UUID: TmuxSessionOwnership] = [:]
+    private(set) var confirmedManagedSessions: Set<UUID> = []
 
     private(set) var currentPrompt: TmuxAttachPrompt?
     private var promptQueue: [TmuxAttachPrompt] = []
@@ -66,6 +61,23 @@ final class TmuxAttachResolver {
     func clearAttachmentState(for entityId: UUID) {
         sessionNames.removeValue(forKey: entityId)
         sessionOwnership.removeValue(forKey: entityId)
+        confirmedManagedSessions.remove(entityId)
+    }
+
+    func confirmManagedSession(for entityId: UUID) {
+        guard sessionOwnership[entityId] == .managed,
+              sessionNames[entityId] != nil else { return }
+        confirmedManagedSessions.insert(entityId)
+    }
+
+    func hasConfirmedManagedSession(for entityId: UUID) -> Bool {
+        confirmedManagedSessions.contains(entityId)
+    }
+
+    func clearAllAttachmentState() {
+        sessionNames.removeAll()
+        sessionOwnership.removeAll()
+        confirmedManagedSessions.removeAll()
     }
 
     func clearRuntimeState(for entityId: UUID, setPrompt: (TmuxAttachPrompt?) -> Void) {
@@ -84,9 +96,14 @@ final class TmuxAttachResolver {
     func updateAttachmentState(for entityId: UUID, selection: TmuxAttachSelection, setPrompt: (TmuxAttachPrompt?) -> Void) {
         switch selection {
         case .createManaged:
-            sessionNames[entityId] = managedSessionName(for: entityId)
+            let managedName = managedSessionName(for: entityId)
+            if sessionNames[entityId] != managedName || sessionOwnership[entityId] != .managed {
+                confirmedManagedSessions.remove(entityId)
+            }
+            sessionNames[entityId] = managedName
             sessionOwnership[entityId] = .managed
         case .attachExisting(let name):
+            confirmedManagedSessions.remove(entityId)
             sessionNames[entityId] = name
             sessionOwnership[entityId] = ownership(for: name)
         case .skipTmux:
@@ -292,7 +309,7 @@ final class TmuxAttachResolver {
         setPrompt(currentPrompt)
     }
 
-    private func ownership(for sessionName: String) -> SessionOwnership {
+    private func ownership(for sessionName: String) -> TmuxSessionOwnership {
         isCurrentDeviceManagedSessionName(sessionName) ? .managed : .external
     }
 }
