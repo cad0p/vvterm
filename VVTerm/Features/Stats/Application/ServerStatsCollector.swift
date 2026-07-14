@@ -147,7 +147,7 @@ final class ServerStatsCollector: ObservableObject {
             return stats.topProcesses
         }
 
-        let processes = try await platformCollector.collectProcesses(client: client)
+        let processes = try await platformCollector.collectProcesses(client: client, context: context)
         return processes.isEmpty ? stats.topProcesses : processes
     }
 

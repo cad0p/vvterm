@@ -4,6 +4,7 @@ import Foundation
 
 /// Stats collector for FreeBSD systems (including TrueNAS, pfSense, OPNsense)
 struct FreeBSDStatsCollector: PlatformStatsCollector {
+    private let periodicProcessLimit = 24
 
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int) {
         let cmd = "uname -srm; echo '---SEP---'; hostname; echo '---SEP---'; sysctl -n hw.ncpu 2>/dev/null || echo 1"
@@ -22,12 +23,13 @@ struct FreeBSDStatsCollector: PlatformStatsCollector {
 
         // Batch commands for FreeBSD
         let batchCmd = """
+            LC_ALL=C LANG=C; \
             sysctl -n vm.loadavg 2>/dev/null || uptime | sed 's/.*load averages: //'; echo '---SEP---'; \
             sysctl -n kern.boottime; echo '---SEP---'; \
             sysctl -n hw.physmem; echo '---SEP---'; \
             vmstat -H 2>/dev/null || vmstat; echo '---SEP---'; \
             netstat -ibn | head -20; echo '---SEP---'; \
-            ps -axo pid,pcpu,pmem,comm | head -6
+            sysctl -n hw.ncpu 2>/dev/null || echo 1
             """
         let batchOutput = try await client.execute(batchCmd)
         let sections = batchOutput.components(separatedBy: "---SEP---")
@@ -77,9 +79,21 @@ struct FreeBSDStatsCollector: PlatformStatsCollector {
             context.updateNetwork(rx: netRx, tx: netTx, timestamp: now)
         }
 
-        // Processes
-        if sections.count > 5 {
-            stats.topProcesses = parsePs(sections[5])
+        let logicalCPUCount = sections.indices.contains(5)
+            ? (Int(sections[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1)
+            : 1
+        stats.cpuCores = max(logicalCPUCount, 1)
+
+        if let collection = try? await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .freebsd,
+            logicalProcessorCount: stats.cpuCores,
+            memoryTotal: totalMem,
+            limit: periodicProcessLimit
+        ) {
+            stats.topProcesses = collection.processes
+            stats.processCount = collection.totalCount
         }
 
         // CPU via vmstat or top
@@ -92,16 +106,26 @@ struct FreeBSDStatsCollector: PlatformStatsCollector {
         stats.cpuIowait = 0
         stats.cpuSteal = 0
 
-        // Process count
-        let procCount = try await client.execute("ps -ax | wc -l")
-        stats.processCount = Int(procCount.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-
         // Volumes
-        let dfOutput = try await client.execute("df -m 2>/dev/null | grep -E '^/dev' | head -10")
+        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -m 2>/dev/null | grep -E '^/dev' | head -10")
         stats.volumes = parseDf(dfOutput)
 
         stats.timestamp = Date()
         return stats
+    }
+
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
+        let systemInfo = try await getSystemInfo(client: client)
+        let memoryOutput = try await client.execute("sysctl -n hw.physmem 2>/dev/null")
+        let memoryTotal = UInt64(memoryOutput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        return try await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .freebsd,
+            logicalProcessorCount: max(systemInfo.cpuCores, 1),
+            memoryTotal: memoryTotal,
+            limit: nil
+        ).processes
     }
 
     // MARK: - Parsers
@@ -138,7 +162,9 @@ struct FreeBSDStatsCollector: PlatformStatsCollector {
 
         let free = freePages * pageSize
         let cached = (inactivePages + cachePages) * pageSize
-        let used = totalMemory - free - cached
+        let reclaimableResult = free.addingReportingOverflow(cached)
+        let reclaimable = reclaimableResult.overflow ? totalMemory : min(reclaimableResult.partialValue, totalMemory)
+        let used = totalMemory - reclaimable
 
         return (totalMemory, used, free, cached, buffers)
     }

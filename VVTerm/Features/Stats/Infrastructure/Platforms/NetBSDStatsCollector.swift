@@ -4,6 +4,7 @@ import Foundation
 
 /// Stats collector for NetBSD systems
 struct NetBSDStatsCollector: PlatformStatsCollector {
+    private let periodicProcessLimit = 24
 
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int) {
         let cmd = "uname -srm; echo '---SEP---'; hostname; echo '---SEP---'; sysctl -n hw.ncpu 2>/dev/null || echo 1"
@@ -22,12 +23,13 @@ struct NetBSDStatsCollector: PlatformStatsCollector {
 
         // Batch commands for NetBSD
         let batchCmd = """
+            LC_ALL=C LANG=C; \
             sysctl -n vm.loadavg 2>/dev/null || uptime | sed 's/.*load averages: //'; echo '---SEP---'; \
             sysctl -n kern.boottime; echo '---SEP---'; \
             sysctl -n hw.physmem64 2>/dev/null || sysctl -n hw.physmem; echo '---SEP---'; \
             vmstat 1 2 | tail -1; echo '---SEP---'; \
             netstat -ibn | head -20; echo '---SEP---'; \
-            ps -axo pid,pcpu,pmem,comm | head -6
+            sysctl -n hw.ncpu 2>/dev/null || echo 1
             """
         let batchOutput = try await client.execute(batchCmd)
         let sections = batchOutput.components(separatedBy: "---SEP---")
@@ -86,21 +88,43 @@ struct NetBSDStatsCollector: PlatformStatsCollector {
             context.updateNetwork(rx: netRx, tx: netTx, timestamp: now)
         }
 
-        // Processes
-        if sections.count > 5 {
-            stats.topProcesses = parsePs(sections[5])
+        let logicalCPUCount = sections.indices.contains(5)
+            ? (Int(sections[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1)
+            : 1
+        stats.cpuCores = max(logicalCPUCount, 1)
+
+        if let collection = try? await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .netbsd,
+            logicalProcessorCount: stats.cpuCores,
+            memoryTotal: totalMem,
+            limit: periodicProcessLimit
+        ) {
+            stats.topProcesses = collection.processes
+            stats.processCount = collection.totalCount
         }
 
-        // Process count
-        let procCount = try await client.execute("ps -ax | wc -l")
-        stats.processCount = Int(procCount.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-
         // Volumes
-        let dfOutput = try await client.execute("df -k 2>/dev/null | grep -E '^/dev' | head -10")
+        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -k 2>/dev/null | grep -E '^/dev' | head -10")
         stats.volumes = parseDf(dfOutput)
 
         stats.timestamp = Date()
         return stats
+    }
+
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
+        let systemInfo = try await getSystemInfo(client: client)
+        let memoryOutput = try await client.execute("sysctl -n hw.physmem64 2>/dev/null || sysctl -n hw.physmem 2>/dev/null")
+        let memoryTotal = UInt64(memoryOutput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        return try await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .netbsd,
+            logicalProcessorCount: max(systemInfo.cpuCores, 1),
+            memoryTotal: memoryTotal,
+            limit: nil
+        ).processes
     }
 
     // MARK: - Parsers
@@ -129,7 +153,8 @@ struct NetBSDStatsCollector: PlatformStatsCollector {
         // Get memory info via sysctl
         let memCmd = """
             sysctl -n uvm.free 2>/dev/null || echo 0; echo '---M---'; \
-            sysctl -n uvm.filemax 2>/dev/null || echo 0
+            sysctl -n uvm.filemax 2>/dev/null || echo 0; echo '---M---'; \
+            sysctl -n hw.pagesize 2>/dev/null || getconf PAGE_SIZE 2>/dev/null || echo 4096
             """
         let memOutput = try await client.execute(memCmd)
         let parts = memOutput.components(separatedBy: "---M---")
@@ -137,7 +162,7 @@ struct NetBSDStatsCollector: PlatformStatsCollector {
         let freePages = parts.count > 0 ? UInt64(parts[0].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0 : 0
         let fileCache = parts.count > 1 ? UInt64(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0 : 0
 
-        let pageSize: UInt64 = 4096
+        let pageSize = parts.count > 2 ? UInt64(parts[2].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 4096 : 4096
         let free = freePages * pageSize
         let cached = fileCache * pageSize
         let used = totalMemory > free + cached ? totalMemory - free - cached : 0

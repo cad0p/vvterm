@@ -165,6 +165,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
 
         // Batch commands for macOS
         let batchCmd = """
+            LC_ALL=C LANG=C; \
             sysctl -n vm.loadavg 2>/dev/null || uptime | sed 's/.*load average[s]*: //'; echo '---SEP---'; \
             sysctl -n kern.boottime; echo '---SEP---'; \
             sysctl -n hw.memsize; echo '---SEP---'; \
@@ -225,7 +226,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
             : 0
 
         // CPU via top (separate command due to complexity)
-        let topOutput = try await client.execute("top -l 1 -n 0 -s 0 2>/dev/null | grep 'CPU usage' || echo 'CPU usage: 0% user, 0% sys, 100% idle'")
+        let topOutput = try await client.execute("LC_ALL=C LANG=C top -l 1 -n 0 -s 0 2>/dev/null | grep 'CPU usage' || echo 'CPU usage: 0% user, 0% sys, 100% idle'")
         let cpu = parseTopCpu(topOutput)
         stats.cpuUser = cpu.user
         stats.cpuSystem = cpu.system
@@ -240,36 +241,41 @@ struct DarwinStatsCollector: PlatformStatsCollector {
             stats.cpuCores = max(stats.cpuCores, cpuCoreSamples.count)
         }
 
-        // Process count
-        let procCount = try await client.execute("ps -ax | wc -l")
-        stats.processCount = Int(procCount.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-
-        let processOutput = try await client.execute(
-            Self.processCommand(limit: Self.periodicProcessLimit),
-            timeout: .seconds(8)
-        )
-        stats.topProcesses = parsePs(processOutput)
+        if let collection = try? await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .darwin,
+            logicalProcessorCount: max(logicalCPUCount, 1),
+            memoryTotal: totalMem,
+            limit: Self.periodicProcessLimit
+        ) {
+            stats.topProcesses = collection.processes
+            stats.processCount = collection.totalCount
+        }
 
         // Volumes
-        let dfOutput = try await client.execute("df -m 2>/dev/null | grep -E '^/dev'")
+        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -m 2>/dev/null | grep -E '^/dev'")
         stats.volumes = parseDf(dfOutput)
 
         stats.timestamp = Date()
         return stats
     }
 
-    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
-        let output = try await client.execute(Self.processCommand(limit: nil), timeout: .seconds(8))
-        return parsePs(output)
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
+        let systemInfo = try await getSystemInfo(client: client)
+        let totalMemoryOutput = try await client.execute("sysctl -n hw.memsize 2>/dev/null")
+        let totalMemory = UInt64(totalMemoryOutput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        return try await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .darwin,
+            logicalProcessorCount: max(systemInfo.cpuCores, 1),
+            memoryTotal: totalMemory,
+            limit: nil
+        ).processes
     }
 
     // MARK: - Parsers
-
-    private static func processCommand(limit: Int?) -> String {
-        let command = "ps -Axo pid=,user=,pcpu=,pmem=,comm=,args= 2>/dev/null | sort -k3 -nr"
-        guard let limit else { return command }
-        return "\(command) | head -n \(limit)"
-    }
 
     private func collectCPUCoreSamplesIfAvailable(
         client: SSHClient,

@@ -22,7 +22,7 @@ protocol PlatformStatsCollector: Sendable {
 
     /// Collect a fuller process list for detail sheets.
     /// Periodic collectors may keep their process list capped for SSH/UI performance.
-    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo]
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo]
 }
 
 extension PlatformStatsCollector {
@@ -43,7 +43,7 @@ extension PlatformStatsCollector {
         )
     }
 
-    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
         []
     }
 }
@@ -57,6 +57,10 @@ final class StatsCollectionContext: @unchecked Sendable {
     var prevTimestamp: Date?
     var prevCpuValues: LinuxCpuValues?
     var prevCpuCoreValues: [String: LinuxCpuValues] = [:]
+    private var previousProcessCPUTimeByPID: [Int: TimeInterval] = [:]
+    private var previousProcessTimestamp: Date?
+    private var lastPeriodicProcessesTimestamp: Date?
+    private var lastPeriodicProcesses: [ProcessInfo] = []
     var lastGPUCollectionTimestamp: Date?
     var lastGPUSamples: [GPUSample] = []
     var lastDockerCollectionTimestamp: Date?
@@ -77,6 +81,10 @@ final class StatsCollectionContext: @unchecked Sendable {
             prevTimestamp = nil
             prevCpuValues = nil
             prevCpuCoreValues = [:]
+            previousProcessCPUTimeByPID = [:]
+            previousProcessTimestamp = nil
+            lastPeriodicProcessesTimestamp = nil
+            lastPeriodicProcesses = []
             lastGPUCollectionTimestamp = nil
             lastGPUSamples = []
             lastDockerCollectionTimestamp = nil
@@ -120,6 +128,61 @@ final class StatsCollectionContext: @unchecked Sendable {
         withLock {
             prevCpuCoreValues
         }
+    }
+
+    /// Converts cumulative per-process CPU time into a share of total machine capacity.
+    /// The first snapshot seeds the interval and intentionally returns no percentages.
+    func processCPUPercentages(
+        cumulativeCPUTimeByPID: [Int: TimeInterval],
+        timestamp: Date,
+        logicalProcessorCount: Int
+    ) -> [Int: Double] {
+        withLock {
+            defer {
+                previousProcessCPUTimeByPID = cumulativeCPUTimeByPID
+                previousProcessTimestamp = timestamp
+            }
+
+            guard let previousProcessTimestamp else { return [:] }
+            let elapsed = timestamp.timeIntervalSince(previousProcessTimestamp)
+            guard elapsed >= 0.25 else { return [:] }
+
+            let capacity = elapsed * Double(max(logicalProcessorCount, 1))
+            guard capacity > 0 else { return [:] }
+
+            var percentages: [Int: Double] = [:]
+            for (pid, currentCPUTime) in cumulativeCPUTimeByPID {
+                guard let previousCPUTime = previousProcessCPUTimeByPID[pid],
+                      currentCPUTime >= previousCPUTime else {
+                    continue
+                }
+                let percent = (currentCPUTime - previousCPUTime) / capacity * 100
+                if percent.isFinite {
+                    percentages[pid] = min(max(percent, 0), 100)
+                }
+            }
+            return percentages
+        }
+    }
+
+    func shouldCollectPeriodicProcesses(now: Date = Date(), minimumInterval: TimeInterval) -> Bool {
+        withLock {
+            guard let lastPeriodicProcessesTimestamp else { return true }
+            return now.timeIntervalSince(lastPeriodicProcessesTimestamp) >= minimumInterval
+        }
+    }
+
+    func updatePeriodicProcesses(_ processes: [ProcessInfo], timestamp: Date = Date()) {
+        withLock {
+            lastPeriodicProcessesTimestamp = timestamp
+            if !processes.isEmpty {
+                lastPeriodicProcesses = processes
+            }
+        }
+    }
+
+    func getPeriodicProcesses() -> [ProcessInfo] {
+        withLock { lastPeriodicProcesses }
     }
 
     func shouldCollectGPU(now: Date = Date(), minimumInterval: TimeInterval = 5) -> Bool {

@@ -77,8 +77,13 @@ struct ProcessInfo: Identifiable {
     var id: Int { pid }
     let pid: Int
     let name: String
+    /// Share of total logical CPU capacity used during the latest sample interval.
+    /// A value of 100 means the process saturated the whole machine, not one core.
     let cpuPercent: Double
+    /// Resident physical memory divided by total visible physical memory.
     let memoryPercent: Double
+    /// Resident physical memory in bytes when the platform exposes it.
+    let memoryBytes: UInt64?
     let user: String
     let command: String
 
@@ -87,6 +92,7 @@ struct ProcessInfo: Identifiable {
         name: String,
         cpuPercent: Double,
         memoryPercent: Double,
+        memoryBytes: UInt64? = nil,
         user: String = "",
         command: String = ""
     ) {
@@ -94,6 +100,7 @@ struct ProcessInfo: Identifiable {
         self.name = name
         self.cpuPercent = cpuPercent
         self.memoryPercent = memoryPercent
+        self.memoryBytes = memoryBytes
         self.user = user
         self.command = command.isEmpty ? name : command
     }

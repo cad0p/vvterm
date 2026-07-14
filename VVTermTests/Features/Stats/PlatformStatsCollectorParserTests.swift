@@ -2,6 +2,96 @@ import XCTest
 @testable import VVTerm
 
 final class PlatformStatsCollectorParserTests: XCTestCase {
+    func testProcessCPUPercentagesUseTotalMachineCapacityOverSampleInterval() {
+        let context = StatsCollectionContext()
+        let start = Date(timeIntervalSince1970: 100)
+
+        XCTAssertTrue(context.processCPUPercentages(
+            cumulativeCPUTimeByPID: [42: 10],
+            timestamp: start,
+            logicalProcessorCount: 8
+        ).isEmpty)
+
+        let percentages = context.processCPUPercentages(
+            cumulativeCPUTimeByPID: [42: 12],
+            timestamp: start.addingTimeInterval(2),
+            logicalProcessorCount: 8
+        )
+
+        XCTAssertEqual(percentages[42] ?? -1, 12.5, accuracy: 0.001)
+    }
+
+    func testPeriodicProcessCachePreservesLastGoodSample() {
+        let context = StatsCollectionContext()
+        let process = ProcessInfo(pid: 42, name: "worker", cpuPercent: 25, memoryPercent: 5)
+
+        context.updatePeriodicProcesses([process], timestamp: Date(timeIntervalSince1970: 100))
+        context.updatePeriodicProcesses([], timestamp: Date(timeIntervalSince1970: 105))
+
+        XCTAssertEqual(context.getPeriodicProcesses().map(\.pid), [42])
+        XCTAssertFalse(context.shouldCollectPeriodicProcesses(
+            now: Date(timeIntervalSince1970: 106),
+            minimumInterval: 5
+        ))
+    }
+
+    func testUnixProcessParserUsesResidentBytesAndIntervalCPU() {
+        let output = """
+          1124 root 0:12.50 87.4 262144 python server.py
+          2048 uy 1:02.25 12.0 524288 ollama serve
+        """
+
+        let rows = UnixProcessTelemetry.parseProcessRows(output)
+        let processes = UnixProcessTelemetry.makeProcesses(
+            from: rows,
+            intervalCPUPercentages: [1124: 25],
+            memoryTotal: 4_294_967_296
+        )
+
+        XCTAssertEqual(processes.count, 2)
+        XCTAssertEqual(processes[0].cpuPercent, 25, accuracy: 0.001)
+        XCTAssertEqual(processes[0].memoryBytes, 268_435_456)
+        XCTAssertEqual(processes[0].memoryPercent, 6.25, accuracy: 0.001)
+        XCTAssertEqual(processes[0].command, "python server.py")
+    }
+
+    func testUnixProcessCommandsForceInvariantLocale() {
+        XCTAssertTrue(UnixProcessTelemetry.processDetailsCommand(
+            platform: .darwin,
+            limit: 24,
+            pids: nil
+        ).contains("LC_ALL=C LANG=C"))
+        XCTAssertTrue(UnixProcessTelemetry.processDetailsCommand(
+            platform: .linux,
+            limit: nil,
+            pids: nil
+        ).contains("LC_ALL=C LANG=C"))
+    }
+
+    func testBSDPeriodicProcessCommandsAreSortedAndOnDemandIsUnbounded() {
+        for platform in [RemotePlatform.freebsd, .openbsd, .netbsd] {
+            let periodic = UnixProcessTelemetry.processDetailsCommand(
+                platform: platform,
+                limit: 24,
+                pids: nil
+            )
+            XCTAssertTrue(periodic.contains("sort -k4 -nr"))
+            XCTAssertTrue(periodic.contains("head -n 24"))
+
+            let full = UnixProcessTelemetry.processDetailsCommand(
+                platform: platform,
+                limit: nil,
+                pids: nil
+            )
+            XCTAssertFalse(full.contains("head -n"))
+        }
+    }
+
+    func testUnixCPUTimeParserHandlesDaysAndFractionalSeconds() {
+        XCTAssertEqual(UnixProcessTelemetry.parseCPUTime("1-02:03:04.50") ?? -1, 93_784.5, accuracy: 0.001)
+        XCTAssertEqual(UnixProcessTelemetry.parseCPUTime("12:34.25") ?? -1, 754.25, accuracy: 0.001)
+    }
+
     func testDarwinDisplayJSONParsesGPUWithoutDisplayRows() {
         let output = """
         {
@@ -153,6 +243,21 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
         XCTAssertEqual(processes[0].command, "python server.py")
     }
 
+    func testLinuxMemoryParserFallsBackWhenMemAvailableIsMissing() {
+        let output = """
+        MemTotal:       1000000 kB
+        MemFree:         100000 kB
+        Buffers:          50000 kB
+        Cached:          300000 kB
+        SReclaimable:     50000 kB
+        Shmem:            25000 kB
+        """
+
+        let memory = LinuxStatsCollector().parseProcMeminfo(output)
+
+        XCTAssertEqual(memory.used, 525_000 * 1_024)
+    }
+
     func testWindowsGPUParserFiltersVirtualAdaptersAndAvoidsCappedVRAM() {
         let output = """
         GameViewer Virtual Display Adapter|GameViewer|0|1.0|ROOT\\DISPLAY\\0000|OK
@@ -249,20 +354,21 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
 
     func testWindowsProcessParserReturnsAllRows() {
         let output = """
-        10|System|100.0|50.0
-        20|Terminal|12.5|200.0
-        30|Code|2.0|512.0
+        10|System|100.0|50.0|2147483648
+        20|Terminal|12.5|20.0|858993459
+        30|Code|2.0|12.5|536870912
         """
 
         let processes = WindowsStatsCollector().parseProcesses(output)
 
         XCTAssertEqual(processes.count, 3)
         XCTAssertEqual(processes[1].name, "Terminal")
+        XCTAssertEqual(processes[1].memoryBytes, 858_993_459)
     }
 
     func testWindowsWMICProcessParserNormalizesCPUAndMemoryPercent() {
         let output = """
-        Node,IDProcess,Name,PercentProcessorTime,WorkingSetPrivate
+        Node,IDProcess,Name,PercentProcessorTime,WorkingSet
         HOST,100,python,320,1073741824
         HOST,200,code,40,536870912
         """
@@ -282,7 +388,7 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
 
     func testWindowsWMICProcessParserReadsLocalizedDecimalCommaCPU() {
         let output = """
-        Node,IDProcess,Name,PercentProcessorTime,WorkingSetPrivate
+        Node,IDProcess,Name,PercentProcessorTime,WorkingSet
         HOST,100,python,"320,0",1073741824
         """
 

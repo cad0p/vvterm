@@ -23,8 +23,16 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         let osInfo = ((try? await executeCMD("ver", using: client, timeout: shellInfoTimeout))?
             .trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
 
-        let cpuCoresCMD = (try? await executeCMD("echo %NUMBER_OF_PROCESSORS%", using: client, timeout: shellInfoTimeout))
+        let environmentCPUCount = (try? await executeCMD("echo %NUMBER_OF_PROCESSORS%", using: client, timeout: shellInfoTimeout))
             .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 1
+        let wmicCPUCount = (try? await executeCMD(
+            "wmic computersystem get NumberOfLogicalProcessors /value",
+            using: client,
+            timeout: shellInfoTimeout
+        )).flatMap { output in
+            parseWMICKeyValueOutput(output)["NumberOfLogicalProcessors"]?.first.flatMap(Int.init)
+        }
+        let cpuCoresCMD = max(wmicCPUCount ?? environmentCPUCount, 1)
 
         if environment.shellProfile.family == .cmd {
             return (hostname, osInfo, cpuCoresCMD)
@@ -220,27 +228,40 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         // Load average (Windows doesn't have this, approximate from CPU)
         stats.loadAverage = (stats.cpuUsage / 100, stats.cpuUsage / 100, stats.cpuUsage / 100)
 
-        if preferCMD {
-            if let processOutput = try? await executeCMD(
-                "wmic path Win32_PerfFormattedData_PerfProc_Process get IDProcess,Name,PercentProcessorTime,WorkingSetPrivate /format:csv",
+        let processCollectionTimestamp = Date()
+        if context.shouldCollectPeriodicProcesses(
+            now: processCollectionTimestamp,
+            minimumInterval: 5
+        ) {
+            var collectedProcesses: [ProcessInfo] = []
+            if let processOutput = try? await executePowerShell(
                 using: client,
-                timeout: topProcessesTimeout
+                script: powerShellProcessScript(limit: periodicProcessLimit),
+                timeout: topProcessesTimeout,
+                probeName: "top_processes"
             ) {
-                let logicalProcessors = (try? await getSystemInfo(client: client))?.cpuCores ?? stats.cpuCores
-                stats.topProcesses = parseWMICProcesses(
+                collectedProcesses = parseProcesses(processOutput)
+            } else if preferCMD,
+                      let processOutput = try? await executeCMD(
+                        "wmic path Win32_PerfFormattedData_PerfProc_Process get IDProcess,Name,PercentProcessorTime,WorkingSet /format:csv",
+                        using: client,
+                        timeout: topProcessesTimeout
+                      ) {
+                let logicalProcessors: Int
+                if stats.cpuCores > 0 {
+                    logicalProcessors = stats.cpuCores
+                } else {
+                    logicalProcessors = (try? await getSystemInfo(client: client))?.cpuCores ?? 1
+                }
+                collectedProcesses = Array(parseWMICProcesses(
                     processOutput,
                     memoryTotal: stats.memoryTotal,
                     logicalProcessorCount: max(logicalProcessors, 1)
-                )
+                ).prefix(periodicProcessLimit))
             }
-        } else if let processOutput = try? await executePowerShell(
-            using: client,
-            script: powerShellProcessScript(limit: periodicProcessLimit),
-            timeout: topProcessesTimeout,
-            probeName: "top_processes"
-        ) {
-            stats.topProcesses = parseProcesses(processOutput)
+            context.updatePeriodicProcesses(collectedProcesses, timestamp: processCollectionTimestamp)
         }
+        stats.topProcesses = context.getPeriodicProcesses()
 
         if preferCMD {
             if let volumeOutput = try? await executeCMD(
@@ -265,7 +286,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return stats
     }
 
-    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
         if let processOutput = try? await executePowerShell(
             using: client,
             script: powerShellProcessScript(limit: nil),
@@ -277,7 +298,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
 
         let memory = (try? await collectMemoryCMD(client: client)) ?? (total: 0, used: 0, free: 0)
         let processOutput = try await executeCMD(
-            "wmic path Win32_PerfFormattedData_PerfProc_Process get IDProcess,Name,PercentProcessorTime,WorkingSetPrivate /format:csv",
+            "wmic path Win32_PerfFormattedData_PerfProc_Process get IDProcess,Name,PercentProcessorTime,WorkingSet /format:csv",
             using: client,
             timeout: topProcessesTimeout
         )
@@ -294,14 +315,15 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return """
         $os = Get-CimInstance Win32_OperatingSystem;
         $totalMemory = [double]$os.TotalVisibleMemorySize * 1024;
-        $logicalProcessors = [math]::Max([Environment]::ProcessorCount, 1);
+        $logicalProcessors = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors;
+        if ($logicalProcessors -le 0) { $logicalProcessors = [Environment]::ProcessorCount };
+        $logicalProcessors = [math]::Max($logicalProcessors, 1);
         Get-CimInstance Win32_PerfFormattedData_PerfProc_Process |
           Where-Object { $_.IDProcess -gt 0 -and $_.Name -ne '_Total' -and $_.Name -ne 'Idle' } |
           Sort-Object PercentProcessorTime -Descending\(limitClause) |
           ForEach-Object {
             $cpu = [double]$_.PercentProcessorTime / $logicalProcessors;
-            $memoryBytes = [double]$_.WorkingSetPrivate;
-            if ($memoryBytes -le 0) { $memoryBytes = [double]$_.WorkingSet };
+            $memoryBytes = [double]$_.WorkingSet;
             $memoryPercent = if ($totalMemory -gt 0) { ($memoryBytes / $totalMemory) * 100 } else { 0 };
             $name = ([string]$_.Name).Replace('|', '/');
             Write-Output ('{0}|{1}|{2}|{3}|{4}' -f $_.IDProcess, $name, [math]::Round($cpu,1), [math]::Round($memoryPercent,1), [uint64]$memoryBytes)
@@ -610,8 +632,15 @@ struct WindowsStatsCollector: PlatformStatsCollector {
             let name = parts[1]
             let cpu = parseWindowsDouble(parts[2]) ?? 0
             let mem = parseWindowsDouble(parts[3]) ?? 0
+            let memoryBytes = parts.count > 4 ? UInt64(parts[4]) : nil
 
-            processes.append(ProcessInfo(pid: pid, name: name, cpuPercent: cpu, memoryPercent: mem))
+            processes.append(ProcessInfo(
+                pid: pid,
+                name: name,
+                cpuPercent: min(max(cpu.isFinite ? cpu : 0, 0), 100),
+                memoryPercent: min(max(mem.isFinite ? mem : 0, 0), 100),
+                memoryBytes: memoryBytes
+            ))
         }
 
         return processes
@@ -698,7 +727,8 @@ struct WindowsStatsCollector: PlatformStatsCollector {
                 pid: pid,
                 name: name,
                 cpuPercent: cpuPercent,
-                memoryPercent: memoryPercent
+                memoryPercent: memoryPercent,
+                memoryBytes: workingSet
             ))
         }
 

@@ -10,7 +10,6 @@ struct LinuxStatsCollector: PlatformStatsCollector {
     private let bytesPerTiB: UInt64 = 1_099_511_627_776
     private let bytesPerPiB: UInt64 = 1_125_899_906_842_624
     private let periodicProcessLimit = 24
-    private let processListTimeout: Duration = .seconds(8)
 
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int) {
         let cmd = "uname -srm; echo '---SEP---'; hostname; echo '---SEP---'; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1"
@@ -99,6 +98,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
                 context.updateCpuValues(cpuResult.newValues)
                 let coreResult = parseProcStatCores(sections[0], prevValues: context.getCpuCoreValues())
                 stats.cpuCoreSamples = coreResult.samples
+                stats.cpuCores = coreResult.samples.count
                 context.updateCpuCoreValues(coreResult.newValues)
                 missingCpu = false
             }
@@ -174,7 +174,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
 
         if needsFallback {
             let fallbackCmd = """
-                LC_ALL=C LANG=C \
+                export LC_ALL=C LANG=C; \
                 top -bn1 2>/dev/null | head -20; echo '---SEP---'; \
                 free -b 2>/dev/null; echo '---SEP---'; \
                 uptime 2>/dev/null; echo '---SEP---'; \
@@ -186,7 +186,6 @@ struct LinuxStatsCollector: PlatformStatsCollector {
                   [ -n "$rx" ] && [ -n "$tx" ] && echo "$n $rx $tx"; \
                 done; echo '---SEP---'; \
                 (ip -s link 2>/dev/null || ifconfig -a 2>/dev/null); echo '---SEP---'; \
-                \(processCommand(limit: periodicProcessLimit)); echo '---SEP---'; \
                 (ps -e 2>/dev/null | wc -l)
                 """
             let fallbackOutput = try await client.execute(RemoteTerminalBootstrap.wrapPOSIXShellCommand(fallbackCmd))
@@ -197,8 +196,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             let uptimeOutput = fallbackSections.count > 2 ? fallbackSections[2] : ""
             let sysClassNetOutput = fallbackSections.count > 3 ? fallbackSections[3] : ""
             let ipOrIfconfigOutput = fallbackSections.count > 4 ? fallbackSections[4] : ""
-            let psOutput = fallbackSections.count > 5 ? fallbackSections[5] : ""
-            let procCountOutput = fallbackSections.count > 6 ? fallbackSections[6] : ""
+            let procCountOutput = fallbackSections.count > 5 ? fallbackSections[5] : ""
 
             if missingCpu, let cpu = parseTopCpu(topOutput) {
                 stats.cpuUser = cpu.user
@@ -251,10 +249,6 @@ struct LinuxStatsCollector: PlatformStatsCollector {
                 }
             }
 
-            if stats.topProcesses.isEmpty, !psOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                stats.topProcesses = parsePs(psOutput)
-            }
-
             if missingProcCount, let count = Int(procCountOutput.trimmingCharacters(in: .whitespacesAndNewlines)), count > 0 {
                 stats.processCount = count
             }
@@ -266,10 +260,18 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         )
         stats.volumes = parseDfVolumes(dfOutput)
 
-        // Top processes
-        if stats.topProcesses.isEmpty {
-            let psOutput = try await client.execute(processCommand(limit: periodicProcessLimit), timeout: processListTimeout)
-            stats.topProcesses = parsePs(psOutput)
+        // Process CPU is calculated from /proc deltas so it reflects this sampling
+        // interval and is normalized to total machine capacity on every platform.
+        if let collection = try? await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .linux,
+            logicalProcessorCount: max(stats.cpuCores, 1),
+            memoryTotal: stats.memoryTotal,
+            limit: periodicProcessLimit
+        ) {
+            stats.topProcesses = collection.processes
+            stats.processCount = max(stats.processCount, collection.totalCount)
         }
 
         // Process count fallback if still missing
@@ -283,18 +285,21 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         return stats
     }
 
-    func collectProcesses(client: SSHClient) async throws -> [ProcessInfo] {
-        let output = try await client.execute(processCommand(limit: nil), timeout: processListTimeout)
-        return parsePs(output)
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
+        let systemInfo = try await getSystemInfo(client: client)
+        let memoryOutput = try await client.execute("cat /proc/meminfo 2>/dev/null")
+        let memory = parseProcMeminfo(memoryOutput)
+        return try await UnixProcessTelemetry.collect(
+            client: client,
+            context: context,
+            platform: .linux,
+            logicalProcessorCount: max(systemInfo.cpuCores, 1),
+            memoryTotal: memory.total,
+            limit: nil
+        ).processes
     }
 
     // MARK: - Parsers
-
-    private func processCommand(limit: Int?) -> String {
-        let command = "(ps -eo pid=,user=,pcpu=,pmem=,comm=,args= --sort=-pcpu 2>/dev/null || ps aux --sort=-%cpu 2>/dev/null || ps aux)"
-        guard let limit else { return command }
-        return "\(command) | head -n \(limit)"
-    }
 
     private func isProcStatValid(_ output: String) -> Bool {
         let firstLine = output.components(separatedBy: .newlines)
@@ -631,13 +636,14 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func parseProcMeminfo(_ output: String) -> (total: UInt64, used: UInt64, free: UInt64, cached: UInt64, buffers: UInt64) {
+    func parseProcMeminfo(_ output: String) -> (total: UInt64, used: UInt64, free: UInt64, cached: UInt64, buffers: UInt64) {
         var total: UInt64 = 0
         var free: UInt64 = 0
         var available: UInt64 = 0
         var buffers: UInt64 = 0
         var cached: UInt64 = 0
         var sReclaimable: UInt64 = 0
+        var shmem: UInt64 = 0
 
         for line in output.components(separatedBy: .newlines) {
             let parts = line.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -653,12 +659,22 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             case "Buffers": buffers = bytesFromKiB(value) ?? 0
             case "Cached": cached = bytesFromKiB(value) ?? 0
             case "SReclaimable": sReclaimable = bytesFromKiB(value) ?? 0
+            case "Shmem": shmem = bytesFromKiB(value) ?? 0
             default: break
             }
         }
 
         let actualCached = clampedAdd(cached, sReclaimable)
-        let used = clampedSubtract(total, available)
+        let used: UInt64
+        if available > 0 {
+            used = clampedSubtract(total, available)
+        } else {
+            // MemAvailable was added after the original /proc/meminfo fields and
+            // can also be hidden by restricted proc mounts. Match free(1)'s
+            // fallback instead of treating the whole machine as used.
+            let reclaimable = clampedAdd(clampedAdd(free, buffers), actualCached)
+            used = min(clampedAdd(clampedSubtract(total, reclaimable), shmem), total)
+        }
         return (total, used, free, actualCached, buffers)
     }
 
