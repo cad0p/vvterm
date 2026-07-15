@@ -17,6 +17,15 @@ import os.log
 import AppKit
 #endif
 
+enum TerminalRegistryRemovalPolicy {
+    static func shouldRemove(
+        registered: ObjectIdentifier,
+        dismantled: ObjectIdentifier
+    ) -> Bool {
+        registered == dismantled
+    }
+}
+
 @MainActor
 final class TerminalTabManager: ObservableObject {
     static let shared = TerminalTabManager()
@@ -574,6 +583,21 @@ final class TerminalTabManager: ObservableObject {
             terminal.cleanup()
         }
         scheduleTerminalRegistryVersionUpdate()
+    }
+
+    /// Unregister a dismantled platform view only if it is still the pane's
+    /// registered terminal. SwiftUI may create its replacement before the old
+    /// view's deferred teardown runs during window reconstruction.
+    func unregisterTerminal(_ terminal: GhosttyTerminalView, for paneId: UUID) {
+        guard let registeredTerminal = terminalViews[paneId],
+              TerminalRegistryRemovalPolicy.shouldRemove(
+                  registered: ObjectIdentifier(registeredTerminal),
+                  dismantled: ObjectIdentifier(terminal)
+              ) else {
+            terminal.cleanup()
+            return
+        }
+        unregisterTerminal(for: paneId)
     }
 
     #if os(iOS)

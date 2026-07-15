@@ -107,6 +107,46 @@ final class TerminalKeyboardUITests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive() throws {
+        let app = launchKeyboardHarness()
+        var terminal = waitForTerminal(in: app)
+        terminal.tap()
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        for _ in 0..<12 {
+            app.buttons["vvterm.keyboardTest.mode.other"].tap()
+            XCTAssertTrue(
+                app.buttons["vvterm.keyboardTest.nonTerminalSurface"].waitForExistence(timeout: 3),
+                diagnosticsText(in: app)
+            )
+
+            app.buttons["vvterm.keyboardTest.mode.terminal"].tap()
+            terminal = waitForTerminal(in: app)
+        }
+
+        terminal.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        terminal.typeText("x")
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
     private func waitForBackgroundState(
         of app: XCUIApplication,
         timeout: TimeInterval

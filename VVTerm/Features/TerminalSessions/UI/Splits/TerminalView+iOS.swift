@@ -439,14 +439,22 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         let paneStillExists = TerminalTabManager.shared.paneStates[coordinator.paneId] != nil
         if paneStillExists {
             terminalView.pauseRendering()
-            TerminalTabManager.shared.keyboardCoordinator.setWindowAttached(false, for: coordinator.paneId)
             coordinator.preservePane = true
+            let paneId = coordinator.paneId
+            Task { @MainActor [weak terminalView] in
+                guard let terminalView,
+                      TerminalTabManager.shared.getTerminal(for: paneId) === terminalView else { return }
+                TerminalTabManager.shared.keyboardCoordinator.setWindowAttached(false, for: paneId)
+            }
             return
         }
 
         coordinator.terminal = nil
-        TerminalTabManager.shared.unregisterTerminal(for: coordinator.paneId)
-        coordinator.cancelShell()
+        let paneId = coordinator.paneId
+        Task { @MainActor in
+            TerminalTabManager.shared.unregisterTerminal(terminalView, for: paneId)
+            coordinator.cancelShell()
+        }
     }
 
     private func configureExistingTerminal(_ terminal: GhosttyTerminalView, coordinator: TerminalPaneSSHCoordinator) {

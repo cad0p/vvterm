@@ -32,6 +32,7 @@ struct TerminalKeyboardUITestHarness: View {
                     terminalView: $terminalView,
                     terminalReady: $terminalReady,
                     focusRequestID: focusRequestID,
+                    paneId: Self.paneId,
                     onInput: { data in
                         receivedInputHex = data.map { String(format: "%02x", $0) }.joined()
                     }
@@ -269,6 +270,7 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     @Binding var terminalView: GhosttyTerminalView?
     @Binding var terminalReady: Bool
     let focusRequestID: Int
+    let paneId: UUID
     let onInput: (Data) -> Void
 
     func makeUIView(context: Context) -> TerminalKeyboardHarnessContainerView {
@@ -276,6 +278,7 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: TerminalKeyboardHarnessContainerView, context: Context) {
+        uiView.paneId = paneId
         uiView.onInput = onInput
         uiView.installTerminalIfNeeded(app: ghosttyApp.app, appWrapper: ghosttyApp)
         uiView.requestKeyboardFocusIfNeeded(focusRequestID: focusRequestID)
@@ -290,11 +293,16 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: TerminalKeyboardHarnessContainerView, coordinator: ()) {
         uiView.releaseTerminalInput()
+        guard let terminal = uiView.terminalView, let paneId = uiView.paneId else { return }
+        Task { @MainActor in
+            TerminalTabManager.shared.unregisterTerminal(terminal, for: paneId)
+        }
     }
 }
 
 private final class TerminalKeyboardHarnessContainerView: UIView {
     private(set) weak var terminalView: GhosttyTerminalView?
+    var paneId: UUID?
     var onInput: ((Data) -> Void)?
     private var lastHandledFocusRequestID: Int?
     private var pendingFocusRequestID = 0
