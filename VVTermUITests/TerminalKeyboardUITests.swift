@@ -69,6 +69,59 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testForegroundReconnectRestoresTerminalTyping() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(
+            waitForBackgroundState(of: app, timeout: 8),
+            "VVTerm did not enter the background. \(diagnosticsText(in: app))"
+        )
+
+        app.activate()
+        XCTAssertTrue(
+            app.wait(for: .runningForeground, timeout: 8),
+            "VVTerm did not return to the foreground. \(diagnosticsText(in: app))"
+        )
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "reconnect=connected",
+            timeout: 8,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let key = app.keys["x"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    private func waitForBackgroundState(
+        of app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if app.state == .runningBackground || app.state == .runningBackgroundSuspended {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    @MainActor
     func testIMEProxyMarkedTextDeleteAndCommitPath() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)

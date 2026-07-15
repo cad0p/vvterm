@@ -899,10 +899,18 @@ struct TerminalPaneView: View {
     }
 
     private func attemptAutoReconnectIfNeeded() {
-        guard scenePhase == .active else { return }
-        guard automaticReconnectAllowed else { return }
-        guard !reconnectInFlight else { return }
-        guard connectionState == .disconnected else { return }
+        #if os(iOS)
+        let applicationIsActive = UIApplication.shared.applicationState == .active
+        #else
+        let applicationIsActive = true
+        #endif
+        guard TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: scenePhase == .active,
+            applicationIsActive: applicationIsActive,
+            automaticReconnectAllowed: automaticReconnectAllowed,
+            reconnectInFlight: reconnectInFlight,
+            connectionState: connectionState
+        ) else { return }
         retryConnection()
     }
 

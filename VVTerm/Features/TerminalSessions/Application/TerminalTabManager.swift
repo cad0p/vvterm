@@ -38,7 +38,6 @@ final class TerminalTabManager: ObservableObject {
 
     /// Servers with at least one live terminal shell.
     @Published var connectedServerIds: Set<UUID> = []
-    @Published private(set) var isSuspendingForBackground = false
 
     /// Selected view type per server (stats/terminal)
     @Published var selectedViewByServer: [UUID: String] = [:] {
@@ -302,10 +301,6 @@ final class TerminalTabManager: ObservableObject {
     /// Disconnect SSH shells without removing tabs. Used when iOS backgrounds so
     /// the foreground path can reconnect into the same terminal surfaces.
     func suspendAllForBackground() async {
-        guard !isSuspendingForBackground else { return }
-        isSuspendingForBackground = true
-        defer { isSuspendingForBackground = false }
-
         let paneIds = Array(paneStates.keys)
         #if os(iOS)
         keyboardCoordinator.setViewActive(false)
@@ -320,10 +315,31 @@ final class TerminalTabManager: ObservableObject {
             }
         }
 
+        // Detach every registration before the app can be frozen. Cleanup may
+        // then finish after foregrounding without removing a replacement shell.
+        let detachedShells = shellRegistry.drain()
+
+        var cleanupByClient: [ObjectIdentifier: (client: SSHClient, shellIds: [UUID])] = [:]
+        for registration in detachedShells.registrations {
+            let clientId = ObjectIdentifier(registration.client)
+            var cleanup = cleanupByClient[clientId] ?? (registration.client, [])
+            cleanup.shellIds.append(registration.shellId)
+            cleanupByClient[clientId] = cleanup
+        }
+        for pendingStart in detachedShells.pendingStarts {
+            let clientId = ObjectIdentifier(pendingStart.client)
+            if cleanupByClient[clientId] == nil {
+                cleanupByClient[clientId] = (pendingStart.client, [])
+            }
+        }
+
         await withTaskGroup(of: Void.self) { group in
-            for paneId in paneIds {
-                group.addTask { [weak self] in
-                    await self?.unregisterSSHClient(for: paneId)
+            for cleanup in cleanupByClient.values {
+                group.addTask {
+                    for shellId in cleanup.shellIds {
+                        await cleanup.client.closeShell(shellId)
+                    }
+                    await cleanup.client.disconnect()
                 }
             }
         }

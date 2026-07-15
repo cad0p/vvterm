@@ -405,19 +405,12 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
             connectionState: state
         )
 
-        if shouldStartSSHConnection, context.coordinator.lastStartRequestState != state {
-            let coordinator = context.coordinator
-            coordinator.lastStartRequestState = state
-            DispatchQueue.main.async { [weak terminalView] in
-                guard let terminalView else { return }
-                startSSHConnectionIfNeeded(
-                    terminal: terminalView,
-                    coordinator: coordinator,
-                    state: TerminalTabManager.shared.paneStates[paneId]?.connectionState ?? .idle
-                )
-            }
-        } else if !shouldStartSSHConnection {
-            context.coordinator.lastStartRequestState = nil
+        if shouldStartSSHConnection {
+            startSSHConnectionIfNeeded(
+                terminal: terminalView,
+                coordinator: context.coordinator,
+                state: state
+            )
         }
 
         if shouldRenderTerminal, context.coordinator.isTerminalReady {
@@ -491,7 +484,6 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         guard coordinator.shellTask == nil else { return }
         guard !TerminalTabManager.shared.isShellStartInFlight(for: paneId) else { return }
         guard UIApplication.shared.applicationState == .active else { return }
-        guard !TerminalTabManager.shared.isSuspendingForBackground else { return }
 
         switch state {
         case .connecting, .reconnecting, .connected:

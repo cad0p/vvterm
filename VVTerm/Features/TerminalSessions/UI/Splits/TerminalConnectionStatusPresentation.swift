@@ -119,3 +119,19 @@ enum TerminalConnectionStartPolicy {
         }
     }
 }
+
+enum TerminalAutoReconnectPolicy {
+    static func shouldAttempt(
+        sceneIsActive: Bool,
+        applicationIsActive: Bool,
+        automaticReconnectAllowed: Bool,
+        reconnectInFlight: Bool,
+        connectionState: ConnectionState
+    ) -> Bool {
+        sceneIsActive
+            && applicationIsActive
+            && automaticReconnectAllowed
+            && !reconnectInFlight
+            && connectionState == .disconnected
+    }
+}

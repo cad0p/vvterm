@@ -130,6 +130,32 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
+    func scenePhaseLagCannotReconnectAfterApplicationEnteredBackground() {
+        let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: true,
+            applicationIsActive: false,
+            automaticReconnectAllowed: true,
+            reconnectInFlight: false,
+            connectionState: .disconnected
+        )
+
+        #expect(!shouldReconnect)
+    }
+
+    @Test
+    func foregroundReconnectStartsWhenApplicationIsActive() {
+        let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: true,
+            applicationIsActive: true,
+            automaticReconnectAllowed: true,
+            reconnectInFlight: false,
+            connectionState: .disconnected
+        )
+
+        #expect(shouldReconnect)
+    }
+
+    @Test
     func initialConnectionUsesProgressSheet() {
         let presentation = resolve(
             connectionState: .connecting,

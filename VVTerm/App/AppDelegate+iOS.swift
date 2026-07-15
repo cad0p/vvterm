@@ -56,8 +56,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         Task { @MainActor in
-            await TerminalTabManager.shared.suspendAllForBackground()
             AppLockManager.shared.lockIfNeededForBackground()
+            await TerminalTabManager.shared.suspendAllForBackground()
         }
     }
 }

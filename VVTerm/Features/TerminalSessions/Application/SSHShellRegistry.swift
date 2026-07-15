@@ -31,6 +31,11 @@ struct SSHShellRegistry {
         let staleContext: StartContext?
     }
 
+    struct DrainResult: Sendable {
+        let registrations: [Registration]
+        let pendingStarts: [StartContext]
+    }
+
     private(set) var registrations: [UUID: Registration] = [:]
     private(set) var startsInFlight: [UUID: StartContext] = [:]
     private let staleThreshold: TimeInterval
@@ -186,8 +191,17 @@ struct SSHShellRegistry {
         startsInFlight.values.first(where: { $0.serverId == serverId })?.client
     }
 
-    mutating func removeAll() {
+    mutating func drain() -> DrainResult {
+        let result = DrainResult(
+            registrations: Array(registrations.values),
+            pendingStarts: Array(startsInFlight.values)
+        )
         registrations.removeAll()
         startsInFlight.removeAll()
+        return result
+    }
+
+    mutating func removeAll() {
+        _ = drain()
     }
 }

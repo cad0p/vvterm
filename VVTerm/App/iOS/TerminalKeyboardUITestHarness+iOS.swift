@@ -15,6 +15,9 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var keyboardHeight: CGFloat = 0
     @State private var keyboardFrame: CGRect?
     @State private var diagnostics = "notReady"
+    @State private var reconnectStatus = "initial"
+    @State private var receivedInputHex = "none"
+    @Environment(\.scenePhase) private var scenePhase
 
     private var preservesTerminalSize: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-preserve-terminal-size")
@@ -28,7 +31,10 @@ struct TerminalKeyboardUITestHarness: View {
                 TerminalKeyboardHarnessRepresentable(
                     terminalView: $terminalView,
                     terminalReady: $terminalReady,
-                    focusRequestID: focusRequestID
+                    focusRequestID: focusRequestID,
+                    onInput: { data in
+                        receivedInputHex = data.map { String(format: "%02x", $0) }.joined()
+                    }
                 )
                 .terminalKeyboardAvoidance(
                     focusedPaneId: Self.paneId,
@@ -136,6 +142,18 @@ struct TerminalKeyboardUITestHarness: View {
         .task {
             ghosttyApp.startIfNeeded()
         }
+        .onChange(of: terminalReady) { isReady in
+            guard isReady else { return }
+            configureLifecycleHarness()
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                restoreLifecycleHarnessAfterForeground()
+            } else {
+                reconnectStatus = "background"
+                TerminalTabManager.shared.keyboardCoordinator.setViewActive(false)
+            }
+        }
         .onReceive(diagnosticTimer) { _ in
             refreshDiagnostics()
         }
@@ -189,6 +207,38 @@ struct TerminalKeyboardUITestHarness: View {
             keyboardVisible: keyboardVisible,
             keyboardHeight: keyboardHeight
         ) + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+            + " reconnect=\(reconnectStatus) inputHex=\(receivedInputHex)"
+    }
+
+    private func configureLifecycleHarness() {
+        guard let terminalView else { return }
+        let manager = TerminalTabManager.shared
+        if manager.paneStates[Self.paneId] == nil {
+            let tab = TerminalTab(serverId: UUID(), title: "Keyboard lifecycle test")
+            manager.paneStates[Self.paneId] = TerminalPaneState(
+                paneId: Self.paneId,
+                tabId: tab.id,
+                serverId: tab.serverId
+            )
+        }
+        manager.registerTerminal(terminalView, for: Self.paneId)
+        manager.updatePaneState(Self.paneId, connectionState: .connected)
+        manager.keyboardCoordinator.setActivePane(Self.paneId)
+        manager.keyboardCoordinator.setViewActive(true)
+        reconnectStatus = "connected"
+    }
+
+    private func restoreLifecycleHarnessAfterForeground() {
+        guard terminalReady else { return }
+        reconnectStatus = "reconnecting"
+        TerminalTabManager.shared.updatePaneState(
+            Self.paneId,
+            connectionState: .reconnecting(attempt: 1)
+        )
+        TerminalTabManager.shared.keyboardCoordinator.setActivePane(Self.paneId)
+        TerminalTabManager.shared.keyboardCoordinator.setViewActive(true)
+        TerminalTabManager.shared.updatePaneState(Self.paneId, connectionState: .connected)
+        reconnectStatus = "connected"
     }
 
     private func keyboardAvoidanceDiagnostics(for terminal: GhosttyTerminalView) -> String {
@@ -219,12 +269,14 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     @Binding var terminalView: GhosttyTerminalView?
     @Binding var terminalReady: Bool
     let focusRequestID: Int
+    let onInput: (Data) -> Void
 
     func makeUIView(context: Context) -> TerminalKeyboardHarnessContainerView {
         TerminalKeyboardHarnessContainerView()
     }
 
     func updateUIView(_ uiView: TerminalKeyboardHarnessContainerView, context: Context) {
+        uiView.onInput = onInput
         uiView.installTerminalIfNeeded(app: ghosttyApp.app, appWrapper: ghosttyApp)
         uiView.requestKeyboardFocusIfNeeded(focusRequestID: focusRequestID)
 
@@ -243,6 +295,7 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
 
 private final class TerminalKeyboardHarnessContainerView: UIView {
     private(set) weak var terminalView: GhosttyTerminalView?
+    var onInput: ((Data) -> Void)?
     private var lastHandledFocusRequestID: Int?
     private var pendingFocusRequestID = 0
 
@@ -274,7 +327,11 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
         terminal.isAccessibilityElement = true
         terminal.acceptsTerminalInput = true
         terminal.keyboardUITestSetHardwareKeyboardAttached(false)
-        terminal.writeCallback = { _ in }
+        terminal.writeCallback = { [weak self] data in
+            DispatchQueue.main.async {
+                self?.onInput?(data)
+            }
+        }
         terminal.setupWriteCallback()
         terminal.onReady = { [weak self, weak terminal] in
             guard let self, let terminal else { return }

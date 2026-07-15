@@ -197,7 +197,6 @@ struct TerminalTabManagerLifecycleTests {
             #expect(manager.shellId(for: liveTab.rootPaneId) == nil)
             #expect(!manager.isShellStartInFlight(for: pendingTab.rootPaneId))
             #expect(manager.connectedServerIds.isEmpty)
-            #expect(!manager.isSuspendingForBackground)
         }
     }
 

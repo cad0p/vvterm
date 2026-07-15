@@ -14,7 +14,6 @@ final class TerminalPaneSSHCoordinator {
     var preservePane = false
     var wasActive = false
     var lastReportedSize: CGSize = .zero
-    var lastStartRequestState: ConnectionState?
 
     private let richPasteRuntime: TerminalRichPasteRuntime
     private var lastTerminalSize: (cols: Int, rows: Int) = (0, 0)
