@@ -16,6 +16,12 @@ import os.log
 /// user never gets a long-lived bar without a keyboard.
 @MainActor
 final class TerminalKeyboardCoordinator: ObservableObject {
+    enum PresentationRefreshAction: Equatable {
+        case none
+        case deferUntilVerification
+        case rebuild
+    }
+
     struct StateInputs: Equatable {
         var viewActive: Bool
         var activePaneConnected: Bool
@@ -48,7 +54,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private var pendingReason = "initial"
     private var lastManagedPaneId: UUID?
     private var wantsPresentationRefresh = false
-    private var pendingPresentationVerify = false
+    private var presentationVerifyTask: Task<Void, Never>?
     /// Rebuilding a session UIKit refuses to present cannot succeed by
     /// repetition; cap attempts until a keyboard actually shows (which
     /// resets the count).
@@ -153,20 +159,46 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             && !inputs.userHidKeyboard
     }
 
+    nonisolated static func presentationRefreshAction(
+        keyboardPresentationDesired: Bool,
+        refreshRequested: Bool,
+        softwareInputActive: Bool,
+        softwareKeyboardVisible: Bool,
+        presentationVerificationPending: Bool,
+        refreshAttemptCount: Int,
+        refreshAttemptLimit: Int
+    ) -> PresentationRefreshAction {
+        guard keyboardPresentationDesired,
+              refreshRequested,
+              softwareInputActive,
+              !softwareKeyboardVisible,
+              refreshAttemptCount < refreshAttemptLimit else {
+            return .none
+        }
+        return presentationVerificationPending ? .deferUntilVerification : .rebuild
+    }
+
     func setActivePane(_ paneId: UUID?) {
         guard activePaneId != paneId else { return }
+        cancelPresentationVerify()
         activePaneId = paneId
         markDirty(reason: "activePane")
     }
 
     func setViewActive(_ active: Bool) {
         guard viewActive != active else { return }
+        if !active {
+            cancelPresentationVerify()
+        }
         viewActive = active
         markDirty(reason: "viewActive")
     }
 
     func setPaneConnected(_ connected: Bool, for paneId: UUID) {
         guard paneConnectedById[paneId] != connected else { return }
+        if !connected, activePaneId == paneId {
+            cancelPresentationVerify()
+        }
         paneConnectedById[paneId] = connected
         markDirty(reason: "paneConnected")
     }
@@ -175,6 +207,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         let didRemoveConnected = paneConnectedById.removeValue(forKey: paneId) != nil
         let didRemoveWindow = paneWindowAttachedById.removeValue(forKey: paneId) != nil
         if activePaneId == paneId {
+            cancelPresentationVerify()
             activePaneId = nil
             markDirty(reason: "removeActivePane")
         } else if didRemoveConnected || didRemoveWindow {
@@ -184,12 +217,18 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     func setWindowAttached(_ attached: Bool, for paneId: UUID) {
         guard paneWindowAttachedById[paneId] != attached else { return }
+        if !attached, activePaneId == paneId {
+            cancelPresentationVerify()
+        }
         paneWindowAttachedById[paneId] = attached
         markDirty(reason: "windowAttached")
     }
 
     func setFindNavigatorActive(_ active: Bool) {
         guard findNavigatorActive != active else { return }
+        if active {
+            cancelPresentationVerify()
+        }
         findNavigatorActive = active
         markDirty(reason: "findNavigator")
     }
@@ -204,6 +243,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         activePaneId = nil
         viewActive = false
         findNavigatorActive = false
+        cancelPresentationVerify()
         pendingReason = "contentProtection"
         syncScheduled = false
         sync()
@@ -211,6 +251,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     func userRequestedHide() {
         guard !isUserHidden else { return }
+        cancelPresentationVerify()
         isUserHidden = true
         markDirty(reason: "userHide")
     }
@@ -279,6 +320,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     private func noteSoftwareKeyboardVisible(_ visible: Bool) {
         if visible {
+            cancelPresentationVerify()
             presentationRefreshAttemptCount = 0
             activeTerminal?.setTerminalInputAccessorySuppressed(false)
         }
@@ -335,6 +377,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         let keyboardPresentationDesired = Self.desiredKeyboardVisible(inputs: inputs)
         let reason = pendingReason
 
+        if !keyboardPresentationDesired {
+            cancelPresentationVerify()
+        }
+
         if let previousPaneId = lastManagedPaneId,
            previousPaneId != activePaneId,
            let previousTerminal = terminalProvider?(previousPaneId) {
@@ -368,11 +414,21 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         // responder state: the view can hold first responder for native
         // selection, which must not read as "keyboard is up".
         guard before.isSoftwareInputActive != inputSessionDesired else {
-            if keyboardPresentationDesired,
-               refreshRequested,
-               before.isSoftwareInputActive,
-               !isSoftwareKeyboardVisible,
-               presentationRefreshAttemptCount < presentationRefreshAttemptLimit {
+            let refreshAction = Self.presentationRefreshAction(
+                keyboardPresentationDesired: keyboardPresentationDesired,
+                refreshRequested: refreshRequested,
+                softwareInputActive: before.isSoftwareInputActive,
+                softwareKeyboardVisible: isSoftwareKeyboardVisible,
+                presentationVerificationPending: presentationVerifyTask != nil,
+                refreshAttemptCount: presentationRefreshAttemptCount,
+                refreshAttemptLimit: presentationRefreshAttemptLimit
+            )
+            switch refreshAction {
+            case .deferUntilVerification:
+                wantsPresentationRefresh = true
+                logDeferredRefresh(inputs: inputs, before: before)
+                return
+            case .rebuild:
                 // The session is active but no keyboard is up. Either the
                 // presentation silently failed or a hardware keyboard is
                 // suppressing it; rebuild once for the former, then the
@@ -384,6 +440,8 @@ final class TerminalKeyboardCoordinator: ObservableObject {
                 let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
                 logAsyncRebuild(inputs: inputs, after: after)
                 return
+            case .none:
+                break
             }
             logSteady(
                 inputSessionDesired: inputSessionDesired,
@@ -416,24 +474,31 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
         if keyboardPresentationDesired, after.isSoftwareInputActive {
             schedulePresentationVerify()
-        } else if !inputSessionDesired {
-            presentationRefreshAttemptCount = 0
+        } else {
+            cancelPresentationVerify()
+            if !inputSessionDesired {
+                presentationRefreshAttemptCount = 0
+            }
         }
     }
 
     /// UIKit can accept the input session while legitimately withholding the
     /// software keyboard (hardware keyboard, iPhone Mirroring), or while a
     /// hosted keyboard scene is temporarily broken. Settle both cases by
-    /// folding the accessory if no real keyboard frame arrives. Explicit
-    /// user actions and scene activation still request one rebuild before
-    /// this verifier runs, so the "tap once after mirroring" repair path is
-    /// preserved without leaving a lone accessory bar.
+    /// folding the accessory if no real keyboard frame arrives. A refresh
+    /// requested while presentation is still in flight waits for this check;
+    /// only a settled failure gets one rebuild. That preserves the "tap once
+    /// after mirroring" repair path without restarting a keyboard animation.
     private func schedulePresentationVerify() {
-        guard !pendingPresentationVerify else { return }
-        pendingPresentationVerify = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        presentationVerifyTask?.cancel()
+        presentationVerifyTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch {
+                return
+            }
             guard let self else { return }
-            self.pendingPresentationVerify = false
+            self.presentationVerifyTask = nil
             guard !self.isSoftwareKeyboardVisible else { return }
             guard let paneId = self.activePaneId,
                   let terminal = self.terminalProvider?(paneId) else { return }
@@ -441,6 +506,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             guard Self.desiredKeyboardVisible(inputs: inputs) else { return }
             let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
             guard snapshot.isSoftwareInputActive else { return }
+            if self.wantsPresentationRefresh {
+                self.markDirty(reason: "presentationUnverified")
+                return
+            }
             // Settled with an active session and no keyboard: hardware mode
             // or a failed software-keyboard presentation. Keep the responder
             // for hardware keys, but remove the accessory until a real
@@ -449,6 +518,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
             self.logVerifySuppressed(after: after)
         }
+    }
+
+    private func cancelPresentationVerify() {
+        presentationVerifyTask?.cancel()
+        presentationVerifyTask = nil
     }
 
     private func logNoActiveTerminal(inputSessionDesired: Bool, inputs: StateInputs) {
@@ -462,6 +536,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     ) {
         guard lifecycleLoggingEnabled else { return }
         logger.info("command=refresh repair=asyncRebuild reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
+    }
+
+    private func logDeferredRefresh(
+        inputs: StateInputs,
+        before: TerminalKeyboardCoordinatorDiagnosticSnapshot
+    ) {
+        guard lifecycleLoggingEnabled else { return }
+        logger.info("command=refresh repair=deferred reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) firstResponder=\(before.isFirstResponder) softwareInput=\(before.isSoftwareInputActive)")
     }
 
     private func logSteady(

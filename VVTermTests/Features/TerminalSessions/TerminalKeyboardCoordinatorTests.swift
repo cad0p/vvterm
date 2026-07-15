@@ -145,5 +145,61 @@ struct TerminalKeyboardCoordinatorTests {
         coordinator.userRequestedShow()
         #expect(!coordinator.isUserHidden)
     }
+
+    @Test
+    func presentationAlreadyInProgressIsNotRebuilt() {
+        #expect(
+            TerminalKeyboardCoordinator.presentationRefreshAction(
+                keyboardPresentationDesired: true,
+                refreshRequested: true,
+                softwareInputActive: true,
+                softwareKeyboardVisible: false,
+                presentationVerificationPending: true,
+                refreshAttemptCount: 0,
+                refreshAttemptLimit: 2
+            ) == .deferUntilVerification
+        )
+    }
+
+    @Test
+    func settledMissingPresentationCanBeRebuiltWithinAttemptLimit() {
+        #expect(
+            TerminalKeyboardCoordinator.presentationRefreshAction(
+                keyboardPresentationDesired: true,
+                refreshRequested: true,
+                softwareInputActive: true,
+                softwareKeyboardVisible: false,
+                presentationVerificationPending: false,
+                refreshAttemptCount: 0,
+                refreshAttemptLimit: 2
+            ) == .rebuild
+        )
+        #expect(
+            TerminalKeyboardCoordinator.presentationRefreshAction(
+                keyboardPresentationDesired: true,
+                refreshRequested: true,
+                softwareInputActive: true,
+                softwareKeyboardVisible: false,
+                presentationVerificationPending: false,
+                refreshAttemptCount: 2,
+                refreshAttemptLimit: 2
+            ) == .none
+        )
+    }
+
+    @Test
+    func visibleKeyboardSupersedesPendingRefresh() {
+        #expect(
+            TerminalKeyboardCoordinator.presentationRefreshAction(
+                keyboardPresentationDesired: true,
+                refreshRequested: true,
+                softwareInputActive: true,
+                softwareKeyboardVisible: true,
+                presentationVerificationPending: true,
+                refreshAttemptCount: 0,
+                refreshAttemptLimit: 2
+            ) == .none
+        )
+    }
 }
 #endif

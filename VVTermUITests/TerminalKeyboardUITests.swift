@@ -402,6 +402,42 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable() throws {
+        let app = launchKeyboardHarness(preservesTerminalSize: false)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        for _ in 0..<8 {
+            terminal.tap()
+        }
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let stableRows = try requiredDiagnosticMetric("gridRows", in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            XCTAssertTrue(app.keyboards.firstMatch.exists, diagnosticsText(in: app))
+            XCTAssertTrue(diagnostics.label.contains("keyboardVisible=true"), diagnosticsText(in: app))
+            XCTAssertTrue(diagnostics.label.contains("accessoryAttached=true"), diagnosticsText(in: app))
+            XCTAssertEqual(
+                try requiredDiagnosticMetric("gridRows", in: app),
+                stableRows,
+                diagnosticsText(in: app)
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+
+        terminal.typeText("x")
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
     func testPreservedTerminalGridMovesCursorAboveKeyboard() throws {
         let app = launchKeyboardHarness(preservesTerminalSize: true)
         let terminal = waitForTerminal(in: app)
