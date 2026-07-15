@@ -15,9 +15,10 @@ enum TerminalKeyboardRouteActivationPolicy {
     static func effect(
         routeVisible: Bool,
         terminalSelected: Bool,
-        sceneActivation: SceneActivation
+        sceneActivation: SceneActivation,
+        contentObscured: Bool = false
     ) -> Effect {
-        guard routeVisible, terminalSelected else {
+        guard routeVisible, terminalSelected, !contentObscured else {
             return .deactivate
         }
 

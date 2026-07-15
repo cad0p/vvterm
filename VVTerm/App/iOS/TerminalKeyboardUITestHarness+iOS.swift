@@ -18,6 +18,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var terminalView: GhosttyTerminalView?
     @State private var terminalReady = false
     @State private var showsTerminal = true
+    @State private var simulatesPrivacyShield = false
     @State private var focusRequestID = 0
     @State private var keyboardVisible = false
     @State private var keyboardHeight: CGFloat = 0
@@ -56,6 +57,13 @@ struct TerminalKeyboardUITestHarness: View {
                 .accessibilityIdentifier("vvterm.keyboardTest.container")
             } else {
                 nonTerminalSurface
+            }
+
+            if simulatesPrivacyShield {
+                Color.black
+                    .opacity(0.55)
+                    .ignoresSafeArea()
+                    .accessibilityIdentifier("vvterm.keyboardTest.privacyShield")
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -150,6 +158,20 @@ struct TerminalKeyboardUITestHarness: View {
                         applyRouteActivation(.foregroundActive)
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.scene.active")
+
+                    Button("Shield") {
+                        simulatesPrivacyShield = true
+                        lifecycleStatus = .inactive
+                        applyRouteActivation(.foregroundInactive, contentObscured: true)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.privacy.shield")
+
+                    Button("Resume") {
+                        simulatesPrivacyShield = false
+                        lifecycleStatus = .connected
+                        applyRouteActivation(.foregroundActive)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.privacy.resume")
                 }
             }
             .font(.system(size: 12, weight: .semibold))
@@ -266,13 +288,15 @@ struct TerminalKeyboardUITestHarness: View {
     }
 
     private func applyRouteActivation(
-        _ sceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation
+        _ sceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation,
+        contentObscured: Bool = false
     ) {
         let manager = TerminalTabManager.shared
         switch TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: showsTerminal,
-            sceneActivation: sceneActivation
+            sceneActivation: sceneActivation,
+            contentObscured: contentObscured
         ) {
         case .activate:
             manager.keyboardCoordinator.setActivePane(Self.paneId)
@@ -280,8 +304,12 @@ struct TerminalKeyboardUITestHarness: View {
         case .preserve:
             break
         case .deactivate:
-            manager.keyboardCoordinator.setViewActive(false)
-            manager.keyboardCoordinator.setActivePane(nil)
+            if contentObscured {
+                manager.keyboardCoordinator.deactivateInputImmediately()
+            } else {
+                manager.keyboardCoordinator.setViewActive(false)
+                manager.keyboardCoordinator.setActivePane(nil)
+            }
         }
     }
 

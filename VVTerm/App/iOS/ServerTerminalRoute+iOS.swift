@@ -22,6 +22,7 @@ struct ServerTerminalRoute: View {
 
     @ObservedObject private var keyboardCoordinator: TerminalKeyboardCoordinator
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
+    @EnvironmentObject private var appLockManager: AppLockManager
 
     @State private var currentServerId: UUID?
     @State private var isRouteVisible = false
@@ -30,6 +31,7 @@ struct ServerTerminalRoute: View {
     @State private var showingTabLimitAlert = false
     @State private var showingFileTabLimitAlert = false
     @SceneStorage("vvterm.zenMode.ios") private var isZenModeEnabled = false
+    @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
     @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -218,6 +220,9 @@ struct ServerTerminalRoute: View {
             .onChange(of: scenePhase) { _ in
                 updateKeyboardCoordinatorInputs()
             }
+            .onChange(of: isContentObscured) { _ in
+                updateKeyboardCoordinatorInputs()
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
                 updateKeyboardCoordinatorInputs()
             }
@@ -374,14 +379,29 @@ struct ServerTerminalRoute: View {
         }
     }
 
+    private var isContentObscured: Bool {
+        AppContentProtectionPolicy.shouldObscureContent(
+            sceneIsActive: scenePhase == .active,
+            fullAppLockEnabled: appLockManager.fullAppLockEnabled,
+            privacyModeEnabled: privacyModeEnabled,
+            isAppLocked: appLockManager.isAppLocked
+        )
+    }
+
     private func updateKeyboardCoordinatorInputs() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: isRouteVisible,
             terminalSelected: selectedView == ConnectionViewTab.terminal.id,
-            sceneActivation: keyboardSceneActivation
+            sceneActivation: keyboardSceneActivation,
+            contentObscured: isContentObscured
         )
 
         guard effect != .preserve else { return }
+
+        if effect == .deactivate, isContentObscured {
+            keyboardCoordinator.deactivateInputImmediately()
+            return
+        }
 
         let activePaneId = effect == .activate ? focusedPaneId : nil
 

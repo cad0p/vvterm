@@ -12,15 +12,19 @@ struct AppLockContainer<Content: View>: View {
     }
 
     var body: some View {
-        let shouldObscureForInactiveScene = scenePhase != .active && (appLockManager.fullAppLockEnabled || privacyModeEnabled)
-        let shouldBlockContent = appLockManager.isAppLocked || shouldObscureForInactiveScene
+        let shouldBlockContent = AppContentProtectionPolicy.shouldObscureContent(
+            sceneIsActive: scenePhase == .active,
+            fullAppLockEnabled: appLockManager.fullAppLockEnabled,
+            privacyModeEnabled: privacyModeEnabled,
+            isAppLocked: appLockManager.isAppLocked
+        )
 
         ZStack {
             content
                 .blur(radius: shouldBlockContent ? 6 : 0)
                 .allowsHitTesting(!shouldBlockContent)
 
-            if !appLockManager.isAppLocked, shouldObscureForInactiveScene {
+            if !appLockManager.isAppLocked, shouldBlockContent {
                 AppPrivacyShieldView()
                     .transition(.opacity)
                     .zIndex(9)

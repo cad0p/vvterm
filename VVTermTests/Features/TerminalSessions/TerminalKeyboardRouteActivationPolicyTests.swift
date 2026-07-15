@@ -60,5 +60,17 @@ struct TerminalKeyboardRouteActivationPolicyTests {
 
         #expect(effect == .deactivate)
     }
+
+    @Test
+    func privacyShieldDeactivatesInputDuringTemporarySceneInactivity() {
+        let effect = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: true,
+            sceneActivation: .foregroundInactive,
+            contentObscured: true
+        )
+
+        #expect(effect == .deactivate)
+    }
 }
 #endif

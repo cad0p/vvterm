@@ -108,6 +108,80 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testPrivacyModeBackgroundResumeRestoresResponsiveTerminal() throws {
+        let app = launchKeyboardHarness(privacyModeEnabled: true)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(
+            waitForBackgroundState(of: app, timeout: 8),
+            "VVTerm did not enter the background. \(diagnosticsText(in: app))"
+        )
+
+        app.activate()
+        XCTAssertTrue(
+            app.wait(for: .runningForeground, timeout: 8),
+            "VVTerm did not return to the foreground. \(diagnosticsText(in: app))"
+        )
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "reconnect=connected",
+            timeout: 8,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let key = app.keys["p"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=70",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
+    func testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        app.buttons["vvterm.keyboardTest.privacy.shield"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["vvterm.keyboardTest.privacyShield"]
+                .waitForExistence(timeout: 5),
+            diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryHidden(in: app)
+
+        app.buttons["vvterm.keyboardTest.privacy.resume"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["vvterm.keyboardTest.privacyShield"]
+                .waitForNonExistence(timeout: 5),
+            diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        let key = app.keys["s"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=73",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
     func testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
@@ -358,12 +432,16 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchKeyboardHarness(preservesTerminalSize: Bool = false) -> XCUIApplication {
+    private func launchKeyboardHarness(
+        preservesTerminalSize: Bool = false,
+        privacyModeEnabled: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "--vvterm-ui-test-terminal-keyboard-harness",
             "-AppleLanguages", "(en)",
-            "-AppleLocale", "en_US"
+            "-AppleLocale", "en_US",
+            "-security.privacyModeEnabled", privacyModeEnabled ? "YES" : "NO"
         ]
         if preservesTerminalSize {
             app.launchArguments.append("--vvterm-ui-test-preserve-terminal-size")

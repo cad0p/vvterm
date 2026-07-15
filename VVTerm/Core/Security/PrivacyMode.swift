@@ -4,6 +4,18 @@ enum PrivacyModeSettings {
     static let enabledKey = "security.privacyModeEnabled"
 }
 
+enum AppContentProtectionPolicy {
+    static func shouldObscureContent(
+        sceneIsActive: Bool,
+        fullAppLockEnabled: Bool,
+        privacyModeEnabled: Bool,
+        isAppLocked: Bool
+    ) -> Bool {
+        isAppLocked
+            || (!sceneIsActive && (fullAppLockEnabled || privacyModeEnabled))
+    }
+}
+
 enum SensitiveContentMask {
     static let placeholder = "••••••••"
 

@@ -194,6 +194,21 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         markDirty(reason: "findNavigator")
     }
 
+    /// Privacy and app-lock shields must remove the UIKit input accessory
+    /// before iOS captures protected content. A scheduled reconciliation can
+    /// run too late because the keyboard belongs to a separate system scene.
+    func deactivateInputImmediately() {
+        guard activePaneId != nil || viewActive || findNavigatorActive || lastManagedPaneId != nil else {
+            return
+        }
+        activePaneId = nil
+        viewActive = false
+        findNavigatorActive = false
+        pendingReason = "contentProtection"
+        syncScheduled = false
+        sync()
+    }
+
     func userRequestedHide() {
         guard !isUserHidden else { return }
         isUserHidden = true
