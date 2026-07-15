@@ -60,7 +60,10 @@ class AudioService: NSObject, ObservableObject {
 
     // MARK: - Recording Control
 
-    func startRecording() async throws {
+    func startRecording(lifecycleState: () -> AudioCaptureLifecycleState) async throws {
+        guard lifecycleState().allowsCapture else {
+            throw RecordingError.inactiveLifecycle
+        }
         let requestedProvider = TranscriptionSettingsStore.currentProvider()
         let effectiveProvider = resolveProvider(for: requestedProvider)
         if requestedProvider == .mlxWhisper && effectiveProvider == .system {
@@ -72,10 +75,16 @@ class AudioService: NSObject, ObservableObject {
 
         let needsSpeech = effectiveProvider == .system
         let hasPermissions = await checkPermissions(includeSpeech: needsSpeech)
+        guard lifecycleState().allowsCapture else {
+            throw RecordingError.inactiveLifecycle
+        }
         if !hasPermissions {
             let granted = await requestPermissions(includeSpeech: needsSpeech)
             guard granted else {
                 throw RecordingError.permissionDenied
+            }
+            guard lifecycleState().allowsCapture else {
+                throw RecordingError.inactiveLifecycle
             }
         }
 
@@ -86,9 +95,9 @@ class AudioService: NSObject, ObservableObject {
         // Start services
         switch effectiveProvider {
         case .system:
-            try await startAppleSpeech()
+            try await startAppleSpeech(lifecycleState: lifecycleState)
         case .mlxWhisper, .mlxParakeet:
-            try startMLXCapture()
+            try startMLXCapture(lifecycleState: lifecycleState)
         }
 
         isRecording = true
@@ -149,6 +158,8 @@ class AudioService: NSObject, ObservableObject {
         case permissionDenied
         case speechRecognitionUnavailable
         case recordingFailed
+        case inactiveLifecycle
+        case inputUnavailable
         case mlxUnavailable
 
         var errorDescription: String? {
@@ -159,6 +170,10 @@ class AudioService: NSObject, ObservableObject {
                 return String(localized: "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight.")
             case .recordingFailed:
                 return String(localized: "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone.")
+            case .inactiveLifecycle:
+                return String(localized: "Voice recording is only available while VVTerm is active.")
+            case .inputUnavailable:
+                return String(localized: "Audio input is temporarily unavailable. Please check the current microphone or audio route and try again.")
             case .mlxUnavailable:
                 return String(localized: "MLX transcription is not available on this Mac. Switching to Apple Speech.")
             }
@@ -186,7 +201,7 @@ class AudioService: NSObject, ObservableObject {
 
     // MARK: - Apple Speech
 
-    private func startAppleSpeech() async throws {
+    private func startAppleSpeech(lifecycleState: () -> AudioCaptureLifecycleState) async throws {
         guard speechRecognitionService.isAvailable else {
             throw RecordingError.speechRecognitionUnavailable
         }
@@ -195,22 +210,45 @@ class AudioService: NSObject, ObservableObject {
             speechRecognitionService?.appendAudioBuffer(buffer)
         }
 
-        try await speechRecognitionService.startRecognition()
         do {
-            try audioCaptureService.start()
+            try await speechRecognitionService.startRecognition()
+            guard lifecycleState().allowsCapture else {
+                throw RecordingError.inactiveLifecycle
+            }
+            try audioCaptureService.start(lifecycleState: lifecycleState)
         } catch {
-            throw RecordingError.recordingFailed
+            speechRecognitionService.cancelRecognition()
+            audioCaptureService.cancel()
+            throw recordingError(for: error)
         }
     }
 
     // MARK: - MLX
 
-    private func startMLXCapture() throws {
+    private func startMLXCapture(lifecycleState: () -> AudioCaptureLifecycleState) throws {
         audioCaptureService.bufferHandler = nil
         do {
-            try audioCaptureService.start()
+            try audioCaptureService.start(lifecycleState: lifecycleState)
         } catch {
-            throw RecordingError.recordingFailed
+            audioCaptureService.cancel()
+            throw recordingError(for: error)
+        }
+    }
+
+    private func recordingError(for error: Error) -> RecordingError {
+        if let recordingError = error as? RecordingError {
+            return recordingError
+        }
+        guard let captureError = error as? AudioCaptureService.RecordingError else {
+            return .recordingFailed
+        }
+        switch captureError {
+        case .inactiveLifecycle:
+            return .inactiveLifecycle
+        case .inputUnavailable:
+            return .inputUnavailable
+        case .converterUnavailable:
+            return .recordingFailed
         }
     }
 

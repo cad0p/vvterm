@@ -30,6 +30,7 @@ struct TerminalTabView: View {
 
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
@@ -133,9 +134,12 @@ struct TerminalTabView: View {
         .onChange(of: isSelected) { _ in
             updateKeyMonitor()
             if !isSelected, showingVoiceRecording {
-                audioService.cancelRecording()
-                showingVoiceRecording = false
-                voiceProcessing = false
+                cancelVoiceRecording()
+            }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase != .active, showingVoiceRecording {
+                cancelVoiceRecording()
             }
         }
         .onChange(of: showingVoiceRecording) { isRecording in
@@ -149,9 +153,7 @@ struct TerminalTabView: View {
         .onDisappear {
             cleanupKeyMonitor()
             if showingVoiceRecording {
-                audioService.cancelRecording()
-                showingVoiceRecording = false
-                voiceProcessing = false
+                cancelVoiceRecording()
             }
             publishVoiceRecordingState(false)
         }
@@ -414,12 +416,28 @@ struct TerminalTabView: View {
 
     private func startVoiceRecording() {
         clearPendingVoiceReturnForFocusedPane()
+        #if os(iOS)
+        let terminal = focusedTerminal
+        let lifecycleState = { [weak terminal] in
+            AudioCaptureLifecycleState(
+                applicationIsActive: UIApplication.shared.applicationState == .active,
+                sceneIsActive: terminal?.window?.windowScene?.activationState == .foregroundActive
+            )
+        }
+        #else
+        let lifecycleState = {
+            AudioCaptureLifecycleState(
+                applicationIsActive: NSApplication.shared.isActive,
+                sceneIsActive: NSApplication.shared.isActive
+            )
+        }
+        #endif
         Task {
             do {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                     showingVoiceRecording = true
                 }
-                try await audioService.startRecording()
+                try await audioService.startRecording(lifecycleState: lifecycleState)
             } catch {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                     showingVoiceRecording = false
@@ -427,14 +445,18 @@ struct TerminalTabView: View {
                 voiceProcessing = false
                 if let recordingError = error as? AudioService.RecordingError {
                     permissionErrorMessage = recordingError.localizedDescription
-                        + "\n\n"
-                        + String(localized: "Enable Microphone and Speech Recognition in System Settings.")
                 } else {
                     permissionErrorMessage = error.localizedDescription
                 }
                 showingPermissionError = true
             }
         }
+    }
+
+    private func cancelVoiceRecording() {
+        audioService.cancelRecording()
+        showingVoiceRecording = false
+        voiceProcessing = false
     }
 
     private func sendTranscriptionToTerminal(_ text: String) {

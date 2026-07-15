@@ -2,6 +2,18 @@ import Foundation
 import Combine
 import AVFoundation
 
+struct AudioCaptureCleanupPlan: Equatable {
+    let removeTap: Bool
+    let stopEngine: Bool
+    let deactivateAudioSession: Bool
+
+    init(hasEngine: Bool, tapInstalled: Bool, audioSessionActive: Bool) {
+        removeTap = hasEngine && tapInstalled
+        stopEngine = hasEngine
+        deactivateAudioSession = audioSessionActive
+    }
+}
+
 @MainActor
 final class AudioCaptureService: ObservableObject {
     @Published var audioLevel: Float = 0.0
@@ -14,63 +26,81 @@ final class AudioCaptureService: ObservableObject {
     private var converter: AVAudioConverter?
     private var recordedSamples: [Float] = []
     private var isRecording = false
+    private var isTapInstalled = false
+    private var isAudioSessionActive = false
 
     var sampleRate: Double { targetSampleRate }
 
-    func start() throws {
+    func start(lifecycleState: () -> AudioCaptureLifecycleState) throws {
         if isRecording { return }
+        guard lifecycleState().allowsCapture else {
+            throw RecordingError.inactiveLifecycle
+        }
+
+        cleanupCaptureResources()
 
         recordedSamples.removeAll(keepingCapacity: true)
         audioLevel = 0
         recordingDuration = 0
 
-        #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
-        try session.setActive(true, options: [])
-        #endif
+        do {
+            #if os(iOS)
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+            try session.setActive(true, options: [])
+            isAudioSessionActive = true
+            #endif
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate, channels: 1, interleaved: false)!
-        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+            let engine = AVAudioEngine()
+            audioEngine = engine
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+            if let rejection = AudioCaptureStartupPolicy.rejection(
+                lifecycle: lifecycleState(),
+                sampleRate: inputFormat.sampleRate,
+                channelCount: Int(inputFormat.channelCount)
+            ) {
+                switch rejection {
+                case .inactiveLifecycle:
+                    throw RecordingError.inactiveLifecycle
+                case .unavailableInputFormat:
+                    throw RecordingError.inputUnavailable
+                }
+            }
 
-        guard let converter else {
-            throw RecordingError.converterUnavailable
+            guard let targetFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: targetSampleRate,
+                channels: 1,
+                interleaved: false
+            ) else {
+                throw RecordingError.inputUnavailable
+            }
+            guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+                throw RecordingError.converterUnavailable
+            }
+            self.converter = converter
+
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+                self?.handleBuffer(buffer, inputFormat: inputFormat, targetFormat: targetFormat)
+            }
+            isTapInstalled = true
+
+            engine.prepare()
+            try engine.start()
+            isRecording = true
+        } catch {
+            cleanupCaptureResources()
+            throw error
         }
-
-        self.audioEngine = engine
-        self.converter = converter
-
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-            self?.handleBuffer(buffer, inputFormat: inputFormat, targetFormat: targetFormat)
-        }
-
-        engine.prepare()
-        try engine.start()
-        isRecording = true
     }
 
     func stop() -> [Float] {
-        guard isRecording else { return [] }
+        let samples = isRecording ? recordedSamples : []
         isRecording = false
-
-        if let engine = audioEngine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-
-        #if os(iOS)
-        // Release the session so system services (e.g. keyboard dictation) regain the mic.
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        #endif
-
-        audioEngine = nil
-        converter = nil
+        cleanupCaptureResources()
         audioLevel = 0
         recordingDuration = 0
-        let samples = recordedSamples
         recordedSamples.removeAll(keepingCapacity: false)
         return samples
     }
@@ -80,6 +110,30 @@ final class AudioCaptureService: ObservableObject {
         recordedSamples.removeAll(keepingCapacity: false)
         audioLevel = 0
         recordingDuration = 0
+    }
+
+    private func cleanupCaptureResources() {
+        let plan = AudioCaptureCleanupPlan(
+            hasEngine: audioEngine != nil,
+            tapInstalled: isTapInstalled,
+            audioSessionActive: isAudioSessionActive
+        )
+        if plan.removeTap {
+            audioEngine?.inputNode.removeTap(onBus: 0)
+        }
+        if plan.stopEngine {
+            audioEngine?.stop()
+        }
+        #if os(iOS)
+        if plan.deactivateAudioSession {
+            // Release the session so system services (e.g. keyboard dictation) regain the mic.
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
+        #endif
+        isTapInstalled = false
+        isAudioSessionActive = false
+        audioEngine = nil
+        converter = nil
     }
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer, inputFormat: AVAudioFormat, targetFormat: AVAudioFormat) {
@@ -129,11 +183,17 @@ final class AudioCaptureService: ObservableObject {
 
     enum RecordingError: LocalizedError {
         case converterUnavailable
+        case inactiveLifecycle
+        case inputUnavailable
 
         var errorDescription: String? {
             switch self {
             case .converterUnavailable:
                 return "Failed to configure audio converter."
+            case .inactiveLifecycle:
+                return "Voice recording is only available while VVTerm is active."
+            case .inputUnavailable:
+                return "Audio input is temporarily unavailable."
             }
         }
     }
