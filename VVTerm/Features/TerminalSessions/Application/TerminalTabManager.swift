@@ -62,7 +62,13 @@ final class TerminalTabManager: ObservableObject {
     private var tabOpensInFlight: Set<UUID> = []
 
     /// Pane state keyed by pane ID
-    @Published var paneStates: [UUID: TerminalPaneState] = [:]
+    @Published var paneStates: [UUID: TerminalPaneState] = [:] {
+        didSet {
+            LiveActivityManager.shared.refresh(
+                with: paneStates.values.map(\.connectionState)
+            )
+        }
+    }
     @Published private(set) var runtimeTitleByPane: [UUID: String] = [:]
     @Published private(set) var titleOverrideByPane: [UUID: String] = [:]
     #if os(iOS)
@@ -95,6 +101,9 @@ final class TerminalTabManager: ObservableObject {
         }
         #endif
         restoreSnapshot()
+        LiveActivityManager.shared.refresh(
+            with: paneStates.values.map(\.connectionState)
+        )
     }
 
     private func paneTmuxStatus(for paneId: UUID) -> TmuxStatus? {
