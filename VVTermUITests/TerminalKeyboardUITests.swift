@@ -148,7 +148,7 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal() throws {
-        let app = launchKeyboardHarness()
+        let app = launchKeyboardHarness(privacyModeEnabled: true)
         let terminal = waitForTerminal(in: app)
         terminal.tap()
         assertKeyboardAndAccessoryVisible(in: app)

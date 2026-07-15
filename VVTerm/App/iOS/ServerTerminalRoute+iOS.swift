@@ -226,8 +226,8 @@ struct ServerTerminalRoute: View {
             .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
                 updateKeyboardCoordinatorInputs()
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { _ in
-                updateKeyboardCoordinatorInputs()
+            .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { notification in
+                handleSceneWillDeactivate(notification)
             }
             .onChange(of: isFocusedTerminalFindNavigatorVisible) { _ in
                 updateKeyboardCoordinatorInputs()
@@ -386,6 +386,24 @@ struct ServerTerminalRoute: View {
             privacyModeEnabled: privacyModeEnabled,
             isAppLocked: appLockManager.isAppLocked
         )
+    }
+
+    private func handleSceneWillDeactivate(_ notification: Notification) {
+        if let notifyingScene = notification.object as? UIScene,
+           let terminalScene = focusedTerminal?.window?.windowScene,
+           notifyingScene !== terminalScene {
+            return
+        }
+
+        if AppContentProtectionPolicy.shouldPrepareForSceneDeactivation(
+            fullAppLockEnabled: appLockManager.fullAppLockEnabled,
+            privacyModeEnabled: privacyModeEnabled,
+            isAppLocked: appLockManager.isAppLocked
+        ) {
+            keyboardCoordinator.deactivateInputImmediately()
+        } else {
+            updateKeyboardCoordinatorInputs()
+        }
     }
 
     private func updateKeyboardCoordinatorInputs() {

@@ -34,4 +34,34 @@ struct AppContentProtectionPolicyTests {
             )
         )
     }
+
+    @Test(arguments: [
+        (fullAppLockEnabled: false, privacyModeEnabled: true, isAppLocked: false),
+        (fullAppLockEnabled: true, privacyModeEnabled: false, isAppLocked: false),
+        (fullAppLockEnabled: false, privacyModeEnabled: false, isAppLocked: true),
+    ])
+    func protectedAppPreparesBeforeSceneDeactivation(
+        fullAppLockEnabled: Bool,
+        privacyModeEnabled: Bool,
+        isAppLocked: Bool
+    ) {
+        #expect(
+            AppContentProtectionPolicy.shouldPrepareForSceneDeactivation(
+                fullAppLockEnabled: fullAppLockEnabled,
+                privacyModeEnabled: privacyModeEnabled,
+                isAppLocked: isAppLocked
+            )
+        )
+    }
+
+    @Test
+    func unprotectedAppPreservesInputDuringSceneDeactivation() {
+        #expect(
+            !AppContentProtectionPolicy.shouldPrepareForSceneDeactivation(
+                fullAppLockEnabled: false,
+                privacyModeEnabled: false,
+                isAppLocked: false
+            )
+        )
+    }
 }

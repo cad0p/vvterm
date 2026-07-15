@@ -15,6 +15,8 @@ struct TerminalKeyboardUITestHarness: View {
     }
 
     @EnvironmentObject private var ghosttyApp: Ghostty.App
+    @EnvironmentObject private var appLockManager: AppLockManager
+    @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
     @State private var terminalView: GhosttyTerminalView?
     @State private var terminalReady = false
     @State private var showsTerminal = true
@@ -160,9 +162,14 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.scene.active")
 
                     Button("Shield") {
+                        handleSceneWillDeactivate(
+                            Notification(
+                                name: UIScene.willDeactivateNotification,
+                                object: terminalView?.window?.windowScene
+                            )
+                        )
                         simulatesPrivacyShield = true
                         lifecycleStatus = .inactive
-                        applyRouteActivation(.foregroundInactive, contentObscured: true)
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.privacy.shield")
 
@@ -212,6 +219,9 @@ struct TerminalKeyboardUITestHarness: View {
                 lifecycleStatus = .background
                 applyRouteActivation(.background)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { notification in
+            handleSceneWillDeactivate(notification)
         }
         .onReceive(diagnosticTimer) { _ in
             refreshDiagnostics()
@@ -310,6 +320,24 @@ struct TerminalKeyboardUITestHarness: View {
                 manager.keyboardCoordinator.setViewActive(false)
                 manager.keyboardCoordinator.setActivePane(nil)
             }
+        }
+    }
+
+    private func handleSceneWillDeactivate(_ notification: Notification) {
+        if let notifyingScene = notification.object as? UIScene,
+           let terminalScene = terminalView?.window?.windowScene,
+           notifyingScene !== terminalScene {
+            return
+        }
+
+        if AppContentProtectionPolicy.shouldPrepareForSceneDeactivation(
+            fullAppLockEnabled: appLockManager.fullAppLockEnabled,
+            privacyModeEnabled: privacyModeEnabled,
+            isAppLocked: appLockManager.isAppLocked
+        ) {
+            TerminalTabManager.shared.keyboardCoordinator.deactivateInputImmediately()
+        } else {
+            applyRouteActivation(.foregroundInactive)
         }
     }
 
