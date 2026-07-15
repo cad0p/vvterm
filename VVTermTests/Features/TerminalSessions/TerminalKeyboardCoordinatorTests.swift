@@ -1,4 +1,5 @@
 #if os(iOS)
+import CoreGraphics
 import Testing
 @testable import VVTerm
 
@@ -144,6 +145,23 @@ struct TerminalKeyboardCoordinatorTests {
 
         coordinator.userRequestedShow()
         #expect(!coordinator.isUserHidden)
+    }
+
+    @Test
+    @MainActor
+    func losingViewOwnershipClearsObservedKeyboardGeometry() {
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.setViewActive(true)
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
+            CGRect(x: 0, y: 700, width: 1_024, height: 300)
+        )
+
+        #expect(coordinator.softwareKeyboardEndFrame != nil)
+
+        coordinator.setViewActive(false)
+
+        #expect(coordinator.softwareKeyboardEndFrame == nil)
+        #expect(!coordinator.isSoftwareKeyboardVisible)
     }
 
     @Test

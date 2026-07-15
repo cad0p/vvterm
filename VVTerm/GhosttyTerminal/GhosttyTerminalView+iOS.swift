@@ -5185,6 +5185,7 @@ extension GhosttyTerminalView {
             "keyboardHeight=\(keyboardHeightText)",
             "gridCols=\(size.map { String($0.columns) } ?? "0")",
             "gridRows=\(size.map { String($0.rows) } ?? "0")",
+            "sizePreserved=\(keyboardAvoidancePreservedSurfaceSize != nil)",
             "accessoryAttached=\(accessoryAttached)",
             "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
             "accessoryHidden=\(shouldHideKeyboardAccessoryBar)",

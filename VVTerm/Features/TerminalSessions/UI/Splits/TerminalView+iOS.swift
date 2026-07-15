@@ -64,7 +64,6 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
             }
         }
 
-        newTerminal.setKeyboardAvoidanceSizePreservationEnabled(keyboardFrame != nil)
         cursorRect = newTerminal.keyboardAvoidanceCursorRect()
         recalculate(animation: animation)
     }
@@ -87,17 +86,32 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
             return
         }
 
+        let currentBoundsFrame = terminal.convert(terminal.bounds, to: window)
+        let baseBoundsFrame = currentBoundsFrame.offsetBy(dx: 0, dy: -verticalOffset)
+        let keyboardFrameInWindow = keyboardFrame.map {
+            window.convert($0, from: window.screen.coordinateSpace)
+        }
+        let screenFrameInWindow = window.convert(
+            window.screen.bounds,
+            from: window.screen.coordinateSpace
+        )
+        let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrameInWindow,
+            terminalFrame: baseBoundsFrame,
+            keyboardFrame: keyboardFrameInWindow
+        )
+        terminal.setKeyboardAvoidanceSizePreservationEnabled(
+            geometry.preservesTerminalSurfaceSize
+        )
+
         let currentTerminalFrame = terminal.convert(terminal.keyboardAvoidanceTerminalRect(), to: window)
         let currentCursorFrame = terminal.convert(cursorRect, to: window)
         let baseTerminalFrame = currentTerminalFrame.offsetBy(dx: 0, dy: -verticalOffset)
         let baseCursorFrame = currentCursorFrame.offsetBy(dx: 0, dy: -verticalOffset)
-        let keyboardFrameInWindow = keyboardFrame.map {
-            window.convert($0, from: window.screen.coordinateSpace)
-        }
         let newOffset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: baseTerminalFrame,
             cursorFrame: baseCursorFrame,
-            keyboardFrame: keyboardFrameInWindow
+            keyboardFrame: geometry.frame
         )
         setVerticalOffset(newOffset, animation: animation)
     }

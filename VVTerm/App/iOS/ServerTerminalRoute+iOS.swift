@@ -229,6 +229,12 @@ struct ServerTerminalRoute: View {
             .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { notification in
                 handleSceneWillDeactivate(notification)
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIWindow.didBecomeKeyNotification)) { notification in
+                handleTerminalWindowKeyChange(notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIWindow.didResignKeyNotification)) { notification in
+                handleTerminalWindowKeyChange(notification)
+            }
             .onChange(of: isFocusedTerminalFindNavigatorVisible) { _ in
                 updateKeyboardCoordinatorInputs()
             }
@@ -406,11 +412,22 @@ struct ServerTerminalRoute: View {
         }
     }
 
+    private func handleTerminalWindowKeyChange(_ notification: Notification) {
+        guard let notifyingWindow = notification.object as? UIWindow,
+              notifyingWindow === focusedTerminal?.window else {
+            return
+        }
+        updateKeyboardCoordinatorInputs()
+    }
+
     private func updateKeyboardCoordinatorInputs() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: isRouteVisible,
             terminalSelected: selectedView == ConnectionViewTab.terminal.id,
             sceneActivation: keyboardSceneActivation,
+            windowOwnership: focusedTerminal?.window.map {
+                $0.isKeyWindow ? .key : .notKey
+            } ?? .unknown,
             contentObscured: isContentObscured
         )
 

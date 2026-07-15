@@ -186,10 +186,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     func setViewActive(_ active: Bool) {
-        guard viewActive != active else { return }
         if !active {
             cancelPresentationVerify()
+            clearSoftwareKeyboardObservation()
         }
+        guard viewActive != active else { return }
         viewActive = active
         markDirty(reason: "viewActive")
     }
@@ -237,6 +238,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     /// before iOS captures protected content. A scheduled reconciliation can
     /// run too late because the keyboard belongs to a separate system scene.
     func deactivateInputImmediately() {
+        clearSoftwareKeyboardObservation()
         guard activePaneId != nil || viewActive || findNavigatorActive || lastManagedPaneId != nil else {
             return
         }
@@ -284,7 +286,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         animationDuration: TimeInterval?,
         animationCurveRawValue: Int?
     ) {
-        guard let frame else { return }
+        guard viewActive, let frame else { return }
         updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
         guard let screenBounds = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.screen.bounds })
@@ -305,6 +307,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         animationCurveRawValue: Int?
     ) {
         updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
+        clearSoftwareKeyboardObservation()
+    }
+
+    private func clearSoftwareKeyboardObservation() {
         softwareKeyboardEndFrame = nil
         noteSoftwareKeyboardVisible(false)
     }
@@ -576,5 +582,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             "command=\(inputSessionDesired ? "acquire" : "release", privacy: .public) inputDesired=\(inputSessionDesired) keyboardDesired=\(keyboardPresentationDesired) reason=\(reason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) beforeWindow=\(before.windowAttached) beforeKeyWindow=\(before.windowIsKey) beforeScene=\(before.sceneActivationState, privacy: .public) beforeFirstResponder=\(before.isFirstResponder) beforeSoftwareInput=\(before.isSoftwareInputActive) afterWindow=\(after.windowAttached) afterKeyWindow=\(after.windowIsKey) afterScene=\(after.sceneActivationState, privacy: .public) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)"
         )
     }
+
+    #if DEBUG
+    func keyboardUITestSetSoftwareKeyboardEndFrame(_ frame: CGRect?) {
+        softwareKeyboardEndFrame = frame
+    }
+    #endif
 }
 #endif

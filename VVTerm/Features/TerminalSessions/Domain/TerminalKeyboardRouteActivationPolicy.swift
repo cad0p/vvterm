@@ -12,13 +12,23 @@ enum TerminalKeyboardRouteActivationPolicy {
         case deactivate
     }
 
+    enum WindowOwnership: Equatable {
+        case unknown
+        case key
+        case notKey
+    }
+
     static func effect(
         routeVisible: Bool,
         terminalSelected: Bool,
         sceneActivation: SceneActivation,
+        windowOwnership: WindowOwnership = .unknown,
         contentObscured: Bool = false
     ) -> Effect {
         guard routeVisible, terminalSelected, !contentObscured else {
+            return .deactivate
+        }
+        guard windowOwnership != .notKey else {
             return .deactivate
         }
 

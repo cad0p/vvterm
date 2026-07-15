@@ -89,5 +89,56 @@ struct TerminalKeyboardAvoidancePolicyTests {
 
         #expect(offset == -160)
     }
+
+    @Test
+    func dockedFloatingDockedTransitionsReplaceGeometryWithoutStalePreservation() {
+        let docked = CGRect(x: 0, y: 500, width: 390, height: 300)
+        let floating = CGRect(x: 160, y: 480, width: 210, height: 220)
+        let geometries = [docked, floating, docked, nil].map {
+            TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+                screenFrame: terminalFrame,
+                terminalFrame: terminalFrame,
+                keyboardFrame: $0
+            )
+        }
+
+        #expect(
+            geometries == [
+                .docked(frame: docked),
+                .floating(frame: floating),
+                .docked(frame: docked),
+                .hidden,
+            ]
+        )
+        #expect(geometries.map(\.preservesTerminalSurfaceSize) == [true, false, true, false])
+    }
+
+    @Test
+    func offWindowKeyboardGeometryIsHidden() {
+        let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: terminalFrame,
+            terminalFrame: terminalFrame,
+            keyboardFrame: CGRect(x: 500, y: 480, width: 210, height: 220)
+        )
+
+        #expect(geometry == .hidden)
+        #expect(!geometry.preservesTerminalSurfaceSize)
+    }
+
+    @Test
+    func floatingKeyboardRemainsFloatingInNarrowAppWindow() {
+        let screenFrame = CGRect(x: 0, y: 0, width: 1_366, height: 1_024)
+        let narrowTerminalFrame = CGRect(x: 991, y: 0, width: 375, height: 1_024)
+        let floating = CGRect(x: 1_046, y: 704, width: 320, height: 320)
+
+        let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrame,
+            terminalFrame: narrowTerminalFrame,
+            keyboardFrame: floating
+        )
+
+        #expect(geometry == .floating(frame: floating))
+        #expect(!geometry.preservesTerminalSurfaceSize)
+    }
 }
 #endif

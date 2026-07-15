@@ -14,6 +14,12 @@ struct TerminalKeyboardUITestHarness: View {
         case reconnecting
     }
 
+    private enum SimulatedKeyboardGeometry {
+        case docked
+        case floating
+        case hidden
+    }
+
     @EnvironmentObject private var ghosttyApp: Ghostty.App
     @EnvironmentObject private var appLockManager: AppLockManager
     @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
@@ -147,6 +153,41 @@ struct TerminalKeyboardUITestHarness: View {
                     terminalView?.keyboardUITestMoveCursorToBottom()
                 }
                 .accessibilityIdentifier("vvterm.keyboardTest.cursor.bottom")
+
+                HStack(spacing: 8) {
+                    Button("Other App") {
+                        lifecycleStatus = .inactive
+                        applyRouteActivation(
+                            .foregroundInactive,
+                            windowOwnership: .notKey
+                        )
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.window.notKey")
+
+                    Button("VVTerm") {
+                        lifecycleStatus = .connected
+                        applyRouteActivation(
+                            .foregroundActive,
+                            windowOwnership: .key
+                        )
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.window.key")
+
+                    Button("Docked") {
+                        applySimulatedKeyboardGeometry(.docked)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.geometry.docked")
+
+                    Button("Floating") {
+                        applySimulatedKeyboardGeometry(.floating)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.geometry.floating")
+
+                    Button("No Frame") {
+                        applySimulatedKeyboardGeometry(.hidden)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.geometry.hidden")
+                }
 
                 HStack(spacing: 8) {
                     Button("Inactive") {
@@ -299,6 +340,7 @@ struct TerminalKeyboardUITestHarness: View {
 
     private func applyRouteActivation(
         _ sceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation,
+        windowOwnership: TerminalKeyboardRouteActivationPolicy.WindowOwnership = .unknown,
         contentObscured: Bool = false
     ) {
         let manager = TerminalTabManager.shared
@@ -306,6 +348,7 @@ struct TerminalKeyboardUITestHarness: View {
             routeVisible: true,
             terminalSelected: showsTerminal,
             sceneActivation: sceneActivation,
+            windowOwnership: windowOwnership,
             contentObscured: contentObscured
         ) {
         case .activate:
@@ -321,6 +364,37 @@ struct TerminalKeyboardUITestHarness: View {
                 manager.keyboardCoordinator.setActivePane(nil)
             }
         }
+    }
+
+    private func applySimulatedKeyboardGeometry(_ geometry: SimulatedKeyboardGeometry) {
+        guard let screenBounds = terminalView?.window?.screen.bounds else { return }
+        let frame: CGRect?
+        switch geometry {
+        case .docked:
+            let height = min(360, screenBounds.height * 0.38)
+            frame = CGRect(
+                x: screenBounds.minX,
+                y: screenBounds.maxY - height,
+                width: screenBounds.width,
+                height: height
+            )
+        case .floating:
+            let width = min(320, screenBounds.width * 0.45)
+            let height = min(260, screenBounds.height * 0.3)
+            frame = CGRect(
+                x: screenBounds.midX - width / 2,
+                y: screenBounds.maxY - height - 100,
+                width: width,
+                height: height
+            )
+        case .hidden:
+            frame = nil
+        }
+
+        keyboardFrame = frame
+        TerminalTabManager.shared.keyboardCoordinator
+            .keyboardUITestSetSoftwareKeyboardEndFrame(frame)
+        refreshDiagnostics()
     }
 
     private func handleSceneWillDeactivate(_ notification: Notification) {

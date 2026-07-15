@@ -72,5 +72,41 @@ struct TerminalKeyboardRouteActivationPolicyTests {
 
         #expect(effect == .deactivate)
     }
+
+    @Test
+    func crossAppFocusTransferDeactivatesTerminalInput() {
+        let effect = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: true,
+            sceneActivation: .foregroundInactive,
+            windowOwnership: .notKey
+        )
+
+        #expect(effect == .deactivate)
+    }
+
+    @Test
+    func temporarySystemOverlayPreservesInputWhileTerminalWindowRemainsKey() {
+        let effect = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: true,
+            sceneActivation: .foregroundInactive,
+            windowOwnership: .key
+        )
+
+        #expect(effect == .preserve)
+    }
+
+    @Test
+    func foregroundRouteCannotAcquireInputBeforeItsWindowBecomesKey() {
+        let effect = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: true,
+            sceneActivation: .foregroundActive,
+            windowOwnership: .notKey
+        )
+
+        #expect(effect == .deactivate)
+    }
 }
 #endif

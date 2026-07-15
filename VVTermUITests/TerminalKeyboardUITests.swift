@@ -267,6 +267,115 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testCrossAppFocusTransferReleasesAndRestoresTerminalInput() throws {
+        let app = launchKeyboardHarness(preservesTerminalSize: true)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        let dockedButton = app.buttons["vvterm.keyboardTest.geometry.docked"]
+        XCTAssertTrue(dockedButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        dockedButton.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "sizePreserved=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        let transferButton = app.buttons["vvterm.keyboardTest.window.notKey"]
+        XCTAssertTrue(transferButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        transferButton.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "sizePreserved=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        let returnButton = app.buttons["vvterm.keyboardTest.window.key"]
+        XCTAssertTrue(returnButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        returnButton.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        terminal.typeText("x")
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
+    func testDockedFloatingDockedGeometryClearsStaleSurfacePreservation() throws {
+        let app = launchKeyboardHarness(preservesTerminalSize: true)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        for identifier in [
+            "vvterm.keyboardTest.geometry.docked",
+            "vvterm.keyboardTest.geometry.floating",
+            "vvterm.keyboardTest.geometry.docked",
+            "vvterm.keyboardTest.geometry.floating",
+            "vvterm.keyboardTest.geometry.docked",
+        ] {
+            let button = app.buttons[identifier]
+            XCTAssertTrue(button.waitForExistence(timeout: 5), diagnosticsText(in: app))
+            button.tap()
+            wait(
+                for: diagnostics,
+                labelContaining: identifier.hasSuffix("floating")
+                    ? "sizePreserved=false"
+                    : "sizePreserved=true",
+                timeout: 5,
+                diagnostics: diagnosticsText(in: app)
+            )
+        }
+
+        let hiddenButton = app.buttons["vvterm.keyboardTest.geometry.hidden"]
+        XCTAssertTrue(hiddenButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        hiddenButton.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "sizePreserved=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        terminal.typeText("g")
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=67",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
     func testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive() throws {
         let app = launchKeyboardHarness()
         var terminal = waitForTerminal(in: app)
