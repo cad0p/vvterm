@@ -1,7 +1,54 @@
 #if os(iOS)
 import CoreGraphics
+import Foundation
 import Testing
 @testable import VVTerm
+
+@MainActor
+private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSession {
+    var snapshot = TerminalKeyboardCoordinatorDiagnosticSnapshot(
+        windowAttached: true,
+        windowIsKey: true,
+        sceneActivationState: "foregroundActive",
+        isFirstResponder: true,
+        isSoftwareInputActive: true
+    )
+    private(set) var acquireCount = 0
+    private(set) var rebuildCount = 0
+
+    func keyboardCoordinatorDiagnosticSnapshot() -> TerminalKeyboardCoordinatorDiagnosticSnapshot {
+        snapshot
+    }
+
+    func acquireTerminalInput() -> Bool {
+        acquireCount += 1
+        snapshot.isFirstResponder = true
+        snapshot.isSoftwareInputActive = true
+        return true
+    }
+
+    func focusTerminalInputWithoutShowingSoftwareKeyboard() -> Bool {
+        snapshot.isFirstResponder = true
+        snapshot.isSoftwareInputActive = true
+        return true
+    }
+
+    func releaseTerminalInput() {
+        snapshot.isFirstResponder = false
+        snapshot.isSoftwareInputActive = false
+    }
+
+    func rebuildTerminalInputSession() {
+        rebuildCount += 1
+    }
+
+    func setTerminalInputAccessorySuppressed(_ suppressed: Bool) {}
+
+    func resetCommands() {
+        acquireCount = 0
+        rebuildCount = 0
+    }
+}
 
 struct TerminalKeyboardCoordinatorTests {
     @Test
@@ -149,6 +196,35 @@ struct TerminalKeyboardCoordinatorTests {
 
     @Test
     @MainActor
+    func explicitShowBeginsOnePresentationWithoutRebuildingActiveInput() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneConnected(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        coordinator.userRequestedHide()
+        await drainMainQueue()
+        session.resetCommands()
+
+        coordinator.userRequestedShow()
+
+        #expect(session.acquireCount == 1)
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
+
+        await drainMainQueue()
+
+        #expect(session.rebuildCount == 0)
+    }
+
+    @Test
+    @MainActor
     func losingViewOwnershipClearsObservedKeyboardGeometry() {
         let coordinator = TerminalKeyboardCoordinator()
         coordinator.setViewActive(true)
@@ -218,6 +294,15 @@ struct TerminalKeyboardCoordinatorTests {
                 refreshAttemptLimit: 2
             ) == .none
         )
+    }
+}
+
+@MainActor
+private func drainMainQueue() async {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+            continuation.resume()
+        }
     }
 }
 #endif

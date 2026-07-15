@@ -4,6 +4,20 @@ import Foundation
 import UIKit
 import os.log
 
+@MainActor
+protocol TerminalKeyboardInputSession: AnyObject {
+    func keyboardCoordinatorDiagnosticSnapshot() -> TerminalKeyboardCoordinatorDiagnosticSnapshot
+    @discardableResult
+    func acquireTerminalInput() -> Bool
+    @discardableResult
+    func focusTerminalInputWithoutShowingSoftwareKeyboard() -> Bool
+    func releaseTerminalInput()
+    func rebuildTerminalInputSession()
+    func setTerminalInputAccessorySuppressed(_ suppressed: Bool)
+}
+
+extension GhosttyTerminalView: TerminalKeyboardInputSession {}
+
 /// Owns the terminal text-input session and observes what UIKit actually
 /// does with it. The design rule that keeps this correct: the app CONTROLS
 /// only the session (first responder) from app state; whether a software
@@ -41,7 +55,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private(set) var keyboardAnimationDuration: TimeInterval = 0.25
     private(set) var keyboardAnimationCurve: UIView.AnimationCurve = .easeInOut
 
-    var terminalProvider: ((UUID) -> GhosttyTerminalView?)?
+    var terminalProvider: ((UUID) -> (any TerminalKeyboardInputSession)?)?
 
     private var activePaneId: UUID?
     private var viewActive = false
@@ -268,6 +282,21 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         if isUserHidden {
             isUserHidden = false
         }
+
+        // A user-hidden keyboard keeps the text-input session active for
+        // hardware keys. Start one normal presentation attempt here and
+        // establish its verifier before queued reconciliation can mistake
+        // the in-flight animation for a settled failure and rebuild it.
+        let inputs = currentInputs
+        if Self.desiredKeyboardVisible(inputs: inputs),
+           let terminal = activeTerminal,
+           terminal.keyboardCoordinatorDiagnosticSnapshot().isSoftwareInputActive {
+            _ = terminal.acquireTerminalInput()
+            if terminal.keyboardCoordinatorDiagnosticSnapshot().isSoftwareInputActive,
+               !isSoftwareKeyboardVisible {
+                schedulePresentationVerify()
+            }
+        }
         markDirty(reason: "userShow")
     }
 
@@ -335,7 +364,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         markDirty(reason: visible ? "keyboardShown" : "keyboardHidden")
     }
 
-    private var activeTerminal: GhosttyTerminalView? {
+    private var activeTerminal: (any TerminalKeyboardInputSession)? {
         activePaneId.flatMap { terminalProvider?($0) }
     }
 
@@ -584,6 +613,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     #if DEBUG
+    var keyboardUITestPresentationVerificationPending: Bool {
+        presentationVerifyTask != nil
+    }
+
     func keyboardUITestSetSoftwareKeyboardEndFrame(_ frame: CGRect?) {
         softwareKeyboardEndFrame = frame
     }

@@ -1844,6 +1844,7 @@ class GhosttyTerminalView: UIView {
     private var suppressAccessoryForMissingSoftwareKeyboard = false
     #if DEBUG
     private var keyboardHideRequestCount = 0
+    private var keyboardInputSessionRebuildCount = 0
     private var keyboardUITestHardwareKeyboardOverride: Bool?
     #endif
     var onWindowAttachmentChange: ((Bool) -> Void)?
@@ -2034,6 +2035,9 @@ class GhosttyTerminalView: UIView {
     /// exists for this identity"); the separate turn plus reloadInputViews
     /// forces the InputUI scene to be recreated.
     func rebuildTerminalInputSession() {
+        #if DEBUG
+        keyboardInputSessionRebuildCount += 1
+        #endif
         releaseTerminalInput()
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isShuttingDown, !self.isFindNavigatorActive else { return }
@@ -5196,7 +5200,8 @@ extension GhosttyTerminalView {
             "imeComposing=\(textInputModel.hasActiveIMEComposition)",
             "imeMarkedText=\(keyboardUITestToken(textInputModel.markedText))",
             "imeModelText=\(keyboardUITestToken(textInputModel.text))",
-            "hideRequests=\(keyboardHideRequestCount)"
+            "hideRequests=\(keyboardHideRequestCount)",
+            "inputRebuilds=\(keyboardInputSessionRebuildCount)"
         ].joined(separator: " ")
     }
 

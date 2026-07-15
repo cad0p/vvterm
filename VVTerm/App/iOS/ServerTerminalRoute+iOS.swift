@@ -456,7 +456,6 @@ struct ServerTerminalRoute: View {
         guard selectedView == ConnectionViewTab.terminal.id else { return }
         clearPendingVoiceReturnForFocusedPane()
         keyboardCoordinator.userRequestedShow()
-        focusedTerminal?.requestKeyboardFocus(for: .explicitUserRequest)
     }
 
     private func startVoiceInputForFocusedTerminal() {

@@ -45,8 +45,10 @@ final class TerminalKeyboardUITests: XCTestCase {
         wait(for: diagnostics, labelContaining: "browse=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         assertKeyboardAndAccessoryRemainHidden(in: app)
 
+        let transitionBaseline = try keyboardTransitionBaseline(in: app)
         app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
         assertKeyboardAndAccessoryVisible(in: app)
+        assertSingleKeyboardRestore(since: transitionBaseline, in: app)
     }
 
     @MainActor
@@ -502,12 +504,14 @@ final class TerminalKeyboardUITests: XCTestCase {
         assertKeyboardAndAccessoryHidden(in: app)
         let expandedRows = try requiredDiagnosticMetric("gridRows", in: app)
 
+        let transitionBaseline = try keyboardTransitionBaseline(in: app)
         app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
         assertKeyboardAndAccessoryVisible(in: app)
         waitForDiagnosticMetrics(in: app) { metrics in
             guard let rows = metrics["gridRows"] else { return false }
             return rows < expandedRows
         }
+        assertSingleKeyboardRestore(since: transitionBaseline, in: app)
     }
 
     @MainActor
@@ -558,6 +562,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         let expandedRows = try requiredDiagnosticMetric("gridRows", in: app)
         let restingTerminalTop = try requiredDiagnosticMetric("terminalTop", in: app)
 
+        let transitionBaseline = try keyboardTransitionBaseline(in: app)
         app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
         assertKeyboardAndAccessoryVisible(in: app)
         app.buttons["vvterm.keyboardTest.cursor.bottom"].tap()
@@ -574,6 +579,7 @@ final class TerminalKeyboardUITests: XCTestCase {
                 && terminalTop < restingTerminalTop
                 && cursorBottom <= keyboardTop
         }
+        assertSingleKeyboardRestore(since: transitionBaseline, in: app)
     }
 
     @MainActor
@@ -717,6 +723,42 @@ final class TerminalKeyboardUITests: XCTestCase {
             throw DiagnosticMetricError.missing(name)
         }
         return value
+    }
+
+    private struct KeyboardTransitionBaseline {
+        let shows: Double
+        let hides: Double
+        let rebuilds: Double
+    }
+
+    private func keyboardTransitionBaseline(in app: XCUIApplication) throws -> KeyboardTransitionBaseline {
+        KeyboardTransitionBaseline(
+            shows: try requiredDiagnosticMetric("keyboardShows", in: app),
+            hides: try requiredDiagnosticMetric("keyboardHides", in: app),
+            rebuilds: try requiredDiagnosticMetric("inputRebuilds", in: app)
+        )
+    }
+
+    private func assertSingleKeyboardRestore(
+        since baseline: KeyboardTransitionBaseline,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        waitForDiagnosticMetrics(in: app, file: file, line: line) { metrics in
+            metrics["keyboardShows"] == baseline.shows + 1
+                && metrics["keyboardHides"] == baseline.hides
+                && metrics["inputRebuilds"] == baseline.rebuilds
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let metrics = diagnosticMetrics(in: app)
+            XCTAssertEqual(metrics["keyboardShows"], baseline.shows + 1, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["keyboardHides"], baseline.hides, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["inputRebuilds"], baseline.rebuilds, diagnosticsText(in: app), file: file, line: line)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
     }
 
     private func waitForDiagnosticMetrics(

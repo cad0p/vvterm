@@ -31,6 +31,8 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var keyboardVisible = false
     @State private var keyboardHeight: CGFloat = 0
     @State private var keyboardFrame: CGRect?
+    @State private var keyboardShowTransitionCount = 0
+    @State private var keyboardHideTransitionCount = 0
     @State private var diagnostics = "notReady"
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
@@ -111,8 +113,7 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.hideViaToolbar")
 
                     Button("Keyboard") {
-                        terminalView?.requestKeyboardFocus(for: .explicitUserRequest)
-                        focusRequestID += 1
+                        TerminalTabManager.shared.keyboardCoordinator.userRequestedShow()
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.showKeyboard")
                 }
@@ -274,16 +275,10 @@ struct TerminalKeyboardUITestHarness: View {
             noteKeyboardFrame(note)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardVisible = false
-            keyboardHeight = 0
-            keyboardFrame = nil
-            refreshDiagnostics()
+            noteKeyboardHidden()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
-            keyboardVisible = false
-            keyboardHeight = 0
-            keyboardFrame = nil
-            refreshDiagnostics()
+            noteKeyboardHidden()
         }
     }
 
@@ -302,9 +297,27 @@ struct TerminalKeyboardUITestHarness: View {
         let screenBounds = terminalView?.window?.screen.bounds ?? UIScreen.main.bounds
         let overlap = screenBounds.intersection(frame)
         let height = overlap.isNull ? 0 : overlap.height
-        keyboardHeight = height
-        keyboardVisible = height >= 100
-        keyboardFrame = keyboardVisible ? frame : nil
+        let visible = height >= 100
+        if visible != keyboardVisible {
+            if visible {
+                keyboardShowTransitionCount += 1
+            } else {
+                keyboardHideTransitionCount += 1
+            }
+        }
+        keyboardHeight = visible ? height : 0
+        keyboardVisible = visible
+        keyboardFrame = visible ? frame : nil
+        refreshDiagnostics()
+    }
+
+    private func noteKeyboardHidden() {
+        if keyboardVisible {
+            keyboardHideTransitionCount += 1
+        }
+        keyboardVisible = false
+        keyboardHeight = 0
+        keyboardFrame = nil
         refreshDiagnostics()
     }
 
@@ -317,6 +330,7 @@ struct TerminalKeyboardUITestHarness: View {
             keyboardVisible: keyboardVisible,
             keyboardHeight: keyboardHeight
         ) + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+            + " keyboardShows=\(keyboardShowTransitionCount) keyboardHides=\(keyboardHideTransitionCount)"
             + " reconnect=\(lifecycleStatus.rawValue) inputHex=\(receivedInputHex)"
     }
 
