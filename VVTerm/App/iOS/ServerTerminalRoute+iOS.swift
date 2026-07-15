@@ -345,20 +345,48 @@ struct ServerTerminalRoute: View {
         )
     }
 
-    /// SwiftUI's scenePhase lags or misreports under iPhone Mirroring while
-    /// touches keep arriving; UIKit's scene activation is the ground truth.
-    private var isSceneInteractive: Bool {
-        UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
+    /// Prefer the terminal's own UIKit scene because SwiftUI's scenePhase can
+    /// lag under iPhone Mirroring and another foreground scene must not make
+    /// this route appear active.
+    private var keyboardSceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation {
+        if let activationState = focusedTerminal?.window?.windowScene?.activationState {
+            switch activationState {
+            case .foregroundActive:
+                return .foregroundActive
+            case .foregroundInactive:
+                return .foregroundInactive
+            case .background, .unattached:
+                return .background
+            @unknown default:
+                return .background
+            }
+        }
+
+        switch scenePhase {
+        case .active:
+            return .foregroundActive
+        case .inactive:
+            return .foregroundInactive
+        case .background:
+            return .background
+        @unknown default:
+            return .background
+        }
     }
 
     private func updateKeyboardCoordinatorInputs() {
-        let isTerminalActive = isRouteVisible
-            && selectedView == ConnectionViewTab.terminal.id
-            && isSceneInteractive
-        let activePaneId = isTerminalActive ? focusedPaneId : nil
+        let effect = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: isRouteVisible,
+            terminalSelected: selectedView == ConnectionViewTab.terminal.id,
+            sceneActivation: keyboardSceneActivation
+        )
+
+        guard effect != .preserve else { return }
+
+        let activePaneId = effect == .activate ? focusedPaneId : nil
 
         keyboardCoordinator.setActivePane(activePaneId)
-        keyboardCoordinator.setViewActive(isTerminalActive)
+        keyboardCoordinator.setViewActive(effect == .activate)
         keyboardCoordinator.setFindNavigatorActive(activePaneId != nil && isFocusedTerminalFindNavigatorVisible)
 
         if let activePaneId {

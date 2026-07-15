@@ -6,6 +6,14 @@ import UIKit
 struct TerminalKeyboardUITestHarness: View {
     private static let paneId = UUID(uuidString: "B54F29D8-7C3E-4DB8-B3D7-9D9F1604B755")!
 
+    private enum LifecycleStatus: String {
+        case initial
+        case connected
+        case inactive
+        case background
+        case reconnecting
+    }
+
     @EnvironmentObject private var ghosttyApp: Ghostty.App
     @State private var terminalView: GhosttyTerminalView?
     @State private var terminalReady = false
@@ -15,7 +23,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var keyboardHeight: CGFloat = 0
     @State private var keyboardFrame: CGRect?
     @State private var diagnostics = "notReady"
-    @State private var reconnectStatus = "initial"
+    @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
     @Environment(\.scenePhase) private var scenePhase
 
@@ -129,6 +137,20 @@ struct TerminalKeyboardUITestHarness: View {
                     terminalView?.keyboardUITestMoveCursorToBottom()
                 }
                 .accessibilityIdentifier("vvterm.keyboardTest.cursor.bottom")
+
+                HStack(spacing: 8) {
+                    Button("Inactive") {
+                        lifecycleStatus = .inactive
+                        applyRouteActivation(.foregroundInactive)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.scene.inactive")
+
+                    Button("Active") {
+                        lifecycleStatus = .connected
+                        applyRouteActivation(.foregroundActive)
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.scene.active")
+                }
             }
             .font(.system(size: 12, weight: .semibold))
             .padding(.horizontal, 10)
@@ -148,11 +170,25 @@ struct TerminalKeyboardUITestHarness: View {
             configureLifecycleHarness()
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active {
-                restoreLifecycleHarnessAfterForeground()
-            } else {
-                reconnectStatus = "background"
-                TerminalTabManager.shared.keyboardCoordinator.setViewActive(false)
+            switch phase {
+            case .active:
+                if lifecycleStatus == .background {
+                    restoreLifecycleHarnessAfterForeground()
+                } else {
+                    lifecycleStatus = .connected
+                    applyRouteActivation(.foregroundActive)
+                }
+            case .inactive:
+                if lifecycleStatus != .background {
+                    lifecycleStatus = .inactive
+                }
+                applyRouteActivation(.foregroundInactive)
+            case .background:
+                lifecycleStatus = .background
+                applyRouteActivation(.background)
+            @unknown default:
+                lifecycleStatus = .background
+                applyRouteActivation(.background)
             }
         }
         .onReceive(diagnosticTimer) { _ in
@@ -208,7 +244,7 @@ struct TerminalKeyboardUITestHarness: View {
             keyboardVisible: keyboardVisible,
             keyboardHeight: keyboardHeight
         ) + " " + keyboardAvoidanceDiagnostics(for: terminalView)
-            + " reconnect=\(reconnectStatus) inputHex=\(receivedInputHex)"
+            + " reconnect=\(lifecycleStatus.rawValue) inputHex=\(receivedInputHex)"
     }
 
     private func configureLifecycleHarness() {
@@ -226,12 +262,32 @@ struct TerminalKeyboardUITestHarness: View {
         manager.updatePaneState(Self.paneId, connectionState: .connected)
         manager.keyboardCoordinator.setActivePane(Self.paneId)
         manager.keyboardCoordinator.setViewActive(true)
-        reconnectStatus = "connected"
+        lifecycleStatus = .connected
+    }
+
+    private func applyRouteActivation(
+        _ sceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation
+    ) {
+        let manager = TerminalTabManager.shared
+        switch TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: showsTerminal,
+            sceneActivation: sceneActivation
+        ) {
+        case .activate:
+            manager.keyboardCoordinator.setActivePane(Self.paneId)
+            manager.keyboardCoordinator.setViewActive(true)
+        case .preserve:
+            break
+        case .deactivate:
+            manager.keyboardCoordinator.setViewActive(false)
+            manager.keyboardCoordinator.setActivePane(nil)
+        }
     }
 
     private func restoreLifecycleHarnessAfterForeground() {
         guard terminalReady else { return }
-        reconnectStatus = "reconnecting"
+        lifecycleStatus = .reconnecting
         TerminalTabManager.shared.updatePaneState(
             Self.paneId,
             connectionState: .reconnecting(attempt: 1)
@@ -239,7 +295,7 @@ struct TerminalKeyboardUITestHarness: View {
         TerminalTabManager.shared.keyboardCoordinator.setActivePane(Self.paneId)
         TerminalTabManager.shared.keyboardCoordinator.setViewActive(true)
         TerminalTabManager.shared.updatePaneState(Self.paneId, connectionState: .connected)
-        reconnectStatus = "connected"
+        lifecycleStatus = .connected
     }
 
     private func keyboardAvoidanceDiagnostics(for terminal: GhosttyTerminalView) -> String {

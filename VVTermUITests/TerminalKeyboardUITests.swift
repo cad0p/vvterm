@@ -108,6 +108,91 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        app.buttons["vvterm.keyboardTest.scene.inactive"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "reconnect=inactive",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        app.buttons["vvterm.keyboardTest.scene.active"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "reconnect=connected",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let key = app.keys["x"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
+    func testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        app.buttons["vvterm.keyboardTest.hideViaToolbar"].tap()
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryHidden(in: app)
+
+        app.buttons["vvterm.keyboardTest.scene.inactive"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "reconnect=inactive",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryRemainHidden(in: app)
+
+        app.buttons["vvterm.keyboardTest.scene.active"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "reconnect=connected",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryRemainHidden(in: app)
+    }
+
+    @MainActor
     func testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive() throws {
         let app = launchKeyboardHarness()
         var terminal = waitForTerminal(in: app)
