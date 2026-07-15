@@ -11,7 +11,7 @@ VENDOR_SSH="$PROJECT_ROOT/Vendor/libssh2"
 BUILD_DIR_SSH="$PROJECT_ROOT/.build/ssh"
 
 OPENSSL_VERSION="3.2.0"
-LIBSSH2_VERSION="1.11.0"
+LIBSSH2_VERSION="1.11.1"
 MACOS_DEPLOYMENT_TARGET="13.3"
 IOS_DEPLOYMENT_TARGET="16.0"
 
@@ -72,6 +72,7 @@ check_deps_ssh() {
     require_cmd tar
     require_cmd cmake
     require_cmd make
+    require_cmd rsync
     require_cmd xcrun
 }
 
@@ -424,6 +425,8 @@ build_libssh2_simulator() {
 
 create_modulemap() {
     log_info "Writing libssh2 module map..."
+
+    rsync -a --delete "${VENDOR_SSH}/macos/include/" "${VENDOR_SSH}/include/"
 
     cat > "${VENDOR_SSH}/module.modulemap" << 'EOF_MODULE'
 module libssh2 {
