@@ -953,8 +953,32 @@ struct TerminalPaneView: View {
         reconnectInFlight = true
         connectWatchdogToken = UUID()
         Task {
+            #if os(iOS)
+            guard UIApplication.shared.applicationState == .active,
+                  scenePhase == .active else {
+                reconnectInFlight = false
+                return
+            }
+            TerminalTabManager.shared.noteForegroundActivation()
+            #endif
+            guard await TerminalTabManager.shared.prepareForForegroundReconnect() else {
+                reconnectInFlight = false
+                return
+            }
+
             await TerminalTabManager.shared.unregisterSSHClient(for: paneId)
             guard TerminalTabManager.shared.paneStates[paneId] != nil else {
+                reconnectInFlight = false
+                return
+            }
+            #if os(iOS)
+            guard UIApplication.shared.applicationState == .active,
+                  scenePhase == .active else {
+                reconnectInFlight = false
+                return
+            }
+            #endif
+            guard await TerminalTabManager.shared.prepareForForegroundReconnect() else {
                 reconnectInFlight = false
                 return
             }

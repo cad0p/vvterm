@@ -11,7 +11,7 @@ enum SSHConnectionRunner {
         shouldContinueConnection: @MainActor @escaping () -> Bool,
         onAttempt: @MainActor @escaping (_ attempt: Int) -> Void,
         startupPlan: @MainActor @escaping () async -> TerminalShellStartupPlan,
-        registerShell: @MainActor @escaping (_ shell: ShellHandle, _ skipTmuxLifecycle: Bool) async -> Void,
+        registerShell: @MainActor @escaping (_ shell: ShellHandle, _ skipTmuxLifecycle: Bool) async -> Bool,
         onBeforeShellStart: @MainActor @escaping (_ cols: Int, _ rows: Int) async -> Void,
         onTitleChange: @MainActor @escaping (_ title: String) -> Void,
         shouldContinueStreaming: @MainActor @escaping (_ data: Data, _ terminal: GhosttyTerminalView) -> Bool,
@@ -52,8 +52,9 @@ enum SSHConnectionRunner {
                     await sshClient.closeShell(shell.id)
                     return
                 }
-
-                await registerShell(shell, startup.skipTmuxLifecycle)
+                guard await registerShell(shell, startup.skipTmuxLifecycle) else {
+                    return
+                }
 
                 guard !Task.isCancelled else { return }
                 var lifecycleParser = startup.tmuxLifecycle.map {
@@ -62,6 +63,7 @@ enum SSHConnectionRunner {
                 var lastLifecycleEvent: TmuxLifecycleEvent?
                 for await data in shell.stream {
                     guard !Task.isCancelled else { break }
+                    guard shouldContinueConnection() else { break }
                     let visibleData: Data
                     if var parser = lifecycleParser {
                         let parsed = parser.consume(data)

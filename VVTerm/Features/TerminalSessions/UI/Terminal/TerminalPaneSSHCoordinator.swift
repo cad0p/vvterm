@@ -156,7 +156,7 @@ final class TerminalPaneSSHCoordinator {
                     )
                 },
                 registerShell: { shell, skipTmuxLifecycle in
-                    TerminalTabManager.shared.registerSSHClient(
+                    guard await TerminalTabManager.shared.registerSSHClient(
                         sshClient,
                         shellId: shell.id,
                         for: paneId,
@@ -164,10 +164,13 @@ final class TerminalPaneSSHCoordinator {
                         transport: shell.transport,
                         fallbackReason: shell.fallbackReason,
                         skipTmuxLifecycle: skipTmuxLifecycle
-                    )
+                    ) else {
+                        return false
+                    }
                     TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
                     self.shellId = shell.id
                     await self.applyWorkingDirectoryIfNeeded(paneId: paneId, shellId: shell.id, sshClient: sshClient)
+                    return true
                 },
                 onBeforeShellStart: { cols, rows in
                     self.lastTerminalSize = (cols, rows)
@@ -176,10 +179,13 @@ final class TerminalPaneSSHCoordinator {
                     TerminalTabManager.shared.updatePaneTitle(paneId, rawTitle: title)
                 },
                 shouldContinueStreaming: { data, terminal in
-                    guard TerminalTabManager.shared.paneStates[paneId] != nil else {
+                    guard TerminalTabManager.shared.isCurrentShellOwner(
+                        for: paneId,
+                        client: sshClient
+                    ) else {
                         return false
                     }
-                    guard self.terminal != nil else {
+                    guard self.terminal === terminal else {
                         return false
                     }
                     terminal.feedData(data)

@@ -27,9 +27,18 @@ struct SSHShellRegistryTests {
             serverId: serverId,
             client: replacementClient
         )
+        let staleRegistration = registry.register(
+            client: oldClient,
+            shellId: UUID(),
+            for: paneId,
+            serverId: serverId,
+            transport: .ssh,
+            fallbackReason: nil
+        )
 
         #expect(detached.registrations.count == 1)
         #expect(detached.pendingStarts.isEmpty)
+        #expect(staleRegistration == .stale)
         #expect(replacement.started)
         #expect(registry.ownsConnection(client: replacementClient, for: paneId))
         #expect(!registry.ownsConnection(client: oldClient, for: paneId))

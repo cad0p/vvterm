@@ -15,10 +15,9 @@ struct SSHShellRegistry {
         let serverId: UUID
     }
 
-    struct RegisterResult: Sendable {
-        let accepted: Bool
-        let staleIncomingShell: (client: SSHClient, shellId: UUID)?
-        let replacedShell: (client: SSHClient, shellId: UUID)?
+    enum RegisterResult: Sendable, Equatable {
+        case accepted
+        case stale
     }
 
     struct StartResult: Sendable {
@@ -33,7 +32,12 @@ struct SSHShellRegistry {
 
     struct DrainResult: Sendable {
         let registrations: [Registration]
-        let pendingStarts: [StartContext]
+        let pendingStarts: [PendingStart]
+    }
+
+    struct PendingStart: Sendable {
+        let entityId: UUID
+        let context: StartContext
     }
 
     private(set) var registrations: [UUID: Registration] = [:]
@@ -52,13 +56,11 @@ struct SSHShellRegistry {
         transport: ShellTransport,
         fallbackReason: MoshFallbackReason?
     ) -> RegisterResult {
-        if let context = startsInFlight[entityId],
-           ObjectIdentifier(context.client) != ObjectIdentifier(client) {
-            return RegisterResult(
-                accepted: false,
-                staleIncomingShell: (client: client, shellId: shellId),
-                replacedShell: nil
-            )
+        guard let context = startsInFlight[entityId],
+              ObjectIdentifier(context.client) == ObjectIdentifier(client),
+              context.serverId == serverId,
+              registrations[entityId] == nil else {
+            return .stale
         }
 
         startsInFlight.removeValue(forKey: entityId)
@@ -69,12 +71,8 @@ struct SSHShellRegistry {
             transport: transport,
             fallbackReason: fallbackReason
         )
-        let replaced = registrations.updateValue(newRegistration, forKey: entityId)
-        return RegisterResult(
-            accepted: true,
-            staleIncomingShell: nil,
-            replacedShell: replaced.map { (client: $0.client, shellId: $0.shellId) }
-        )
+        registrations[entityId] = newRegistration
+        return .accepted
     }
 
     mutating func unregister(for entityId: UUID) -> (registration: Registration?, pendingStart: StartContext?) {
@@ -194,7 +192,9 @@ struct SSHShellRegistry {
     mutating func drain() -> DrainResult {
         let result = DrainResult(
             registrations: Array(registrations.values),
-            pendingStarts: Array(startsInFlight.values)
+            pendingStarts: startsInFlight.map { entityId, context in
+                PendingStart(entityId: entityId, context: context)
+            }
         )
         registrations.removeAll()
         startsInFlight.removeAll()

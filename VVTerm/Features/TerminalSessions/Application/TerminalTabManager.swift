@@ -28,6 +28,43 @@ enum TerminalRegistryRemovalPolicy {
 
 @MainActor
 final class TerminalTabManager: ObservableObject {
+    private enum ConnectionLifecycle {
+        enum Destination {
+            case foreground
+            case background
+        }
+
+        case foreground
+        case background
+        case suspending(
+            epoch: UUID,
+            destination: Destination,
+            barrier: Task<Void, Never>
+        )
+
+        var allowsConnections: Bool {
+            if case .foreground = self {
+                return true
+            }
+            return false
+        }
+    }
+
+    private struct ConnectionCleanup {
+        let client: SSHClient
+        let task: Task<Void, Never>
+    }
+
+    private struct ShellStartIdentity: Hashable {
+        let paneId: UUID
+        let clientId: ObjectIdentifier
+    }
+
+    private struct RetiredShellStart {
+        let completion: AsyncStream<Void>
+        let signal: AsyncStream<Void>.Continuation
+    }
+
     static let shared = TerminalTabManager()
 
     // MARK: - Published State
@@ -58,6 +95,9 @@ final class TerminalTabManager: ObservableObject {
     /// Terminal views keyed by pane ID
     private var terminalViews: [UUID: GhosttyTerminalView] = [:]
     private var shellRegistry = SSHShellRegistry(staleThreshold: 120)
+    private var connectionCleanupsInFlight: [UUID: ConnectionCleanup] = [:]
+    private var retiredShellStarts: [ShellStartIdentity: RetiredShellStart] = [:]
+    private var connectionLifecycle: ConnectionLifecycle = .foreground
     /// Server IDs with an in-flight tab-open request to avoid queued duplicates.
     private var tabOpensInFlight: Set<UUID> = []
 
@@ -316,13 +356,34 @@ final class TerminalTabManager: ObservableObject {
         logger.info("Disconnected all terminal tabs")
     }
 
-    /// Disconnect SSH shells without removing tabs. Used when iOS backgrounds so
-    /// the foreground path can reconnect into the same terminal surfaces.
-    func suspendAllForBackground() async {
+    /// Synchronously revokes every shell owner before iOS can freeze the app,
+    /// then starts one shared cleanup barrier for the revoked clients.
+    func beginBackgroundSuspension() {
+        beginBackgroundSuspension(beforeCleanup: nil)
+    }
+
+    private func beginBackgroundSuspension(
+        beforeCleanup: (@MainActor @Sendable () async -> Void)? = nil
+    ) {
         let paneIds = Array(paneStates.keys)
         #if os(iOS)
         keyboardCoordinator.setViewActive(false)
         #endif
+
+        switch connectionLifecycle {
+        case .background:
+            return
+        case let .suspending(epoch, _, barrier):
+            connectionLifecycle = .suspending(
+                epoch: epoch,
+                destination: .background,
+                barrier: barrier
+            )
+            return
+        case .foreground:
+            break
+        }
+
         for paneId in paneIds {
             if let terminal = terminalViews[paneId] {
                 terminal.pauseRendering()
@@ -337,32 +398,174 @@ final class TerminalTabManager: ObservableObject {
         // then finish after foregrounding without removing a replacement shell.
         let detachedShells = shellRegistry.drain()
 
-        var cleanupByClient: [ObjectIdentifier: (client: SSHClient, shellIds: [UUID])] = [:]
+        var cleanupByClient: [ObjectIdentifier: SSHClient] = [:]
         for registration in detachedShells.registrations {
-            let clientId = ObjectIdentifier(registration.client)
-            var cleanup = cleanupByClient[clientId] ?? (registration.client, [])
-            cleanup.shellIds.append(registration.shellId)
-            cleanupByClient[clientId] = cleanup
+            cleanupByClient[ObjectIdentifier(registration.client)] = registration.client
         }
         for pendingStart in detachedShells.pendingStarts {
-            let clientId = ObjectIdentifier(pendingStart.client)
-            if cleanupByClient[clientId] == nil {
-                cleanupByClient[clientId] = (pendingStart.client, [])
-            }
+            let context = pendingStart.context
+            cleanupByClient[ObjectIdentifier(context.client)] = context.client
+            let identity = ShellStartIdentity(
+                paneId: pendingStart.entityId,
+                clientId: ObjectIdentifier(context.client)
+            )
+            let completion = AsyncStream<Void>.makeStream()
+            retiredShellStarts[identity]?.signal.finish()
+            retiredShellStarts[identity] = RetiredShellStart(
+                completion: completion.stream,
+                signal: completion.continuation
+            )
+        }
+        let cleanupsInFlight = Array(connectionCleanupsInFlight.values)
+        for cleanup in cleanupsInFlight {
+            cleanupByClient[ObjectIdentifier(cleanup.client)] = cleanup.client
         }
 
-        await withTaskGroup(of: Void.self) { group in
-            for cleanup in cleanupByClient.values {
-                group.addTask {
-                    for shellId in cleanup.shellIds {
-                        await cleanup.client.closeShell(shellId)
+        let clients = Array(cleanupByClient.values)
+        let epoch = UUID()
+        let barrier = Task { @MainActor [weak self, clients, beforeCleanup] in
+            if let beforeCleanup {
+                await beforeCleanup()
+            }
+            await withTaskGroup(of: Void.self) { group in
+                for client in clients {
+                    group.addTask {
+                        // Disconnect aborts the active session before its bounded
+                        // shutdown, avoiding a blocking channel-close handshake.
+                        await client.disconnect()
                     }
-                    await cleanup.client.disconnect()
                 }
             }
+            await self?.finishBackgroundSuspension(epoch: epoch)
         }
 
-        logger.info("Suspended all terminal tabs for background")
+        connectionLifecycle = .suspending(
+            epoch: epoch,
+            destination: .background,
+            barrier: barrier
+        )
+        logger.info(
+            "Started terminal background suspension \(epoch.uuidString, privacy: .public) for \(clients.count, privacy: .public) clients"
+        )
+    }
+
+    /// Disconnect SSH shells without removing tabs. Used by tests and callers
+    /// that need to wait for the full background cleanup.
+    func suspendAllForBackground() async {
+        beginBackgroundSuspension()
+        if case let .suspending(_, _, barrier) = connectionLifecycle {
+            await barrier.value
+        }
+    }
+
+    func noteForegroundActivation() {
+        switch connectionLifecycle {
+        case .foreground:
+            break
+        case .background:
+            connectionLifecycle = .foreground
+        case let .suspending(epoch, _, barrier):
+            connectionLifecycle = .suspending(
+                epoch: epoch,
+                destination: .foreground,
+                barrier: barrier
+            )
+        }
+    }
+
+    func prepareForForegroundReconnect() async -> Bool {
+        switch connectionLifecycle {
+        case .foreground:
+            return true
+        case .background:
+            return false
+        case let .suspending(_, destination, barrier):
+            guard destination == .foreground else { return false }
+            await barrier.value
+            return connectionLifecycle.allowsConnections
+        }
+    }
+
+    private func finishBackgroundSuspension(epoch: UUID) async {
+        while true {
+            guard case let .suspending(currentEpoch, destination, _) = connectionLifecycle,
+                  currentEpoch == epoch else {
+                return
+            }
+
+            // Cleanup can be registered after the registry drain when a native
+            // shell start finishes late. Keep folding that work into this epoch
+            // until the MainActor can atomically observe an empty set and close it.
+            let cleanups = Array(connectionCleanupsInFlight)
+            if !cleanups.isEmpty {
+                for (_, cleanup) in cleanups {
+                    await cleanup.task.value
+                }
+                for (cleanupId, _) in cleanups {
+                    connectionCleanupsInFlight.removeValue(forKey: cleanupId)
+                }
+                continue
+            }
+
+            let retiredStarts = Array(retiredShellStarts)
+            if !retiredStarts.isEmpty {
+                let timeoutCount = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+                    for (_, retiredStart) in retiredStarts {
+                        group.addTask {
+                            await Self.waitForRetiredShellStart(retiredStart.completion)
+                        }
+                    }
+                    var timeouts = 0
+                    for await completed in group {
+                        if !completed {
+                            timeouts += 1
+                        }
+                    }
+                    return timeouts
+                }
+                for (identity, retiredStart) in retiredStarts {
+                    retiredStart.signal.finish()
+                    retiredShellStarts.removeValue(forKey: identity)
+                }
+                if timeoutCount > 0 {
+                    logger.warning(
+                        "Timed out waiting for \(timeoutCount, privacy: .public) retired shell starts during background suspension \(epoch.uuidString, privacy: .public)"
+                    )
+                }
+                continue
+            }
+
+            switch destination {
+            case .foreground:
+                connectionLifecycle = .foreground
+            case .background:
+                connectionLifecycle = .background
+            }
+            logger.info(
+                "Finished terminal background suspension \(epoch.uuidString, privacy: .public) toward \(String(describing: destination), privacy: .public)"
+            )
+            return
+        }
+    }
+
+    nonisolated private static func waitForRetiredShellStart(
+        _ completion: AsyncStream<Void>
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self, returning: Bool.self) { group in
+            group.addTask {
+                for await _ in completion {
+                    break
+                }
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(2))
+                return false
+            }
+            let completed = await group.next() ?? false
+            group.cancelAll()
+            return completed
+        }
     }
 
     // MARK: - Split Management
@@ -649,6 +852,7 @@ final class TerminalTabManager: ObservableObject {
     }
 
     /// Register SSH shell for a pane
+    @discardableResult
     func registerSSHClient(
         _ client: SSHClient,
         shellId: UUID,
@@ -657,7 +861,7 @@ final class TerminalTabManager: ObservableObject {
         transport: ShellTransport = .ssh,
         fallbackReason: MoshFallbackReason? = nil,
         skipTmuxLifecycle: Bool = false
-    ) {
+    ) async -> Bool {
         let registerResult = shellRegistry.register(
             client: client,
             shellId: shellId,
@@ -667,19 +871,19 @@ final class TerminalTabManager: ObservableObject {
             fallbackReason: fallbackReason
         )
 
-        if let stale = registerResult.staleIncomingShell {
+        switch registerResult {
+        case .stale:
             logger.warning("Ignoring stale shell registration for pane \(paneId.uuidString, privacy: .public)")
-            Task.detached(priority: .utility) { [client = stale.client, shellId = stale.shellId] in
-                await client.closeShell(shellId)
-                await client.disconnect()
+            await performTrackedConnectionCleanup(for: client) {
+                if self.shellRegistry.hasClientReferences(client) {
+                    await client.closeShell(shellId)
+                } else {
+                    await client.disconnect()
+                }
             }
-            return
-        }
-
-        if let replaced = registerResult.replacedShell {
-            Task.detached { [client = replaced.client, shellId = replaced.shellId] in
-                await client.closeShell(shellId)
-            }
+            return false
+        case .accepted:
+            break
         }
 
         setPaneTransport(transport, fallbackReason: fallbackReason, for: paneId)
@@ -689,39 +893,72 @@ final class TerminalTabManager: ObservableObject {
                 await self?.handleTmuxLifecycle(paneId: paneId, serverId: serverId, client: client, shellId: shellId)
             }
         }
+        return true
     }
 
     /// Unregister SSH shell
     func unregisterSSHClient(for paneId: UUID) async {
-        await unregisterSSHClient(for: paneId, killingManagedTmuxSessionNamed: nil)
+        await unregisterSSHClient(
+            for: paneId,
+            killingManagedTmuxSessionNamed: nil,
+            beforeCleanup: nil
+        )
     }
 
     private func unregisterSSHClient(
         for paneId: UUID,
-        killingManagedTmuxSessionNamed tmuxSessionName: String?
+        killingManagedTmuxSessionNamed tmuxSessionName: String?,
+        beforeCleanup: (@MainActor @Sendable () async -> Void)?
     ) async {
         let unregisterResult = shellRegistry.unregister(for: paneId)
 
         guard let registration = unregisterResult.registration else {
             if let pendingStart = unregisterResult.pendingStart {
                 if !shellRegistry.hasClientReferences(pendingStart.client) {
-                    await pendingStart.client.disconnect()
+                    await performTrackedConnectionCleanup(for: pendingStart.client) {
+                        if let beforeCleanup {
+                            await beforeCleanup()
+                        }
+                        await pendingStart.client.disconnect()
+                    }
                 }
             }
             return
         }
 
-        if let tmuxSessionName {
-            await RemoteTmuxManager.shared.killSession(named: tmuxSessionName, using: registration.client)
-        }
-
-        await registration.client.closeShell(registration.shellId)
-
-        if !shellRegistry.hasClientReferences(registration.client) {
-            await registration.client.disconnect()
+        await performTrackedConnectionCleanup(for: registration.client) {
+            if let beforeCleanup {
+                await beforeCleanup()
+            }
+            if let tmuxSessionName {
+                await RemoteTmuxManager.shared.killSession(named: tmuxSessionName, using: registration.client)
+            }
+            if !self.shellRegistry.hasClientReferences(registration.client) {
+                // Abort the whole session before its bounded shutdown. A last
+                // shell does not need a separate channel-close handshake.
+                await registration.client.disconnect()
+            } else {
+                await registration.client.closeShell(registration.shellId)
+            }
         }
 
         setPaneTransport(.ssh, fallbackReason: nil, for: paneId)
+    }
+
+    private func performTrackedConnectionCleanup(
+        for client: SSHClient,
+        operation: @MainActor @Sendable @escaping () async -> Void
+    ) async {
+        let cleanupId = UUID()
+        let task = Task { @MainActor in
+            await operation()
+        }
+        connectionCleanupsInFlight[cleanupId] = ConnectionCleanup(
+            client: client,
+            task: task
+        )
+        await task.value
+        connectionCleanupsInFlight.removeValue(forKey: cleanupId)
     }
 
     /// Get SSH client for a pane
@@ -735,6 +972,9 @@ final class TerminalTabManager: ObservableObject {
 
     /// Returns true only for the first caller while no live shell exists for the pane.
     func tryBeginShellStart(for paneId: UUID, client: SSHClient) -> Bool {
+        guard connectionLifecycle.allowsConnections else {
+            return false
+        }
         guard let serverId = paneStates[paneId]?.serverId else {
             return false
         }
@@ -754,6 +994,11 @@ final class TerminalTabManager: ObservableObject {
     }
 
     func finishShellStart(for paneId: UUID, client: SSHClient) {
+        let identity = ShellStartIdentity(
+            paneId: paneId,
+            clientId: ObjectIdentifier(client)
+        )
+        retiredShellStarts.removeValue(forKey: identity)?.signal.finish()
         shellRegistry.finishStart(for: paneId, client: client)
     }
 
@@ -768,7 +1013,8 @@ final class TerminalTabManager: ObservableObject {
     }
 
     func isCurrentShellOwner(for paneId: UUID, client: SSHClient) -> Bool {
-        paneStates[paneId] != nil
+        connectionLifecycle.allowsConnections
+            && paneStates[paneId] != nil
             && shellRegistry.ownsConnection(client: client, for: paneId)
     }
 
@@ -870,7 +1116,8 @@ final class TerminalTabManager: ObservableObject {
         Task.detached { [weak self] in
             await self?.unregisterSSHClient(
                 for: paneId,
-                killingManagedTmuxSessionNamed: tmuxSessionToKill
+                killingManagedTmuxSessionNamed: tmuxSessionToKill,
+                beforeCleanup: nil
             )
         }
     }
@@ -1674,6 +1921,33 @@ private struct TerminalTabsSnapshot: Codable {
 
 #if DEBUG
 extension TerminalTabManager {
+    func beginBackgroundSuspensionForTesting(
+        beforeCleanup: @MainActor @Sendable @escaping () async -> Void
+    ) {
+        beginBackgroundSuspension(beforeCleanup: beforeCleanup)
+    }
+
+    func unregisterSSHClientForTesting(
+        for paneId: UUID,
+        beforeCleanup: @MainActor @Sendable @escaping () async -> Void
+    ) async {
+        await unregisterSSHClient(
+            for: paneId,
+            killingManagedTmuxSessionNamed: nil,
+            beforeCleanup: beforeCleanup
+        )
+    }
+
+    func trackConnectionCleanupForTesting(
+        for client: SSHClient,
+        beforeCleanup: @MainActor @Sendable @escaping () async -> Void
+    ) async {
+        await performTrackedConnectionCleanup(for: client) {
+            await beforeCleanup()
+            await client.disconnect()
+        }
+    }
+
     func persistAndRestoreSnapshotForTesting() {
         persistTask?.cancel()
         persistTask = nil
@@ -1687,6 +1961,15 @@ extension TerminalTabManager {
         persistTask?.cancel()
         persistTask = nil
 
+        if case let .suspending(_, _, barrier) = connectionLifecycle {
+            barrier.cancel()
+        }
+        connectionLifecycle = .foreground
+        for retiredStart in retiredShellStarts.values {
+            retiredStart.signal.finish()
+        }
+        retiredShellStarts.removeAll()
+
         let allPaneIds = Set(paneStates.keys)
             .union(shellRegistry.startsInFlight.keys)
         for paneId in allPaneIds {
@@ -1699,6 +1982,10 @@ extension TerminalTabManager {
         }
         for context in shellRegistry.startsInFlight.values {
             uniqueClients[ObjectIdentifier(context.client)] = context.client
+        }
+        for cleanup in connectionCleanupsInFlight.values {
+            cleanup.task.cancel()
+            uniqueClients[ObjectIdentifier(cleanup.client)] = cleanup.client
         }
 
         let terminals = Array(terminalViews.values)
@@ -1721,6 +2008,7 @@ extension TerminalTabManager {
         terminalRegistryVersion = 0
         terminalViews.removeAll()
         shellRegistry.removeAll()
+        connectionCleanupsInFlight.removeAll()
         tabOpensInFlight.removeAll()
         tmuxCleanupServers.removeAll()
         isRestoring = false

@@ -18,6 +18,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        TerminalTabManager.shared.noteForegroundActivation()
+
         guard SyncSettings.isEnabled else { return }
 
         let now = Date()
@@ -55,10 +57,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        Task { @MainActor in
-            AppLockManager.shared.lockIfNeededForBackground()
-            await TerminalTabManager.shared.suspendAllForBackground()
-        }
+        AppLockManager.shared.lockIfNeededForBackground()
+        TerminalTabManager.shared.beginBackgroundSuspension()
     }
 }
 #endif

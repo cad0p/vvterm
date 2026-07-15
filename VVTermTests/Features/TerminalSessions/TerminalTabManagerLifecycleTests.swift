@@ -2,6 +2,63 @@ import Foundation
 import Testing
 @testable import VVTerm
 
+private actor BackgroundCleanupGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isWaiting = false
+    private var isOpen = false
+
+    func wait() async {
+        guard !isOpen else { return }
+        isWaiting = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilBlocked(timeout: Duration = .seconds(2)) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if isWaiting {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return isWaiting
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor ForegroundReadinessProbe {
+    private(set) var started = false
+    private(set) var result: Bool?
+
+    func markStarted() {
+        started = true
+    }
+
+    func waitUntilStarted(timeout: Duration = .seconds(2)) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if started {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return started
+    }
+
+    func finish(with result: Bool) {
+        self.result = result
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct TerminalTabManagerLifecycleTests {
@@ -60,13 +117,13 @@ struct TerminalTabManagerLifecycleTests {
             let staleClient = SSHClient()
             #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: activeClient))
 
-            manager.registerSSHClient(
+            #expect(!(await manager.registerSSHClient(
                 staleClient,
                 shellId: UUID(),
                 for: tab.rootPaneId,
                 serverId: serverId,
                 skipTmuxLifecycle: true
-            )
+            )))
 
             #expect(manager.shellId(for: tab.rootPaneId) == nil)
             #expect(manager.isShellStartInFlight(for: tab.rootPaneId))
@@ -137,20 +194,22 @@ struct TerminalTabManagerLifecycleTests {
 
             let firstClient = SSHClient()
             let secondClient = SSHClient()
-            manager.registerSSHClient(
+            #expect(manager.tryBeginShellStart(for: firstTab.rootPaneId, client: firstClient))
+            #expect(await manager.registerSSHClient(
                 firstClient,
                 shellId: UUID(),
                 for: firstTab.rootPaneId,
                 serverId: firstTab.serverId,
                 skipTmuxLifecycle: true
-            )
-            manager.registerSSHClient(
+            ))
+            #expect(manager.tryBeginShellStart(for: secondTab.rootPaneId, client: secondClient))
+            #expect(await manager.registerSSHClient(
                 secondClient,
                 shellId: UUID(),
                 for: secondTab.rootPaneId,
                 serverId: secondTab.serverId,
                 skipTmuxLifecycle: true
-            )
+            ))
             manager.updatePaneState(firstTab.rootPaneId, connectionState: .connected)
             manager.updatePaneState(secondTab.rootPaneId, connectionState: .connected)
 
@@ -176,13 +235,14 @@ struct TerminalTabManagerLifecycleTests {
             installTab(pendingTab, in: manager)
 
             let liveClient = SSHClient()
-            manager.registerSSHClient(
+            #expect(manager.tryBeginShellStart(for: liveTab.rootPaneId, client: liveClient))
+            #expect(await manager.registerSSHClient(
                 liveClient,
                 shellId: UUID(),
                 for: liveTab.rootPaneId,
                 serverId: serverId,
                 skipTmuxLifecycle: true
-            )
+            ))
             manager.updatePaneState(liveTab.rootPaneId, connectionState: .connected)
 
             let pendingClient = SSHClient()
@@ -201,19 +261,325 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func staleShellCannotReplaceForegroundStartAfterBackgroundDrain() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Stale background start")
+            installTab(tab, in: manager)
+            let staleClient = SSHClient()
+            let staleShellId = UUID()
+
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: staleClient))
+
+            await manager.suspendAllForBackground()
+            manager.noteForegroundActivation()
+            #expect(await manager.prepareForForegroundReconnect())
+            let replacementClient = SSHClient()
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: replacementClient))
+
+            #expect(!(await manager.registerSSHClient(
+                staleClient,
+                shellId: staleShellId,
+                for: tab.rootPaneId,
+                serverId: tab.serverId,
+                skipTmuxLifecycle: true
+            )))
+
+            #expect(manager.shellId(for: tab.rootPaneId) == nil)
+            #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .disconnected)
+            #expect(!manager.isCurrentShellOwner(for: tab.rootPaneId, client: staleClient))
+            #expect(manager.isCurrentShellOwner(for: tab.rootPaneId, client: replacementClient))
+            manager.finishShellStart(for: tab.rootPaneId, client: replacementClient)
+        }
+    }
+
+    @Test
+    func staleShellOnSharedClientDoesNotDisconnectSiblingPane() async {
+        await withCleanManager { manager in
+            let siblingTab = TerminalTab(serverId: UUID(), title: "Sibling")
+            let pendingTab = TerminalTab(serverId: UUID(), title: "Pending")
+            installTab(siblingTab, in: manager)
+            installTab(pendingTab, in: manager)
+
+            let sharedClient = SSHClient()
+            #expect(manager.tryBeginShellStart(for: siblingTab.rootPaneId, client: sharedClient))
+            #expect(await manager.registerSSHClient(
+                sharedClient,
+                shellId: UUID(),
+                for: siblingTab.rootPaneId,
+                serverId: siblingTab.serverId,
+                skipTmuxLifecycle: true
+            ))
+
+            let pendingClient = SSHClient()
+            #expect(manager.tryBeginShellStart(for: pendingTab.rootPaneId, client: pendingClient))
+            #expect(!(await manager.registerSSHClient(
+                sharedClient,
+                shellId: UUID(),
+                for: pendingTab.rootPaneId,
+                serverId: pendingTab.serverId,
+                skipTmuxLifecycle: true
+            )))
+
+            #expect(!(await sharedClient.isAborted))
+            #expect(manager.isCurrentShellOwner(for: siblingTab.rootPaneId, client: sharedClient))
+            #expect(manager.isCurrentShellOwner(for: pendingTab.rootPaneId, client: pendingClient))
+        }
+    }
+
+    @Test
+    func foregroundReconnectWaitsForBackgroundCleanup() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Foreground barrier")
+            installTab(tab, in: manager)
+            let gate = BackgroundCleanupGate()
+            let probe = ForegroundReadinessProbe()
+
+            manager.beginBackgroundSuspensionForTesting {
+                await gate.wait()
+            }
+            guard await gate.waitUntilBlocked() else {
+                Issue.record("Background cleanup did not reach the test gate")
+                return
+            }
+            manager.noteForegroundActivation()
+
+            let readiness = Task { @MainActor in
+                await probe.markStarted()
+                let result = await manager.prepareForForegroundReconnect()
+                await probe.finish(with: result)
+            }
+            guard await probe.waitUntilStarted() else {
+                Issue.record("Foreground readiness task did not start")
+                await gate.open()
+                return
+            }
+            await Task.yield()
+
+            #expect(await probe.result == nil)
+            #expect(!manager.tryBeginShellStart(for: tab.rootPaneId, client: SSHClient()))
+
+            await gate.open()
+            await readiness.value
+
+            #expect(await probe.result == true)
+            let client = SSHClient()
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
+            manager.finishShellStart(for: tab.rootPaneId, client: client)
+        }
+    }
+
+    @Test
+    func laterBackgroundEventCancelsPendingForegroundReconnect() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Retargeted barrier")
+            installTab(tab, in: manager)
+            let gate = BackgroundCleanupGate()
+            let probe = ForegroundReadinessProbe()
+
+            manager.beginBackgroundSuspensionForTesting {
+                await gate.wait()
+            }
+            guard await gate.waitUntilBlocked() else {
+                Issue.record("Background cleanup did not reach the test gate")
+                return
+            }
+            manager.noteForegroundActivation()
+
+            let readiness = Task { @MainActor in
+                await probe.markStarted()
+                let result = await manager.prepareForForegroundReconnect()
+                await probe.finish(with: result)
+            }
+            guard await probe.waitUntilStarted() else {
+                Issue.record("Foreground readiness task did not start")
+                await gate.open()
+                return
+            }
+            await Task.yield()
+            manager.beginBackgroundSuspension()
+
+            await gate.open()
+            await readiness.value
+
+            #expect(await probe.result == false)
+            #expect(!manager.tryBeginShellStart(for: tab.rootPaneId, client: SSHClient()))
+
+            manager.noteForegroundActivation()
+            #expect(await manager.prepareForForegroundReconnect())
+        }
+    }
+
+    @Test
+    func foregroundReconnectWaitsForCleanupAlreadyRemovedFromRegistry() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "In-flight unregister")
+            installTab(tab, in: manager)
+            let client = SSHClient()
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
+            #expect(await manager.registerSSHClient(
+                client,
+                shellId: UUID(),
+                for: tab.rootPaneId,
+                serverId: tab.serverId,
+                skipTmuxLifecycle: true
+            ))
+
+            let cleanupGate = BackgroundCleanupGate()
+            let cleanup = Task { @MainActor in
+                await manager.unregisterSSHClientForTesting(for: tab.rootPaneId) {
+                    await cleanupGate.wait()
+                }
+            }
+            guard await cleanupGate.waitUntilBlocked() else {
+                Issue.record("Unregister cleanup did not reach the test gate")
+                await cleanupGate.open()
+                await cleanup.value
+                return
+            }
+
+            manager.beginBackgroundSuspension()
+            manager.noteForegroundActivation()
+
+            let probe = ForegroundReadinessProbe()
+            let readiness = Task { @MainActor in
+                await probe.markStarted()
+                let result = await manager.prepareForForegroundReconnect()
+                await probe.finish(with: result)
+            }
+            guard await probe.waitUntilStarted() else {
+                Issue.record("Foreground readiness task did not start")
+                await cleanupGate.open()
+                return
+            }
+            for _ in 0..<100 {
+                await Task.yield()
+            }
+
+            #expect(await probe.result == nil)
+
+            await cleanupGate.open()
+            await cleanup.value
+            await readiness.value
+            #expect(await probe.result == true)
+        }
+    }
+
+    @Test
+    func foregroundReconnectWaitsForCleanupAddedAfterBackgroundDrain() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Late cleanup")
+            installTab(tab, in: manager)
+            let backgroundGate = BackgroundCleanupGate()
+            let lateCleanupGate = BackgroundCleanupGate()
+
+            manager.beginBackgroundSuspensionForTesting {
+                await backgroundGate.wait()
+            }
+            guard await backgroundGate.waitUntilBlocked() else {
+                Issue.record("Background cleanup did not reach the test gate")
+                await backgroundGate.open()
+                return
+            }
+            manager.noteForegroundActivation()
+
+            let lateCleanup = Task { @MainActor in
+                await manager.trackConnectionCleanupForTesting(for: SSHClient()) {
+                    await lateCleanupGate.wait()
+                }
+            }
+            guard await lateCleanupGate.waitUntilBlocked() else {
+                Issue.record("Late connection cleanup did not reach the test gate")
+                await backgroundGate.open()
+                await lateCleanupGate.open()
+                await lateCleanup.value
+                return
+            }
+
+            let probe = ForegroundReadinessProbe()
+            let readiness = Task { @MainActor in
+                await probe.markStarted()
+                let result = await manager.prepareForForegroundReconnect()
+                await probe.finish(with: result)
+            }
+            guard await probe.waitUntilStarted() else {
+                Issue.record("Foreground readiness task did not start")
+                await backgroundGate.open()
+                await lateCleanupGate.open()
+                await lateCleanup.value
+                return
+            }
+
+            await backgroundGate.open()
+            for _ in 0..<100 {
+                await Task.yield()
+            }
+            #expect(await probe.result == nil)
+
+            await lateCleanupGate.open()
+            await lateCleanup.value
+            await readiness.value
+            #expect(await probe.result == true)
+        }
+    }
+
+    @Test
+    func foregroundReconnectWaitsForDrainedShellStartCompletion() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Drained shell start")
+            installTab(tab, in: manager)
+            let client = SSHClient()
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
+
+            let backgroundGate = BackgroundCleanupGate()
+            manager.beginBackgroundSuspensionForTesting {
+                await backgroundGate.wait()
+            }
+            guard await backgroundGate.waitUntilBlocked() else {
+                Issue.record("Background cleanup did not reach the test gate")
+                await backgroundGate.open()
+                return
+            }
+            manager.noteForegroundActivation()
+
+            let probe = ForegroundReadinessProbe()
+            let readiness = Task { @MainActor in
+                await probe.markStarted()
+                let result = await manager.prepareForForegroundReconnect()
+                await probe.finish(with: result)
+            }
+            guard await probe.waitUntilStarted() else {
+                Issue.record("Foreground readiness task did not start")
+                await backgroundGate.open()
+                return
+            }
+
+            await backgroundGate.open()
+            for _ in 0..<100 {
+                await Task.yield()
+            }
+            #expect(await probe.result == nil)
+
+            manager.finishShellStart(for: tab.rootPaneId, client: client)
+            await readiness.value
+            #expect(await probe.result == true)
+        }
+    }
+
+    @Test
     func shellExitLifecycleDisconnectsPaneAndClearsRegistration() async {
         await withCleanManager { manager in
             let tab = TerminalTab(serverId: UUID(), title: "Shell Exit")
             installTab(tab, in: manager)
 
             let client = SSHClient()
-            manager.registerSSHClient(
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
+            #expect(await manager.registerSSHClient(
                 client,
                 shellId: UUID(),
                 for: tab.rootPaneId,
                 serverId: tab.serverId,
                 skipTmuxLifecycle: true
-            )
+            ))
             manager.updatePaneState(tab.rootPaneId, connectionState: .connected)
 
             manager.updatePaneState(tab.rootPaneId, connectionState: .disconnected)
@@ -395,13 +761,14 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager, connectionState: .connected)
             let activeClient = SSHClient()
             let activeShellId = UUID()
-            manager.registerSSHClient(
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: activeClient))
+            #expect(await manager.registerSSHClient(
                 activeClient,
                 shellId: activeShellId,
                 for: tab.rootPaneId,
                 serverId: tab.serverId,
                 skipTmuxLifecycle: true
-            )
+            ))
 
             manager.handleShellEnd(
                 for: tab.rootPaneId,
@@ -443,14 +810,15 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager)
 
             let client = SSHClient()
-            manager.registerSSHClient(
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
+            #expect(await manager.registerSSHClient(
                 client,
                 shellId: UUID(),
                 for: tab.rootPaneId,
                 serverId: server.id,
                 transport: .mosh,
                 skipTmuxLifecycle: true
-            )
+            ))
 
             #expect(manager.sshClient(for: server.id) === client)
             #expect(manager.sharedStatsClient(for: server.id) == nil)
