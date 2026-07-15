@@ -677,7 +677,7 @@
 "Microphone permission is required. The microphone will be automatically requested when recording starts." = "Cần quyền dùng micro. Quyền sẽ được yêu cầu tự động khi bắt đầu ghi.";
 "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight." = "Nhận dạng giọng nói không khả dụng. Vui lòng bật Siri trong System Settings > Siri & Spotlight.";
 "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone." = "Không thể bắt đầu ghi. Vui lòng kiểm tra quyền micro trong System Settings > Privacy & Security > Microphone.";
-"MLX transcription is not available on this Mac. Switching to Apple Speech." = "Phiên âm MLX không khả dụng trên Mac này. Chuyển sang Apple Speech.";
+"On-device MLX transcription isn't supported on this device. Apple Speech will be used instead." = "Thiết bị này không hỗ trợ phiên âm MLX trên thiết bị. Apple Speech sẽ được sử dụng thay thế.";
 
 /* Pro Required Errors */
 "Upgrade to Pro for unlimited servers" = "Nâng cấp Pro để dùng máy chủ không giới hạn";

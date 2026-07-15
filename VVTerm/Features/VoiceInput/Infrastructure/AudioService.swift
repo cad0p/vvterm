@@ -175,7 +175,7 @@ class AudioService: NSObject, ObservableObject {
             case .inputUnavailable:
                 return String(localized: "Audio input is temporarily unavailable. Please check the current microphone or audio route and try again.")
             case .mlxUnavailable:
-                return String(localized: "MLX transcription is not available on this Mac. Switching to Apple Speech.")
+                return MLXAudioSupport.unavailableDescription
             }
         }
     }
@@ -187,15 +187,19 @@ class AudioService: NSObject, ObservableObject {
         case .system:
             return .system
         case .mlxWhisper:
-            guard MLXWhisperProvider.isSupported else { return .system }
             let modelId = TranscriptionSettingsStore.currentWhisperModelId()
-            guard MLXModelManager.isModelAvailable(kind: .whisper, modelId: modelId) else { return .system }
-            return .mlxWhisper
+            return TranscriptionProviderResolutionPolicy.resolve(
+                requested: requested,
+                mlxSupported: MLXWhisperProvider.isSupported,
+                requestedModelAvailable: MLXModelManager.isModelAvailable(kind: .whisper, modelId: modelId)
+            )
         case .mlxParakeet:
-            guard MLXParakeetProvider.isSupported else { return .system }
             let modelId = TranscriptionSettingsStore.currentParakeetModelId()
-            guard MLXModelManager.isModelAvailable(kind: .parakeetTDT, modelId: modelId) else { return .system }
-            return .mlxParakeet
+            return TranscriptionProviderResolutionPolicy.resolve(
+                requested: requested,
+                mlxSupported: MLXParakeetProvider.isSupported,
+                requestedModelAvailable: MLXModelManager.isModelAvailable(kind: .parakeetTDT, modelId: modelId)
+            )
         }
     }
 

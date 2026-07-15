@@ -641,7 +641,7 @@
 "Microphone permission is required. The microphone will be automatically requested when recording starts." = "Wymagana jest zgoda na mikrofon. Zostanie ona automatycznie poproszona przy rozpoczęciu nagrywania.";
 "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight." = "Rozpoznawanie mowy nie jest dostępne. Włącz Siri w Ustawieniach systemowych > Siri i Spotlight.";
 "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone." = "Nie udało się rozpocząć nagrywania. Sprawdź uprawnienia mikrofonu w Ustawieniach systemowych > Prywatność i bezpieczeństwo > Mikrofon.";
-"MLX transcription is not available on this Mac. Switching to Apple Speech." = "Transkrypcja MLX nie jest dostępna na tym Macu. Przełączanie na Apple Speech.";
+"On-device MLX transcription isn't supported on this device. Apple Speech will be used instead." = "Transkrypcja MLX na urządzeniu nie jest obsługiwana na tym urządzeniu. Zamiast niej zostanie użyta usługa Apple Speech.";
 
 /* Pro Required Errors */
 "Upgrade to Pro for unlimited servers" = "Ulepsz do Pro, aby mieć nielimitowane serwery";
