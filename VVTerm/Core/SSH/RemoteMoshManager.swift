@@ -3,6 +3,12 @@ import MoshBootstrap
 import os
 
 actor RemoteMoshManager {
+    enum PortClass: String, Equatable, Sendable {
+        case privileged
+        case standardMoshRange
+        case otherUnprivileged
+    }
+
     static let shared = RemoteMoshManager()
     private let logger = Logger(subsystem: "app.vivy.VivyTerm", category: "mosh-bootstrap")
     private static let installSuccessMarker = "__VVTERM_MOSH_INSTALLED__"
@@ -11,6 +17,12 @@ actor RemoteMoshManager {
     private let installTimeout: Duration = .seconds(180)
 
     private init() {}
+
+    nonisolated static func portClass(_ port: Int) -> PortClass {
+        if port < 1_024 { return .privileged }
+        if (60_001...61_000).contains(port) { return .standardMoshRange }
+        return .otherUnprivileged
+    }
 
     func isMoshServerAvailable(using client: SSHClient) async -> Bool {
         let okMarker = "__VVTERM_MOSH_OK__"
@@ -37,7 +49,9 @@ actor RemoteMoshManager {
         mosh-server new -s -c 256 -p \(portRange.lowerBound):\(portRange.upperBound) -- /bin/sh -lc \(quotedStartup) 2>&1
         """
         let command = "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
-        logger.info("Mosh bootstrap startup: \(resolvedStartup.prefix(300))")
+        logger.info(
+            "Starting Mosh bootstrap [custom startup: \(startCommand != nil)] [terminal: \(terminalType.rawValue, privacy: .public)]"
+        )
         let output = try await client.execute(command, timeout: bootstrapTimeout)
         return try parseConnectInfo(from: output)
     }
@@ -202,8 +216,11 @@ actor RemoteMoshManager {
     nonisolated func sanitizedBootstrapOutput(_ output: String) -> String {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+        let redacted = trimmed.split(whereSeparator: { $0.isNewline }).map { line in
+            line.contains("MOSH CONNECT") ? "MOSH CONNECT <redacted>" : String(line)
+        }.joined(separator: "\n")
         let maxLength = 1_500
-        guard trimmed.count > maxLength else { return trimmed }
-        return String(trimmed.prefix(maxLength)) + "..."
+        guard redacted.count > maxLength else { return redacted }
+        return String(redacted.prefix(maxLength)) + "..."
     }
 }

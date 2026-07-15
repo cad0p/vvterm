@@ -48,6 +48,17 @@ struct RemoteMoshManagerTests {
     }
 
     @Test
+    func bootstrapDiagnosticsRedactMoshSessionKeys() {
+        let output = "MOSH CONNECT invalid-port ABCDEFGHIJKLMNOPQRSTUV\nother detail"
+
+        let sanitized = RemoteMoshManager.shared.sanitizedBootstrapOutput(output)
+
+        #expect(sanitized.contains("MOSH CONNECT <redacted>"))
+        #expect(!sanitized.contains("ABCDEFGHIJKLMNOPQRSTUV"))
+        #expect(sanitized.contains("other detail"))
+    }
+
+    @Test
     func installScriptContainsSupportedPackageManagers() {
         let script = RemoteMoshManager.shared.installScript()
         #expect(script.contains("apt-get"))
@@ -125,5 +136,36 @@ struct RemoteMoshManagerTests {
         default:
             Issue.record("Expected moshBootstrapFailed for permissionDenied")
         }
+    }
+
+    @Test
+    func endpointCandidatesPreferConfiguredHostThenDistinctSSHPeer() {
+        #expect(
+            MoshEndpointCandidatePolicy.hosts(
+                configuredHost: "server.example.com",
+                sshPeerHost: "100.64.0.10"
+            ) == ["server.example.com", "100.64.0.10"]
+        )
+        #expect(
+            MoshEndpointCandidatePolicy.hosts(
+                configuredHost: "100.64.0.10",
+                sshPeerHost: "100.64.0.10"
+            ) == ["100.64.0.10"]
+        )
+    }
+
+    @Test
+    func fallbackReasonsAreActionable() {
+        #expect(MoshFallbackReason.bootstrapFailed.bannerMessage.contains("could not start"))
+        #expect(MoshFallbackReason.invalidEndpoint.bannerMessage.contains("address"))
+        #expect(MoshFallbackReason.udpTimeout.bannerMessage.contains("UDP"))
+        #expect(MoshFallbackReason.clientSessionFailed.bannerMessage.contains("client session"))
+    }
+
+    @Test
+    func moshPortClassificationDoesNotExposeExactPort() {
+        #expect(RemoteMoshManager.portClass(60001) == .standardMoshRange)
+        #expect(RemoteMoshManager.portClass(22) == .privileged)
+        #expect(RemoteMoshManager.portClass(50_000) == .otherUnprivileged)
     }
 }

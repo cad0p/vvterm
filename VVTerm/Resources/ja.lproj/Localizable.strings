@@ -1486,6 +1486,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "このセッションに SSH フォールバックを使用します (解決されたリモート環境では Mosh がサポートされていません)。";
 "Using SSH fallback for this session (mosh-server is missing)." = "このセッションに SSH フォールバックを使用します (mosh サーバーがありません)。";
 "Using SSH fallback for this session." = "このセッションでは SSH フォールバックを使用します。";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "このセッションでは SSH フォールバックを使用します（mosh-server を正しく起動できませんでした）。";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "このセッションでは SSH フォールバックを使用します（Mosh サーバーのアドレスが無効でした）。";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "このセッションでは SSH フォールバックを使用します（Mosh UDP 接続がタイムアウトしました。UDP ポート 60001～61000 を確認してください）。";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "このセッションでは SSH フォールバックを使用します（Mosh クライアントセッションを起動できませんでした）。";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm には、このデバイス上に %lld の信頼された SSH ホストがあります。信頼できるホストをリセットすると、VVTerm は次回の接続で提示されたホスト キーを信頼するようになります。";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm には、このデバイス上に 1 つの信頼された SSH ホストがあります。信頼できるホストをリセットすると、VVTerm は次回の接続で提示されたホスト キーを信頼するようになります。";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm は、%@ の別の SSH ホスト キーを保存しました。このサーバーを再作成した場合、または新しいホストを信頼する場合にのみ続行してください。";

@@ -1531,6 +1531,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Sử dụng dự phòng SSH cho phiên này (Mosh không được môi trường từ xa đã giải quyết hỗ trợ).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Sử dụng dự phòng SSH cho phiên này (thiếu máy chủ mosh).";
 "Using SSH fallback for this session." = "Sử dụng dự phòng SSH cho phiên này.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Sử dụng SSH dự phòng cho phiên này (không thể khởi động mosh-server đúng cách).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Sử dụng SSH dự phòng cho phiên này (địa chỉ máy chủ Mosh không hợp lệ).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Sử dụng SSH dự phòng cho phiên này (kết nối UDP Mosh đã hết thời gian; hãy kiểm tra các cổng UDP 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Sử dụng SSH dự phòng cho phiên này (không thể khởi động phiên máy khách Mosh).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm có máy chủ SSH đáng tin cậy %lld trên thiết bị này. Việc đặt lại các máy chủ đáng tin cậy khiến VVTerm tin cậy vào khóa máy chủ được trình bày trong kết nối tiếp theo.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm có 1 máy chủ SSH đáng tin cậy trên thiết bị này. Việc đặt lại các máy chủ đáng tin cậy khiến VVTerm tin cậy vào khóa máy chủ được trình bày trong kết nối tiếp theo.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm đã lưu khóa máy chủ SSH khác cho %@. Chỉ tiếp tục nếu bạn đã tạo lại máy chủ này hoặc tin cậy máy chủ mới.";

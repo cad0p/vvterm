@@ -1488,6 +1488,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Używanie zastępczego SSH dla tej sesji (Mosh nie jest obsługiwany przez rozwiązane środowisko zdalne).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Używam zastępczego SSH dla tej sesji (brak serwera mosh).";
 "Using SSH fallback for this session." = "Używanie zastępczego protokołu SSH w tej sesji.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Używanie zastępczego SSH dla tej sesji (nie udało się poprawnie uruchomić mosh-server).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Używanie zastępczego SSH dla tej sesji (adres serwera Mosh był nieprawidłowy).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Używanie zastępczego SSH dla tej sesji (przekroczono limit czasu połączenia UDP Mosh; sprawdź porty UDP 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Używanie zastępczego SSH dla tej sesji (nie udało się uruchomić sesji klienta Mosh).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm ma %lld zaufanych hostów SSH na tym urządzeniu. Zresetowanie zaufanych hostów sprawia, że ​​VVTerm ufa kluczowi hosta prezentowanemu przy następnym połączeniu.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm ma 1 zaufanego hosta SSH na tym urządzeniu. Zresetowanie zaufanych hostów sprawia, że ​​VVTerm ufa kluczowi hosta prezentowanemu przy następnym połączeniu.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm zapisał inny klucz hosta SSH dla %@. Kontynuuj tylko wtedy, gdy odtworzyłeś ten serwer lub zaufałeś nowemu hostowi.";

@@ -1487,6 +1487,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Použití záložního protokolu SSH pro tuto relaci (Mosh není podporováno vyřešeným vzdáleným prostředím).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Pro tuto relaci se používá záložní SSH (chybí server mosh).";
 "Using SSH fallback for this session." = "Použití záložního protokolu SSH pro tuto relaci.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Pro tuto relaci se používá záložní SSH (mosh-server se nepodařilo správně spustit).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Pro tuto relaci se používá záložní SSH (adresa serveru Mosh nebyla platná).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Pro tuto relaci se používá záložní SSH (vypršel časový limit UDP připojení Mosh; zkontrolujte UDP porty 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Pro tuto relaci se používá záložní SSH (relaci klienta Mosh se nepodařilo spustit).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm má na tomto zařízení %lld důvěryhodných hostitelů SSH. Resetováním důvěryhodných hostitelů zajistíte, že VVTerm bude důvěřovat hostitelskému klíči prezentovanému při příštím připojení.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm má na tomto zařízení 1 důvěryhodného hostitele SSH. Resetováním důvěryhodných hostitelů zajistíte, že VVTerm bude důvěřovat hostitelskému klíči prezentovanému při příštím připojení.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm uložil jiný klíč hostitele SSH pro %@. Pokračujte pouze v případě, že jste znovu vytvořili tento server nebo důvěřujete novému hostiteli.";

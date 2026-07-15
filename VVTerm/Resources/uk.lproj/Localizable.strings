@@ -1493,6 +1493,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Використання резервного SSH для цього сеансу (Mosh не підтримується вирішеним віддаленим середовищем).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Використання резервного SSH для цього сеансу (mosh-сервер відсутній).";
 "Using SSH fallback for this session." = "Використання резервного SSH для цього сеансу.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Використовується резервний SSH для цього сеансу (mosh-server не вдалося запустити належним чином).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Використовується резервний SSH для цього сеансу (адреса сервера Mosh недійсна).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Використовується резервний SSH для цього сеансу (час очікування UDP-з’єднання Mosh минув; перевірте UDP-порти 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Використовується резервний SSH для цього сеансу (не вдалося запустити клієнтський сеанс Mosh).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm має %lld довірених хостів SSH на цьому пристрої. Скидання довірених хостів змушує VVTerm довіряти ключу хоста, наданому під час наступного підключення.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm має 1 надійний хост SSH на цьому пристрої. Скидання довірених хостів змушує VVTerm довіряти ключу хоста, наданому під час наступного підключення.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm зберіг інший ключ хоста SSH для %@. Продовжуйте, лише якщо ви повторно створили цей сервер або довіряєте новому хосту.";

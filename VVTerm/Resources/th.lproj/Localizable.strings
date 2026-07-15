@@ -1486,6 +1486,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "การใช้ทางเลือก SSH สำหรับเซสชันนี้ (สภาพแวดล้อมระยะไกลที่แก้ไขแล้วไม่รองรับ Mosh)";
 "Using SSH fallback for this session (mosh-server is missing)." = "การใช้ทางเลือก SSH สำหรับเซสชันนี้ (เซิร์ฟเวอร์ mosh หายไป)";
 "Using SSH fallback for this session." = "การใช้ทางเลือก SSH สำหรับเซสชันนี้";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "ใช้ SSH สำรองสำหรับเซสชันนี้ (ไม่สามารถเริ่ม mosh-server ได้อย่างถูกต้อง)";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "ใช้ SSH สำรองสำหรับเซสชันนี้ (ที่อยู่เซิร์ฟเวอร์ Mosh ไม่ถูกต้อง)";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "ใช้ SSH สำรองสำหรับเซสชันนี้ (การเชื่อมต่อ UDP ของ Mosh หมดเวลา โปรดตรวจสอบพอร์ต UDP 60001–61000)";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "ใช้ SSH สำรองสำหรับเซสชันนี้ (ไม่สามารถเริ่มเซสชันไคลเอนต์ Mosh ได้)";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm มีโฮสต์ SSH ที่เชื่อถือได้ %lld บนอุปกรณ์นี้ การรีเซ็ตโฮสต์ที่เชื่อถือได้จะทำให้ VVTerm เชื่อถือคีย์โฮสต์ที่แสดงในการเชื่อมต่อครั้งถัดไป";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm มีโฮสต์ SSH ที่เชื่อถือได้ 1 รายการบนอุปกรณ์นี้ การรีเซ็ตโฮสต์ที่เชื่อถือได้จะทำให้ VVTerm เชื่อถือคีย์โฮสต์ที่แสดงในการเชื่อมต่อครั้งถัดไป";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm บันทึกคีย์โฮสต์ SSH อื่นสำหรับ %@ ดำเนินการต่อเฉพาะในกรณีที่คุณสร้างเซิร์ฟเวอร์นี้ขึ้นใหม่หรือเชื่อถือโฮสต์ใหม่";

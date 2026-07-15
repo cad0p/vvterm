@@ -1487,6 +1487,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Выкарыстанне рэзервовага SSH для гэтага сеансу (Mosh не падтрымліваецца дазволеным аддаленым асяроддзем).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Выкарыстоўваецца рэзервовы SSH для гэтага сеансу (mosh-сервер адсутнічае).";
 "Using SSH fallback for this session." = "Выкарыстанне рэзервовага SSH для гэтага сеансу.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Выкарыстоўваецца рэзервовы SSH для гэтага сеансу (mosh-server не ўдалося правільна запусціць).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Выкарыстоўваецца рэзервовы SSH для гэтага сеансу (адрас сервера Mosh быў няправільны).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Выкарыстоўваецца рэзервовы SSH для гэтага сеансу (час чакання UDP-злучэння Mosh скончыўся; праверце UDP-парты 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Выкарыстоўваецца рэзервовы SSH для гэтага сеансу (не ўдалося запусціць кліенцкі сеанс Mosh).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm мае %lld давераных вузлоў SSH на гэтай прыладзе. Скід давераных хастоў прымушае VVTerm давяраць ключу хаста, прадстаўленаму пры наступным злучэнні.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm мае 1 надзейны хост SSH на гэтай прыладзе. Скід давераных хастоў прымушае VVTerm давяраць ключу хаста, прадстаўленаму пры наступным злучэнні.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm захаваў іншы ключ хаста SSH для %@. Працягвайце, толькі калі вы стварылі гэты сервер нанова або давяраеце новаму хосту.";

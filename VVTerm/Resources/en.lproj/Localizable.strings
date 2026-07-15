@@ -1485,6 +1485,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Using SSH fallback for this session (mosh-server is missing).";
 "Using SSH fallback for this session." = "Using SSH fallback for this session.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Using SSH fallback for this session (mosh-server could not start correctly).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Using SSH fallback for this session (the Mosh server address was invalid).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Using SSH fallback for this session (the Mosh client session could not start).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host.";

@@ -1485,6 +1485,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "이 세션에 SSH 대체를 사용합니다(해결된 원격 환경에서는 Mosh가 지원되지 않습니다).";
 "Using SSH fallback for this session (mosh-server is missing)." = "이 세션에 SSH 대체를 사용합니다(mosh-server가 누락됨).";
 "Using SSH fallback for this session." = "이 세션에 SSH 대체를 사용합니다.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "이 세션에 SSH 대체를 사용합니다(mosh-server를 올바르게 시작하지 못함).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "이 세션에 SSH 대체를 사용합니다(Mosh 서버 주소가 올바르지 않음).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "이 세션에 SSH 대체를 사용합니다(Mosh UDP 연결 시간 초과, UDP 포트 60001–61000 확인).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "이 세션에 SSH 대체를 사용합니다(Mosh 클라이언트 세션을 시작하지 못함).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm에는 이 장치에 %lld 신뢰할 수 있는 SSH 호스트가 있습니다. 신뢰할 수 있는 호스트를 재설정하면 VVTerm이 다음 연결 시 제공되는 호스트 키를 신뢰하게 됩니다.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm에는 이 장치에 신뢰할 수 있는 SSH 호스트가 1개 있습니다. 신뢰할 수 있는 호스트를 재설정하면 VVTerm이 다음 연결 시 제공되는 호스트 키를 신뢰하게 됩니다.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm이 %@에 대해 다른 SSH 호스트 키를 저장했습니다. 이 서버를 다시 생성했거나 새 호스트를 신뢰하는 경우에만 계속하십시오.";

@@ -134,16 +134,31 @@ struct RemoteEnvironment: Hashable, Sendable {
 }
 
 enum RemoteEnvironmentResolver {
+    typealias CommandExecutor = @Sendable (_ command: String, _ timeout: Duration?) async throws -> String
+
     private static let probeTimeout: Duration = .seconds(2)
+    private static let platformMarker = "__VVTERM_PLATFORM__="
+    private static let shellMarker = "__VVTERM_SHELL__="
 
     static func resolve(using client: SSHClient) async -> RemoteEnvironment {
-        let platform = await detectPlatform(using: client)
+        await resolve { command, timeout in
+            try await client.execute(command, timeout: timeout)
+        }
+    }
+
+    static func resolve(execute: CommandExecutor) async -> RemoteEnvironment {
+        if let output = await probe(posixEnvironmentProbeCommand(), execute: execute),
+           let environment = parsePOSIXEnvironmentProbe(output) {
+            return environment
+        }
+
+        let platform = await detectPlatform(execute: execute)
 
         switch platform {
         case .windows:
-            let activeShell = await detectWindowsShell(using: client)
+            let activeShell = await detectWindowsShell(execute: execute)
             let powerShellExecutable = await detectPowerShellExecutable(
-                using: client,
+                execute: execute,
                 preferredExecutableName: activeShell.powerShellExecutableName
             )
             let profile: RemoteShellProfile
@@ -165,7 +180,7 @@ enum RemoteEnvironmentResolver {
             )
 
         case .linux, .darwin, .freebsd, .openbsd, .netbsd, .unknown:
-            let shellName = await detectUnixShellName(using: client)
+            let shellName = await detectUnixShellName(execute: execute)
             let profile = resolveUnixProfile(shellName: shellName)
             return RemoteEnvironment(
                 platform: platform,
@@ -176,21 +191,58 @@ enum RemoteEnvironmentResolver {
         }
     }
 
-    private static func detectPlatform(using client: SSHClient) async -> RemotePlatform {
-        if let output = await probe("cmd.exe /d /c ver", using: client) {
+    nonisolated static func posixEnvironmentProbeCommand() -> String {
+        let body = """
+        \(RemoteTerminalBootstrap.shellPathExport());
+        VVTERM_PLATFORM="$(uname -s 2>/dev/null || true)";
+        VVTERM_SHELL="${SHELL##*/}";
+        if [ -z "$VVTERM_SHELL" ]; then VVTERM_SHELL="$(ps -p $$ -o comm= 2>/dev/null || true)"; fi;
+        printf '\(platformMarker)%s\n\(shellMarker)%s' "$VVTERM_PLATFORM" "$VVTERM_SHELL"
+        """
+        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(body)
+    }
+
+    nonisolated static func parsePOSIXEnvironmentProbe(_ output: String) -> RemoteEnvironment? {
+        let values = output.split(whereSeparator: { $0.isNewline }).reduce(into: [String: String]()) {
+            let line = String($1)
+            if line.hasPrefix(platformMarker) {
+                $0[platformMarker] = String(line.dropFirst(platformMarker.count))
+            } else if line.hasPrefix(shellMarker) {
+                $0[shellMarker] = String(line.dropFirst(shellMarker.count))
+            }
+        }
+        guard let platformValue = values[platformMarker] else { return nil }
+        let platform = RemotePlatform.detect(from: platformValue)
+        guard platform != .windows, platform != .unknown else { return nil }
+        let shellValue = values[shellMarker]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let shellName = shellValue.flatMap { value -> String? in
+            let normalized = (value as NSString).lastPathComponent.lowercased()
+            return normalized.isEmpty ? nil : normalized
+        }
+        return RemoteEnvironment(
+            platform: platform,
+            shellProfile: resolveUnixProfile(shellName: shellName),
+            activeShellName: shellName,
+            powerShellExecutable: nil
+        )
+    }
+
+    private static func detectPlatform(execute: CommandExecutor) async -> RemotePlatform {
+        if let output = await probe("cmd.exe /d /c ver", execute: execute) {
             let platform = RemotePlatform.detect(from: output)
             if platform == .windows {
                 return .windows
             }
         }
 
-        if let output = await probe("uname -s", using: client) {
+        if let output = await probe("uname -s", execute: execute) {
             return RemotePlatform.detect(from: output)
         }
 
         if let output = await probe(
             RemoteTerminalBootstrap.wrapPOSIXShellCommand("/usr/bin/uname -s 2>/dev/null || /bin/uname -s 2>/dev/null || uname -s"),
-            using: client
+            execute: execute
         ) {
             return RemotePlatform.detect(from: output)
         }
@@ -198,14 +250,14 @@ enum RemoteEnvironmentResolver {
         return .unknown
     }
 
-    private static func detectUnixShellName(using client: SSHClient) async -> String? {
+    private static func detectUnixShellName(execute: CommandExecutor) async -> String? {
         let probes = [
             #"printf '%s' "$SHELL" 2>/dev/null"#,
             #"ps -p $$ -o comm= 2>/dev/null"#,
         ]
 
         for command in probes {
-            guard let output = await probe(command, using: client) else { continue }
+            guard let output = await probe(command, execute: execute) else { continue }
             let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             let normalized = (trimmed as NSString).lastPathComponent.lowercased()
@@ -267,23 +319,23 @@ enum RemoteEnvironmentResolver {
     }
 
     private static func detectPowerShellExecutable(
-        using client: SSHClient,
+        execute: CommandExecutor,
         preferredExecutableName: String?
     ) async -> String? {
         let marker = "__VVTERM_PWSH_OK__"
         for executable in powerShellExecutableCandidates(preferredExecutableName: preferredExecutableName) {
-            if let output = await probe("cmd.exe /d /c where \(executable)", using: client),
+            if let output = await probe("cmd.exe /d /c where \(executable)", execute: execute),
                output.lowercased().contains(executable) {
                 return executable
             }
 
-            if let output = await probe("where \(executable)", using: client),
+            if let output = await probe("where \(executable)", execute: execute),
                output.lowercased().contains(executable) {
                 return executable
             }
 
             let command = RemoteTerminalBootstrap.wrapPowerShellCommand("Write-Output '\(marker)'", executableName: executable)
-            guard let output = await probe(command, using: client) else { continue }
+            guard let output = await probe(command, execute: execute) else { continue }
             if output.contains(marker) {
                 return executable
             }
@@ -291,8 +343,8 @@ enum RemoteEnvironmentResolver {
         return nil
     }
 
-    private static func detectWindowsShell(using client: SSHClient) async -> RemoteWindowsShellDetection {
-        if let output = await probe(#"reg query "HKLM\SOFTWARE\OpenSSH" /v DefaultShell"#, using: client) {
+    private static func detectWindowsShell(execute: CommandExecutor) async -> RemoteWindowsShellDetection {
+        if let output = await probe(#"reg query "HKLM\SOFTWARE\OpenSSH" /v DefaultShell"#, execute: execute) {
             let normalized = output.lowercased()
             if normalized.contains("powershell") || normalized.contains("pwsh") {
                 return .powershell(
@@ -305,13 +357,13 @@ enum RemoteEnvironmentResolver {
         }
 
         let powerShellMarker = "__VVTERM_ACTIVE_POWERSHELL__"
-        if let output = await probe("Write-Output '\(powerShellMarker)'", using: client),
+        if let output = await probe("Write-Output '\(powerShellMarker)'", execute: execute),
            output.contains(powerShellMarker) {
             return .powershell(executableName: nil)
         }
 
         let cmdMarker = "__VVTERM_ACTIVE_CMD__"
-        if let output = await probe("for %I in (1) do @echo \(cmdMarker)", using: client),
+        if let output = await probe("for %I in (1) do @echo \(cmdMarker)", execute: execute),
            output.contains(cmdMarker) {
             return .cmd
         }
@@ -333,8 +385,8 @@ enum RemoteEnvironmentResolver {
         return nil
     }
 
-    private static func probe(_ command: String, using client: SSHClient) async -> String? {
-        try? await client.execute(command, timeout: probeTimeout)
+    private static func probe(_ command: String, execute: CommandExecutor) async -> String? {
+        try? await execute(command, probeTimeout)
     }
 }
 

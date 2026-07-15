@@ -1483,6 +1483,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "为此会话使用 SSH 回退（已解析的远程环境不支持 Mosh）。";
 "Using SSH fallback for this session (mosh-server is missing)." = "为此会话使用 SSH 回退（缺少 mosh-server）。";
 "Using SSH fallback for this session." = "为此会话使用 SSH 回退。";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "为此会话使用 SSH 回退（mosh-server 无法正常启动）。";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "为此会话使用 SSH 回退（Mosh 服务器地址无效）。";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "为此会话使用 SSH 回退（Mosh UDP 连接超时；请检查 UDP 端口 60001–61000）。";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "为此会话使用 SSH 回退（Mosh 客户端会话无法启动）。";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm 在此设备上有 %lld 受信任的 SSH 主机。重置受信任的主机使 VVTerm 信任下一次连接时出现的主机密钥。";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm 在此设备上有 1 个受信任的 SSH 主机。重置受信任的主机使 VVTerm 信任下一次连接时出现的主机密钥。";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm 为 %@ 保存了不同的 SSH 主机密钥。仅当您重新创建此服务器或信任新主机时才继续。";

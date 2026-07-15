@@ -68,6 +68,7 @@ actor SSHClient {
     private var connectedServer: Server?
     private var resolvedRemoteEnvironment: RemoteEnvironment?
     private var resolvedRemoteTerminalType: RemoteTerminalType?
+    private var startupTrace: SSHStartupTrace?
     private var moshShells: [UUID: MoshShellRuntime] = [:]
     private let cloudflareTransportManager = CloudflareTransportManager()
     private let moshStartupTimeout: Duration = .seconds(8)
@@ -117,8 +118,13 @@ actor SSHClient {
             throw SSHError.connectionFailed("SSH client already connected")
         }
 
-        logger.info("Connecting to \(server.host):\(server.port) [mode: \(server.connectionMode.rawValue)]")
+        logger.info(
+            "Connecting to \(server.host, privacy: .private(mask: .hash)):\(server.port) [mode: \(server.connectionMode.rawValue, privacy: .public)]"
+        )
         logger.info("Auth method: \(String(describing: server.authMethod)), password present: \(credentials.password != nil)")
+        let startupTrace = SSHStartupTrace(logger: logger)
+        self.startupTrace = startupTrace
+        let transportToken = startupTrace.begin(.transportPreparation)
 
         var dialHost = server.host
         var dialPort = server.port
@@ -131,6 +137,7 @@ actor SSHClient {
         } else {
             await disconnectCloudflareTransport(reason: "pre-connect cleanup")
         }
+        startupTrace.end(transportToken, detail: server.connectionMode.rawValue)
 
         let config = SSHSessionConfig(
             host: server.host,
@@ -145,7 +152,7 @@ actor SSHClient {
             credentials: credentials
         )
 
-        let pendingSession = SSHSession(config: config)
+        let pendingSession = SSHSession(config: config, startupTrace: startupTrace)
         pendingConnectSession = pendingSession
 
         let task = Task { [connectTimeout] () -> SSHSession in
@@ -187,7 +194,7 @@ actor SSHClient {
             self.resolvedRemoteTerminalType = nil
             startKeepAlive()
             connectTask = nil
-            logger.info("Connected to \(server.host)")
+            logger.info("Connected to \(server.host, privacy: .private(mask: .hash))")
             return session
         } catch {
             pendingConnectSession = nil
@@ -198,6 +205,7 @@ actor SSHClient {
             self.connectedServer = nil
             self.resolvedRemoteEnvironment = nil
             self.resolvedRemoteTerminalType = nil
+            self.startupTrace = nil
             await disconnectCloudflareTransport(reason: "connect failure")
             if server.connectionMode == .cloudflare,
                case SSHError.connectionFailed(let message) = error,
@@ -235,6 +243,7 @@ actor SSHClient {
         connectedServer = nil
         resolvedRemoteEnvironment = nil
         resolvedRemoteTerminalType = nil
+        startupTrace = nil
         activeSession?.abort()
         await disconnectSSHSession(activeSession)
         await disconnectCloudflareTransport(reason: "client disconnect")
@@ -290,7 +299,11 @@ actor SSHClient {
             return resolvedRemoteEnvironment
         }
 
+        let token = startupTrace?.begin(.remoteEnvironment)
         let environment = await RemoteEnvironmentResolver.resolve(using: self)
+        if let token {
+            startupTrace?.end(token, detail: environment.platform.rawValue)
+        }
         resolvedRemoteEnvironment = environment
         logger.info(
             "Resolved remote environment [platform: \(environment.platform.rawValue, privacy: .public), shell: \(environment.shellProfile.family.rawValue, privacy: .public), active: \(environment.activeShellName ?? "unknown", privacy: .public)]"
@@ -304,6 +317,7 @@ actor SSHClient {
         }
 
         let environment = await remoteEnvironment(forceRefresh: forceRefresh)
+        let token = startupTrace?.begin(.terminalType)
         let terminalType = await RemoteTerminalTypeResolver.resolve(
             environment: environment,
             execute: { [weak self] command, timeout in
@@ -311,6 +325,9 @@ actor SSHClient {
                 return try await self.execute(command, timeout: timeout)
             }
         )
+        if let token {
+            startupTrace?.end(token, detail: terminalType.rawValue)
+        }
         resolvedRemoteTerminalType = terminalType
         logger.info("Resolved remote terminal type: \(terminalType.rawValue, privacy: .public)")
         return terminalType
@@ -457,6 +474,7 @@ actor SSHClient {
 
         guard environment.platform != .windows && environment.shellProfile.family == .posix else {
             logger.warning("Mosh requested, but remote environment does not support Mosh runtime. Falling back to SSH.")
+            let fallbackToken = startupTrace?.begin(.sshFallback)
             let fallbackShell = try await session.startShell(
                 cols: cols,
                 rows: rows,
@@ -464,6 +482,7 @@ actor SSHClient {
                 environment: environment,
                 terminalType: terminalType
             )
+            if let fallbackToken { startupTrace?.end(fallbackToken, detail: "unsupported_remote") }
             return ShellHandle(
                 id: fallbackShell.id,
                 stream: fallbackShell.stream,
@@ -483,6 +502,7 @@ actor SSHClient {
             logger.warning("Mosh startup failed, using SSH fallback: \(moshError.localizedDescription)")
 
             do {
+                let fallbackToken = startupTrace?.begin(.sshFallback)
                 let fallbackShell = try await session.startShell(
                     cols: cols,
                     rows: rows,
@@ -490,6 +510,9 @@ actor SSHClient {
                     environment: environment,
                     terminalType: terminalType
                 )
+                if let fallbackToken {
+                    startupTrace?.end(fallbackToken, detail: fallbackReason.rawValue)
+                }
                 return ShellHandle(
                     id: fallbackShell.id,
                     stream: fallbackShell.stream,
@@ -599,31 +622,58 @@ actor SSHClient {
         rows: Int,
         startupCommand: String?
     ) async throws -> ShellHandle {
-        let configuredHost = connectedServer?.host.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !configuredHost.isEmpty else {
-            throw SSHError.moshBootstrapFailed("Missing server host for Mosh endpoint")
+        let configuredHost = connectedServer?.host ?? ""
+        let peerHost: String?
+        if let sshSession = session {
+            peerHost = await sshSession.remoteEndpointHost()
+        } else {
+            peerHost = nil
         }
-
-        var candidateHosts: [String] = [configuredHost]
-        if let sshSession = session,
-           let peerHost = await sshSession.remoteEndpointHost() {
-            let trimmedPeerHost = peerHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedPeerHost.isEmpty && trimmedPeerHost != configuredHost {
-                candidateHosts.append(trimmedPeerHost)
-            }
-        }
-
-        let connectInfo = try await RemoteMoshManager.shared.bootstrapConnectInfo(
-            using: self,
-            startCommand: startupCommand,
-            portRange: 60001...61000
+        let candidateHosts = MoshEndpointCandidatePolicy.hosts(
+            configuredHost: configuredHost,
+            sshPeerHost: peerHost
         )
+        guard !candidateHosts.isEmpty else { throw SSHError.moshInvalidEndpoint }
+
+        let bootstrapToken = startupTrace?.begin(.moshBootstrap)
+        let connectInfo: MoshServerConnectInfo
+        do {
+            connectInfo = try await RemoteMoshManager.shared.bootstrapConnectInfo(
+                using: self,
+                startCommand: startupCommand,
+                portRange: 60001...61000
+            )
+            if let bootstrapToken {
+                startupTrace?.end(
+                    bootstrapToken,
+                    detail: RemoteMoshManager.portClass(Int(connectInfo.port)).rawValue
+                )
+            }
+        } catch {
+            if let bootstrapToken {
+                startupTrace?.end(
+                    bootstrapToken,
+                    outcome: "failed",
+                    detail: fallbackReason(for: error).rawValue
+                )
+            }
+            throw error
+        }
 
         let startupTimeout = candidateHosts.count > 1 ? Duration.seconds(4) : moshStartupTimeout
         var lastStartupError: Error?
         var moshSession: MoshClientSession?
+        var pendingOps: [MoshHostOp] = []
 
         for host in candidateHosts {
+            let endpointClass = host == configuredHost ? "configured" : "ssh_peer"
+            startupTrace?.record(
+                .moshEndpoint,
+                stageMilliseconds: 0,
+                outcome: "selected",
+                detail: endpointClass
+            )
+            let udpToken = startupTrace?.begin(.moshUDPSession)
             let endpoint = MoshEndpoint(
                 host: host,
                 port: connectInfo.port,
@@ -632,23 +682,28 @@ actor SSHClient {
             let candidateSession = MoshClientSession(endpoint: endpoint)
 
             do {
-                try await SSHClient.runWithTimeout(startupTimeout) {
+                pendingOps = try await SSHClient.runWithTimeout(startupTimeout) {
                     try await candidateSession.start()
                     try await candidateSession.enqueue(.resize(cols: Int32(cols), rows: Int32(rows)))
+                    return try await SSHClient.waitForMoshHostData(from: candidateSession)
                 }
                 moshSession = candidateSession
+                if let udpToken { startupTrace?.end(udpToken, detail: endpointClass) }
                 if host != configuredHost {
-                    logger.info("Using SSH peer endpoint for Mosh: \(host, privacy: .public)")
+                    logger.info("Using SSH peer endpoint for Mosh: \(host, privacy: .private(mask: .hash))")
                 }
                 break
             } catch {
                 await candidateSession.stop()
+                if let udpToken {
+                    startupTrace?.end(udpToken, outcome: "failed", detail: endpointClass)
+                }
                 if error is CancellationError || Task.isCancelled {
                     throw CancellationError()
                 }
                 lastStartupError = error
                 if host != candidateHosts.last {
-                    logger.warning("Mosh startup failed for endpoint \(host, privacy: .public), trying next candidate")
+                    logger.warning("Mosh startup failed for endpoint \(host, privacy: .private(mask: .hash)), trying next candidate")
                 }
             }
         }
@@ -656,25 +711,26 @@ actor SSHClient {
         guard let moshSession else {
             if let sshError = lastStartupError as? SSHError,
                case .timeout = sshError {
-                throw SSHError.moshSessionFailed("Timed out waiting for Mosh UDP session startup")
+                throw SSHError.moshUDPTimeout
             }
             if let lastStartupError {
-                throw SSHError.moshSessionFailed(lastStartupError.localizedDescription)
+                throw SSHError.moshClientSessionFailed(lastStartupError.localizedDescription)
             }
-            throw SSHError.moshSessionFailed("Failed to start Mosh session")
+            throw SSHError.moshClientSessionFailed("Failed to start Mosh session")
         }
 
         let shellId = UUID()
-        let pendingOps = await moshSession.drainHostOps()
         if !pendingOps.isEmpty {
             logger.info("Mosh: \(pendingOps.count) pending host ops before stream creation")
         }
         let hostOpStream = await moshSession.hostOpStream()
         let moshLogger = logger
+        let trace = startupTrace
         let stream = AsyncStream<Data> { continuation in
             // Replay any ops that arrived before the stream was created
             for op in pendingOps {
                 if case .hostBytes(let bytes) = op {
+                    trace?.recordOnce(.firstTerminalByte, detail: "mosh")
                     continuation.yield(bytes)
                 }
             }
@@ -684,15 +740,9 @@ actor SSHClient {
                     guard !Task.isCancelled else { break }
                     switch hostOp {
                     case .hostBytes(let bytes):
+                        trace?.recordOnce(.firstTerminalByte, detail: "mosh")
                         totalBytes += bytes.count
-                        if totalBytes <= 2000 {
-                            let preview = String(data: bytes, encoding: .utf8)?
-                                .replacingOccurrences(of: "\u{1b}", with: "\\e")
-                                .replacingOccurrences(of: "\r", with: "\\r")
-                                .replacingOccurrences(of: "\n", with: "\\n")
-                                .prefix(300) ?? "<binary>"
-                            moshLogger.info("Mosh hostBytes: \(bytes.count)B (total: \(totalBytes)) content: \(preview)")
-                        }
+                        moshLogger.debug("Mosh host bytes: \(bytes.count)B (total: \(totalBytes))")
                         continuation.yield(bytes)
                     case .echoAck, .resize:
                         break
@@ -717,6 +767,26 @@ actor SSHClient {
             stream: stream,
             transport: .mosh
         )
+    }
+
+    private nonisolated static func waitForMoshHostData(
+        from session: MoshClientSession
+    ) async throws -> [MoshHostOp] {
+        var pendingOps: [MoshHostOp] = []
+        while true {
+            try Task.checkCancellation()
+            let drained = await session.drainHostOps()
+            var receivedData = false
+            for op in drained {
+                guard case .hostBytes(let bytes) = op else { continue }
+                pendingOps.append(op)
+                receivedData = receivedData || !bytes.isEmpty
+            }
+            if receivedData {
+                return pendingOps
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     private nonisolated static func runWithTimeout<T: Sendable>(
@@ -750,6 +820,12 @@ actor SSHClient {
             return .serverMissing
         case .moshBootstrapFailed:
             return .bootstrapFailed
+        case .moshInvalidEndpoint:
+            return .invalidEndpoint
+        case .moshUDPTimeout:
+            return .udpTimeout
+        case .moshClientSessionFailed:
+            return .clientSessionFailed
         case .moshSessionFailed:
             return .sessionFailed
         default:
@@ -891,6 +967,7 @@ actor SSHSession {
         var batchBuffer = Data()
         var lastYieldTime: UInt64 = DispatchTime.now().uptimeNanoseconds
         var recentBytesPerRead: Int = 0
+        var didRecordFirstByte = false
 
         init(id: UUID, channel: OpaquePointer, continuation: AsyncStream<Data>.Continuation) {
             self.id = id
@@ -909,6 +986,7 @@ actor SSHSession {
     private var execRequests: [UUID: ExecRequest] = [:]
     private var connectedPeerAddress: String?
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "SSHSession")
+    private let startupTrace: SSHStartupTrace?
 
     /// Atomic socket storage for emergency abort from any thread
     private let atomicSocket = AtomicSocket()
@@ -919,8 +997,9 @@ actor SSHSession {
     /// Track if cleanup has been performed
     private var hasBeenCleaned = false
 
-    init(config: SSHSessionConfig) {
+    init(config: SSHSessionConfig, startupTrace: SSHStartupTrace? = nil) {
         self.config = config
+        self.startupTrace = startupTrace
     }
 
     var isConnected: Bool {
@@ -940,52 +1019,11 @@ actor SSHSession {
         socket = -1
         connectedPeerAddress = nil
 
-        // Resolve host
-        var hints = addrinfo()
-        hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
-        hints.ai_protocol = IPPROTO_TCP
-        var result: UnsafeMutablePointer<addrinfo>?
-
-        let portString = String(config.dialPort)
-        let resolveResult = getaddrinfo(config.dialHost, portString, &hints, &result)
-        guard resolveResult == 0, let addrInfo = result else {
-            throw SSHError.connectionFailed("Failed to resolve host: \(config.dialHost)")
-        }
-        defer { freeaddrinfo(result) }
-
-        // Connect socket (try all resolved addresses so IPv6-only MagicDNS hosts work)
-        var lastConnectError: Int32 = 0
-        var candidate: UnsafeMutablePointer<addrinfo>? = addrInfo
-
-        while let current = candidate {
-            try Task.checkCancellation()
-            let family = current.pointee.ai_family
-            let sockType = current.pointee.ai_socktype == 0 ? SOCK_STREAM : current.pointee.ai_socktype
-            let protocolNumber = current.pointee.ai_protocol
-
-            let candidateSocket = Darwin.socket(family, sockType, protocolNumber)
-            if candidateSocket < 0 {
-                lastConnectError = errno
-                candidate = current.pointee.ai_next
-                continue
-            }
-
-            let connectResult = Darwin.connect(candidateSocket, current.pointee.ai_addr, current.pointee.ai_addrlen)
-            if connectResult == 0 {
-                socket = candidateSocket
-                break
-            }
-
-            lastConnectError = errno
-            Darwin.close(candidateSocket)
-            candidate = current.pointee.ai_next
-        }
-
-        guard socket >= 0 else {
-            let message = lastConnectError == 0 ? "Unknown connect failure" : String(cString: strerror(lastConnectError))
-            throw SSHError.connectionFailed("Failed to connect: \(message)")
-        }
+        socket = try await SSHAddressConnector.connect(
+            host: config.dialHost,
+            port: config.dialPort,
+            trace: startupTrace
+        )
 
         // Disable Nagle's algorithm for low-latency interactive typing
         // Without this, small packets (keystrokes) are batched causing 40-200ms delays
@@ -1032,22 +1070,35 @@ actor SSHSession {
 
         // Perform SSH handshake
         try Task.checkCancellation()
+        let handshakeToken = startupTrace?.begin(.sshHandshake)
         let handshakeResult = libssh2_session_handshake(session, socket)
         guard handshakeResult == 0 else {
+            if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "failed") }
             cleanup()
             throw SSHError.connectionFailed("SSH handshake failed: \(handshakeResult)")
         }
+        if let handshakeToken { startupTrace?.end(handshakeToken) }
 
+        let hostKeyToken = startupTrace?.begin(.hostKeyVerification)
         do {
             try verifyHostKey()
+            if let hostKeyToken { startupTrace?.end(hostKeyToken) }
         } catch {
+            if let hostKeyToken { startupTrace?.end(hostKeyToken, outcome: "failed") }
             cleanup()
             throw error
         }
 
         // Authenticate
         try Task.checkCancellation()
-        try authenticate()
+        let authenticationToken = startupTrace?.begin(.authentication)
+        do {
+            try authenticate()
+            if let authenticationToken { startupTrace?.end(authenticationToken) }
+        } catch {
+            if let authenticationToken { startupTrace?.end(authenticationToken, outcome: "failed") }
+            throw error
+        }
 
         // Set non-blocking for I/O
         libssh2_session_set_blocking(session, 0)
@@ -1190,11 +1241,13 @@ actor SSHSession {
 
         if let entry = KnownHostsManager.shared.entry(for: host, port: port) {
             if entry.fingerprint != fingerprint {
-                logger.error("Host key mismatch for \(host):\(port). Known: \(entry.fingerprint), Presented: \(fingerprint)")
+                logger.error(
+                    "Host key mismatch for \(host, privacy: .private(mask: .hash)):\(port). Known: \(entry.fingerprint, privacy: .private(mask: .hash)), Presented: \(fingerprint, privacy: .private(mask: .hash))"
+                )
                 throw SSHError.hostKeyVerificationFailed
             }
             KnownHostsManager.shared.updateSeen(host: host, port: port)
-            logger.info("Host key verified for \(host):\(port)")
+            logger.info("Host key verified for \(host, privacy: .private(mask: .hash)):\(port)")
             return
         }
 
@@ -1207,7 +1260,9 @@ actor SSHSession {
             lastSeenAt: Date()
         )
         KnownHostsManager.shared.save(entry: entry)
-        logger.info("Trusted new host key for \(host):\(port) (\(fingerprint))")
+        logger.info(
+            "Trusted new host key for \(host, privacy: .private(mask: .hash)):\(port) (\(fingerprint, privacy: .private(mask: .hash)))"
+        )
     }
 
     private func hostKeyFingerprint(for session: OpaquePointer) throws -> (String, Int) {
@@ -1717,6 +1772,7 @@ actor SSHSession {
 
         // Open channel (use _ex variant since macros not available in Swift)
         // LIBSSH2_CHANNEL_WINDOW_DEFAULT = 2*1024*1024, LIBSSH2_CHANNEL_PACKET_DEFAULT = 32768
+        let channelToken = startupTrace?.begin(.shellChannel)
         guard let channel = libssh2_channel_open_ex(
             session,
             "session",
@@ -1726,8 +1782,10 @@ actor SSHSession {
             nil,
             0
         ) else {
+            if let channelToken { startupTrace?.end(channelToken, outcome: "failed") }
             throw SSHError.channelOpenFailed
         }
+        if let channelToken { startupTrace?.end(channelToken) }
 
         // Mirror Ghostty's SSH behavior so remote prompts/themes can detect
         // 24-bit color support without changing TERM compatibility.
@@ -1748,6 +1806,7 @@ actor SSHSession {
         }
 
         // Request PTY
+        let ptyToken = startupTrace?.begin(.ptyRequest)
         let ptyResult = libssh2_channel_request_pty_ex(
             channel,
             terminalType.rawValue,
@@ -1760,17 +1819,21 @@ actor SSHSession {
             0
         )
         guard ptyResult == 0 else {
+            if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed") }
             libssh2_channel_close(channel)
             libssh2_channel_free(channel)
             throw SSHError.shellRequestFailed
         }
+        if let ptyToken { startupTrace?.end(ptyToken) }
 
         // Route shell startup through a single bootstrap helper so SSH, tmux,
         // and mosh share the same environment and quoting behavior.
+        let shellToken = startupTrace?.begin(.shellRequest)
         switch RemoteTerminalBootstrap.launchPlan(startupCommand: startupCommand, environment: environment) {
         case .shell:
             let shellResult = libssh2_channel_process_startup(channel, "shell", 5, nil, 0)
             guard shellResult == 0 else {
+                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
                 libssh2_channel_close(channel)
                 libssh2_channel_free(channel)
                 throw SSHError.shellRequestFailed
@@ -1781,11 +1844,13 @@ actor SSHSession {
                 libssh2_channel_process_startup(channel, "exec", 4, ptr, commandLength)
             }
             guard execResult == 0 else {
+                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
                 libssh2_channel_close(channel)
                 libssh2_channel_free(channel)
                 throw SSHError.shellRequestFailed
             }
         }
+        if let shellToken { startupTrace?.end(shellToken) }
 
         logger.info("Shell started (\(cols)x\(rows))")
 
@@ -1840,6 +1905,10 @@ actor SSHSession {
                     let bytesRead = libssh2_channel_read_ex(state.channel, 0, &buffer, buffer.count)
 
                     if bytesRead > 0 {
+                        if !state.didRecordFirstByte {
+                            state.didRecordFirstByte = true
+                            startupTrace?.recordOnce(.firstTerminalByte, detail: "ssh")
+                        }
                         let readCount = Int(bytesRead)
                         state.batchBuffer.append(Data(bytes: buffer, count: readCount))
                         didWork = true
@@ -2826,6 +2895,9 @@ enum SSHError: LocalizedError {
     case moshServerMissing
     case moshBootstrapFailed(String)
     case moshSessionFailed(String)
+    case moshInvalidEndpoint
+    case moshUDPTimeout
+    case moshClientSessionFailed(String)
     case timeout
     case channelOpenFailed
     case shellRequestFailed
@@ -2852,6 +2924,12 @@ enum SSHError: LocalizedError {
             return "Mosh bootstrap failed: \(msg)"
         case .moshSessionFailed(let msg):
             return "Mosh session failed: \(msg)"
+        case .moshInvalidEndpoint:
+            return "Mosh server address is invalid"
+        case .moshUDPTimeout:
+            return "Mosh UDP session timed out"
+        case .moshClientSessionFailed(let msg):
+            return "Mosh client session failed: \(msg)"
         case .timeout: return "Connection timed out"
         case .channelOpenFailed: return "Failed to open channel"
         case .shellRequestFailed: return "Failed to request shell"

@@ -29,7 +29,9 @@ enum SSHConnectionRunner {
             onAttempt(attempt)
 
             do {
-                logger.info("Connecting to \(server.host)... (attempt \(attempt))")
+                logger.info(
+                    "Connecting to \(server.host, privacy: .private(mask: .hash))... (attempt \(attempt))"
+                )
                 _ = try await sshClient.connect(to: server, credentials: credentials)
                 guard !Task.isCancelled else { return }
                 guard shouldContinueConnection() else { return }

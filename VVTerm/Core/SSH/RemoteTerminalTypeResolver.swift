@@ -33,12 +33,11 @@ enum RemoteTerminalTypeResolver {
             return RemoteTerminalBootstrap.defaultTerminalType
         }
 
-        if await remoteHasGhosttyTerminfo(execute: execute) {
-            return .xtermGhostty
-        }
-
         let resolvedTerminfoSource = terminfoSource ?? RemoteTerminalBootstrap.ghosttyTerminfoSource(bundle: bundle)
         guard let resolvedTerminfoSource else {
+            if await remoteHasGhosttyTerminfo(execute: execute) {
+                return .xtermGhostty
+            }
             logger.warning("Ghostty terminfo source not found in bundle; falling back to \(RemoteTerminalBootstrap.defaultTerminalType.rawValue, privacy: .public)")
             return RemoteTerminalBootstrap.defaultTerminalType
         }

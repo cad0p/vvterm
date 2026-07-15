@@ -66,9 +66,9 @@ struct RemoteTerminalTypeResolverTests {
     }
 
     @Test
-    func resolveUsesGhosttyWhenProbeSucceeds() async {
+    func resolveUsesGhosttyWhenInstallCommandFindsExistingEntry() async {
         let executor = FakeExecutor(outputs: [
-            .success("__VVTERM_XTERM_GHOSTTY_OK__")
+            .success("__VVTERM_XTERM_GHOSTTY_INSTALLED__")
         ])
 
         let terminalType = await RemoteTerminalTypeResolver.resolve(
@@ -83,6 +83,7 @@ struct RemoteTerminalTypeResolverTests {
         #expect(terminalType == .xtermGhostty)
         #expect(commands.count == 1)
         #expect(commands[0].contains("infocmp -x xterm-ghostty"))
+        #expect(commands[0].contains("tic -x -"))
     }
 
     @Test
@@ -98,7 +99,6 @@ struct RemoteTerminalTypeResolverTests {
     @Test
     func resolveInstallsGhosttyTerminfoWhenProbeMisses() async {
         let executor = FakeExecutor(outputs: [
-            .success("__VVTERM_XTERM_GHOSTTY_NO__"),
             .success("__VVTERM_XTERM_GHOSTTY_INSTALLED__")
         ])
 
@@ -112,15 +112,14 @@ struct RemoteTerminalTypeResolverTests {
 
         let commands = await executor.recordedCommands()
         #expect(terminalType == .xtermGhostty)
-        #expect(commands.count == 2)
-        #expect(commands[1].contains("tic -x -"))
-        #expect(commands[1].contains("xterm-ghostty|ghostty|Ghostty"))
+        #expect(commands.count == 1)
+        #expect(commands[0].contains("tic -x -"))
+        #expect(commands[0].contains("xterm-ghostty|ghostty|Ghostty"))
     }
 
     @Test
     func resolveFallsBackWhenInstallationFails() async {
         let executor = FakeExecutor(outputs: [
-            .success("__VVTERM_XTERM_GHOSTTY_NO__"),
             .success("__VVTERM_XTERM_GHOSTTY_INSTALL_FAILED__")
         ])
 

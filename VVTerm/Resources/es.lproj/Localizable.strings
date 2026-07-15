@@ -1486,6 +1486,10 @@
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Uso del respaldo SSH para esta sesión (Mosh no es compatible con el entorno remoto resuelto).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Usando el respaldo SSH para esta sesión (falta el servidor mosh).";
 "Using SSH fallback for this session." = "Usando el respaldo SSH para esta sesión.";
+"Using SSH fallback for this session (mosh-server could not start correctly)." = "Usando el respaldo SSH para esta sesión (mosh-server no pudo iniciarse correctamente).";
+"Using SSH fallback for this session (the Mosh server address was invalid)." = "Usando el respaldo SSH para esta sesión (la dirección del servidor Mosh no era válida).";
+"Using SSH fallback for this session (the Mosh UDP connection timed out; check UDP ports 60001–61000)." = "Usando el respaldo SSH para esta sesión (se agotó el tiempo de la conexión UDP de Mosh; comprueba los puertos UDP 60001–61000).";
+"Using SSH fallback for this session (the Mosh client session could not start)." = "Usando el respaldo SSH para esta sesión (la sesión del cliente Mosh no pudo iniciarse).";
 "VVTerm has %lld trusted SSH hosts on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm tiene %lld hosts SSH confiables en este dispositivo. Restablecer los hosts confiables hace que VVTerm confíe en la clave de host presentada en la siguiente conexión.";
 "VVTerm has 1 trusted SSH host on this device. Resetting trusted hosts makes VVTerm trust the host key presented on the next connection." = "VVTerm tiene 1 host SSH confiable en este dispositivo. Restablecer los hosts confiables hace que VVTerm confíe en la clave de host presentada en la siguiente conexión.";
 "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host." = "VVTerm guardó una clave de host SSH diferente para %@. Continúe solo si volvió a crear este servidor o confía en el nuevo host.";
