@@ -7,6 +7,14 @@ enum TerminalPointerButton: Equatable {
 }
 
 enum TerminalPointerInputRoutingPolicy {
+    static func shouldSendDirectTouchClick(
+        terminalMouseCaptured: Bool,
+        terminalInputAvailable: Bool,
+        selectionInteractionActive: Bool
+    ) -> Bool {
+        terminalMouseCaptured && terminalInputAvailable && !selectionInteractionActive
+    }
+
     static func pointerButton(
         isPrimaryPressed: Bool,
         isSecondaryPressed: Bool,

@@ -153,6 +153,50 @@ struct TerminalPointerInputRoutingPolicyTests {
     }
 
     @Test
+    func routesDirectTouchClickToAvailableCapturedTerminal() {
+        #expect(
+            TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: true,
+                terminalInputAvailable: true,
+                selectionInteractionActive: false
+            )
+        )
+    }
+
+    @Test
+    func doesNotRouteDirectTouchClickOutsideMouseCapture() {
+        #expect(
+            !TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: false,
+                terminalInputAvailable: true,
+                selectionInteractionActive: false
+            )
+        )
+    }
+
+    @Test
+    func excludesSelectionInteractionFromDirectTouchClick() {
+        #expect(
+            !TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: true,
+                terminalInputAvailable: true,
+                selectionInteractionActive: true
+            )
+        )
+    }
+
+    @Test
+    func excludesUnavailableTerminalInputFromDirectTouchClick() {
+        #expect(
+            !TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: true,
+                terminalInputAvailable: false,
+                selectionInteractionActive: false
+            )
+        )
+    }
+
+    @Test
     func disablesHostSelectionWhileTerminalMouseIsCaptured() {
         #expect(
             TerminalSelectionRoutingPolicy.shouldAllowHostSelection(

@@ -1024,6 +1024,29 @@ class GhosttyTerminalView: UIView {
     }
     private let touchSelectionOverlay = TerminalTouchSelectionOverlayView()
     private let touchSelectionLoupe = TerminalTouchSelectionLoupeView()
+    private lazy var directTouchTapRecognizer: UITapGestureRecognizer = {
+        let recognizer = UITapGestureRecognizer(
+            target: self,
+            action: #selector(handleDirectTouchTap(_:))
+        )
+        recognizer.numberOfTapsRequired = 1
+        recognizer.numberOfTouchesRequired = 1
+        recognizer.cancelsTouchesInView = false
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
+        return recognizer
+    }()
+    private lazy var directTouchLongPressExclusionRecognizer: UILongPressGestureRecognizer = {
+        let recognizer = UILongPressGestureRecognizer(target: nil, action: nil)
+        recognizer.minimumPressDuration = 0.2
+        recognizer.cancelsTouchesInView = false
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
+        recognizer.delegate = self
+        return recognizer
+    }()
     private lazy var selectionRecognizer: UILongPressGestureRecognizer = {
         let recognizer = UILongPressGestureRecognizer(
             target: self,
@@ -1246,6 +1269,7 @@ class GhosttyTerminalView: UIView {
         }
 
         // Setup gesture recognizers with delegate for simultaneous recognition
+        directTouchTapRecognizer.delegate = self
         scrollRecognizer.delegate = self
         pinchRecognizer.delegate = self
         if usesAppOwnedTouchSelection {
@@ -1259,8 +1283,18 @@ class GhosttyTerminalView: UIView {
         if usesAppOwnedTouchSelection {
             // Triple tap should require double tap to fail first
             doubleTapRecognizer.require(toFail: tripleTapRecognizer)
+            directTouchTapRecognizer.require(toFail: scrollRecognizer)
+            directTouchTapRecognizer.require(toFail: selectionRecognizer)
+            directTouchTapRecognizer.require(toFail: doubleTapRecognizer)
+        } else {
+            if !usesNativeTouchSelection {
+                directTouchTapRecognizer.require(toFail: scrollRecognizer)
+            }
+            directTouchTapRecognizer.require(toFail: directTouchLongPressExclusionRecognizer)
+            addGestureRecognizer(directTouchLongPressExclusionRecognizer)
         }
 
+        addGestureRecognizer(directTouchTapRecognizer)
         addGestureRecognizer(scrollRecognizer)
         addGestureRecognizer(pointerHoverRecognizer)
         addGestureRecognizer(pinchRecognizer)
@@ -2402,6 +2436,27 @@ class GhosttyTerminalView: UIView {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
         _ = handleIndirectPointerTouchesEnded(touches, event: event)
+    }
+
+    @objc private func handleDirectTouchTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let surface,
+              TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                  terminalMouseCaptured: surface.mouseCaptured,
+                  terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
+                  selectionInteractionActive: hasActiveSelectionInteraction(
+                      at: recognizer.location(in: self)
+                  )
+              ) else {
+            return
+        }
+
+        let position = ghosttyPoint(recognizer.location(in: self))
+        stopMomentumScrolling()
+        surface.sendMousePos(.init(x: position.x, y: position.y, mods: []))
+        surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        requestRender()
     }
 
     private func ghosttyPoint(_ location: CGPoint) -> CGPoint {
@@ -5044,6 +5099,21 @@ extension GhosttyTerminalView: UITextSearching {
 
 extension GhosttyTerminalView: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if !usesAppOwnedTouchSelection,
+           gestureRecognizer == directTouchLongPressExclusionRecognizer {
+            return TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: surface?.mouseCaptured == true,
+                terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
+                selectionInteractionActive: false
+            )
+        }
+        if gestureRecognizer == directTouchTapRecognizer {
+            return TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: surface?.mouseCaptured == true,
+                terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
+                selectionInteractionActive: hasActiveSelectionInteraction(at: touch.location(in: self))
+            )
+        }
         if gestureRecognizer == pinchRecognizer {
             return canHandlePinchZoom
         }
@@ -5074,6 +5144,9 @@ extension GhosttyTerminalView: UIGestureRecognizerDelegate {
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
+        if gestureRecognizer == directTouchTapRecognizer || otherGestureRecognizer == directTouchTapRecognizer {
+            return false
+        }
         if usesNativeTouchSelection,
            nativeSelectionInteractionActive || nativeSelectedRange != nil,
            gestureRecognizer == scrollRecognizer || otherGestureRecognizer == scrollRecognizer {
@@ -5105,6 +5178,21 @@ private extension GhosttyTerminalView {
         TerminalSelectionRoutingPolicy.shouldAllowHostSelection(
             terminalMouseCaptured: surface?.mouseCaptured == true
         )
+    }
+
+    func hasActiveSelectionInteraction(at point: CGPoint) -> Bool {
+        if usesNativeTouchSelection {
+            return nativeSelectionInteractionActive
+                || nativeSelectedRange != nil
+                || prefersNativeSelectionFirstResponder
+                || isPointOnNativeSelectionHandleHitArea(point)
+        }
+        if usesAppOwnedTouchSelection {
+            return isSelecting
+                || touchSelection != nil
+                || isPointOnTouchSelectionHandle(point)
+        }
+        return false
     }
 
     func shouldAllowScrollGesture(

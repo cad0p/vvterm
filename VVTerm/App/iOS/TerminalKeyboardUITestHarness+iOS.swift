@@ -8,6 +8,9 @@ struct TerminalKeyboardUITestHarness: View {
     private static let codexTUIResponse = Data(
         "\u{1B}[?1049h\u{1B}[?2004h\u{1B}[?1004h\u{1B}]0;Codex\u{07}\u{1B}[2J\u{1B}[HCodex response\r\n\u{1B}[?25h".utf8
     )
+    private static let mouseCaptureSequence = Data(
+        "\u{1B}[?1000h\u{1B}[?1006h".utf8
+    )
 
     private enum LifecycleStatus: String {
         case initial
@@ -67,8 +70,10 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var diagnostics = "notReady"
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
+    @State private var receivedInput = Data()
     @State private var returnInputCount = 0
     @State private var codexResponseCount = 0
+    @State private var zoomActionCount = 0
     @Environment(\.scenePhase) private var scenePhase
 
     private var preservesTerminalSize: Bool {
@@ -83,6 +88,10 @@ struct TerminalKeyboardUITestHarness: View {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-codex-tui-response")
     }
 
+    private var simulatesTerminalMouseCapture: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-mouse-capture")
+    }
+
     private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -95,6 +104,7 @@ struct TerminalKeyboardUITestHarness: View {
                     paneId: Self.paneId,
                     onInput: { data in
                         receivedInputHex = data.map { String(format: "%02x", $0) }.joined()
+                        receivedInput.append(data)
                         if data.contains(0x0D) {
                             returnInputCount += 1
                         }
@@ -104,6 +114,9 @@ struct TerminalKeyboardUITestHarness: View {
                                 codexResponseCount += 1
                             }
                         }
+                    },
+                    onZoomAction: { _ in
+                        zoomActionCount += 1
                     }
                 )
                 .terminalKeyboardAvoidance(
@@ -406,6 +419,9 @@ struct TerminalKeyboardUITestHarness: View {
             keyboardHeight: keyboardHeight
         )
         observeKeyboardAccessoryPairing(terminalDiagnostics: terminalDiagnostics)
+        let primaryMousePresses = mouseReportCount(buttonPattern: "0", terminator: "M")
+        let primaryMouseReleases = mouseReportCount(buttonPattern: "0", terminator: "m")
+        let mouseScrollReports = mouseReportCount(buttonPattern: "6[45]", terminator: "M")
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardShows=\(keyboardShowTransitionCount) keyboardHides=\(keyboardHideTransitionCount)"
             + " accessoryPairingObservation=\(keyboardAccessoryPairingObservation.status)"
@@ -413,6 +429,19 @@ struct TerminalKeyboardUITestHarness: View {
             + " reconnect=\(lifecycleStatus.rawValue) inputHex=\(receivedInputHex)"
             + " returnInputs=\(returnInputCount) codexResponses=\(codexResponseCount)"
             + " findPresented=\(terminalView.isFindNavigatorVisible)"
+            + " mouseCaptured=\(terminalView.surface?.mouseCaptured == true)"
+            + " primaryMousePresses=\(primaryMousePresses) primaryMouseReleases=\(primaryMouseReleases)"
+            + " mouseScrollReports=\(mouseScrollReports) zoomActions=\(zoomActionCount)"
+    }
+
+    private func mouseReportCount(buttonPattern: String, terminator: Character) -> Int {
+        let reports = String(decoding: receivedInput, as: UTF8.self)
+        let pattern = "\u{1B}\\[<\(buttonPattern);[0-9]+;[0-9]+\(terminator)"
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return 0 }
+        return expression.numberOfMatches(
+            in: reports,
+            range: NSRange(reports.startIndex..<reports.endIndex, in: reports)
+        )
     }
 
     private func observeKeyboardAccessoryPairing(terminalDiagnostics: String) {
@@ -449,6 +478,9 @@ struct TerminalKeyboardUITestHarness: View {
         manager.updatePaneState(Self.paneId, connectionState: .connected)
         manager.keyboardCoordinator.setActivePane(Self.paneId)
         manager.keyboardCoordinator.setViewActive(true)
+        if simulatesTerminalMouseCapture {
+            terminalView.feedData(Self.mouseCaptureSequence)
+        }
         lifecycleStatus = .connected
     }
 
@@ -594,6 +626,7 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     let focusRequestID: Int
     let paneId: UUID
     let onInput: (Data) -> Void
+    let onZoomAction: (TerminalZoomAction) -> Void
 
     func makeUIView(context: Context) -> TerminalKeyboardHarnessContainerView {
         TerminalKeyboardHarnessContainerView()
@@ -602,6 +635,7 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     func updateUIView(_ uiView: TerminalKeyboardHarnessContainerView, context: Context) {
         uiView.paneId = paneId
         uiView.onInput = onInput
+        uiView.onZoomAction = onZoomAction
         uiView.installTerminalIfNeeded(app: ghosttyApp.app, appWrapper: ghosttyApp)
         uiView.requestKeyboardFocusIfNeeded(focusRequestID: focusRequestID)
 
@@ -626,6 +660,7 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
     private(set) weak var terminalView: GhosttyTerminalView?
     var paneId: UUID?
     var onInput: ((Data) -> Void)?
+    var onZoomAction: ((TerminalZoomAction) -> Void)?
     private var lastHandledFocusRequestID: Int?
     private var pendingFocusRequestID = 0
 
@@ -663,6 +698,15 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
             }
         }
         terminal.setupWriteCallback()
+        terminal.onZoomAction = { [weak self, weak terminal] action in
+            guard let terminal else { return nil }
+            self?.onZoomAction?(action)
+            let overrides = terminal.surfacePresentationOverrides
+            return TerminalZoomResult(
+                presentationOverrides: overrides,
+                effectiveFontSize: overrides.resolvedFontSize()
+            )
+        }
         terminal.onReady = { [weak self, weak terminal] in
             guard let self, let terminal else { return }
             terminal.acceptsTerminalInput = true

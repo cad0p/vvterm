@@ -751,6 +751,133 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates() throws {
+        let app = launchKeyboardHarness(simulatesTerminalMouseCapture: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "mouseCaptured=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
+
+        terminal.tap()
+        waitForMouseClickCounts(presses: 1, releases: 1, in: app)
+        wait(
+            for: diagnostics,
+            labelContaining: "terminalFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        terminal.typeText("x")
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        let dragStart = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        let dragEnd = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
+        waitForDiagnosticMetrics(in: app) { metrics in
+            (metrics["mouseScrollReports"] ?? 0) > 0
+        }
+        assertMouseClickCountsRemain(presses: 1, releases: 1, in: app)
+
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.4)
+        assertMouseClickCountsRemain(presses: 1, releases: 1, in: app)
+
+        terminal.pinch(withScale: 0.8, velocity: -1)
+        waitForDiagnosticMetrics(in: app) { metrics in
+            (metrics["zoomActions"] ?? 0) > 0
+        }
+        assertMouseClickCountsRemain(presses: 1, releases: 1, in: app)
+
+        terminal.tap()
+        waitForMouseClickCounts(presses: 2, releases: 2, in: app)
+        terminal.tap()
+        waitForMouseClickCounts(presses: 3, releases: 3, in: app)
+    }
+
+    @MainActor
+    func testNativeSelectionGesturesYieldToCapturedDirectTouch() throws {
+        let app = launchKeyboardHarness(
+            simulatesTerminalMouseCapture: true,
+            usesNativeFindNavigator: true
+        )
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "mouseCaptured=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        terminal.tap()
+        waitForMouseClickCounts(presses: 1, releases: 1, in: app)
+
+        let dragStart = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        let dragEnd = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
+        waitForDiagnosticMetrics(in: app) { metrics in
+            (metrics["mouseScrollReports"] ?? 0) > 0
+        }
+        assertMouseClickCountsRemain(presses: 1, releases: 1, in: app)
+
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.4)
+        assertMouseClickCountsRemain(presses: 1, releases: 1, in: app)
+
+        terminal.pinch(withScale: 0.8, velocity: -1)
+        waitForDiagnosticMetrics(in: app) { metrics in
+            (metrics["zoomActions"] ?? 0) > 0
+        }
+        assertMouseClickCountsRemain(presses: 1, releases: 1, in: app)
+    }
+
+    @MainActor
+    func testDirectTouchDoesNotClickOutsideMouseCapture() throws {
+        let app = launchKeyboardHarness(usesNativeFindNavigator: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "mouseCaptured=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        terminal.tap()
+        assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
+        wait(
+            for: diagnostics,
+            labelContaining: "terminalFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        terminal.doubleTap()
+        assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
+    }
+
+    @MainActor
     func testPreservedTerminalGridMovesCursorAboveKeyboard() throws {
         let app = launchKeyboardHarness(preservesTerminalSize: true)
         let terminal = waitForTerminal(in: app)
@@ -788,6 +915,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         privacyModeEnabled: Bool = false,
         simulatesKeyboardFrames: Bool = false,
         simulatesCodexTUIResponse: Bool = false,
+        simulatesTerminalMouseCapture: Bool = false,
         usesNativeFindNavigator: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -806,6 +934,9 @@ final class TerminalKeyboardUITests: XCTestCase {
         }
         if simulatesCodexTUIResponse {
             app.launchArguments.append("--vvterm-ui-test-codex-tui-response")
+        }
+        if simulatesTerminalMouseCapture {
+            app.launchArguments.append("--vvterm-ui-test-terminal-mouse-capture")
         }
         if usesNativeFindNavigator {
             app.launchArguments.append("--vvterm-ui-test-native-find-navigator")
@@ -957,6 +1088,36 @@ final class TerminalKeyboardUITests: XCTestCase {
                 )
                 return
             }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
+    private func waitForMouseClickCounts(
+        presses: Double,
+        releases: Double,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        waitForDiagnosticMetrics(in: app, file: file, line: line) { metrics in
+            metrics["primaryMousePresses"] == presses
+                && metrics["primaryMouseReleases"] == releases
+        }
+    }
+
+    private func assertMouseClickCountsRemain(
+        presses: Double,
+        releases: Double,
+        in app: XCUIApplication,
+        duration: TimeInterval = 0.6,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(duration)
+        while Date() < deadline {
+            let metrics = diagnosticMetrics(in: app)
+            XCTAssertEqual(metrics["primaryMousePresses"], presses, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["primaryMouseReleases"], releases, diagnosticsText(in: app), file: file, line: line)
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
     }
