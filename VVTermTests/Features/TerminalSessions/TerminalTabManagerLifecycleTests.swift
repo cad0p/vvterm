@@ -942,4 +942,53 @@ struct TerminalTabManagerLifecycleTests {
             #expect(Set(latestTab.allPaneIds) == [tab.rootPaneId, firstSplitPane, secondSplitPane])
         }
     }
+
+    @Test
+    func closeTabUsesLatestManagerStateWhenViewTabIsStale() async {
+        await withCleanManager { manager in
+            let wasPro = StoreManager.shared.isPro
+            StoreManager.shared.isPro = true
+            defer { StoreManager.shared.isPro = wasPro }
+
+            let tab = TerminalTab(serverId: UUID(), title: "Close stale tab")
+            installTab(tab, in: manager, connectionState: .connected)
+
+            guard let splitPane = manager.splitHorizontal(tab: tab, paneId: tab.rootPaneId) else {
+                Issue.record("Split failed unexpectedly")
+                return
+            }
+            manager.updatePaneState(splitPane, connectionState: .connected)
+
+            #expect(
+                TerminalLiveActivityPolicy.snapshot(
+                    for: manager.paneStates.values.map(\.connectionState)
+                )?.activeCount == 2
+            )
+
+            manager.closeTab(tab)
+
+            #expect(manager.tabs(for: tab.serverId).isEmpty)
+            #expect(manager.paneStates.isEmpty)
+            #expect(
+                TerminalLiveActivityPolicy.snapshot(
+                    for: manager.paneStates.values.map(\.connectionState)
+                ) == nil
+            )
+        }
+    }
+
+    #if os(iOS)
+    @Test
+    func applicationTerminationDisconnectsTabsAndCompletesActivityCleanup() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Termination")
+            installTab(tab, in: manager, connectionState: .connected)
+
+            #expect(AppDelegate().handleApplicationWillTerminate())
+
+            #expect(manager.tabs(for: tab.serverId).isEmpty)
+            #expect(manager.paneStates.isEmpty)
+        }
+    }
+    #endif
 }

@@ -79,12 +79,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            TerminalTabManager.shared.disconnectAll()
-            semaphore.signal()
-        }
-        _ = semaphore.wait(timeout: .now() + 2)
+        handleApplicationWillTerminate()
+    }
+
+    @discardableResult
+    func handleApplicationWillTerminate() -> Bool {
+        TerminalTabManager.shared.disconnectAll()
+        return LiveActivityManager.shared.endForApplicationTermination()
     }
 
     @objc

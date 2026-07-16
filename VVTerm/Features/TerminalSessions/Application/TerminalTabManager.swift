@@ -299,41 +299,46 @@ final class TerminalTabManager: ObservableObject {
         _ tab: TerminalTab,
         managedTmuxCleanup: ManagedTmuxCleanupDisposition
     ) {
+        guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
+            logger.warning("closeTab: tab not found \(tab.id.uuidString, privacy: .public)")
+            return
+        }
+
         // Clean up all panes in this tab
-        for paneId in tab.allPaneIds {
+        for paneId in currentTab.allPaneIds {
             cleanupPane(paneId, managedTmuxCleanup: managedTmuxCleanup)
         }
 
         // Remove from tabs
-        if var serverTabs = tabsByServer[tab.serverId] {
-            let closingIndex = serverTabs.firstIndex { $0.id == tab.id }
-            serverTabs.removeAll { $0.id == tab.id }
+        if var serverTabs = tabsByServer[currentTab.serverId] {
+            let closingIndex = serverTabs.firstIndex { $0.id == currentTab.id }
+            serverTabs.removeAll { $0.id == currentTab.id }
 
             // Select the closest neighbor when the selected tab is closed: the
             // tab that shifted into its slot, or the new last tab if it was last.
             if serverTabs.isEmpty {
-                tabsByServer.removeValue(forKey: tab.serverId)
-                selectedTabByServer.removeValue(forKey: tab.serverId)
+                tabsByServer.removeValue(forKey: currentTab.serverId)
+                selectedTabByServer.removeValue(forKey: currentTab.serverId)
             } else {
-                tabsByServer[tab.serverId] = serverTabs
+                tabsByServer[currentTab.serverId] = serverTabs
             }
 
-            if selectedTabByServer[tab.serverId] == tab.id {
+            if selectedTabByServer[currentTab.serverId] == currentTab.id {
                 if let closingIndex, !serverTabs.isEmpty {
-                    selectedTabByServer[tab.serverId] = serverTabs[min(closingIndex, serverTabs.count - 1)].id
+                    selectedTabByServer[currentTab.serverId] = serverTabs[min(closingIndex, serverTabs.count - 1)].id
                 } else {
-                    selectedTabByServer.removeValue(forKey: tab.serverId)
+                    selectedTabByServer.removeValue(forKey: currentTab.serverId)
                 }
             }
 
-            refreshConnectedServerState(for: tab.serverId)
+            refreshConnectedServerState(for: currentTab.serverId)
         }
 
         EngagementTracker.shared.noteTerminalSessionEnded(
             otherTerminalsActive: hasConnectedPanes
         )
 
-        logger.info("Closed tab \(tab.id)")
+        logger.info("Closed tab \(currentTab.id)")
     }
 
     /// Close all tabs for a server

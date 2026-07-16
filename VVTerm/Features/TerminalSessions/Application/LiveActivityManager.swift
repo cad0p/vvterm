@@ -30,6 +30,32 @@ final class LiveActivityManager {
         #endif
     }
 
+    @discardableResult
+    func endForApplicationTermination() -> Bool {
+        #if os(iOS)
+        guard #available(iOS 16.1, *) else { return true }
+
+        requestedTarget = .end
+        let completion = DispatchSemaphore(value: 0)
+        Task.detached(priority: .high) {
+            defer { completion.signal() }
+            for activity in Activity<VVTermActivityAttributes>.activities {
+                await activity.end(dismissalPolicy: .immediate)
+            }
+        }
+
+        let completed = completion.wait(timeout: .now() + 2) == .success
+        if completed {
+            reconciledTarget = .end
+        } else {
+            logger.error("Timed out ending Live Activities during application termination")
+        }
+        return completed
+        #else
+        return true
+        #endif
+    }
+
     #if os(iOS)
     @available(iOS 16.1, *)
     private enum ReconciliationTarget: Equatable {
