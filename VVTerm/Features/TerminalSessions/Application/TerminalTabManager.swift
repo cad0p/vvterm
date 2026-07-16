@@ -1510,7 +1510,8 @@ final class TerminalTabManager: ObservableObject {
                 return RemoteTmuxManager.shared.attachExistingCommand(
                     sessionName: tmuxResolver.sessionName(for: paneId),
                     backend: backend,
-                    lifecycleMarkerToken: lifecycleMarkerToken
+                    lifecycleMarkerToken: lifecycleMarkerToken,
+                    configureManagedClearBehavior: true
                 )
             }
             return RemoteTmuxManager.shared.attachCommand(
@@ -1523,7 +1524,8 @@ final class TerminalTabManager: ObservableObject {
             return RemoteTmuxManager.shared.attachExistingCommand(
                 sessionName: sessionName,
                 backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken
+                lifecycleMarkerToken: lifecycleMarkerToken,
+                configureManagedClearBehavior: tmuxResolver.sessionOwnership[paneId] == .managed
             )
         }
     }

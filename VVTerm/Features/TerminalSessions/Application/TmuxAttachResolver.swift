@@ -214,7 +214,8 @@ final class TmuxAttachResolver {
             return RemoteTmuxManager.shared.attachExistingCommand(
                 sessionName: name,
                 context: .startupExec,
-                backend: backend
+                backend: backend,
+                configureManagedClearBehavior: sessionOwnership[entityId] == .managed
             )
         }
     }
@@ -235,7 +236,11 @@ final class TmuxAttachResolver {
                 backend: backend
             )
         case .attachExisting(let name):
-            return RemoteTmuxManager.shared.attachExistingExecCommand(sessionName: name, backend: backend)
+            return RemoteTmuxManager.shared.attachExistingExecCommand(
+                sessionName: name,
+                backend: backend,
+                configureManagedClearBehavior: sessionOwnership[entityId] == .managed
+            )
         }
     }
 

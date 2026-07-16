@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import VVTerm
 
@@ -126,10 +127,12 @@ struct RemoteTmuxManagerParserTests {
     func managedReattachDoesNotRecreateMissingSession() {
         let command = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "vvterm_managed",
-            lifecycleMarkerToken: "marker-token"
+            lifecycleMarkerToken: "marker-token",
+            configureManagedClearBehavior: true
         )
 
         #expect(command.contains("attach-session"))
+        #expect(command.contains("set-option -wq -t 'vvterm_managed:' scroll-on-clear off"))
         #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
         #expect(!command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .creationFailed)))
         #expect(!command.contains("new-session"))
@@ -185,6 +188,49 @@ struct RemoteTmuxManagerParserTests {
         #expect(command.contains("set -gq allow-set-title on"))
         #expect(!command.contains("%if"))
         #expect(!command.contains("#{version}"))
+    }
+
+    @Test
+    func managedSessionClearBehaviorIsWindowScoped() {
+        let create = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_managed",
+            workingDirectory: "/tmp"
+        )
+        let reattach = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "vvterm_managed",
+            configureManagedClearBehavior: true
+        )
+        let external = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "shared"
+        )
+        let generatedConfig = RemoteTmuxManager.shared.configWriteExecutionCommand(
+            terminalType: .xtermGhostty,
+            backend: .unixTmux
+        )
+
+        let scopedOption = "set-option -wq -t 'vvterm_managed:' scroll-on-clear off"
+        #expect(create.contains(scopedOption))
+        #expect(reattach.contains(scopedOption))
+        #expect(!external.contains("scroll-on-clear"))
+        #expect(!generatedConfig.contains("scroll-on-clear"))
+    }
+
+    @Test @MainActor
+    func selectedVVTermManagedSessionKeepsManagedClearBehavior() {
+        let resolver = TmuxAttachResolver()
+        let paneId = UUID()
+        let sessionName = resolver.managedSessionName(for: paneId)
+        let selection = TmuxAttachSelection.attachExisting(sessionName: sessionName)
+
+        resolver.updateAttachmentState(for: paneId, selection: selection) { _ in }
+        let command = resolver.buildAttachCommand(
+            for: paneId,
+            selection: selection,
+            workingDirectory: "/tmp"
+        )
+
+        #expect(resolver.sessionOwnership[paneId] == .managed)
+        #expect(command?.contains("set-option -wq -t '\(sessionName):' scroll-on-clear off") == true)
     }
 
     @Test
@@ -337,6 +383,7 @@ struct RemoteTmuxManagerParserTests {
         #expect(!script.contains("irm "))
         #expect(!script.contains("WheelUpPane"))
         #expect(!script.contains("WheelDownPane"))
+        #expect(!script.contains("scroll-on-clear"))
         #expect(!script.contains("sh -lc"))
     }
 }

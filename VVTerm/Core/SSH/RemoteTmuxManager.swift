@@ -133,7 +133,8 @@ actor RemoteTmuxManager {
         sessionName: String,
         context: CommandContext = .startupExec,
         backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil
+        lifecycleMarkerToken: String? = nil,
+        configureManagedClearBehavior: Bool = false
     ) -> String {
         let body = attachExistingBody(
             sessionName: sessionName,
@@ -141,16 +142,23 @@ actor RemoteTmuxManager {
                 ? missingSessionCommand(for: context, backend: backend)
                 : lifecycleMissingSessionCommand(backend: backend),
             backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken
+            lifecycleMarkerToken: lifecycleMarkerToken,
+            configureManagedClearBehavior: configureManagedClearBehavior
         )
         return commandString(for: body, context: context, backend: backend)
     }
 
     nonisolated func attachExistingExecCommand(
         sessionName: String,
-        backend: RemoteTmuxBackend = .unixTmux
+        backend: RemoteTmuxBackend = .unixTmux,
+        configureManagedClearBehavior: Bool = false
     ) -> String {
-        attachExistingCommand(sessionName: sessionName, context: .interactiveShell, backend: backend)
+        attachExistingCommand(
+            sessionName: sessionName,
+            context: .interactiveShell,
+            backend: backend,
+            configureManagedClearBehavior: configureManagedClearBehavior
+        )
     }
 
     nonisolated func sessionPresenceProbeCommand(
@@ -407,7 +415,8 @@ actor RemoteTmuxManager {
             missingCommand: createCommand,
             backend: backend,
             lifecycleMarkerToken: lifecycleMarkerToken,
-            reportsCreationFailure: true
+            reportsCreationFailure: true,
+            configureManagedClearBehavior: true
         )
     }
 
@@ -416,7 +425,8 @@ actor RemoteTmuxManager {
         missingCommand: String,
         backend: RemoteTmuxBackend = .unixTmux,
         lifecycleMarkerToken: String? = nil,
-        reportsCreationFailure: Bool = false
+        reportsCreationFailure: Bool = false,
+        configureManagedClearBehavior: Bool = false
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachExistingCommand(
@@ -434,6 +444,9 @@ actor RemoteTmuxManager {
         let tmuxAttach = tmuxCommand(includeUTF8: true, includeConfig: true)
         let tmuxSource = tmuxCommand(includeUTF8: false, includeConfig: false)
         let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
+        let managedClearBehavior = configureManagedClearBehavior
+            ? " \\; \(managedClearBehaviorCommand(sessionName: sessionName))"
+            : ""
         let creationStatusCapture = reportsCreationFailure && lifecycleMarkerToken != nil
             ? "; vvtermTmuxCreateStatus=$?"
             : ""
@@ -468,9 +481,9 @@ actor RemoteTmuxManager {
         return """
         \(RemoteTerminalBootstrap.shellPathExport()); \
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null; then \
-        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(exactSession); \
+        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(exactSession)\(managedClearBehavior); \
         elif \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(plainSession); \
+        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(plainSession)\(managedClearBehavior); \
         else \(missingCommand)\(creationStatusCapture); fi\(lifecycleReport)
         """
     }
@@ -493,7 +506,17 @@ actor RemoteTmuxManager {
         let escapedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
         let tmux = tmuxCommand(includeUTF8: true, includeConfig: true)
         let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
-        return "\(processReplacement)\(tmux) new-session -A -s \(escapedSession) -c \(escapedDir)"
+        let clearBehavior = managedClearBehaviorCommand(sessionName: sessionName)
+        return "\(processReplacement)\(tmux) new-session -A -s \(escapedSession) -c \(escapedDir) \\; \(clearBehavior)"
+    }
+
+    nonisolated private func managedClearBehaviorCommand(sessionName: String) -> String {
+        // `clear` sends E3 followed by 2J. tmux clears history for E3, but its
+        // default scroll-on-clear behavior puts the visible grid back during
+        // 2J. Keep the override window-scoped so external sessions are intact;
+        // -q safely ignores the option on tmux versions older than 3.3.
+        let target = RemoteTerminalBootstrap.shellQuoted("\(sessionName):")
+        return "set-option -wq -t \(target) scroll-on-clear off"
     }
 
     nonisolated private func lifecycleMissingSessionCommand(backend: RemoteTmuxBackend) -> String {
