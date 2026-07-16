@@ -1,10 +1,5 @@
 import Foundation
 
-enum TmuxSessionOwnership: String, Codable, Hashable, Sendable {
-    case managed
-    case external
-}
-
 struct TmuxShellLifecycleContext: Hashable, Sendable {
     let ownership: TmuxSessionOwnership
     let markerToken: String

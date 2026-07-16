@@ -270,7 +270,10 @@ struct RemoteTmuxManagerParserTests {
 
     @Test
     func attachExistingCommandFallsBackToLoginShell() {
-        let command = RemoteTmuxManager.shared.attachExistingCommand(sessionName: "team session")
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "team session",
+            ownership: .external
+        )
         #expect(command.contains("tmux has-session"))
         #expect(command.contains("attach-session"))
         #expect(command.contains("exec \"${SHELL:-/bin/sh}\" -l"))
@@ -312,8 +315,8 @@ struct RemoteTmuxManagerParserTests {
     func managedReattachDoesNotRecreateMissingSession() {
         let command = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "vvterm_managed",
-            lifecycleMarkerToken: "marker-token",
-            configureManagedClearBehavior: true
+            ownership: .managed,
+            lifecycleMarkerToken: "marker-token"
         )
 
         #expect(command.contains("attach-session"))
@@ -383,10 +386,11 @@ struct RemoteTmuxManagerParserTests {
         )
         let reattach = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "vvterm_managed",
-            configureManagedClearBehavior: true
+            ownership: .managed
         )
         let external = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "shared"
+            sessionName: "shared",
+            ownership: .external
         )
         let generatedConfig = RemoteTmuxManager.shared.configWriteExecutionCommand(
             terminalType: .xtermGhostty,
@@ -396,26 +400,95 @@ struct RemoteTmuxManagerParserTests {
         let scopedOption = "set-option -wq -t 'vvterm_managed:' scroll-on-clear off"
         #expect(create.contains(scopedOption))
         #expect(reattach.contains(scopedOption))
+        #expect(reattach.contains("source-file ~/.vvterm/tmux.conf"))
+        #expect(reattach.contains("tmux -u -f ~/.vvterm/tmux.conf attach-session"))
         #expect(!external.contains("scroll-on-clear"))
         #expect(!generatedConfig.contains("scroll-on-clear"))
     }
 
+    @Test
+    func externalUnixSessionAttachDoesNotLoadVVTermConfiguration() {
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "external's; $session",
+            ownership: .external
+        )
+        let exactSession = "'=external'\\''s; $session'"
+
+        #expect(command.contains("has-session -t \(exactSession)"))
+        #expect(command.contains("attach-session -t \(exactSession)"))
+        #expect(!command.contains("source-file"))
+        #expect(!command.contains("~/.vvterm/tmux.conf"))
+    }
+
+    @Test
+    func externalWindowsSessionAttachDoesNotLoadVVTermConfiguration() {
+        let backend = RemoteTmuxBackend.windowsPsmux(
+            commandName: "psmux",
+            shellFamily: .powershell,
+            powerShellExecutable: "pwsh"
+        )
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "external team; session",
+            ownership: .external,
+            backend: backend
+        )
+
+        #expect(command.contains("attach-session -d -t $vvtermSession"))
+        #expect(!command.contains("source-file"))
+        #expect(!command.contains("$vvtermConfig"))
+    }
+
+    @Test
+    func managedWindowsSessionAttachLoadsVVTermConfiguration() {
+        let backend = RemoteTmuxBackend.windowsPsmux(
+            commandName: "psmux",
+            shellFamily: .powershell,
+            powerShellExecutable: "pwsh"
+        )
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "vvterm_managed",
+            ownership: .managed,
+            backend: backend
+        )
+
+        #expect(command.contains("source-file $vvtermConfig"))
+        #expect(command.contains("-u -f $vvtermConfig attach-session"))
+    }
+
     @Test @MainActor
-    func selectedVVTermManagedSessionKeepsManagedClearBehavior() {
+    func selectedVVTermManagedSessionKeepsManagedClearBehavior() throws {
         let resolver = TmuxAttachResolver()
         let paneId = UUID()
         let sessionName = resolver.managedSessionName(for: paneId)
         let selection = TmuxAttachSelection.attachExisting(sessionName: sessionName)
 
         resolver.updateAttachmentState(for: paneId, selection: selection) { _ in }
-        let command = resolver.buildAttachCommand(
-            for: paneId,
-            selection: selection,
-            workingDirectory: "/tmp"
+        let ownership = try #require(resolver.sessionOwnership[paneId])
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: sessionName,
+            ownership: ownership
         )
 
-        #expect(resolver.sessionOwnership[paneId] == .managed)
-        #expect(command?.contains("set-option -wq -t '\(sessionName):' scroll-on-clear off") == true)
+        #expect(ownership == .managed)
+        #expect(command.contains("set-option -wq -t '\(sessionName):' scroll-on-clear off"))
+    }
+
+    @Test @MainActor
+    func selectedExternalSessionDoesNotLoadVVTermConfiguration() throws {
+        let resolver = TmuxAttachResolver()
+        let paneId = UUID()
+        let selection = TmuxAttachSelection.attachExisting(sessionName: "shared")
+
+        resolver.updateAttachmentState(for: paneId, selection: selection) { _ in }
+        let ownership = try #require(resolver.sessionOwnership[paneId])
+        let command = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "shared",
+            ownership: ownership
+        )
+
+        #expect(ownership == .external)
+        #expect(!command.contains("source-file"))
+        #expect(!command.contains("~/.vvterm/tmux.conf"))
     }
 
     @Test @MainActor
@@ -522,6 +595,7 @@ struct RemoteTmuxManagerParserTests {
 
         let command = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "shared",
+            ownership: .external,
             backend: backend
         )
 
@@ -538,6 +612,7 @@ struct RemoteTmuxManagerParserTests {
 
         let command = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "shared",
+            ownership: .external,
             backend: backend
         )
 

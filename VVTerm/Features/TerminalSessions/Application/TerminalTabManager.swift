@@ -1522,6 +1522,7 @@ final class TerminalTabManager: ObservableObject {
         workingDirectory: String,
         backend: RemoteTmuxBackend,
         lifecycleMarkerToken: String,
+        ownership: TmuxSessionOwnership,
         reattachingManagedSession: Bool
     ) -> String? {
         switch selection {
@@ -1531,9 +1532,9 @@ final class TerminalTabManager: ObservableObject {
             if reattachingManagedSession {
                 return RemoteTmuxManager.shared.attachExistingCommand(
                     sessionName: tmuxResolver.sessionName(for: paneId),
+                    ownership: .managed,
                     backend: backend,
-                    lifecycleMarkerToken: lifecycleMarkerToken,
-                    configureManagedClearBehavior: true
+                    lifecycleMarkerToken: lifecycleMarkerToken
                 )
             }
             return RemoteTmuxManager.shared.attachCommand(
@@ -1545,9 +1546,9 @@ final class TerminalTabManager: ObservableObject {
         case .attachExisting(let sessionName):
             return RemoteTmuxManager.shared.attachExistingCommand(
                 sessionName: sessionName,
+                ownership: ownership,
                 backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken,
-                configureManagedClearBehavior: tmuxResolver.sessionOwnership[paneId] == .managed
+                lifecycleMarkerToken: lifecycleMarkerToken
             )
         }
     }
@@ -1758,6 +1759,7 @@ final class TerminalTabManager: ObservableObject {
                 workingDirectory: workingDirectory,
                 backend: backend,
                 lifecycleMarkerToken: lifecycleMarkerToken,
+                ownership: ownership,
                 reattachingManagedSession: isReattachingManagedSession
             ),
             tmuxLifecycle: TmuxShellLifecycleContext(

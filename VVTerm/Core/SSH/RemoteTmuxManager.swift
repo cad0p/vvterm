@@ -7,6 +7,11 @@ nonisolated struct RemoteTmuxSession: Hashable, Sendable {
     let windowCount: Int
 }
 
+nonisolated enum TmuxSessionOwnership: String, Codable, Hashable, Sendable {
+    case managed
+    case external
+}
+
 nonisolated enum RemoteTmuxBackend: Hashable, Sendable {
     case unixTmux
     case windowsPsmux(commandName: String, shellFamily: RemoteShellFamily, powerShellExecutable: String?)
@@ -266,9 +271,9 @@ actor RemoteTmuxManager {
 
     nonisolated func attachExistingCommand(
         sessionName: String,
+        ownership: TmuxSessionOwnership,
         backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil,
-        configureManagedClearBehavior: Bool = false
+        lifecycleMarkerToken: String? = nil
     ) -> String {
         let body = attachExistingBody(
             sessionName: sessionName,
@@ -277,7 +282,7 @@ actor RemoteTmuxManager {
                 : lifecycleMissingSessionCommand(backend: backend),
             backend: backend,
             lifecycleMarkerToken: lifecycleMarkerToken,
-            configureManagedClearBehavior: configureManagedClearBehavior
+            ownership: ownership
         )
         return body
     }
@@ -510,7 +515,7 @@ actor RemoteTmuxManager {
             backend: backend,
             lifecycleMarkerToken: lifecycleMarkerToken,
             reportsCreationFailure: true,
-            configureManagedClearBehavior: true
+            ownership: .managed
         )
     }
 
@@ -520,7 +525,7 @@ actor RemoteTmuxManager {
         backend: RemoteTmuxBackend = .unixTmux,
         lifecycleMarkerToken: String? = nil,
         reportsCreationFailure: Bool = false,
-        configureManagedClearBehavior: Bool = false
+        ownership: TmuxSessionOwnership
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachExistingCommand(
@@ -528,17 +533,21 @@ actor RemoteTmuxManager {
                 missingCommand: missingCommand,
                 backend: backend,
                 lifecycleMarkerToken: lifecycleMarkerToken,
-                reportsCreationFailure: reportsCreationFailure
+                reportsCreationFailure: reportsCreationFailure,
+                ownership: ownership
             )
         }
 
         let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
         let plainSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
         let tmuxProbe = tmuxCommand(includeUTF8: false, includeConfig: false)
-        let tmuxAttach = tmuxCommand(includeUTF8: true, includeConfig: true)
-        let tmuxSource = tmuxCommand(includeUTF8: false, includeConfig: false)
+        let usesManagedConfiguration = ownership == .managed
+        let tmuxAttach = tmuxCommand(includeUTF8: true, includeConfig: usesManagedConfiguration)
         let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
-        let managedClearBehavior = configureManagedClearBehavior
+        let managedConfiguration = usesManagedConfiguration
+            ? "\(tmuxProbe) source-file \(configPath) >/dev/null 2>&1 || true; "
+            : ""
+        let managedClearBehavior = usesManagedConfiguration
             ? " \\; \(managedClearBehaviorCommand(sessionName: sessionName))"
             : ""
         let creationStatusCapture = reportsCreationFailure && lifecycleMarkerToken != nil
@@ -575,9 +584,9 @@ actor RemoteTmuxManager {
         return """
         \(RemoteTerminalBootstrap.shellPathExport()); \
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null; then \
-        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(exactSession)\(managedClearBehavior); \
+        \(managedConfiguration)\(processReplacement)\(tmuxAttach) attach-session -t \(exactSession)\(managedClearBehavior); \
         elif \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; \(processReplacement)\(tmuxAttach) attach-session -t \(plainSession)\(managedClearBehavior); \
+        \(managedConfiguration)\(processReplacement)\(tmuxAttach) attach-session -t \(plainSession)\(managedClearBehavior); \
         else \(missingCommand)\(creationStatusCapture); fi\(lifecycleReport)
         """
     }
@@ -971,7 +980,8 @@ actor RemoteTmuxManager {
         missingCommand: String,
         backend: RemoteTmuxBackend,
         lifecycleMarkerToken: String?,
-        reportsCreationFailure: Bool = false
+        reportsCreationFailure: Bool = false,
+        ownership: TmuxSessionOwnership
     ) -> String {
         windowsShellCommand(
             powerShellScript: windowsAttachExistingPowerShell(
@@ -979,7 +989,8 @@ actor RemoteTmuxManager {
                 missingCommand: missingCommand,
                 backend: backend,
                 lifecycleMarkerToken: lifecycleMarkerToken,
-                reportsCreationFailure: reportsCreationFailure
+                reportsCreationFailure: reportsCreationFailure,
+                ownership: ownership
             ),
             backend: backend
         )
@@ -1004,7 +1015,8 @@ actor RemoteTmuxManager {
             backend: backend,
             commandExpression: commandExpression,
             lifecycleMarkerToken: lifecycleMarkerToken,
-            reportsCreationFailure: true
+            reportsCreationFailure: true,
+            ownership: .managed
         )
     }
 
@@ -1014,10 +1026,21 @@ actor RemoteTmuxManager {
         backend: RemoteTmuxBackend,
         commandExpression: String? = nil,
         lifecycleMarkerToken: String? = nil,
-        reportsCreationFailure: Bool = false
+        reportsCreationFailure: Bool = false,
+        ownership: TmuxSessionOwnership
     ) -> String {
         guard case .windowsPsmux(let commandName, _, _) = backend else { return missingCommand }
         let psmuxExpression = commandExpression ?? powerShellQuoted(commandName)
+        let usesManagedConfiguration = ownership == .managed
+        let configDeclaration = usesManagedConfiguration
+            ? "$vvtermConfig = \(windowsConfigPathPowerShellExpression())"
+            : ""
+        let attachCommand = usesManagedConfiguration
+            ? """
+              & $vvtermPsmux -f $vvtermConfig source-file $vvtermConfig 2>$null
+              & $vvtermPsmux -u -f $vvtermConfig attach-session -d -t $vvtermSession
+              """
+            : "& $vvtermPsmux -u attach-session -d -t $vvtermSession"
         let lifecycleReport: String
         if let lifecycleMarkerToken {
             let detached = powerShellQuoted(
@@ -1054,12 +1077,11 @@ actor RemoteTmuxManager {
 
         return """
         $vvtermPsmux = \(psmuxExpression)
-        $vvtermConfig = \(windowsConfigPathPowerShellExpression())
+        \(configDeclaration)
         $vvtermSession = \(powerShellQuoted(sessionName))
         & $vvtermPsmux has-session -t $vvtermSession 2>$null
         if ($LASTEXITCODE -eq 0) {
-          & $vvtermPsmux -f $vvtermConfig source-file $vvtermConfig 2>$null
-          & $vvtermPsmux -u -f $vvtermConfig attach-session -d -t $vvtermSession
+        \(indentPowerShell(attachCommand, spaces: 2))
         } else {
         \(indentPowerShell(missingCommand, spaces: 2))
         \(reportsCreationFailure && lifecycleMarkerToken != nil ? "  $vvtermTmuxCreateStatus = $LASTEXITCODE" : "")

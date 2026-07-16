@@ -185,32 +185,6 @@ final class TmuxAttachResolver {
         promptContinuations[requestId] != nil
     }
 
-    // MARK: - Command Building
-
-    func buildAttachCommand(
-        for entityId: UUID,
-        selection: TmuxAttachSelection,
-        workingDirectory: String,
-        backend: RemoteTmuxBackend = .unixTmux
-    ) -> String? {
-        switch selection {
-        case .skipTmux:
-            return nil
-        case .createManaged:
-            return RemoteTmuxManager.shared.attachCommand(
-                sessionName: sessionName(for: entityId),
-                workingDirectory: workingDirectory,
-                backend: backend
-            )
-        case .attachExisting(let name):
-            return RemoteTmuxManager.shared.attachExistingCommand(
-                sessionName: name,
-                backend: backend,
-                configureManagedClearBehavior: sessionOwnership[entityId] == .managed
-            )
-        }
-    }
-
     // MARK: - Filtering
 
     func sessionInfosForPrompt(from sessions: [RemoteTmuxSession]) -> [TmuxAttachSessionInfo] {
