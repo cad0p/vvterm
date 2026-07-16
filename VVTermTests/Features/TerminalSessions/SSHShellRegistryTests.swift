@@ -31,22 +31,83 @@ struct SSHShellRegistryTests {
         )
         #expect(!atThreshold.inFlight)
         #expect(atThreshold.staleContext?.client === client)
-        #expect(!registry.ownsConnection(client: client, for: paneId))
+        #expect(registry.connectionStartToken(for: paneId) == nil)
     }
 
     @Test
-    func connectionClientIncludesPendingShellStart() {
+    func connectionStartTokenIncludesPendingShellStart() {
         let paneId = UUID()
         let client = SSHClient()
         var registry = SSHShellRegistry(staleThreshold: 120)
 
-        #expect(registry.tryBeginStart(
+        let start = registry.tryBeginStart(
             for: paneId,
             serverId: UUID(),
             client: client
-        ).started)
+        )
+        #expect(start.started)
         #expect(registry.client(for: paneId) == nil)
-        #expect(registry.connectionClient(for: paneId) === client)
+        #expect(registry.connectionStartToken(for: paneId) == start.token)
+    }
+
+    @Test
+    func staleFinishCannotRemoveReplacementStartUsingSameClient() {
+        let paneId = UUID()
+        let serverId = UUID()
+        let client = SSHClient()
+        let startedAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        var registry = SSHShellRegistry(staleThreshold: 120)
+
+        let firstStart = registry.tryBeginStart(
+            for: paneId,
+            serverId: serverId,
+            client: client,
+            now: startedAt
+        )
+        let replacementStart = registry.tryBeginStart(
+            for: paneId,
+            serverId: serverId,
+            client: client,
+            now: startedAt.addingTimeInterval(120)
+        )
+        let shellId = UUID()
+
+        #expect(firstStart.started)
+        #expect(replacementStart.started)
+        #expect(firstStart.token != replacementStart.token)
+        guard let firstToken = firstStart.token,
+              let replacementToken = replacementStart.token else {
+            Issue.record("Expected unique start tokens")
+            return
+        }
+
+        registry.finishStart(
+            for: paneId,
+            client: client,
+            startToken: firstToken
+        )
+        let staleRegistration = registry.register(
+            client: client,
+            shellId: UUID(),
+            startToken: firstToken,
+            for: paneId,
+            serverId: serverId,
+            transport: .ssh,
+            fallbackReason: nil
+        )
+        let replacementRegistration = registry.register(
+            client: client,
+            shellId: shellId,
+            startToken: replacementToken,
+            for: paneId,
+            serverId: serverId,
+            transport: .ssh,
+            fallbackReason: nil
+        )
+
+        #expect(staleRegistration == .stale)
+        #expect(replacementRegistration == .accepted)
+        #expect(registry.owns(client: client, shellId: shellId, for: paneId))
     }
 
     @Test
@@ -57,10 +118,15 @@ struct SSHShellRegistryTests {
         let replacementClient = SSHClient()
         var registry = SSHShellRegistry(staleThreshold: 120)
 
-        #expect(registry.tryBeginStart(for: paneId, serverId: serverId, client: oldClient).started)
+        let oldStart = registry.tryBeginStart(for: paneId, serverId: serverId, client: oldClient)
+        guard let oldStartToken = oldStart.token else {
+            Issue.record("Expected the original start to begin")
+            return
+        }
         _ = registry.register(
             client: oldClient,
             shellId: UUID(),
+            startToken: oldStartToken,
             for: paneId,
             serverId: serverId,
             transport: .ssh,
@@ -76,6 +142,7 @@ struct SSHShellRegistryTests {
         let staleRegistration = registry.register(
             client: oldClient,
             shellId: UUID(),
+            startToken: oldStartToken,
             for: paneId,
             serverId: serverId,
             transport: .ssh,
@@ -86,7 +153,6 @@ struct SSHShellRegistryTests {
         #expect(detached.pendingStarts.isEmpty)
         #expect(staleRegistration == .stale)
         #expect(replacement.started)
-        #expect(registry.ownsConnection(client: replacementClient, for: paneId))
-        #expect(!registry.ownsConnection(client: oldClient, for: paneId))
+        #expect(registry.connectionStartToken(for: paneId) == replacement.token)
     }
 }

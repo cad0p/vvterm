@@ -29,12 +29,10 @@ struct TmuxSessionPresenceProbe: Hashable, Sendable {
 
 struct TerminalShellStartupPlan: Sendable {
     let command: String?
-    let skipTmuxLifecycle: Bool
     let tmuxLifecycle: TmuxShellLifecycleContext?
 
     static let plainShell = TerminalShellStartupPlan(
         command: nil,
-        skipTmuxLifecycle: true,
         tmuxLifecycle: nil
     )
 }

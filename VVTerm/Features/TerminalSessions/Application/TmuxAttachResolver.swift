@@ -82,15 +82,12 @@ final class TmuxAttachResolver {
 
     func clearRuntimeState(for entityId: UUID, setPrompt: (TmuxAttachPrompt?) -> Void) {
         clearAttachmentState(for: entityId)
-        if promptContinuations[entityId] != nil {
-            resolvePrompt(entityId: entityId, selection: .skipTmux, setPrompt: setPrompt)
-            return
+        let requestIds = ([currentPrompt].compactMap { $0 } + promptQueue)
+            .filter { $0.paneId == entityId }
+            .map(\.id)
+        for requestId in requestIds {
+            cancelPrompt(requestId: requestId, setPrompt: setPrompt)
         }
-        if currentPrompt?.id == entityId {
-            currentPrompt = nil
-            advancePromptQueue(setPrompt: setPrompt)
-        }
-        promptQueue.removeAll { $0.id == entityId }
     }
 
     func updateAttachmentState(for entityId: UUID, selection: TmuxAttachSelection, setPrompt: (TmuxAttachPrompt?) -> Void) {
@@ -117,8 +114,11 @@ final class TmuxAttachResolver {
         for entityId: UUID,
         serverId: UUID,
         client: SSHClient,
-        setPrompt: @escaping (TmuxAttachPrompt?) -> Void
-    ) async -> TmuxAttachSelection {
+        backend: RemoteTmuxBackend,
+        requestId: UUID,
+        validateOwner: () throws -> Void,
+        setPrompt: @MainActor @Sendable @escaping (TmuxAttachPrompt?) -> Void
+    ) async throws -> TmuxAttachSelection {
         // On reconnect, reuse the previous session choice for this tab/pane
         if let existingName = sessionNames[entityId],
            let ownership = sessionOwnership[entityId] {
@@ -126,13 +126,15 @@ final class TmuxAttachResolver {
             case .managed:
                 return .createManaged
             case .external:
-                let sessions = await RemoteTmuxManager.shared.listSessions(using: client)
+                let sessions = try await RemoteTmuxManager.shared.listSessions(
+                    using: client,
+                    backend: backend
+                )
+                try validateOwner()
                 if sessions.contains(where: { $0.name == existingName }) {
                     return .attachExisting(sessionName: existingName)
                 }
                 // Session no longer exists, fall through to normal resolution
-                sessionNames.removeValue(forKey: entityId)
-                sessionOwnership.removeValue(forKey: entityId)
             }
         }
 
@@ -144,8 +146,13 @@ final class TmuxAttachResolver {
         case .skipTmux:
             return .skipTmux
         case .askEveryTime:
-            let sessions = await RemoteTmuxManager.shared.listSessions(using: client)
+            let sessions = try await RemoteTmuxManager.shared.listSessions(
+                using: client,
+                backend: backend
+            )
+            try validateOwner()
             return await requestSelection(
+                requestId: requestId,
                 entityId: entityId,
                 serverId: serverId,
                 availableSessions: sessionInfosForPrompt(from: sessions),
@@ -156,40 +163,26 @@ final class TmuxAttachResolver {
 
     // MARK: - Prompt Queue
 
-    func resolvePrompt(entityId: UUID, selection: TmuxAttachSelection, setPrompt: (TmuxAttachPrompt?) -> Void) {
-        guard let continuation = promptContinuations.removeValue(forKey: entityId) else { return }
+    func resolvePrompt(requestId: UUID, selection: TmuxAttachSelection, setPrompt: (TmuxAttachPrompt?) -> Void) {
+        guard let continuation = promptContinuations.removeValue(forKey: requestId) else { return }
 
-        if currentPrompt?.id == entityId {
+        if currentPrompt?.id == requestId {
             currentPrompt = nil
             advancePromptQueue(setPrompt: setPrompt)
             continuation.resume(returning: selection)
             return
         }
 
-        promptQueue.removeAll { $0.id == entityId }
+        promptQueue.removeAll { $0.id == requestId }
         continuation.resume(returning: selection)
     }
 
-    func cancelPrompt(entityId: UUID, setPrompt: (TmuxAttachPrompt?) -> Void) {
-        resolvePrompt(entityId: entityId, selection: .skipTmux, setPrompt: setPrompt)
+    func cancelPrompt(requestId: UUID, setPrompt: (TmuxAttachPrompt?) -> Void) {
+        resolvePrompt(requestId: requestId, selection: .skipTmux, setPrompt: setPrompt)
     }
 
-    // MARK: - Cleanup
-
-    func runCleanupIfNeeded(
-        serverId: UUID,
-        cleanupSet: inout Set<UUID>,
-        managedNames: Set<String>,
-        using client: SSHClient
-    ) async {
-        guard !cleanupSet.contains(serverId) else { return }
-        cleanupSet.insert(serverId)
-        await RemoteTmuxManager.shared.cleanupLegacySessions(using: client)
-        await RemoteTmuxManager.shared.cleanupDetachedSessions(
-            deviceId: DeviceIdentity.id,
-            keeping: managedNames,
-            using: client
-        )
+    func hasPendingPrompt(requestId: UUID) -> Bool {
+        promptContinuations[requestId] != nil
     }
 
     // MARK: - Command Building
@@ -207,36 +200,10 @@ final class TmuxAttachResolver {
             return RemoteTmuxManager.shared.attachCommand(
                 sessionName: sessionName(for: entityId),
                 workingDirectory: workingDirectory,
-                context: .startupExec,
                 backend: backend
             )
         case .attachExisting(let name):
             return RemoteTmuxManager.shared.attachExistingCommand(
-                sessionName: name,
-                context: .startupExec,
-                backend: backend,
-                configureManagedClearBehavior: sessionOwnership[entityId] == .managed
-            )
-        }
-    }
-
-    func buildAttachExecCommand(
-        for entityId: UUID,
-        selection: TmuxAttachSelection,
-        workingDirectory: String,
-        backend: RemoteTmuxBackend = .unixTmux
-    ) -> String? {
-        switch selection {
-        case .skipTmux:
-            return nil
-        case .createManaged:
-            return RemoteTmuxManager.shared.attachExecCommand(
-                sessionName: sessionName(for: entityId),
-                workingDirectory: workingDirectory,
-                backend: backend
-            )
-        case .attachExisting(let name):
-            return RemoteTmuxManager.shared.attachExistingExecCommand(
                 sessionName: name,
                 backend: backend,
                 configureManagedClearBehavior: sessionOwnership[entityId] == .managed
@@ -270,24 +237,36 @@ final class TmuxAttachResolver {
         name.hasPrefix("vvterm_\(DeviceIdentity.id)_")
     }
 
-    // MARK: - Private
+    // MARK: - Prompt Requests
 
-    private func requestSelection(
+    func requestSelection(
+        requestId: UUID,
         entityId: UUID,
         serverId: UUID,
         availableSessions: [TmuxAttachSessionInfo],
-        setPrompt: @escaping (TmuxAttachPrompt?) -> Void
+        setPrompt: @MainActor @Sendable @escaping (TmuxAttachPrompt?) -> Void
     ) async -> TmuxAttachSelection {
         let serverName = ServerManager.shared.servers.first(where: { $0.id == serverId })?.name ?? String(localized: "Server")
         let prompt = TmuxAttachPrompt(
-            id: entityId,
+            id: requestId,
+            paneId: entityId,
             serverId: serverId,
             serverName: serverName,
             existingSessions: availableSessions
         )
 
-        return await withCheckedContinuation { continuation in
-            enqueuePrompt(prompt, continuation: continuation, setPrompt: setPrompt)
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return .skipTmux }
+            return await withCheckedContinuation { continuation in
+                enqueuePrompt(prompt, continuation: continuation, setPrompt: setPrompt)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelPrompt(
+                    requestId: requestId,
+                    setPrompt: setPrompt
+                )
+            }
         }
     }
 

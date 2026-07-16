@@ -312,6 +312,51 @@ struct SSHStartupIntegrationTests {
         }
     }
 
+    @Test
+    func disconnectedTmuxProbeIsIndeterminateAndFreshConnectionRecovers() async throws {
+        guard let configuration = try Configuration.fromEnvironment() else { return }
+        let previousKnownHost = KnownHostsManager.shared.entry(
+            for: configuration.host,
+            port: configuration.port
+        )
+        defer {
+            restoreKnownHost(
+                previousKnownHost,
+                host: configuration.host,
+                port: configuration.port
+            )
+        }
+
+        let staleClient = SSHClient()
+        let replacementClient = SSHClient()
+        let (server, credentials) = makeStandardConnection(configuration: configuration)
+
+        do {
+            _ = try await staleClient.connect(to: server, credentials: credentials)
+            let initialAvailability = await RemoteTmuxManager.shared.tmuxAvailability(
+                using: staleClient
+            )
+            #expect(initialAvailability == .available(.unixTmux))
+
+            await staleClient.disconnect()
+            let staleAvailability = await RemoteTmuxManager.shared.tmuxAvailability(
+                using: staleClient
+            )
+            #expect(staleAvailability == .indeterminate(.disconnected))
+
+            _ = try await replacementClient.connect(to: server, credentials: credentials)
+            let recoveredAvailability = await RemoteTmuxManager.shared.tmuxAvailability(
+                using: replacementClient
+            )
+            #expect(recoveredAvailability == .available(.unixTmux))
+            await replacementClient.disconnect()
+        } catch {
+            await staleClient.disconnect()
+            await replacementClient.disconnect()
+            throw error
+        }
+    }
+
     private var shellStartupCases: [(
         stage: SSHSession.ShellStartupStage,
         startupCommand: String?
@@ -341,7 +386,7 @@ struct SSHStartupIntegrationTests {
     ) -> (Server, ServerCredentials) {
         let server = Server(
             workspaceId: UUID(),
-            name: "DEV-201 integration",
+            name: "SSH integration",
             host: configuration.host,
             port: configuration.port,
             username: configuration.username,

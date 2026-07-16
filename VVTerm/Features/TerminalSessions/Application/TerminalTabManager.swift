@@ -64,11 +64,6 @@ final class TerminalTabManager: ObservableObject {
         let task: Task<Void, Never>
     }
 
-    private struct ShellStartIdentity: Hashable {
-        let paneId: UUID
-        let clientId: ObjectIdentifier
-    }
-
     private struct RetiredShellStart {
         let completion: AsyncStream<Void>
         let signal: AsyncStream<Void>.Continuation
@@ -105,7 +100,7 @@ final class TerminalTabManager: ObservableObject {
     private var terminalViews: [UUID: GhosttyTerminalView] = [:]
     private var shellRegistry = SSHShellRegistry(staleThreshold: 120)
     private var connectionCleanupsInFlight: [UUID: ConnectionCleanup] = [:]
-    private var retiredShellStarts: [ShellStartIdentity: RetiredShellStart] = [:]
+    private var retiredShellStarts: [SSHShellRegistry.StartToken: RetiredShellStart] = [:]
     private var connectionLifecycle: ConnectionLifecycle = .foreground
     private var reconnectPreparationsInFlight: Set<UUID> = []
     /// Server IDs with an in-flight tab-open request to avoid queued duplicates.
@@ -161,7 +156,12 @@ final class TerminalTabManager: ObservableObject {
     }
 
     private func setPaneTmuxStatus(_ status: TmuxStatus, for paneId: UUID) {
+        guard let previousStatus = paneStates[paneId]?.tmuxStatus,
+              previousStatus != status else { return }
         paneStates[paneId]?.tmuxStatus = status
+        logger.info(
+            "Tmux status for pane \(paneId.uuidString, privacy: .public) changed from \(previousStatus.rawValue, privacy: .public) to \(status.rawValue, privacy: .public)"
+        )
     }
 
     private func paneWorkingDirectory(for paneId: UUID) -> String? {
@@ -200,6 +200,10 @@ final class TerminalTabManager: ObservableObject {
         guard let staleContext else { return }
 
         logger.warning("\(logMessage) \(paneId.uuidString, privacy: .public)")
+        tmuxResolver.cancelPrompt(
+            requestId: staleContext.token.id,
+            setPrompt: setTmuxAttachPrompt
+        )
         if !shellRegistry.hasClientReferences(staleContext.client) {
             Task.detached(priority: .utility) { [client = staleContext.client] in
                 await client.disconnect()
@@ -417,18 +421,17 @@ final class TerminalTabManager: ObservableObject {
         for registration in detachedShells.registrations {
             cleanupByClient[ObjectIdentifier(registration.client)] = registration.client
         }
-        for pendingStart in detachedShells.pendingStarts {
-            let context = pendingStart.context
+        for context in detachedShells.pendingStarts {
             cleanupByClient[ObjectIdentifier(context.client)] = context.client
-            let identity = ShellStartIdentity(
-                paneId: pendingStart.entityId,
-                clientId: ObjectIdentifier(context.client)
-            )
             let completion = AsyncStream<Void>.makeStream()
-            retiredShellStarts[identity]?.signal.finish()
-            retiredShellStarts[identity] = RetiredShellStart(
+            retiredShellStarts[context.token]?.signal.finish()
+            retiredShellStarts[context.token] = RetiredShellStart(
                 completion: completion.stream,
                 signal: completion.continuation
+            )
+            tmuxResolver.cancelPrompt(
+                requestId: context.token.id,
+                setPrompt: setTmuxAttachPrompt
             )
         }
         let cleanupsInFlight = Array(connectionCleanupsInFlight.values)
@@ -896,15 +899,16 @@ final class TerminalTabManager: ObservableObject {
     func registerSSHClient(
         _ client: SSHClient,
         shellId: UUID,
+        startToken: SSHShellRegistry.StartToken,
         for paneId: UUID,
         serverId: UUID,
         transport: ShellTransport = .ssh,
-        fallbackReason: MoshFallbackReason? = nil,
-        skipTmuxLifecycle: Bool = false
+        fallbackReason: MoshFallbackReason? = nil
     ) async -> Bool {
         let registerResult = shellRegistry.register(
             client: client,
             shellId: shellId,
+            startToken: startToken,
             for: paneId,
             serverId: serverId,
             transport: transport,
@@ -915,11 +919,7 @@ final class TerminalTabManager: ObservableObject {
         case .stale:
             logger.warning("Ignoring stale shell registration for pane \(paneId.uuidString, privacy: .public)")
             await performTrackedConnectionCleanup(for: client) {
-                if self.shellRegistry.hasClientReferences(client) {
-                    await client.closeShell(shellId)
-                } else {
-                    await client.disconnect()
-                }
+                await client.closeShell(shellId)
             }
             return false
         case .accepted:
@@ -927,12 +927,6 @@ final class TerminalTabManager: ObservableObject {
         }
 
         setPaneTransport(transport, fallbackReason: fallbackReason, for: paneId)
-
-        if !skipTmuxLifecycle {
-            Task { [weak self] in
-                await self?.handleTmuxLifecycle(paneId: paneId, serverId: serverId, client: client, shellId: shellId)
-            }
-        }
         return true
     }
 
@@ -960,9 +954,9 @@ final class TerminalTabManager: ObservableObject {
 
     func unregisterSSHClient(
         for paneId: UUID,
-        ifOwnedBy client: SSHClient
+        ifOwnedBy startToken: SSHShellRegistry.StartToken
     ) async {
-        guard shellRegistry.ownsConnection(client: client, for: paneId) else { return }
+        guard shellRegistry.owns(startToken: startToken, for: paneId) else { return }
         await unregisterSSHClient(for: paneId)
     }
 
@@ -972,6 +966,12 @@ final class TerminalTabManager: ObservableObject {
         beforeCleanup: (@MainActor @Sendable () async -> Void)?
     ) async {
         let unregisterResult = shellRegistry.unregister(for: paneId)
+        if let pendingStart = unregisterResult.pendingStart {
+            tmuxResolver.cancelPrompt(
+                requestId: pendingStart.token.id,
+                setPrompt: setTmuxAttachPrompt
+            )
+        }
 
         guard let registration = unregisterResult.registration else {
             if let pendingStart = unregisterResult.pendingStart {
@@ -1027,21 +1027,24 @@ final class TerminalTabManager: ObservableObject {
         shellRegistry.client(for: paneId)
     }
 
-    func getConnectionOwnerClient(for paneId: UUID) -> SSHClient? {
-        shellRegistry.connectionClient(for: paneId)
+    func connectionStartToken(for paneId: UUID) -> SSHShellRegistry.StartToken? {
+        shellRegistry.connectionStartToken(for: paneId)
     }
 
     func shellId(for paneId: UUID) -> UUID? {
         shellRegistry.shellId(for: paneId)
     }
 
-    /// Returns true only for the first caller while no live shell exists for the pane.
-    func tryBeginShellStart(for paneId: UUID, client: SSHClient) -> Bool {
+    /// Returns a unique ownership token only for the first caller while no live shell exists.
+    func beginShellStart(
+        for paneId: UUID,
+        client: SSHClient
+    ) -> SSHShellRegistry.StartToken? {
         guard connectionLifecycle.allowsConnections else {
-            return false
+            return nil
         }
         guard let serverId = paneStates[paneId]?.serverId else {
-            return false
+            return nil
         }
 
         let startResult = shellRegistry.tryBeginStart(
@@ -1055,16 +1058,20 @@ final class TerminalTabManager: ObservableObject {
             logMessage: "Recovered stale pane shell-start lock for",
             paneId: paneId
         )
-        return startResult.started
+        return startResult.token
     }
 
-    func finishShellStart(for paneId: UUID, client: SSHClient) {
-        let identity = ShellStartIdentity(
-            paneId: paneId,
-            clientId: ObjectIdentifier(client)
+    func finishShellStart(
+        for paneId: UUID,
+        client: SSHClient,
+        startToken: SSHShellRegistry.StartToken
+    ) {
+        retiredShellStarts.removeValue(forKey: startToken)?.signal.finish()
+        shellRegistry.finishStart(
+            for: paneId,
+            client: client,
+            startToken: startToken
         )
-        retiredShellStarts.removeValue(forKey: identity)?.signal.finish()
-        shellRegistry.finishStart(for: paneId, client: client)
     }
 
     func isShellStartInFlight(for paneId: UUID) -> Bool {
@@ -1077,10 +1084,18 @@ final class TerminalTabManager: ObservableObject {
         return result.inFlight
     }
 
-    func isCurrentShellOwner(for paneId: UUID, client: SSHClient) -> Bool {
+    func isCurrentShellOwner(
+        for paneId: UUID,
+        client: SSHClient,
+        startToken: SSHShellRegistry.StartToken
+    ) -> Bool {
         connectionLifecycle.allowsConnections
             && paneStates[paneId] != nil
-            && shellRegistry.ownsConnection(client: client, for: paneId)
+            && shellRegistry.ownsConnection(
+                client: client,
+                startToken: startToken,
+                for: paneId
+            )
     }
 
     private func preferredSSHClient(for serverId: UUID, allowPendingStart: Bool) -> SSHClient? {
@@ -1415,12 +1430,16 @@ final class TerminalTabManager: ObservableObject {
         tmuxResolver.clearRuntimeState(for: paneId, setPrompt: setTmuxAttachPrompt)
     }
 
-    func resolveTmuxAttachPrompt(paneId: UUID, selection: TmuxAttachSelection) {
-        tmuxResolver.resolvePrompt(entityId: paneId, selection: selection, setPrompt: setTmuxAttachPrompt)
+    func resolveTmuxAttachPrompt(requestId: UUID, selection: TmuxAttachSelection) {
+        tmuxResolver.resolvePrompt(
+            requestId: requestId,
+            selection: selection,
+            setPrompt: setTmuxAttachPrompt
+        )
     }
 
-    func cancelTmuxAttachPrompt(paneId: UUID) {
-        tmuxResolver.cancelPrompt(entityId: paneId, setPrompt: setTmuxAttachPrompt)
+    func cancelTmuxAttachPrompt(requestId: UUID) {
+        tmuxResolver.cancelPrompt(requestId: requestId, setPrompt: setTmuxAttachPrompt)
     }
 
     private func managedTmuxSessionNames(for serverId: UUID) -> Set<String> {
@@ -1466,16 +1485,24 @@ final class TerminalTabManager: ObservableObject {
         for serverId: UUID,
         paneId: UUID,
         selection: TmuxAttachSelection,
-        using client: SSHClient
+        using client: SSHClient,
+        backend: RemoteTmuxBackend
     ) async {
-        var cleanupSet = tmuxCleanupServers
-        await tmuxResolver.runCleanupIfNeeded(
-            serverId: serverId,
-            cleanupSet: &cleanupSet,
-            managedNames: tmuxSessionNamesToKeep(for: serverId, paneId: paneId, selection: selection),
-            using: client
+        guard tmuxCleanupServers.insert(serverId).inserted else { return }
+        await RemoteTmuxManager.shared.cleanupLegacySessions(
+            using: client,
+            backend: backend
         )
-        tmuxCleanupServers = cleanupSet
+        await RemoteTmuxManager.shared.cleanupDetachedSessions(
+            deviceId: DeviceIdentity.id,
+            keeping: tmuxSessionNamesToKeep(
+                for: serverId,
+                paneId: paneId,
+                selection: selection
+            ),
+            using: client,
+            backend: backend
+        )
     }
 
     private func prepareActiveTmuxPane(
@@ -1487,16 +1514,6 @@ final class TerminalTabManager: ObservableObject {
         updatePaneTmuxStatus(paneId, status: currentTmuxStatus(for: paneId, serverId: serverId))
         let terminalType = await client.remoteTerminalType()
         await RemoteTmuxManager.shared.prepareConfig(using: client, terminalType: terminalType, backend: backend)
-    }
-
-    private func immediateTmuxSelection(for paneId: UUID) -> TmuxAttachSelection {
-        if tmuxResolver.sessionOwnership[paneId] == .external {
-            return .attachExisting(sessionName: tmuxResolver.sessionName(for: paneId))
-        }
-
-        tmuxResolver.sessionNames[paneId] = tmuxResolver.managedSessionName(for: paneId)
-        tmuxResolver.sessionOwnership[paneId] = .managed
-        return .createManaged
     }
 
     private func tmuxStartupCommand(
@@ -1541,21 +1558,25 @@ final class TerminalTabManager: ObservableObject {
             && tmuxResolver.hasConfirmedManagedSession(for: paneId)
     }
 
-    private func resolveTmuxWorkingDirectory(for paneId: UUID, using client: SSHClient) async -> String {
+    private func resolveTmuxWorkingDirectory(
+        for paneId: UUID,
+        using client: SSHClient,
+        backend: RemoteTmuxBackend? = nil
+    ) async -> String {
         if let seedPaneId = paneStates[paneId]?.seedPaneId,
            let path = await RemoteTmuxManager.shared.currentPath(
                sessionName: tmuxResolver.sessionName(for: seedPaneId),
-               using: client
+               using: client,
+               backend: backend
            ) {
-            setPaneWorkingDirectory(path, for: paneId)
             return path
         }
 
         if let path = await RemoteTmuxManager.shared.currentPath(
             sessionName: tmuxResolver.sessionName(for: paneId),
-            using: client
+            using: client,
+            backend: backend
         ) {
-            setPaneWorkingDirectory(path, for: paneId)
             return path
         }
 
@@ -1602,74 +1623,85 @@ final class TerminalTabManager: ObservableObject {
         }
     }
 
-    private func handleTmuxLifecycle(
-        paneId: UUID,
+    func tmuxStartupPlan(
+        for paneId: UUID,
         serverId: UUID,
         client: SSHClient,
-        shellId: UUID
-    ) async {
-        guard tmuxResolver.isTmuxEnabled(for: serverId) else {
-            await MainActor.run {
-                self.disableTmuxAttachment(for: paneId, status: .off)
-            }
-            return
-        }
-
-        guard await client.supportsTmuxRuntime() else {
-            logger.info("Resolved remote environment does not support tmux runtime for pane \(paneId.uuidString, privacy: .public); using plain SSH shell")
-            await MainActor.run {
-                self.disableTmuxAttachment(for: paneId, status: .off)
-            }
-            return
-        }
-
-        guard let backend = await RemoteTmuxManager.shared.tmuxBackend(using: client) else {
-            await MainActor.run {
-                self.disableTmuxAttachment(for: paneId, status: .missing)
-            }
-            return
-        }
-
-        let selection = immediateTmuxSelection(for: paneId)
-        await runTmuxCleanupIfNeeded(for: serverId, paneId: paneId, selection: selection, using: client)
-        await prepareActiveTmuxPane(for: paneId, serverId: serverId, using: client, backend: backend)
-
-        let workingDirectory = await resolveTmuxWorkingDirectory(for: paneId, using: client)
-        guard let command = tmuxResolver.buildAttachExecCommand(
+        startToken: SSHShellRegistry.StartToken
+    ) async throws -> TerminalShellStartupPlan {
+        try await tmuxStartupPlan(
             for: paneId,
-            selection: selection,
-            workingDirectory: workingDirectory,
-            backend: backend
-        ) else {
-            return
-        }
-
-        await RemoteTmuxManager.shared.sendScript(command, using: client, shellId: shellId)
+            serverId: serverId,
+            client: client,
+            startToken: startToken,
+            availabilityResolver: {
+                await RemoteTmuxManager.shared.tmuxAvailability(using: client)
+            }
+        )
     }
 
     func tmuxStartupPlan(
         for paneId: UUID,
         serverId: UUID,
-        client: SSHClient
-    ) async -> TerminalShellStartupPlan {
+        client: SSHClient,
+        startToken: SSHShellRegistry.StartToken,
+        availabilityResolver: () async -> RemoteTmuxAvailability
+    ) async throws -> TerminalShellStartupPlan {
+        try requireCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
+        )
+
         guard tmuxResolver.isTmuxEnabled(for: serverId) else {
             disableTmuxAttachment(for: paneId, status: .off)
             return .plainShell
         }
 
-        guard await client.supportsTmuxRuntime() else {
+        let availability = await availabilityResolver()
+        try requireCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
+        )
+
+        let backend: RemoteTmuxBackend
+        switch availability {
+        case .unsupported:
             disableTmuxAttachment(for: paneId, status: .off)
             return .plainShell
-        }
-
-        guard let backend = await RemoteTmuxManager.shared.tmuxBackend(using: client) else {
+        case .available(let availableBackend):
+            backend = availableBackend
+        case .confirmedMissing:
             disableTmuxAttachment(for: paneId, status: .missing)
             return .plainShell
+        case .indeterminate(let failure):
+            logger.warning(
+                "Preserving tmux attachment for pane \(paneId.uuidString, privacy: .public) after indeterminate probe: \(failure.logDescription, privacy: .public)"
+            )
+            throw failure.retryError
         }
 
         let isReattachingManagedSession = shouldReattachManagedTmuxSession(for: paneId)
-        let selection = await tmuxResolver.resolveSelection(
-            for: paneId, serverId: serverId, client: client, setPrompt: setTmuxAttachPrompt
+        let selection = try await tmuxResolver.resolveSelection(
+            for: paneId,
+            serverId: serverId,
+            client: client,
+            backend: backend,
+            requestId: startToken.id,
+            validateOwner: {
+                try self.requireCurrentShellOwner(
+                    for: paneId,
+                    client: client,
+                    startToken: startToken
+                )
+            },
+            setPrompt: setTmuxAttachPrompt
+        )
+        try requireCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
         )
         tmuxResolver.updateAttachmentState(for: paneId, selection: selection, setPrompt: setTmuxAttachPrompt)
         schedulePersist()
@@ -1679,12 +1711,40 @@ final class TerminalTabManager: ObservableObject {
             return .plainShell
         }
 
-        await runTmuxCleanupIfNeeded(for: serverId, paneId: paneId, selection: selection, using: client)
+        await runTmuxCleanupIfNeeded(
+            for: serverId,
+            paneId: paneId,
+            selection: selection,
+            using: client,
+            backend: backend
+        )
+        try requireCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
+        )
         await prepareActiveTmuxPane(for: paneId, serverId: serverId, using: client, backend: backend)
+        try requireCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
+        )
 
-        let workingDirectory = await resolveTmuxWorkingDirectory(for: paneId, using: client)
+        let workingDirectory = await resolveTmuxWorkingDirectory(
+            for: paneId,
+            using: client,
+            backend: backend
+        )
+        try requireCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
+        )
+        if workingDirectory != "~" {
+            setPaneWorkingDirectory(workingDirectory, for: paneId)
+        }
         guard let ownership = tmuxResolver.sessionOwnership[paneId] else {
-            return .plainShell
+            throw SSHError.unknown("tmux attachment state was lost during startup")
         }
         let lifecycleMarkerToken = UUID().uuidString
         let sessionName = tmuxResolver.sessionName(for: paneId)
@@ -1700,7 +1760,6 @@ final class TerminalTabManager: ObservableObject {
                 lifecycleMarkerToken: lifecycleMarkerToken,
                 reattachingManagedSession: isReattachingManagedSession
             ),
-            skipTmuxLifecycle: true,
             tmuxLifecycle: TmuxShellLifecycleContext(
                 ownership: ownership,
                 markerToken: lifecycleMarkerToken,
@@ -1718,6 +1777,22 @@ final class TerminalTabManager: ObservableObject {
         )
     }
 
+    private func requireCurrentShellOwner(
+        for paneId: UUID,
+        client: SSHClient,
+        startToken: SSHShellRegistry.StartToken
+    ) throws {
+        try Task.checkCancellation()
+        guard isCurrentShellOwner(
+            for: paneId,
+            client: client,
+            startToken: startToken
+        ) else {
+            logger.info("Ignoring stale tmux startup result for pane \(paneId.uuidString, privacy: .public)")
+            throw CancellationError()
+        }
+    }
+
     func startTmuxInstall(
         for paneId: UUID,
         onInstalled: @MainActor @escaping () -> Void
@@ -1729,13 +1804,38 @@ final class TerminalTabManager: ObservableObject {
         updatePaneTmuxStatus(paneId, status: .installing)
 
         guard let backend = await RemoteTmuxManager.shared.tmuxInstallBackend(using: registration.client) else {
+            guard !Task.isCancelled else { return }
+            guard shellRegistry.owns(
+                client: registration.client,
+                shellId: registration.shellId,
+                for: paneId
+            ) else { return }
             updatePaneTmuxStatus(paneId, status: .off)
             return
         }
+        guard !Task.isCancelled, shellRegistry.owns(
+            client: registration.client,
+            shellId: registration.shellId,
+            for: paneId
+        ) else { return }
 
         let sessionName = tmuxResolver.sessionName(for: paneId)
-        let workingDirectory = await resolveTmuxWorkingDirectory(for: paneId, using: registration.client)
+        let workingDirectory = await resolveTmuxWorkingDirectory(
+            for: paneId,
+            using: registration.client,
+            backend: backend
+        )
+        guard !Task.isCancelled, shellRegistry.owns(
+            client: registration.client,
+            shellId: registration.shellId,
+            for: paneId
+        ) else { return }
         let terminalType = await registration.client.remoteTerminalType()
+        guard !Task.isCancelled, shellRegistry.owns(
+            client: registration.client,
+            shellId: registration.shellId,
+            for: paneId
+        ) else { return }
         let script = RemoteTmuxManager.shared.installAndAttachScript(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
@@ -1744,21 +1844,57 @@ final class TerminalTabManager: ObservableObject {
             attachAfterInstall: false
         )
         await RemoteTmuxManager.shared.sendScript(script, using: registration.client, shellId: registration.shellId)
+        guard !Task.isCancelled, shellRegistry.owns(
+            client: registration.client,
+            shellId: registration.shellId,
+            for: paneId
+        ) else { return }
 
+        var observedIndeterminateResult = false
         for _ in 0..<6 {
             try? await Task.sleep(for: .seconds(2))
-            if await RemoteTmuxManager.shared.isTmuxAvailable(using: registration.client) {
-                guard paneStates[paneId] != nil else { return }
-                await unregisterSSHClient(for: paneId)
+            guard !Task.isCancelled else { return }
+            guard shellRegistry.owns(
+                client: registration.client,
+                shellId: registration.shellId,
+                for: paneId
+            ) else { return }
+            let availability = await RemoteTmuxManager.shared.tmuxAvailability(using: registration.client)
+            guard !Task.isCancelled, shellRegistry.owns(
+                client: registration.client,
+                shellId: registration.shellId,
+                for: paneId
+            ) else { return }
+
+            switch availability {
+            case .available:
+                await unregisterSSHClient(
+                    for: paneId,
+                    ifOwnedBy: registration.client,
+                    shellId: registration.shellId
+                )
+                guard shellRegistry.registration(for: paneId) == nil else { return }
                 completeTmuxInstall(
                     for: paneId,
                     sessionName: sessionName,
                     onInstalled: onInstalled
                 )
                 return
+            case .confirmedMissing:
+                continue
+            case .indeterminate:
+                observedIndeterminateResult = true
+            case .unsupported:
+                updatePaneTmuxStatus(paneId, status: .off)
+                return
             }
         }
-        updatePaneTmuxStatus(paneId, status: .missing)
+        guard !Task.isCancelled, shellRegistry.owns(
+            client: registration.client,
+            shellId: registration.shellId,
+            for: paneId
+        ) else { return }
+        updatePaneTmuxStatus(paneId, status: observedIndeterminateResult ? .unknown : .missing)
     }
 
     func completeTmuxInstall(

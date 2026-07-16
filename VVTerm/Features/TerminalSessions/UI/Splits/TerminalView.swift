@@ -233,13 +233,13 @@ struct TerminalTabView: View {
     }
 
     private func handlePaneExit(paneId: UUID) {
-        let client = tabManager.getConnectionOwnerClient(for: paneId)
+        let startToken = tabManager.connectionStartToken(for: paneId)
         tabManager.updatePaneState(paneId, connectionState: .disconnected)
-        guard let client else { return }
+        guard let startToken else { return }
         Task {
             await tabManager.unregisterSSHClient(
                 for: paneId,
-                ifOwnedBy: client
+                ifOwnedBy: startToken
             )
         }
     }
@@ -542,6 +542,7 @@ struct TerminalPaneView: View {
     @State private var connectWatchdogToken = UUID()
     @State private var showingRetrustHostConfirmation = false
     @StateObject private var richPasteUI = TerminalRichPasteUIModel()
+    @ObservedObject private var networkMonitor: NetworkMonitor = .shared
 
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
@@ -617,7 +618,7 @@ struct TerminalPaneView: View {
     }
 
     private var isAwaitingTmuxSelection: Bool {
-        TerminalTabManager.shared.tmuxAttachPrompt?.id == paneId
+        TerminalTabManager.shared.tmuxAttachPrompt?.paneId == paneId
     }
 
     private var noticeSurfaceStyle: NoticeSurfaceStyle {
@@ -774,9 +775,9 @@ struct TerminalPaneView: View {
                 credentialLoadErrorMessage = String(localized: "Failed to load credentials")
             }
 
-            if paneState?.tmuxStatus == .missing {
-                showingTmuxInstallPrompt = true
-            }
+            showingTmuxInstallPrompt = TmuxInstallPromptPolicy.shouldPresent(
+                for: paneState?.tmuxStatus
+            )
             if shouldPromptMoshInstall {
                 showingMoshInstallPrompt = true
             }
@@ -789,6 +790,11 @@ struct TerminalPaneView: View {
         .onChange(of: colorScheme) { _ in updateTerminalBackgroundColor() }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
+                attemptAutoReconnectIfNeeded()
+            }
+        }
+        .onChange(of: networkMonitor.readiness) { readiness in
+            if readiness == .ready {
                 attemptAutoReconnectIfNeeded()
             }
         }
@@ -806,9 +812,7 @@ struct TerminalPaneView: View {
             }
         }
         .onChange(of: paneState?.tmuxStatus) { status in
-            if status == .missing {
-                showingTmuxInstallPrompt = true
-            }
+            showingTmuxInstallPrompt = TmuxInstallPromptPolicy.shouldPresent(for: status)
         }
         .onChange(of: isAwaitingTmuxSelection) { isAwaitingSelection in
             connectWatchdogToken = UUID()
@@ -940,19 +944,25 @@ struct TerminalPaneView: View {
         #if os(iOS)
         let applicationIsActive = UIApplication.shared.applicationState == .active
         #else
-        let applicationIsActive = true
+        let applicationIsActive = NSApplication.shared.isActive
         #endif
         guard TerminalAutoReconnectPolicy.shouldAttempt(
             sceneIsActive: foregroundSceneIsActive,
             applicationIsActive: applicationIsActive,
+            networkReadiness: networkMonitor.readiness,
             automaticReconnectAllowed: automaticReconnectAllowed,
             reconnectInFlight: reconnectInFlight,
             connectionState: connectionState
         ) else { return }
-        retryConnection()
+        retryConnection(requiresReadyNetwork: true)
     }
 
     private func retryConnection() {
+        retryConnection(requiresReadyNetwork: false)
+    }
+
+    private func retryConnection(requiresReadyNetwork: Bool) {
+        guard !requiresReadyNetwork || networkMonitor.readiness == .ready else { return }
         guard !reconnectInFlight else { return }
         guard !connectionState.isConnecting else { return }
         credentialLoadErrorMessage = nil
@@ -975,6 +985,7 @@ struct TerminalPaneView: View {
                 tabManager.finishReconnectPreparation(for: paneId)
                 reconnectInFlight = false
             }
+            guard !requiresReadyNetwork || networkMonitor.readiness == .ready else { return }
             #if os(iOS)
             guard UIApplication.shared.applicationState == .active,
                   foregroundSceneIsActive else {
@@ -983,6 +994,7 @@ struct TerminalPaneView: View {
             tabManager.noteForegroundActivation()
             #endif
             guard await tabManager.prepareForForegroundReconnect() else { return }
+            guard !requiresReadyNetwork || networkMonitor.readiness == .ready else { return }
 
             await tabManager.unregisterSSHClient(for: paneId)
             guard tabManager.paneStates[paneId] != nil else { return }
@@ -993,6 +1005,7 @@ struct TerminalPaneView: View {
             }
             #endif
             guard await tabManager.prepareForForegroundReconnect() else { return }
+            guard !requiresReadyNetwork || networkMonitor.readiness == .ready else { return }
 
             isReady = false
             let hasEstablishedConnection = paneState?.hasEstablishedConnection == true

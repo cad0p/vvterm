@@ -4,12 +4,10 @@ import Testing
 
 private actor BackgroundCleanupGate {
     private var continuation: CheckedContinuation<Void, Never>?
-    private var isWaiting = false
     private var isOpen = false
 
     func wait() async {
         guard !isOpen else { return }
-        isWaiting = true
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
@@ -19,12 +17,12 @@ private actor BackgroundCleanupGate {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
-            if isWaiting {
+            if continuation != nil {
                 return true
             }
             try? await Task.sleep(for: .milliseconds(1))
         }
-        return isWaiting
+        return continuation != nil
     }
 
     func open() {
@@ -56,6 +54,33 @@ private actor ForegroundReadinessProbe {
 
     func finish(with result: Bool) {
         self.result = result
+    }
+}
+
+private actor TmuxAvailabilityGate {
+    private var continuation: CheckedContinuation<RemoteTmuxAvailability, Never>?
+
+    func waitForResolution() async -> RemoteTmuxAvailability {
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilBlocked(timeout: Duration = .seconds(2)) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if continuation != nil {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return continuation != nil
+    }
+
+    func resolve(_ availability: RemoteTmuxAvailability) {
+        continuation?.resume(returning: availability)
+        continuation = nil
     }
 }
 
@@ -91,6 +116,38 @@ struct TerminalTabManagerLifecycleTests {
         }
     }
 
+    private func withTmuxEnabled(
+        _ body: @MainActor () async throws -> Void
+    ) async rethrows {
+        let defaults = UserDefaults.standard
+        let key = "terminalTmuxEnabledDefault"
+        let previousValue = defaults.object(forKey: key)
+        defaults.set(true, forKey: key)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        try await body()
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(2),
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return condition()
+    }
+
     private func installTab(
         _ tab: TerminalTab,
         in manager: TerminalTabManager,
@@ -104,6 +161,27 @@ struct TerminalTabManagerLifecycleTests {
             serverId: tab.serverId
         )
         manager.updatePaneState(tab.rootPaneId, connectionState: connectionState)
+    }
+
+    private func startAndRegisterShell(
+        _ client: SSHClient,
+        shellId: UUID = UUID(),
+        paneId: UUID,
+        serverId: UUID,
+        transport: ShellTransport = .ssh,
+        in manager: TerminalTabManager
+    ) async -> Bool {
+        guard let startToken = manager.beginShellStart(for: paneId, client: client) else {
+            return false
+        }
+        return await manager.registerSSHClient(
+            client,
+            shellId: shellId,
+            startToken: startToken,
+            for: paneId,
+            serverId: serverId,
+            transport: transport
+        )
     }
 
     @Test
@@ -129,25 +207,23 @@ struct TerminalTabManagerLifecycleTests {
             let oldClient = SSHClient()
             let oldShellId = UUID()
 
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: oldClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 oldClient,
                 shellId: oldShellId,
-                for: tab.rootPaneId,
+                paneId: tab.rootPaneId,
                 serverId: tab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
             await manager.unregisterSSHClient(for: tab.rootPaneId)
 
             let replacementClient = SSHClient()
             let replacementShellId = UUID()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: replacementClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 replacementClient,
                 shellId: replacementShellId,
-                for: tab.rootPaneId,
+                paneId: tab.rootPaneId,
                 serverId: tab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
 
             await manager.unregisterSSHClient(
@@ -168,30 +244,44 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager)
             let exitedSurfaceClient = SSHClient()
 
-            #expect(manager.tryBeginShellStart(
+            guard let exitedStartToken = manager.beginShellStart(
                 for: tab.rootPaneId,
                 client: exitedSurfaceClient
+            ), let exitedConnectionToken = manager.connectionStartToken(for: tab.rootPaneId) else {
+                Issue.record("Expected the exiting surface to own a shell start")
+                return
+            }
+            #expect(exitedConnectionToken == exitedStartToken)
+            #expect(manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: exitedSurfaceClient,
+                startToken: exitedStartToken
             ))
-            #expect(manager.getConnectionOwnerClient(for: tab.rootPaneId) === exitedSurfaceClient)
 
             await manager.unregisterSSHClient(
                 for: tab.rootPaneId,
-                ifOwnedBy: exitedSurfaceClient
+                ifOwnedBy: exitedConnectionToken
             )
             #expect(!manager.isShellStartInFlight(for: tab.rootPaneId))
 
-            let replacementClient = SSHClient()
-            #expect(manager.tryBeginShellStart(
+            guard let replacementStartToken = manager.beginShellStart(
                 for: tab.rootPaneId,
-                client: replacementClient
-            ))
+                client: exitedSurfaceClient
+            ) else {
+                Issue.record("Expected a same-client replacement shell start")
+                return
+            }
 
             await manager.unregisterSSHClient(
                 for: tab.rootPaneId,
-                ifOwnedBy: exitedSurfaceClient
+                ifOwnedBy: exitedConnectionToken
             )
             #expect(manager.isShellStartInFlight(for: tab.rootPaneId))
-            #expect(manager.getConnectionOwnerClient(for: tab.rootPaneId) === replacementClient)
+            #expect(manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: exitedSurfaceClient,
+                startToken: replacementStartToken
+            ))
         }
     }
 
@@ -204,23 +294,37 @@ struct TerminalTabManagerLifecycleTests {
 
             let activeClient = SSHClient()
             let staleClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: activeClient))
+            guard let activeStartToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: activeClient
+            ) else {
+                Issue.record("Expected active shell start")
+                return
+            }
 
             #expect(!(await manager.registerSSHClient(
                 staleClient,
                 shellId: UUID(),
+                startToken: activeStartToken,
                 for: tab.rootPaneId,
-                serverId: serverId,
-                skipTmuxLifecycle: true
+                serverId: serverId
             )))
 
             #expect(manager.shellId(for: tab.rootPaneId) == nil)
             #expect(manager.isShellStartInFlight(for: tab.rootPaneId))
 
-            manager.finishShellStart(for: tab.rootPaneId, client: staleClient)
+            manager.finishShellStart(
+                for: tab.rootPaneId,
+                client: staleClient,
+                startToken: activeStartToken
+            )
             #expect(manager.isShellStartInFlight(for: tab.rootPaneId))
 
-            manager.finishShellStart(for: tab.rootPaneId, client: activeClient)
+            manager.finishShellStart(
+                for: tab.rootPaneId,
+                client: activeClient,
+                startToken: activeStartToken
+            )
             #expect(!manager.isShellStartInFlight(for: tab.rootPaneId))
         }
     }
@@ -232,7 +336,7 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager)
 
             let firstClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: firstClient))
+            #expect(manager.beginShellStart(for: tab.rootPaneId, client: firstClient) != nil)
 
             await manager.unregisterSSHClient(for: tab.rootPaneId)
 
@@ -240,8 +344,63 @@ struct TerminalTabManagerLifecycleTests {
             #expect(manager.shellId(for: tab.rootPaneId) == nil)
 
             let nextClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: nextClient))
-            manager.finishShellStart(for: tab.rootPaneId, client: nextClient)
+            guard let nextStartToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: nextClient
+            ) else {
+                Issue.record("Expected replacement shell start")
+                return
+            }
+            manager.finishShellStart(
+                for: tab.rootPaneId,
+                client: nextClient,
+                startToken: nextStartToken
+            )
+        }
+    }
+
+    @Test
+    func unregisterPendingShellStartCancelsItsTmuxPrompt() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Pending prompt")
+            installTab(tab, in: manager)
+            let client = SSHClient()
+            guard let startToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: client
+            ) else {
+                Issue.record("Expected pending shell start")
+                return
+            }
+
+            let selection = Task { @MainActor in
+                await manager.tmuxResolver.requestSelection(
+                    requestId: startToken.id,
+                    entityId: tab.rootPaneId,
+                    serverId: tab.serverId,
+                    availableSessions: [],
+                    setPrompt: { manager.tmuxAttachPrompt = $0 }
+                )
+            }
+            guard await waitUntil({
+                manager.tmuxResolver.hasPendingPrompt(requestId: startToken.id)
+            }) else {
+                Issue.record("Pending tmux prompt was not enqueued")
+                selection.cancel()
+                return
+            }
+
+            await manager.unregisterSSHClient(for: tab.rootPaneId)
+
+            let promptWasCancelled = await waitUntil({
+                !manager.tmuxResolver.hasPendingPrompt(requestId: startToken.id)
+                    && manager.tmuxAttachPrompt == nil
+            })
+            #expect(promptWasCancelled)
+            if !promptWasCancelled {
+                selection.cancel()
+            }
+            #expect(await selection.value == .skipTmux)
         }
     }
 
@@ -253,13 +412,31 @@ struct TerminalTabManagerLifecycleTests {
             let activeClient = SSHClient()
             let staleClient = SSHClient()
 
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: activeClient))
-            #expect(manager.isCurrentShellOwner(for: tab.rootPaneId, client: activeClient))
-            #expect(!manager.isCurrentShellOwner(for: tab.rootPaneId, client: staleClient))
+            guard let activeStartToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: activeClient
+            ) else {
+                Issue.record("Expected active shell start")
+                return
+            }
+            #expect(manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: activeClient,
+                startToken: activeStartToken
+            ))
+            #expect(!manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: staleClient,
+                startToken: activeStartToken
+            ))
 
             await manager.unregisterSSHClient(for: tab.rootPaneId)
 
-            #expect(!manager.isCurrentShellOwner(for: tab.rootPaneId, client: activeClient))
+            #expect(!manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: activeClient,
+                startToken: activeStartToken
+            ))
         }
     }
 
@@ -268,7 +445,7 @@ struct TerminalTabManagerLifecycleTests {
         await withCleanManager { manager in
             let missingPaneId = UUID()
 
-            #expect(!manager.tryBeginShellStart(for: missingPaneId, client: SSHClient()))
+            #expect(manager.beginShellStart(for: missingPaneId, client: SSHClient()) == nil)
             #expect(!manager.isShellStartInFlight(for: missingPaneId))
         }
     }
@@ -283,21 +460,17 @@ struct TerminalTabManagerLifecycleTests {
 
             let firstClient = SSHClient()
             let secondClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: firstTab.rootPaneId, client: firstClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 firstClient,
-                shellId: UUID(),
-                for: firstTab.rootPaneId,
+                paneId: firstTab.rootPaneId,
                 serverId: firstTab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
-            #expect(manager.tryBeginShellStart(for: secondTab.rootPaneId, client: secondClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 secondClient,
-                shellId: UUID(),
-                for: secondTab.rootPaneId,
+                paneId: secondTab.rootPaneId,
                 serverId: secondTab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
             manager.updatePaneState(firstTab.rootPaneId, connectionState: .connected)
             manager.updatePaneState(secondTab.rootPaneId, connectionState: .connected)
@@ -324,18 +497,16 @@ struct TerminalTabManagerLifecycleTests {
             installTab(pendingTab, in: manager)
 
             let liveClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: liveTab.rootPaneId, client: liveClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 liveClient,
-                shellId: UUID(),
-                for: liveTab.rootPaneId,
+                paneId: liveTab.rootPaneId,
                 serverId: serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
             manager.updatePaneState(liveTab.rootPaneId, connectionState: .connected)
 
             let pendingClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: pendingTab.rootPaneId, client: pendingClient))
+            #expect(manager.beginShellStart(for: pendingTab.rootPaneId, client: pendingClient) != nil)
             #expect(manager.connectedServerIds == [serverId])
 
             await manager.suspendAllForBackground()
@@ -357,27 +528,51 @@ struct TerminalTabManagerLifecycleTests {
             let staleClient = SSHClient()
             let staleShellId = UUID()
 
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: staleClient))
+            guard let staleStartToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: staleClient
+            ) else {
+                Issue.record("Expected stale shell start")
+                return
+            }
 
             await manager.suspendAllForBackground()
             manager.noteForegroundActivation()
             #expect(await manager.prepareForForegroundReconnect())
             let replacementClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: replacementClient))
+            guard let replacementStartToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: replacementClient
+            ) else {
+                Issue.record("Expected replacement shell start")
+                return
+            }
 
             #expect(!(await manager.registerSSHClient(
                 staleClient,
                 shellId: staleShellId,
+                startToken: staleStartToken,
                 for: tab.rootPaneId,
-                serverId: tab.serverId,
-                skipTmuxLifecycle: true
+                serverId: tab.serverId
             )))
 
             #expect(manager.shellId(for: tab.rootPaneId) == nil)
             #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .disconnected)
-            #expect(!manager.isCurrentShellOwner(for: tab.rootPaneId, client: staleClient))
-            #expect(manager.isCurrentShellOwner(for: tab.rootPaneId, client: replacementClient))
-            manager.finishShellStart(for: tab.rootPaneId, client: replacementClient)
+            #expect(!manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: staleClient,
+                startToken: staleStartToken
+            ))
+            #expect(manager.isCurrentShellOwner(
+                for: tab.rootPaneId,
+                client: replacementClient,
+                startToken: replacementStartToken
+            ))
+            manager.finishShellStart(
+                for: tab.rootPaneId,
+                client: replacementClient,
+                startToken: replacementStartToken
+            )
         }
     }
 
@@ -390,28 +585,36 @@ struct TerminalTabManagerLifecycleTests {
             installTab(pendingTab, in: manager)
 
             let sharedClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: siblingTab.rootPaneId, client: sharedClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 sharedClient,
-                shellId: UUID(),
-                for: siblingTab.rootPaneId,
+                paneId: siblingTab.rootPaneId,
                 serverId: siblingTab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
 
             let pendingClient = SSHClient()
-            #expect(manager.tryBeginShellStart(for: pendingTab.rootPaneId, client: pendingClient))
+            guard let pendingStartToken = manager.beginShellStart(
+                for: pendingTab.rootPaneId,
+                client: pendingClient
+            ) else {
+                Issue.record("Expected pending shell start")
+                return
+            }
             #expect(!(await manager.registerSSHClient(
                 sharedClient,
                 shellId: UUID(),
+                startToken: pendingStartToken,
                 for: pendingTab.rootPaneId,
-                serverId: pendingTab.serverId,
-                skipTmuxLifecycle: true
+                serverId: pendingTab.serverId
             )))
 
             #expect(!(await sharedClient.isAborted))
-            #expect(manager.isCurrentShellOwner(for: siblingTab.rootPaneId, client: sharedClient))
-            #expect(manager.isCurrentShellOwner(for: pendingTab.rootPaneId, client: pendingClient))
+            #expect(manager.getSSHClient(for: siblingTab.rootPaneId) === sharedClient)
+            #expect(manager.isCurrentShellOwner(
+                for: pendingTab.rootPaneId,
+                client: pendingClient,
+                startToken: pendingStartToken
+            ))
         }
     }
 
@@ -445,15 +648,25 @@ struct TerminalTabManagerLifecycleTests {
             await Task.yield()
 
             #expect(await probe.result == nil)
-            #expect(!manager.tryBeginShellStart(for: tab.rootPaneId, client: SSHClient()))
+            #expect(manager.beginShellStart(for: tab.rootPaneId, client: SSHClient()) == nil)
 
             await gate.open()
             await readiness.value
 
             #expect(await probe.result == true)
             let client = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
-            manager.finishShellStart(for: tab.rootPaneId, client: client)
+            guard let startToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: client
+            ) else {
+                Issue.record("Expected foreground shell start")
+                return
+            }
+            manager.finishShellStart(
+                for: tab.rootPaneId,
+                client: client,
+                startToken: startToken
+            )
         }
     }
 
@@ -491,7 +704,7 @@ struct TerminalTabManagerLifecycleTests {
             await readiness.value
 
             #expect(await probe.result == false)
-            #expect(!manager.tryBeginShellStart(for: tab.rootPaneId, client: SSHClient()))
+            #expect(manager.beginShellStart(for: tab.rootPaneId, client: SSHClient()) == nil)
 
             manager.noteForegroundActivation()
             #expect(await manager.prepareForForegroundReconnect())
@@ -504,13 +717,11 @@ struct TerminalTabManagerLifecycleTests {
             let tab = TerminalTab(serverId: UUID(), title: "In-flight unregister")
             installTab(tab, in: manager)
             let client = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 client,
-                shellId: UUID(),
-                for: tab.rootPaneId,
+                paneId: tab.rootPaneId,
                 serverId: tab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
 
             let cleanupGate = BackgroundCleanupGate()
@@ -617,7 +828,13 @@ struct TerminalTabManagerLifecycleTests {
             let tab = TerminalTab(serverId: UUID(), title: "Drained shell start")
             installTab(tab, in: manager)
             let client = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
+            guard let startToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: client
+            ) else {
+                Issue.record("Expected shell start before background drain")
+                return
+            }
 
             let backgroundGate = BackgroundCleanupGate()
             manager.beginBackgroundSuspensionForTesting {
@@ -648,9 +865,67 @@ struct TerminalTabManagerLifecycleTests {
             }
             #expect(await probe.result == nil)
 
-            manager.finishShellStart(for: tab.rootPaneId, client: client)
+            manager.finishShellStart(
+                for: tab.rootPaneId,
+                client: client,
+                startToken: startToken
+            )
             await readiness.value
             #expect(await probe.result == true)
+        }
+    }
+
+    @Test
+    func backgroundDrainCancelsRetiredShellStartTmuxPrompt() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Drained prompt")
+            installTab(tab, in: manager)
+            let client = SSHClient()
+            guard let startToken = manager.beginShellStart(
+                for: tab.rootPaneId,
+                client: client
+            ) else {
+                Issue.record("Expected shell start before background drain")
+                return
+            }
+
+            let selection = Task { @MainActor in
+                let value = await manager.tmuxResolver.requestSelection(
+                    requestId: startToken.id,
+                    entityId: tab.rootPaneId,
+                    serverId: tab.serverId,
+                    availableSessions: [],
+                    setPrompt: { manager.tmuxAttachPrompt = $0 }
+                )
+                manager.finishShellStart(
+                    for: tab.rootPaneId,
+                    client: client,
+                    startToken: startToken
+                )
+                return value
+            }
+            guard await waitUntil({
+                manager.tmuxResolver.hasPendingPrompt(requestId: startToken.id)
+            }) else {
+                Issue.record("Pending tmux prompt was not enqueued")
+                selection.cancel()
+                return
+            }
+
+            let clock = ContinuousClock()
+            let startedAt = clock.now
+            await manager.suspendAllForBackground()
+            let suspensionDuration = startedAt.duration(to: clock.now)
+
+            let promptWasCancelled = !manager.tmuxResolver.hasPendingPrompt(
+                requestId: startToken.id
+            ) && manager.tmuxAttachPrompt == nil
+            #expect(promptWasCancelled)
+            #expect(suspensionDuration < .seconds(1))
+            if !promptWasCancelled {
+                selection.cancel()
+            }
+            #expect(await selection.value == .skipTmux)
         }
     }
 
@@ -661,13 +936,11 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager)
 
             let client = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 client,
-                shellId: UUID(),
-                for: tab.rootPaneId,
+                paneId: tab.rootPaneId,
                 serverId: tab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
             manager.updatePaneState(tab.rootPaneId, connectionState: .connected)
 
@@ -747,6 +1020,280 @@ struct TerminalTabManagerLifecycleTests {
             #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == "vvterm_test")
             #expect(manager.tmuxResolver.hasConfirmedManagedSession(for: tab.rootPaneId))
         }
+    }
+
+    @Test
+    func disconnectedTmuxProbePreservesConfirmedAttachmentInsteadOfReportingMissing() async {
+        await withTmuxEnabled {
+            await withCleanManager { manager in
+                let tab = TerminalTab(serverId: UUID(), title: "Long-idle tmux reconnect")
+                installTab(tab, in: manager, connectionState: .disconnected)
+                manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_existing"
+                manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+                manager.tmuxResolver.confirmManagedSession(for: tab.rootPaneId)
+                manager.updatePaneTmuxStatus(tab.rootPaneId, status: .background)
+
+                let disconnectedClient = SSHClient()
+                guard let startToken = manager.beginShellStart(
+                    for: tab.rootPaneId,
+                    client: disconnectedClient
+                ) else {
+                    Issue.record("Expected disconnected shell start")
+                    return
+                }
+
+                do {
+                    _ = try await manager.tmuxStartupPlan(
+                        for: tab.rootPaneId,
+                        serverId: tab.serverId,
+                        client: disconnectedClient,
+                        startToken: startToken
+                    )
+                    Issue.record("An indeterminate tmux probe should retry the connection")
+                } catch {
+                    #expect(error is SSHError)
+                }
+
+                #expect(manager.paneStates[tab.rootPaneId]?.tmuxStatus == .background)
+                #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == "vvterm_existing")
+                #expect(manager.tmuxResolver.sessionOwnership[tab.rootPaneId] == .managed)
+                #expect(manager.tmuxResolver.hasConfirmedManagedSession(for: tab.rootPaneId))
+                #expect(manager.tmuxAttachPrompt == nil)
+
+                manager.finishShellStart(
+                    for: tab.rootPaneId,
+                    client: disconnectedClient,
+                    startToken: startToken
+                )
+            }
+        }
+    }
+
+    @Test
+    func explicitMissingTmuxProbeClearsAttachmentAndReportsMissing() async {
+        await withTmuxEnabled {
+            await withCleanManager { manager in
+                let tab = TerminalTab(serverId: UUID(), title: "Confirmed missing tmux")
+                installTab(tab, in: manager, connectionState: .disconnected)
+                manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_existing"
+                manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+                manager.tmuxResolver.confirmManagedSession(for: tab.rootPaneId)
+                manager.updatePaneTmuxStatus(tab.rootPaneId, status: .background)
+
+                let client = SSHClient()
+                guard let startToken = manager.beginShellStart(
+                    for: tab.rootPaneId,
+                    client: client
+                ) else {
+                    Issue.record("Expected shell start")
+                    return
+                }
+                _ = try? await manager.tmuxStartupPlan(
+                    for: tab.rootPaneId,
+                    serverId: tab.serverId,
+                    client: client,
+                    startToken: startToken,
+                    availabilityResolver: { .confirmedMissing }
+                )
+
+                #expect(manager.paneStates[tab.rootPaneId]?.tmuxStatus == .missing)
+                #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == nil)
+                #expect(manager.tmuxResolver.sessionOwnership[tab.rootPaneId] == nil)
+                #expect(!manager.tmuxResolver.hasConfirmedManagedSession(for: tab.rootPaneId))
+
+                manager.finishShellStart(
+                    for: tab.rootPaneId,
+                    client: client,
+                    startToken: startToken
+                )
+            }
+        }
+    }
+
+    @Test
+    func staleMissingTmuxProbeCannotOverwriteReplacementOwner() async {
+        await withTmuxEnabled {
+            await withCleanManager { manager in
+                let tab = TerminalTab(serverId: UUID(), title: "Stale tmux probe")
+                installTab(tab, in: manager, connectionState: .disconnected)
+                manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_existing"
+                manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+                manager.tmuxResolver.confirmManagedSession(for: tab.rootPaneId)
+                manager.updatePaneTmuxStatus(tab.rootPaneId, status: .background)
+
+                let client = SSHClient()
+                let gate = TmuxAvailabilityGate()
+                guard let staleStartToken = manager.beginShellStart(
+                    for: tab.rootPaneId,
+                    client: client
+                ) else {
+                    Issue.record("Expected stale shell start")
+                    return
+                }
+
+                let stalePlan = Task { @MainActor in
+                    do {
+                        _ = try await manager.tmuxStartupPlan(
+                            for: tab.rootPaneId,
+                            serverId: tab.serverId,
+                            client: client,
+                            startToken: staleStartToken,
+                            availabilityResolver: { await gate.waitForResolution() }
+                        )
+                        return false
+                    } catch is CancellationError {
+                        return true
+                    } catch {
+                        Issue.record("Unexpected stale probe error: \(error)")
+                        return false
+                    }
+                }
+
+                #expect(await gate.waitUntilBlocked())
+                manager.finishShellStart(
+                    for: tab.rootPaneId,
+                    client: client,
+                    startToken: staleStartToken
+                )
+                guard let replacementStartToken = manager.beginShellStart(
+                    for: tab.rootPaneId,
+                    client: client
+                ) else {
+                    Issue.record("Expected replacement shell start")
+                    return
+                }
+                await gate.resolve(.confirmedMissing)
+
+                #expect(await stalePlan.value)
+                #expect(manager.paneStates[tab.rootPaneId]?.tmuxStatus == .background)
+                #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == "vvterm_existing")
+                #expect(manager.tmuxResolver.sessionOwnership[tab.rootPaneId] == .managed)
+                #expect(manager.tmuxResolver.hasConfirmedManagedSession(for: tab.rootPaneId))
+
+                manager.finishShellStart(
+                    for: tab.rootPaneId,
+                    client: client,
+                    startToken: replacementStartToken
+                )
+            }
+        }
+    }
+
+    @Test
+    func cancelledTmuxProbeCannotPublishMissingForCurrentOwner() async {
+        await withTmuxEnabled {
+            await withCleanManager { manager in
+                let tab = TerminalTab(serverId: UUID(), title: "Cancelled tmux probe")
+                installTab(tab, in: manager, connectionState: .disconnected)
+                manager.tmuxResolver.sessionNames[tab.rootPaneId] = "vvterm_existing"
+                manager.tmuxResolver.sessionOwnership[tab.rootPaneId] = .managed
+                manager.tmuxResolver.confirmManagedSession(for: tab.rootPaneId)
+                manager.updatePaneTmuxStatus(tab.rootPaneId, status: .background)
+
+                let client = SSHClient()
+                let gate = TmuxAvailabilityGate()
+                guard let startToken = manager.beginShellStart(
+                    for: tab.rootPaneId,
+                    client: client
+                ) else {
+                    Issue.record("Expected shell start")
+                    return
+                }
+
+                let cancelledPlan = Task { @MainActor in
+                    do {
+                        _ = try await manager.tmuxStartupPlan(
+                            for: tab.rootPaneId,
+                            serverId: tab.serverId,
+                            client: client,
+                            startToken: startToken,
+                            availabilityResolver: { await gate.waitForResolution() }
+                        )
+                        return false
+                    } catch is CancellationError {
+                        return true
+                    } catch {
+                        Issue.record("Unexpected cancelled probe error: \(error)")
+                        return false
+                    }
+                }
+
+                #expect(await gate.waitUntilBlocked())
+                cancelledPlan.cancel()
+                await gate.resolve(.confirmedMissing)
+
+                #expect(await cancelledPlan.value)
+                #expect(manager.paneStates[tab.rootPaneId]?.tmuxStatus == .background)
+                #expect(manager.tmuxResolver.sessionNames[tab.rootPaneId] == "vvterm_existing")
+                #expect(manager.tmuxResolver.sessionOwnership[tab.rootPaneId] == .managed)
+                #expect(manager.tmuxResolver.hasConfirmedManagedSession(for: tab.rootPaneId))
+
+                manager.finishShellStart(
+                    for: tab.rootPaneId,
+                    client: client,
+                    startToken: startToken
+                )
+            }
+        }
+    }
+
+    @Test
+    func cancelledTmuxPromptCannotResolveReplacementPromptForSamePane() async {
+        let resolver = TmuxAttachResolver()
+        let paneId = UUID()
+        let serverId = UUID()
+        let staleRequestId = UUID()
+        let replacementRequestId = UUID()
+
+        let staleSelection = Task { @MainActor in
+            await resolver.requestSelection(
+                requestId: staleRequestId,
+                entityId: paneId,
+                serverId: serverId,
+                availableSessions: [],
+                setPrompt: { _ in }
+            )
+        }
+        guard await waitUntil({
+            resolver.hasPendingPrompt(requestId: staleRequestId)
+        }) else {
+            Issue.record("Stale tmux prompt was not enqueued")
+            staleSelection.cancel()
+            return
+        }
+
+        let replacementSelection = Task { @MainActor in
+            await resolver.requestSelection(
+                requestId: replacementRequestId,
+                entityId: paneId,
+                serverId: serverId,
+                availableSessions: [],
+                setPrompt: { _ in }
+            )
+        }
+        guard await waitUntil({
+            resolver.hasPendingPrompt(requestId: replacementRequestId)
+        }) else {
+            Issue.record("Replacement tmux prompt was not enqueued")
+            staleSelection.cancel()
+            replacementSelection.cancel()
+            return
+        }
+
+        staleSelection.cancel()
+        #expect(await waitUntil({
+            resolver.currentPrompt?.id == replacementRequestId
+                && !resolver.hasPendingPrompt(requestId: staleRequestId)
+        }))
+
+        resolver.resolvePrompt(
+            requestId: replacementRequestId,
+            selection: .createManaged,
+            setPrompt: { _ in }
+        )
+
+        #expect(await staleSelection.value == .skipTmux)
+        #expect(await replacementSelection.value == .createManaged)
     }
 
     @Test
@@ -850,13 +1397,12 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager, connectionState: .connected)
             let activeClient = SSHClient()
             let activeShellId = UUID()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: activeClient))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 activeClient,
                 shellId: activeShellId,
-                for: tab.rootPaneId,
+                paneId: tab.rootPaneId,
                 serverId: tab.serverId,
-                skipTmuxLifecycle: true
+                in: manager
             ))
 
             manager.handleShellEnd(
@@ -899,14 +1445,12 @@ struct TerminalTabManagerLifecycleTests {
             installTab(tab, in: manager)
 
             let client = SSHClient()
-            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: client))
-            #expect(await manager.registerSSHClient(
+            #expect(await startAndRegisterShell(
                 client,
-                shellId: UUID(),
-                for: tab.rootPaneId,
+                paneId: tab.rootPaneId,
                 serverId: server.id,
                 transport: .mosh,
-                skipTmuxLifecycle: true
+                in: manager
             ))
 
             #expect(manager.sshClient(for: server.id) === client)

@@ -1,43 +1,50 @@
 import Foundation
 
-struct SSHShellRegistry {
-    struct Registration: Sendable {
+nonisolated struct SSHShellRegistry {
+    nonisolated struct StartToken: Hashable, Sendable {
+        let id: UUID
+
+        init(id: UUID = UUID()) {
+            self.id = id
+        }
+    }
+
+    nonisolated struct Registration: Sendable {
         let serverId: UUID
         let client: SSHClient
         let shellId: UUID
+        let startToken: StartToken
         let transport: ShellTransport
         let fallbackReason: MoshFallbackReason?
     }
 
-    struct StartContext: Sendable {
+    nonisolated struct StartContext: Sendable {
+        let token: StartToken
         let startedAt: Date
         let client: SSHClient
         let serverId: UUID
     }
 
-    enum RegisterResult: Sendable, Equatable {
+    nonisolated enum RegisterResult: Sendable, Equatable {
         case accepted
         case stale
     }
 
-    struct StartResult: Sendable {
-        let started: Bool
+    nonisolated struct StartResult: Sendable {
+        let token: StartToken?
         let staleContext: StartContext?
+
+        var started: Bool { token != nil }
     }
 
-    struct InFlightResult: Sendable {
+    nonisolated struct InFlightResult: Sendable {
         let inFlight: Bool
         let staleContext: StartContext?
     }
 
-    struct DrainResult: Sendable {
+    nonisolated struct DrainResult: Sendable {
         let registrations: [Registration]
-        let pendingStarts: [PendingStart]
-    }
-
-    struct PendingStart: Sendable {
-        let entityId: UUID
-        let context: StartContext
+        let pendingStarts: [StartContext]
     }
 
     private(set) var registrations: [UUID: Registration] = [:]
@@ -51,6 +58,7 @@ struct SSHShellRegistry {
     mutating func register(
         client: SSHClient,
         shellId: UUID,
+        startToken: StartToken,
         for entityId: UUID,
         serverId: UUID,
         transport: ShellTransport,
@@ -58,6 +66,7 @@ struct SSHShellRegistry {
     ) -> RegisterResult {
         guard let context = startsInFlight[entityId],
               ObjectIdentifier(context.client) == ObjectIdentifier(client),
+              context.token == startToken,
               context.serverId == serverId,
               registrations[entityId] == nil else {
             return .stale
@@ -68,6 +77,7 @@ struct SSHShellRegistry {
             serverId: serverId,
             client: client,
             shellId: shellId,
+            startToken: startToken,
             transport: transport,
             fallbackReason: fallbackReason
         )
@@ -88,33 +98,42 @@ struct SSHShellRegistry {
         now: Date = Date()
     ) -> StartResult {
         if registrations[entityId] != nil {
-            return StartResult(started: false, staleContext: nil)
+            return StartResult(token: nil, staleContext: nil)
         }
 
         if let context = startsInFlight[entityId] {
             if now.timeIntervalSince(context.startedAt) < staleThreshold {
-                return StartResult(started: false, staleContext: nil)
+                return StartResult(token: nil, staleContext: nil)
             }
             startsInFlight.removeValue(forKey: entityId)
-            startsInFlight[entityId] = StartContext(
+            let replacement = StartContext(
+                token: StartToken(),
                 startedAt: now,
                 client: client,
                 serverId: serverId
             )
-            return StartResult(started: true, staleContext: context)
+            startsInFlight[entityId] = replacement
+            return StartResult(token: replacement.token, staleContext: context)
         }
 
-        startsInFlight[entityId] = StartContext(
+        let context = StartContext(
+            token: StartToken(),
             startedAt: now,
             client: client,
             serverId: serverId
         )
-        return StartResult(started: true, staleContext: nil)
+        startsInFlight[entityId] = context
+        return StartResult(token: context.token, staleContext: nil)
     }
 
-    mutating func finishStart(for entityId: UUID, client: SSHClient) {
+    mutating func finishStart(
+        for entityId: UUID,
+        client: SSHClient,
+        startToken: StartToken
+    ) {
         guard let context = startsInFlight[entityId] else { return }
         guard ObjectIdentifier(context.client) == ObjectIdentifier(client) else { return }
+        guard context.token == startToken else { return }
         startsInFlight.removeValue(forKey: entityId)
     }
 
@@ -145,13 +164,19 @@ struct SSHShellRegistry {
             && registration.shellId == shellId
     }
 
-    func ownsConnection(client: SSHClient, for entityId: UUID) -> Bool {
+    func ownsConnection(
+        client: SSHClient,
+        startToken: StartToken,
+        for entityId: UUID
+    ) -> Bool {
         let identifier = ObjectIdentifier(client)
         if let registration = registrations[entityId] {
             return ObjectIdentifier(registration.client) == identifier
+                && registration.startToken == startToken
         }
         if let context = startsInFlight[entityId] {
             return ObjectIdentifier(context.client) == identifier
+                && context.token == startToken
         }
         return false
     }
@@ -160,8 +185,12 @@ struct SSHShellRegistry {
         registrations[entityId]?.client
     }
 
-    func connectionClient(for entityId: UUID) -> SSHClient? {
-        registrations[entityId]?.client ?? startsInFlight[entityId]?.client
+    func connectionStartToken(for entityId: UUID) -> StartToken? {
+        registrations[entityId]?.startToken ?? startsInFlight[entityId]?.token
+    }
+
+    func owns(startToken: StartToken, for entityId: UUID) -> Bool {
+        connectionStartToken(for: entityId) == startToken
     }
 
     func hasOtherRegistrations(using client: SSHClient, excluding entityId: UUID) -> Bool {
@@ -196,9 +225,7 @@ struct SSHShellRegistry {
     mutating func drain() -> DrainResult {
         let result = DrainResult(
             registrations: Array(registrations.values),
-            pendingStarts: startsInFlight.map { entityId, context in
-                PendingStart(entityId: entityId, context: context)
-            }
+            pendingStarts: Array(startsInFlight.values)
         )
         registrations.removeAll()
         startsInFlight.removeAll()

@@ -106,7 +106,10 @@ final class TerminalPaneSSHCoordinator {
             return
         }
 
-        guard TerminalTabManager.shared.tryBeginShellStart(for: paneId, client: sshClient) else {
+        guard let startToken = TerminalTabManager.shared.beginShellStart(
+            for: paneId,
+            client: sshClient
+        ) else {
             if TerminalTabManager.shared.shellId(for: paneId) != nil {
                 TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
             }
@@ -120,10 +123,14 @@ final class TerminalPaneSSHCoordinator {
         let logger = self.logger
         let hasEstablishedConnection = TerminalTabManager.shared.paneStates[paneId]?.hasEstablishedConnection == true
 
-        shellTask = Task.detached(priority: .userInitiated) { [weak self, weak terminal, sshClient, server, credentials, paneId, logger] in
+        shellTask = Task.detached(priority: .userInitiated) { [weak self, weak terminal, sshClient, server, credentials, paneId, startToken, logger] in
             defer {
                 Task { @MainActor [weak self] in
-                    TerminalTabManager.shared.finishShellStart(for: paneId, client: sshClient)
+                    TerminalTabManager.shared.finishShellStart(
+                        for: paneId,
+                        client: sshClient,
+                        startToken: startToken
+                    )
                     self?.shellTask = nil
                 }
             }
@@ -136,7 +143,11 @@ final class TerminalPaneSSHCoordinator {
                 terminal: terminal,
                 logger: logger,
                 shouldContinueConnection: {
-                    TerminalTabManager.shared.isCurrentShellOwner(for: paneId, client: sshClient)
+                    TerminalTabManager.shared.isCurrentShellOwner(
+                        for: paneId,
+                        client: sshClient,
+                        startToken: startToken
+                    )
                 },
                 onAttempt: { attempt in
                     TerminalTabManager.shared.updatePaneState(
@@ -148,21 +159,22 @@ final class TerminalPaneSSHCoordinator {
                     )
                 },
                 startupPlan: {
-                    await TerminalTabManager.shared.tmuxStartupPlan(
+                    try await TerminalTabManager.shared.tmuxStartupPlan(
                         for: paneId,
                         serverId: server.id,
-                        client: sshClient
+                        client: sshClient,
+                        startToken: startToken
                     )
                 },
-                registerShell: { shell, skipTmuxLifecycle in
+                registerShell: { shell in
                     guard await TerminalTabManager.shared.registerSSHClient(
                         sshClient,
                         shellId: shell.id,
+                        startToken: startToken,
                         for: paneId,
                         serverId: server.id,
                         transport: shell.transport,
-                        fallbackReason: shell.fallbackReason,
-                        skipTmuxLifecycle: skipTmuxLifecycle
+                        fallbackReason: shell.fallbackReason
                     ) else {
                         return false
                     }
@@ -180,7 +192,8 @@ final class TerminalPaneSSHCoordinator {
                 shouldContinueStreaming: { data, terminal in
                     guard TerminalTabManager.shared.isCurrentShellOwner(
                         for: paneId,
-                        client: sshClient
+                        client: sshClient,
+                        startToken: startToken
                     ) else {
                         return false
                     }

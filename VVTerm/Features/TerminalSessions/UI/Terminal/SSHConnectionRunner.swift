@@ -10,8 +10,8 @@ enum SSHConnectionRunner {
         logger: Logger,
         shouldContinueConnection: @MainActor @escaping () -> Bool,
         onAttempt: @MainActor @escaping (_ attempt: Int) -> Void,
-        startupPlan: @MainActor @escaping () async -> TerminalShellStartupPlan,
-        registerShell: @MainActor @escaping (_ shell: ShellHandle, _ skipTmuxLifecycle: Bool) async -> Bool,
+        startupPlan: @MainActor @escaping () async throws -> TerminalShellStartupPlan,
+        registerShell: @MainActor @escaping (_ shell: ShellHandle) async -> Bool,
         onBeforeShellStart: @MainActor @escaping (_ cols: Int, _ rows: Int) async -> Void,
         onTitleChange: @MainActor @escaping (_ title: String) -> Void,
         shouldContinueStreaming: @MainActor @escaping (_ data: Data, _ terminal: GhosttyTerminalView) -> Bool,
@@ -41,7 +41,9 @@ enum SSHConnectionRunner {
                 let rows = Int(size?.rows ?? 24)
 
                 await onBeforeShellStart(cols, rows)
-                let startup = await startupPlan()
+                let startup = try await startupPlan()
+                guard !Task.isCancelled else { return }
+                guard shouldContinueConnection() else { return }
                 let shell = try await sshClient.startShell(
                     cols: cols,
                     rows: rows,
@@ -52,7 +54,7 @@ enum SSHConnectionRunner {
                     await sshClient.closeShell(shell.id)
                     return
                 }
-                guard await registerShell(shell, startup.skipTmuxLifecycle) else {
+                guard await registerShell(shell) else {
                     return
                 }
 
@@ -122,9 +124,13 @@ enum SSHConnectionRunner {
 
                 if attempt < maxAttempts, let sshError = error as? SSHError {
                     let shouldReset = await shouldResetClient(sshError)
+                    guard !Task.isCancelled else { return }
+                    guard shouldContinueConnection() else { return }
                     if shouldReset {
                         logger.warning("Resetting SSH client before retrying connection")
                         await sshClient.disconnect()
+                        guard !Task.isCancelled else { return }
+                        guard shouldContinueConnection() else { return }
                     }
                 }
 

@@ -133,14 +133,22 @@ enum TerminalAutoReconnectPolicy {
     static func shouldAttempt(
         sceneIsActive: Bool,
         applicationIsActive: Bool,
+        networkReadiness: NetworkMonitor.Readiness,
         automaticReconnectAllowed: Bool,
         reconnectInFlight: Bool,
         connectionState: ConnectionState
     ) -> Bool {
         sceneIsActive
             && applicationIsActive
+            && networkReadiness == .ready
             && automaticReconnectAllowed
             && !reconnectInFlight
             && connectionState == .disconnected
+    }
+}
+
+enum TmuxInstallPromptPolicy {
+    static func shouldPresent(for status: TmuxStatus?) -> Bool {
+        status == .missing
     }
 }

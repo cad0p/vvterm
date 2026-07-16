@@ -134,6 +134,7 @@ struct TerminalConnectionStatusPresentationTests {
         let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
             sceneIsActive: true,
             applicationIsActive: false,
+            networkReadiness: .ready,
             automaticReconnectAllowed: true,
             reconnectInFlight: false,
             connectionState: .disconnected
@@ -147,6 +148,7 @@ struct TerminalConnectionStatusPresentationTests {
         let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
             sceneIsActive: true,
             applicationIsActive: true,
+            networkReadiness: .ready,
             automaticReconnectAllowed: true,
             reconnectInFlight: false,
             connectionState: .disconnected
@@ -160,12 +162,38 @@ struct TerminalConnectionStatusPresentationTests {
         let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
             sceneIsActive: true,
             applicationIsActive: true,
+            networkReadiness: .ready,
             automaticReconnectAllowed: true,
             reconnectInFlight: true,
             connectionState: .disconnected
         )
 
         #expect(!shouldReconnect)
+    }
+
+    @Test(arguments: [NetworkMonitor.Readiness.unknown, .unavailable])
+    func automaticReconnectWaitsForReadyNetwork(readiness: NetworkMonitor.Readiness) {
+        let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: true,
+            applicationIsActive: true,
+            networkReadiness: readiness,
+            automaticReconnectAllowed: true,
+            reconnectInFlight: false,
+            connectionState: .disconnected
+        )
+
+        #expect(!shouldReconnect)
+    }
+
+    @Test
+    func tmuxInstallPromptRequiresConfirmedMissingStatus() {
+        #expect(TmuxInstallPromptPolicy.shouldPresent(for: TmuxStatus.missing))
+        #expect(!TmuxInstallPromptPolicy.shouldPresent(for: TmuxStatus.unknown))
+        #expect(!TmuxInstallPromptPolicy.shouldPresent(for: TmuxStatus.background))
+        #expect(!TmuxInstallPromptPolicy.shouldPresent(for: TmuxStatus.foreground))
+        #expect(!TmuxInstallPromptPolicy.shouldPresent(for: TmuxStatus.off))
+        #expect(!TmuxInstallPromptPolicy.shouldPresent(for: TmuxStatus.installing))
+        #expect(!TmuxInstallPromptPolicy.shouldPresent(for: nil))
     }
 
     @Test

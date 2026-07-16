@@ -99,7 +99,8 @@ private struct ConnectionSheetHandoffHarness: View {
         .task {
             try? await Task.sleep(for: .seconds(3))
             tmuxPrompt = TmuxAttachPrompt(
-                id: paneId,
+                id: UUID(),
+                paneId: paneId,
                 serverId: UUID(),
                 serverName: "production",
                 existingSessions: []
