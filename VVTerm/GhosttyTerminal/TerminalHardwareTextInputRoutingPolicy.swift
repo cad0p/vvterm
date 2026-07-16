@@ -65,6 +65,35 @@ enum TerminalHardwareTextInputRoutingPolicy {
     }
 }
 
+enum TerminalHardwareKeyRepeatSource {
+    case directTerminal
+    case systemInterpretedText
+}
+
+enum TerminalHardwareKeyRepeatPolicy {
+    static func shouldRepeat(
+        source: TerminalHardwareKeyRepeatSource,
+        isPrintableKey: Bool,
+        isRepeatableSpecialKey: Bool,
+        hasControlModifier: Bool,
+        hasAlternateModifier: Bool,
+        hasCommandModifier: Bool,
+        hasActiveIMEComposition: Bool
+    ) -> Bool {
+        guard !hasCommandModifier,
+              !hasActiveIMEComposition else {
+            return false
+        }
+
+        switch source {
+        case .directTerminal:
+            return isPrintableKey || isRepeatableSpecialKey
+        case .systemInterpretedText:
+            return isPrintableKey && !hasControlModifier && !hasAlternateModifier
+        }
+    }
+}
+
 enum TerminalKeyInputModifierPolicy {
     static func consumedModifiers(for mods: Ghostty.Input.Mods) -> Ghostty.Input.Mods {
         mods.subtracting([.ctrl, .super])

@@ -236,6 +236,39 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.keyboard.unexpectedLoss")
                 }
 
+                HStack(spacing: 8) {
+                    Button("Repeat h") {
+                        terminalView?.keyboardUITestBeginInterpretedHardwareKeyRepeat(
+                            text: "h",
+                            shifted: false
+                        )
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.begin.h")
+
+                    Button("Repeat H") {
+                        terminalView?.keyboardUITestBeginInterpretedHardwareKeyRepeat(
+                            text: "H",
+                            shifted: true
+                        )
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.begin.shiftH")
+
+                    Button("Repeat Tick") {
+                        terminalView?.keyboardUITestFireHardwareKeyRepeat()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.tick")
+
+                    Button("Repeat Release") {
+                        terminalView?.keyboardUITestEndHardwareKeyRepeat()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.release")
+
+                    Button("Repeat Cancel") {
+                        terminalView?.keyboardUITestCancelHardwareKeyRepeat()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.cancel")
+                }
+
                 Button("Cursor Bottom") {
                     terminalView?.keyboardUITestMoveCursorToBottom()
                 }
@@ -422,6 +455,8 @@ struct TerminalKeyboardUITestHarness: View {
         let primaryMousePresses = mouseReportCount(buttonPattern: "0", terminator: "M")
         let primaryMouseReleases = mouseReportCount(buttonPattern: "0", terminator: "m")
         let mouseScrollReports = mouseReportCount(buttonPattern: "6[45]", terminator: "M")
+        let lowercaseHInputs = inputByteCount(0x68)
+        let uppercaseHInputs = inputByteCount(0x48)
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardShows=\(keyboardShowTransitionCount) keyboardHides=\(keyboardHideTransitionCount)"
             + " accessoryPairingObservation=\(keyboardAccessoryPairingObservation.status)"
@@ -432,6 +467,15 @@ struct TerminalKeyboardUITestHarness: View {
             + " mouseCaptured=\(terminalView.surface?.mouseCaptured == true)"
             + " primaryMousePresses=\(primaryMousePresses) primaryMouseReleases=\(primaryMouseReleases)"
             + " mouseScrollReports=\(mouseScrollReports) zoomActions=\(zoomActionCount)"
+            + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
+    }
+
+    private func inputByteCount(_ byte: UInt8) -> Int {
+        receivedInput.reduce(into: 0) { count, receivedByte in
+            if receivedByte == byte {
+                count += 1
+            }
+        }
     }
 
     private func mouseReportCount(buttonPattern: String, terminator: Character) -> Int {

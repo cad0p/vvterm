@@ -558,7 +558,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
         Self.dictationLogger.debug("setMarkedText text=\(markedText ?? "nil", privacy: .public) sel=\(selectedRange.location),\(selectedRange.length) mode=\(self.currentPrimaryLanguage, privacy: .public) session=\(self.dictationSessionOrigin?.rawValue ?? "none", privacy: .public)")
-        terminalOwner?.discardPendingSystemTextInputHardwareKey()
+        terminalOwner?.cancelHardwareKeyRepeatForIMEComposition()
         performDocumentEdit {
             let normalized = markedText?.precomposedStringWithCanonicalMapping ?? ""
             let nsText = documentBuffer as NSString
@@ -965,10 +965,10 @@ class GhosttyTerminalView: UIView {
     #endif
     private var customIORedrawScheduled = false
     private var keyRepeatTimer: DispatchSourceTimer?
-    private var repeatingHardwareKey: UIKey?
-    private var repeatingFallbackKey: Ghostty.Input.Key?
-    private var repeatingFallbackModifiers: UIKeyModifierFlags = []
-    private var repeatingKeyCode: UInt16?
+    private var hardwareKeyRepeatState = TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>()
+    #if DEBUG
+    private var keyboardUITestUsesManualHardwareKeyRepeatClock = false
+    #endif
 
     /// Track last surface size in pixels to avoid redundant resize/draw work.
     private var lastPixelSize: CGSize = .zero
@@ -1166,9 +1166,7 @@ class GhosttyTerminalView: UIView {
         }
         return textView
     }()
-    private var hardwarePressesSentToGhostty: Set<UInt16> = []
-    private var fallbackHardwarePressKeys: [UInt16: Ghostty.Input.Key] = [:]
-    private var fallbackHardwarePressModifiers: [UInt16: UIKeyModifierFlags] = [:]
+    private var hardwarePressesSentToGhostty: [UInt16: Ghostty.Input.KeyEvent] = [:]
     private var systemTextInputPresses: Set<UInt16> = []
     private var terminalAltOptionKeyCodes: Set<UInt16> = []
 
@@ -1326,6 +1324,7 @@ class GhosttyTerminalView: UIView {
     }
 
     isolated deinit {
+        cancelTrackedHardwareInput()
         stopSelectionAutoscroll()
         for observer in hardwareKeyboardObservers {
             NotificationCenter.default.removeObserver(observer)
@@ -1345,6 +1344,7 @@ class GhosttyTerminalView: UIView {
     /// Explicitly cleanup the terminal before removal from view hierarchy.
     /// Call this in dismantleUIView to ensure proper cleanup.
     func cleanup() {
+        cancelTrackedHardwareInput()
         isShuttingDown = true
         isPaused = true
         stopMomentumScrolling()
@@ -1407,6 +1407,7 @@ class GhosttyTerminalView: UIView {
 
     func pauseRendering() {
         guard !isShuttingDown else { return }
+        cancelTrackedHardwareInput()
         isPaused = true
 
         if let surface = surface?.unsafeCValue {
@@ -1743,7 +1744,7 @@ class GhosttyTerminalView: UIView {
         } else {
             imeProxyTextView.endDictationSession(commit: true)
             invalidateLocalTextInputSession()
-            stopKeyRepeat()
+            cancelTrackedHardwareInput()
         }
     }
 
@@ -1910,7 +1911,13 @@ class GhosttyTerminalView: UIView {
         return UIApplication.shared.applicationState == .active
     }
 
-    var acceptsTerminalInput = true
+    var acceptsTerminalInput = true {
+        didSet {
+            if !acceptsTerminalInput {
+                cancelTrackedHardwareInput()
+            }
+        }
+    }
     private var keyboardFocusPolicy = TerminalKeyboardFocusPolicy()
     private var suppressDirectTouchKeyboardFocusUntil = Date.distantPast
     private var suppressAccessoryForMissingSoftwareKeyboard = false
@@ -2257,6 +2264,9 @@ class GhosttyTerminalView: UIView {
         super.didMoveToWindow()
 
         let isVisible = (window != nil)
+        if !isVisible {
+            cancelTrackedHardwareInput()
+        }
         isPaused = !isVisible
         if let surface = surface?.unsafeCValue {
             ghostty_surface_set_occlusion(surface, isVisible)
@@ -2325,14 +2335,12 @@ class GhosttyTerminalView: UIView {
 
     private func refreshHardwareKeyboardAttachmentFromSystem() {
         let hasHardwareKeyboard = detectedHardwareKeyboardAttached
-        guard hasHardwareKeyboard != hasHardwareKeyboardAttached else { return }
-        hasHardwareKeyboardAttached = hasHardwareKeyboard
+        _ = setHardwareKeyboardAttached(hasHardwareKeyboard)
     }
 
     private func updateHardwareKeyboardState(reloadInputViewsIfNeeded: Bool) {
         let hasHardwareKeyboard = detectedHardwareKeyboardAttached
-        let didChange = hasHardwareKeyboard != hasHardwareKeyboardAttached
-        hasHardwareKeyboardAttached = hasHardwareKeyboard
+        let didChange = setHardwareKeyboardAttached(hasHardwareKeyboard)
         if didChange {
             logKeyboardLifecycle(
                 "hardware.changed",
@@ -2354,6 +2362,16 @@ class GhosttyTerminalView: UIView {
         if reloadInputViewsIfNeeded, isTerminalTextInputActive, isTextInputSessionEligible {
             reloadTerminalInputViewsIfActive()
         }
+    }
+
+    @discardableResult
+    private func setHardwareKeyboardAttached(_ attached: Bool) -> Bool {
+        guard attached != hasHardwareKeyboardAttached else { return false }
+        if !attached {
+            cancelTrackedHardwareInput()
+        }
+        hasHardwareKeyboardAttached = attached
+        return true
     }
 
     private func markHardwareKeyboardDetectedFromKeyPress() {
@@ -3026,7 +3044,7 @@ class GhosttyTerminalView: UIView {
         )
         findNavigatorLifecycle.begin(restoreTerminalFocus: restoreTerminalFocus)
         notifyFindNavigatorVisibilityChange()
-        stopKeyRepeat()
+        cancelTrackedHardwareInput()
 
         if !super.isFirstResponder {
             _ = super.becomeFirstResponder()
@@ -4020,7 +4038,7 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    private func shouldRepeatHardwareKey(_ key: UIKey) -> Bool {
+    private func isRepeatableSpecialHardwareKey(_ key: UIKey) -> Bool {
         switch key.keyCode {
         case .keyboardDeleteOrBackspace,
              .keyboardDeleteForward,
@@ -4036,6 +4054,10 @@ class GhosttyTerminalView: UIView {
         default:
             return false
         }
+    }
+
+    private func isPrintableHardwareKeyEvent(_ event: Ghostty.Input.KeyEvent) -> Bool {
+        event.unshiftedCodepoint >= 0x20 || !(event.text?.isEmpty ?? true)
     }
 
     private func fallbackHardwareKey(for key: UIKey) -> Ghostty.Input.Key? {
@@ -4148,69 +4170,126 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    private func startKeyRepeat(for key: UIKey) {
-        guard shouldRepeatHardwareKey(key) else { return }
-        let blockedModifiers: UIKeyModifierFlags = [.command, .control, .alternate]
-        guard key.modifierFlags.intersection(blockedModifiers).isEmpty else { return }
-        stopKeyRepeat()
-        repeatingHardwareKey = key
-        repeatingFallbackKey = fallbackHardwareKey(for: key)
-        repeatingFallbackModifiers = key.modifierFlags
-        repeatingKeyCode = UInt16(key.keyCode.rawValue)
+    @discardableResult
+    private func registerHardwareKeyRepeat(
+        keyCode: UInt16,
+        source: TerminalHardwareKeyRepeatSource,
+        event: Ghostty.Input.KeyEvent,
+        isRepeatableSpecialKey: Bool,
+        modifiers: UIKeyModifierFlags,
+        hasActiveIMEComposition: Bool
+    ) -> TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Registration? {
+        guard TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+            source: source,
+            isPrintableKey: isPrintableHardwareKeyEvent(event),
+            isRepeatableSpecialKey: isRepeatableSpecialKey,
+            hasControlModifier: modifiers.contains(.control),
+            hasAlternateModifier: modifiers.contains(.alternate),
+            hasCommandModifier: modifiers.contains(.command),
+            hasActiveIMEComposition: hasActiveIMEComposition
+        ) else {
+            return nil
+        }
+
+        let registration = hardwareKeyRepeatState.register(
+            keyCode: keyCode,
+            payload: event
+        )
+        if case .started(let active) = registration {
+            scheduleHardwareKeyRepeatTimer(token: active.token)
+        }
+        return registration
+    }
+
+    private func scheduleHardwareKeyRepeatTimer(token: UUID) {
+        stopHardwareKeyRepeatTimer()
+        #if DEBUG
+        guard !keyboardUITestUsesManualHardwareKeyRepeatClock else { return }
+        #endif
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 0.35, repeating: 0.05)
         timer.setEventHandler { [weak self] in
-            guard let self = self,
-                  let cSurface = self.surface?.unsafeCValue else { return }
-            guard self.canRouteTerminalInput else {
-                self.stopKeyRepeat()
-                return
-            }
-            if let repeatKey = self.repeatingHardwareKey,
-               self.sendDirectHardwareKeyEvent(
-                   repeatKey,
-                   action: GHOSTTY_ACTION_REPEAT,
-                   surface: cSurface
-               ) {
-                self.requestRender()
-                return
-            }
-            if let fallbackKey = self.repeatingFallbackKey,
-               let surface = self.surface {
-                surface.sendKeyEvent(
-                    self.fallbackHardwareEvent(
-                        key: fallbackKey,
-                        action: .repeat,
-                        modifiers: self.repeatingFallbackModifiers
-                    )
-                )
-            }
-            self.requestRender()
+            self?.handleHardwareKeyRepeatTick(token: token)
         }
         keyRepeatTimer = timer
         timer.resume()
     }
 
-    private func stopKeyRepeat() {
+    private func stopHardwareKeyRepeatTimer() {
         keyRepeatTimer?.cancel()
         keyRepeatTimer = nil
-        repeatingHardwareKey = nil
-        repeatingFallbackKey = nil
-        repeatingFallbackModifiers = []
-        repeatingKeyCode = nil
     }
 
-    private func ghosttyInputAction(_ action: ghostty_input_action_e) -> Ghostty.Input.Action {
-        switch action {
-        case GHOSTTY_ACTION_PRESS:
-            return .press
-        case GHOSTTY_ACTION_RELEASE:
-            return .release
-        case GHOSTTY_ACTION_REPEAT:
-            return .repeat
-        default:
-            return .press
+    private var activeHardwareKeyRepeat: TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Active? {
+        guard case .repeating(let active) = hardwareKeyRepeatState.phase else { return nil }
+        return active
+    }
+
+    private var canContinueHardwareKeyRepeat: Bool {
+        canRouteTerminalInput
+            && hasHardwareKeyboardAttached
+            && isTextInputSessionEligible
+            && isTerminalTextInputActive
+            && !isPaused
+            && !isShuttingDown
+    }
+
+    private func handleHardwareKeyRepeatTick(token: UUID) {
+        guard canContinueHardwareKeyRepeat else {
+            cancelTrackedHardwareInput()
+            return
         }
+        guard let active = hardwareKeyRepeatState.active(for: token), let surface else { return }
+        surface.sendKeyEvent(hardwareKeyEvent(active.payload, action: .repeat))
+        requestRender()
+    }
+
+    @discardableResult
+    private func endHardwareKeyRepeat(keyCode: UInt16) -> TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Active? {
+        guard let active = hardwareKeyRepeatState.end(keyCode: keyCode) else { return nil }
+        stopHardwareKeyRepeatTimer()
+        return active
+    }
+
+    private func cancelTrackedHardwareInput() {
+        stopHardwareKeyRepeatTimer()
+        let active = hardwareKeyRepeatState.cancel()
+        var trackedPresses = hardwarePressesSentToGhostty
+        hardwarePressesSentToGhostty.removeAll()
+        systemTextInputPresses.removeAll()
+        terminalAltOptionKeyCodes.removeAll()
+        pendingSystemTextInputHardwareKeys.removeAll()
+
+        guard let surface else { return }
+        var didSendRelease = false
+        if let active {
+            trackedPresses.removeValue(forKey: active.keyCode)
+            surface.sendKeyEvent(hardwareKeyEvent(active.payload, action: .release))
+            didSendRelease = true
+        }
+        for event in trackedPresses.values {
+            surface.sendKeyEvent(hardwareKeyEvent(event, action: .release))
+            didSendRelease = true
+        }
+        if didSendRelease {
+            requestRender()
+        }
+    }
+
+    private func hardwareKeyEvent(
+        _ event: Ghostty.Input.KeyEvent,
+        action: Ghostty.Input.Action,
+        text: String? = nil
+    ) -> Ghostty.Input.KeyEvent {
+        Ghostty.Input.KeyEvent(
+            key: event.key,
+            action: action,
+            text: text ?? event.text,
+            composing: false,
+            mods: event.mods,
+            consumedMods: event.consumedMods,
+            unshiftedCodepoint: event.unshiftedCodepoint
+        )
     }
 
     private func fallbackHardwareEvent(
@@ -4237,14 +4316,20 @@ class GhosttyTerminalView: UIView {
         _ key: UIKey,
         action: ghostty_input_action_e,
         surface cSurface: ghostty_surface_t
-    ) -> Bool {
-        guard let event = Ghostty.Input.KeyEvent(uiKey: key, action: ghosttyInputAction(action))
-        else {
-            return false
+    ) -> Ghostty.Input.KeyEvent? {
+        let ghosttyAction: Ghostty.Input.Action = switch action {
+        case GHOSTTY_ACTION_PRESS: .press
+        case GHOSTTY_ACTION_RELEASE: .release
+        case GHOSTTY_ACTION_REPEAT: .repeat
+        default: .press
         }
-        return event.withCValue { cEvent in
+        guard let event = Ghostty.Input.KeyEvent(uiKey: key, action: ghosttyAction) else {
+            return nil
+        }
+        guard event.withCValue(execute: { cEvent in
             ghostty_surface_key(cSurface, cEvent)
-        }
+        }) else { return nil }
+        return event
     }
 
     private func isTextInputModifierOnlyKey(_ key: UIKey) -> Bool {
@@ -4287,11 +4372,20 @@ class GhosttyTerminalView: UIView {
         surface: Ghostty.Surface,
         cSurface: ghostty_surface_t
     ) -> Bool {
-        if sendDirectHardwareKeyEvent(key, action: GHOSTTY_ACTION_PRESS, surface: cSurface) {
-            hardwarePressesSentToGhostty.insert(keyCode)
-            fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-            fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-            startKeyRepeat(for: key)
+        if let event = sendDirectHardwareKeyEvent(
+            key,
+            action: GHOSTTY_ACTION_PRESS,
+            surface: cSurface
+        ) {
+            hardwarePressesSentToGhostty[keyCode] = event
+            registerHardwareKeyRepeat(
+                keyCode: keyCode,
+                source: .directTerminal,
+                event: event,
+                isRepeatableSpecialKey: isRepeatableSpecialHardwareKey(key),
+                modifiers: key.modifierFlags,
+                hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
+            )
             return true
         }
 
@@ -4299,17 +4393,21 @@ class GhosttyTerminalView: UIView {
             return false
         }
 
-        surface.sendKeyEvent(
-            fallbackHardwareEvent(
-                key: fallbackKey,
-                action: .press,
-                modifiers: key.modifierFlags
-            )
+        let event = fallbackHardwareEvent(
+            key: fallbackKey,
+            action: .press,
+            modifiers: key.modifierFlags
         )
-        hardwarePressesSentToGhostty.insert(keyCode)
-        fallbackHardwarePressKeys[keyCode] = fallbackKey
-        fallbackHardwarePressModifiers[keyCode] = key.modifierFlags
-        startKeyRepeat(for: key)
+        surface.sendKeyEvent(event)
+        hardwarePressesSentToGhostty[keyCode] = event
+        registerHardwareKeyRepeat(
+            keyCode: keyCode,
+            source: .directTerminal,
+            event: event,
+            isRepeatableSpecialKey: isRepeatableSpecialHardwareKey(key),
+            modifiers: key.modifierFlags,
+            hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
+        )
         return true
     }
 
@@ -4414,7 +4512,7 @@ class GhosttyTerminalView: UIView {
     }
 
     fileprivate func processHardwarePressesEnded(_ presses: Set<UIPress>, event _: UIPressesEvent?) -> HardwarePressResult {
-        guard let surface = surface, let cSurface = surface.unsafeCValue else {
+        guard let surface else {
             return HardwarePressResult(forwardedToSystem: presses, didHandleGhosttyInput: false)
         }
         guard canRouteTerminalInput || !hardwarePressesSentToGhostty.isEmpty else {
@@ -4430,32 +4528,13 @@ class GhosttyTerminalView: UIView {
             let keyCode = UInt16(key.keyCode.rawValue)
             let shouldForwardToSystem = systemTextInputPresses.remove(keyCode) != nil
             terminalAltOptionKeyCodes.remove(keyCode)
-            guard hardwarePressesSentToGhostty.contains(keyCode) else {
-                fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-                fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
+            guard let pressedEvent = hardwarePressesSentToGhostty.removeValue(forKey: keyCode) else {
                 result.forwardedToSystem.insert(press)
                 continue
             }
-            hardwarePressesSentToGhostty.remove(keyCode)
-            if repeatingKeyCode == keyCode {
-                stopKeyRepeat()
-            }
-            let fallbackKey = fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-            let fallbackModifiers =
-                fallbackHardwarePressModifiers.removeValue(forKey: keyCode) ?? key.modifierFlags
-
-            if sendDirectHardwareKeyEvent(key, action: GHOSTTY_ACTION_RELEASE, surface: cSurface) {
-                result.didHandleGhosttyInput = true
-            } else if let fallbackKey {
-                surface.sendKeyEvent(
-                    fallbackHardwareEvent(
-                        key: fallbackKey,
-                        action: .release,
-                        modifiers: fallbackModifiers
-                    )
-                )
-                result.didHandleGhosttyInput = true
-            }
+            endHardwareKeyRepeat(keyCode: keyCode)
+            surface.sendKeyEvent(hardwareKeyEvent(pressedEvent, action: .release))
+            result.didHandleGhosttyInput = true
             if shouldForwardToSystem {
                 result.forwardedToSystem.insert(press)
             }
@@ -4464,17 +4543,8 @@ class GhosttyTerminalView: UIView {
         return result
     }
 
-    fileprivate func processHardwarePressesCancelled(_ presses: Set<UIPress>) {
-        for press in presses {
-            guard let key = press.key else { continue }
-            let keyCode = UInt16(key.keyCode.rawValue)
-            hardwarePressesSentToGhostty.remove(keyCode)
-            fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-            fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-            systemTextInputPresses.remove(keyCode)
-            terminalAltOptionKeyCodes.remove(keyCode)
-        }
-        stopKeyRepeat()
+    fileprivate func processHardwarePressesCancelled(_: Set<UIPress>) {
+        cancelTrackedHardwareInput()
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -4576,6 +4646,9 @@ class GhosttyTerminalView: UIView {
 
     fileprivate func handleIMEProxyInsertText(_ text: String, fromIMEComposition: Bool = false) -> Bool {
         guard canRouteTerminalInput else { return true }
+        if fromIMEComposition {
+            cancelTrackedHardwareInput()
+        }
         if isNativeSelectionTextInputContext {
             clearNativeSelectionStateForTerminalInput()
         }
@@ -4597,6 +4670,9 @@ class GhosttyTerminalView: UIView {
            let key = consumePendingSystemTextInputHardwareKey(),
            sendInterpretedHardwareKeyText(normalized, for: key) {
             invalidateLocalTextInputSession()
+            return true
+        }
+        if !fromIMEComposition, updateActiveInterpretedHardwareKeyRepeat(text: normalized) {
             return true
         }
 
@@ -5432,6 +5508,8 @@ extension GhosttyTerminalView {
             "imeComposing=\(textInputModel.hasActiveIMEComposition)",
             "imeMarkedText=\(keyboardUITestToken(textInputModel.markedText))",
             "imeModelText=\(keyboardUITestToken(textInputModel.text))",
+            "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
+            "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
             "hideRequests=\(keyboardHideRequestCount)",
             "inputRebuilds=\(keyboardInputSessionRebuildCount)"
         ].joined(separator: " ")
@@ -5454,6 +5532,62 @@ extension GhosttyTerminalView {
         )
     }
 
+    func keyboardUITestBeginInterpretedHardwareKeyRepeat(text: String, shifted: Bool) {
+        guard !text.isEmpty, let surface else { return }
+        keyboardUITestUsesManualHardwareKeyRepeatClock = true
+        cancelTrackedHardwareInput()
+
+        let keyCode = UInt16(UIKeyboardHIDUsage.keyboardH.rawValue)
+        let modifiers: UIKeyModifierFlags = shifted ? [.shift] : []
+        let ghosttyModifiers = Ghostty.Input.Mods(uiKeyModifiers: modifiers)
+        if shifted {
+            let shiftKeyCode = UInt16(UIKeyboardHIDUsage.keyboardLeftShift.rawValue)
+            let shiftEvent = Ghostty.Input.KeyEvent(
+                key: .shiftLeft,
+                action: .press,
+                mods: ghosttyModifiers,
+                consumedMods: ghosttyModifiers
+            )
+            surface.sendKeyEvent(shiftEvent)
+            hardwarePressesSentToGhostty[shiftKeyCode] = shiftEvent
+            systemTextInputPresses.insert(shiftKeyCode)
+        }
+        let sourceEvent = Ghostty.Input.KeyEvent(
+            key: .h,
+            action: .press,
+            text: text,
+            composing: false,
+            mods: ghosttyModifiers,
+            consumedMods: ghosttyModifiers,
+            unshiftedCodepoint: 0x68
+        )
+        systemTextInputPresses.insert(keyCode)
+        _ = sendResolvedInterpretedHardwareKeyText(
+            text,
+            keyCode: keyCode,
+            modifiers: modifiers,
+            sourceEvent: sourceEvent
+        )
+    }
+
+    func keyboardUITestFireHardwareKeyRepeat() {
+        guard let token = activeHardwareKeyRepeat?.token else { return }
+        handleHardwareKeyRepeatTick(token: token)
+    }
+
+    func keyboardUITestEndHardwareKeyRepeat() {
+        guard let active = activeHardwareKeyRepeat,
+              let ended = endHardwareKeyRepeat(keyCode: active.keyCode) else { return }
+        systemTextInputPresses.remove(ended.keyCode)
+        let pressedEvent = hardwarePressesSentToGhostty.removeValue(forKey: ended.keyCode)
+        surface?.sendKeyEvent(hardwareKeyEvent(pressedEvent ?? ended.payload, action: .release))
+        requestRender()
+    }
+
+    func keyboardUITestCancelHardwareKeyRepeat() {
+        cancelTrackedHardwareInput()
+    }
+
     func keyboardUITestDeleteBackwardThroughIMEProxy() {
         if !imeProxyTextView.isFirstResponder {
             _ = requestKeyboardFocus(for: .initialActivation)
@@ -5471,7 +5605,7 @@ extension GhosttyTerminalView {
 
     func keyboardUITestSetHardwareKeyboardAttached(_ attached: Bool) {
         keyboardUITestHardwareKeyboardOverride = attached
-        hasHardwareKeyboardAttached = attached
+        _ = setHardwareKeyboardAttached(attached)
         if attached {
             focusForHardwareKeyboardIfNeeded()
         } else if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
@@ -5485,6 +5619,15 @@ extension GhosttyTerminalView {
     func keyboardUITestBeginUnexpectedSoftwareKeyboardLoss() {
         keyboardUITestSoftwareKeyboardFailure = .untilSessionRebuild
         reloadTerminalInputViewsIfActive()
+    }
+
+    private var keyboardUITestHardwareRepeatPhase: String {
+        switch hardwareKeyRepeatState.phase {
+        case .idle:
+            "idle"
+        case .repeating:
+            "repeating"
+        }
     }
 
     private func keyboardUITestToken(_ value: String) -> String {
@@ -6438,6 +6581,10 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
         pendingSystemTextInputHardwareKeys.removeFirst()
     }
 
+    fileprivate func cancelHardwareKeyRepeatForIMEComposition() {
+        cancelTrackedHardwareInput()
+    }
+
     fileprivate func removeUnconsumedPendingSystemTextInputHardwareKeys(after pendingCount: Int) {
         guard pendingSystemTextInputHardwareKeys.count > pendingCount else { return }
         pendingSystemTextInputHardwareKeys.removeSubrange(pendingCount...)
@@ -6445,12 +6592,26 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
 
     @discardableResult
     fileprivate func sendInterpretedHardwareKeyText(_ text: String, for key: UIKey) -> Bool {
-        guard canRouteTerminalInput, let surface else { return false }
         guard let sourceEvent = Ghostty.Input.KeyEvent(uiKey: key, action: .press) else {
             sendText(text)
             return true
         }
-        let keyCode = UInt16(key.keyCode.rawValue)
+        return sendResolvedInterpretedHardwareKeyText(
+            text,
+            keyCode: UInt16(key.keyCode.rawValue),
+            modifiers: key.modifierFlags,
+            sourceEvent: sourceEvent
+        )
+    }
+
+    @discardableResult
+    private func sendResolvedInterpretedHardwareKeyText(
+        _ text: String,
+        keyCode: UInt16,
+        modifiers: UIKeyModifierFlags,
+        sourceEvent: Ghostty.Input.KeyEvent
+    ) -> Bool {
+        guard canRouteTerminalInput, let surface else { return false }
         let interpretedEvent = Ghostty.Input.KeyEvent(
             key: sourceEvent.key,
             action: .press,
@@ -6460,10 +6621,37 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
             consumedMods: sourceEvent.consumedMods,
             unshiftedCodepoint: sourceEvent.unshiftedCodepoint
         )
+        let registration = registerHardwareKeyRepeat(
+            keyCode: keyCode,
+            source: .systemInterpretedText,
+            event: interpretedEvent,
+            isRepeatableSpecialKey: false,
+            modifiers: modifiers,
+            hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
+        )
+        if case .updated? = registration {
+            hardwarePressesSentToGhostty[keyCode] = interpretedEvent
+            return true
+        }
+
         surface.sendKeyEvent(interpretedEvent)
-        hardwarePressesSentToGhostty.insert(keyCode)
-        systemTextInputPresses.remove(keyCode)
+        hardwarePressesSentToGhostty[keyCode] = interpretedEvent
         requestRender()
+        return true
+    }
+
+    private func updateActiveInterpretedHardwareKeyRepeat(text: String) -> Bool {
+        guard !text.isEmpty,
+              let active = activeHardwareKeyRepeat,
+              systemTextInputPresses.contains(active.keyCode) else {
+            return false
+        }
+        let event = hardwareKeyEvent(active.payload, action: .press, text: text)
+        hardwareKeyRepeatState.register(
+            keyCode: active.keyCode,
+            payload: event
+        )
+        hardwarePressesSentToGhostty[active.keyCode] = event
         return true
     }
 
@@ -6643,7 +6831,7 @@ extension GhosttyTerminalView: UITextInput {
         if isNativeSelectionTextInputContext {
             guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
         }
-        discardPendingSystemTextInputHardwareKey()
+        cancelHardwareKeyRepeatForIMEComposition()
         applyTerminalTextInputEffects(
             textInputModel.handleSetMarkedText(
                 markedText,

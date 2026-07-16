@@ -3,6 +3,114 @@ import Testing
 
 struct TerminalHardwareTextInputRoutingPolicyTests {
     @Test
+    func repeatsPlainSystemInterpretedPrintableKey() {
+        #expect(
+            TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .systemInterpretedText,
+                isPrintableKey: true,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            )
+        )
+    }
+
+    @Test
+    func repeatsDirectNavigationAndDeleteKeys() {
+        #expect(
+            TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .directTerminal,
+                isPrintableKey: false,
+                isRepeatableSpecialKey: true,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            )
+        )
+    }
+
+    @Test
+    func repeatsControlAndConfiguredOptionAsAltPrintableKeysOnDirectPath() {
+        #expect(
+            TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .directTerminal,
+                isPrintableKey: true,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: true,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            )
+        )
+        #expect(
+            TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .directTerminal,
+                isPrintableKey: true,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: false,
+                hasAlternateModifier: true,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            )
+        )
+    }
+
+    @Test
+    func doesNotRepeatSystemOptionTextCommandKeysOrActiveIMEInput() {
+        #expect(
+            !TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .systemInterpretedText,
+                isPrintableKey: true,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: false,
+                hasAlternateModifier: true,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            )
+        )
+        #expect(
+            !TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .directTerminal,
+                isPrintableKey: true,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: true,
+                hasActiveIMEComposition: false
+            )
+        )
+        #expect(
+            !TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .systemInterpretedText,
+                isPrintableKey: true,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: true
+            )
+        )
+    }
+
+    @Test
+    func doesNotRepeatCapsLockOrModifierOnlyKeys() {
+        #expect(
+            !TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                source: .directTerminal,
+                isPrintableKey: false,
+                isRepeatableSpecialKey: false,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            )
+        )
+    }
+
+    @Test
     func routesPrintableHardwareTextToSystemTextInput() {
         #expect(
             TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
