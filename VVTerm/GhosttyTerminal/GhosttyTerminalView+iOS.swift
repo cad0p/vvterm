@@ -26,6 +26,16 @@ struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
     var sceneActivationState: String
     var isFirstResponder: Bool
     var isSoftwareInputActive: Bool
+
+    var lifecycleDescription: String {
+        [
+            "windowAttached=\(windowAttached)",
+            "keyWindow=\(windowIsKey)",
+            "scene=\(sceneActivationState)",
+            "firstResponder=\(isFirstResponder)",
+            "softwareInput=\(isSoftwareInputActive)",
+        ].joined(separator: " ")
+    }
 }
 
 private enum TerminalEditMenuPresentation {
@@ -265,18 +275,23 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     override func becomeFirstResponder() -> Bool {
+        terminalOwner?.logKeyboardLifecycle("imeProxy.become.begin")
         let result = super.becomeFirstResponder()
         terminalOwner?.imeProxyFocusDidChange(isFocused: result || isFirstResponder)
+        terminalOwner?.logKeyboardLifecycle("imeProxy.become.end", result: result)
         return result
     }
 
     override func resignFirstResponder() -> Bool {
+        terminalOwner?.logKeyboardLifecycle("imeProxy.resign.begin")
         guard canResignFirstResponder else {
             terminalOwner?.imeProxyFocusDidChange(isFocused: isFirstResponder)
+            terminalOwner?.logKeyboardLifecycle("imeProxy.resign.blocked", result: false)
             return false
         }
         let result = super.resignFirstResponder()
         terminalOwner?.imeProxyFocusDidChange(isFocused: isFirstResponder)
+        terminalOwner?.logKeyboardLifecycle("imeProxy.resign.end", result: result)
         return result
     }
 
@@ -964,6 +979,11 @@ class GhosttyTerminalView: UIView {
     var scrollbar: Ghostty.Action.Scrollbar?
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm", category: "GhosttyTerminal")
+    private static let keyboardLifecycleLoggingEnabled = DebugLogConfiguration.isEnabled("keyboard")
+    private static let keyboardLifecycleLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
+        category: "TerminalKeyboardInput"
+    )
 
     private var isSelecting = false
     private var isScrolling = false
@@ -1849,9 +1869,15 @@ class GhosttyTerminalView: UIView {
         return view
     }()
     #if DEBUG
+    private enum KeyboardUITestSoftwareKeyboardFailure: Equatable {
+        case none
+        case untilSessionRebuild
+    }
+
     private var keyboardHideRequestCount = 0
     private var keyboardInputSessionRebuildCount = 0
     private var keyboardUITestHardwareKeyboardOverride: Bool?
+    private var keyboardUITestSoftwareKeyboardFailure = KeyboardUITestSoftwareKeyboardFailure.none
     #endif
     var onWindowAttachmentChange: ((Bool) -> Void)?
     /// Reports terminal touches; isFocusTap is true for the plain
@@ -1889,6 +1915,40 @@ class GhosttyTerminalView: UIView {
             sceneActivationState: window?.windowScene.map { String(describing: $0.activationState) } ?? "nil",
             isFirstResponder: isFirstResponder,
             isSoftwareInputActive: isKeyboardTextInputActive
+        )
+    }
+
+    private func keyboardLifecycleDescription() -> String {
+        let snapshot = keyboardCoordinatorDiagnosticSnapshot()
+        return [
+            "terminal=\(ObjectIdentifier(self))",
+            "inputResponder=\(ObjectIdentifier(imeProxyTextView))",
+            "window=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil")",
+            snapshot.lifecycleDescription,
+            "viewFirstResponder=\(super.isFirstResponder)",
+            "canBecome=\(imeProxyTextView.canBecomeFirstResponder)",
+            "canResign=\(imeProxyTextView.canResignFirstResponder)",
+            "hardware=\(hasHardwareKeyboardAttached)",
+            "forced=\(keyboardFocusPolicy.forcesSoftwareKeyboardPresentation)",
+            "browse=\(keyboardFocusPolicy.isBrowsing)",
+            "softwareSuppressed=\(shouldSuppressSoftwareKeyboard)",
+            "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
+            "accessoryAttached=\(keyboardToolbar?.window != nil)",
+            "inputView=\(shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")",
+            "language=\(imeProxyTextView.textInputMode?.primaryLanguage ?? "nil")",
+            "layoutFrame=\(keyboardLayoutGuide.layoutFrame.debugDescription)",
+        ].joined(separator: " ")
+    }
+
+    fileprivate func logKeyboardLifecycle(
+        _ event: String,
+        result: Bool? = nil,
+        detail: String = ""
+    ) {
+        guard Self.keyboardLifecycleLoggingEnabled else { return }
+        let resultDescription = result.map(String.init) ?? "none"
+        Self.keyboardLifecycleLogger.info(
+            "event=\(event, privacy: .public) result=\(resultDescription, privacy: .public) detail=\(detail, privacy: .public) \(self.keyboardLifecycleDescription(), privacy: .public)"
         )
     }
 
@@ -1935,9 +1995,16 @@ class GhosttyTerminalView: UIView {
 
     @discardableResult
     func requestKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
-        guard prepareKeyboardFocus(for: reason) else { return false }
+        let reasonDescription = String(describing: reason)
+        logKeyboardLifecycle("focus.request.begin", detail: "reason=\(reasonDescription)")
+        guard prepareKeyboardFocus(for: reason) else {
+            logKeyboardLifecycle("focus.request.rejected", result: false, detail: "reason=\(reasonDescription)")
+            return false
+        }
         notifyKeyboardBrowseModeChange()
-        return becomeFirstResponder()
+        let result = becomeFirstResponder()
+        logKeyboardLifecycle("focus.request.end", result: result, detail: "reason=\(reasonDescription)")
+        return result
     }
 
     private func prepareKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
@@ -1946,7 +2013,6 @@ class GhosttyTerminalView: UIView {
             refreshHardwareKeyboardAttachmentFromSystem()
         }
         guard keyboardFocusPolicy.requestFocus(for: reason) else { return false }
-        suppressAccessoryForMissingSoftwareKeyboard = false
         clearNativeSelectionStateForTerminalInput()
         return true
     }
@@ -2033,6 +2099,7 @@ class GhosttyTerminalView: UIView {
         guard suppressAccessoryForMissingSoftwareKeyboard != suppressed else { return }
         suppressAccessoryForMissingSoftwareKeyboard = suppressed
         reloadTerminalInputViewsIfActive()
+        logKeyboardLifecycle("accessory.suppression.changed", detail: "suppressed=\(suppressed)")
     }
 
     private func notifyKeyboardBrowseModeChange() {
@@ -2043,22 +2110,28 @@ class GhosttyTerminalView: UIView {
     /// Tears the input session down and rebuilds it across runloop turns.
     /// A same-tick resign/become pair is coalesced by UIKit into "nothing
     /// changed" and cannot revive a dead keyboard scene (iOS 26 "No scene
-    /// exists for this identity"); the separate turn plus reloadInputViews
-    /// forces the InputUI scene to be recreated.
-    func rebuildTerminalInputSession() {
+    /// exists for this identity"); the responder-free turn gives InputUI a
+    /// real session boundary before the coordinator requests reacquisition.
+    func releaseTerminalInputForReacquisition(completion: @escaping () -> Void) {
         #if DEBUG
         keyboardInputSessionRebuildCount += 1
         #endif
+        logKeyboardLifecycle("session.rebuild.begin")
         releaseTerminalInput()
+        #if DEBUG
+        if keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild {
+            keyboardUITestSoftwareKeyboardFailure = .none
+        }
+        #endif
+        logKeyboardLifecycle("session.rebuild.released")
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isShuttingDown, !self.isFindNavigatorActive else { return }
-            _ = self.acquireTerminalInput()
-            self.reloadTerminalInputViewsIfActive()
+            self?.logKeyboardLifecycle("session.rebuild.readyForReacquisition")
+            completion()
         }
     }
 
-    private func notifyFindNavigatorVisibilityChange() {
-        onFindNavigatorVisibilityChange?(isFindNavigatorVisible)
+    private func notifyFindNavigatorVisibilityChange(_ visibilityOverride: Bool? = nil) {
+        onFindNavigatorVisibilityChange?(visibilityOverride ?? isFindNavigatorVisible)
     }
 
     private func notifyDirectTouchOnTerminal(isFocusTap: Bool = false) {
@@ -2137,6 +2210,7 @@ class GhosttyTerminalView: UIView {
             ghostty_surface_set_occlusion(surface, isVisible)
         }
         onWindowAttachmentChange?(isVisible)
+        logKeyboardLifecycle("terminal.didMoveToWindow", detail: "attached=\(isVisible)")
 
         if isVisible {
             updateHardwareKeyboardState(reloadInputViewsIfNeeded: true)
@@ -2207,6 +2281,12 @@ class GhosttyTerminalView: UIView {
         let hasHardwareKeyboard = detectedHardwareKeyboardAttached
         let didChange = hasHardwareKeyboard != hasHardwareKeyboardAttached
         hasHardwareKeyboardAttached = hasHardwareKeyboard
+        if didChange {
+            logKeyboardLifecycle(
+                "hardware.changed",
+                detail: "attached=\(hasHardwareKeyboard) vendor=\(GCKeyboard.coalesced?.vendorName ?? "nil")"
+            )
+        }
         if didChange {
             notifyKeyboardBrowseModeChange()
         }
@@ -2867,6 +2947,10 @@ class GhosttyTerminalView: UIView {
 
     @available(iOS 16.0, *)
     private func beginFindNavigatorPresentation(restoreTerminalFocus: Bool) {
+        logKeyboardLifecycle(
+            "find.begin",
+            detail: "restoreTerminalFocus=\(restoreTerminalFocus)"
+        )
         findNavigatorLifecycle.begin(restoreTerminalFocus: restoreTerminalFocus)
         notifyFindNavigatorVisibilityChange()
         stopKeyRepeat()
@@ -2886,6 +2970,33 @@ class GhosttyTerminalView: UIView {
             _ = super.resignFirstResponder()
         }
         return shouldRestoreTerminalFocus
+    }
+
+    @available(iOS 16.0, *)
+    private func completeFindNavigatorDismissal() {
+        guard findNavigatorLifecycle.isActive else { return }
+        logKeyboardLifecycle("find.end.begin")
+        let shouldRestoreTerminalFocus = endFindNavigatorLifecycle()
+        nativeFindDecorations.removeAll()
+        nativeFindSession?.resetReportedResults()
+        nativeFindSession = nil
+        ghosttyFindReportedTotal = 0
+        ghosttyFindReportedSelectedIndex = nil
+        // UIFindInteraction can still report `isFindNavigatorVisible == true`
+        // from inside its didEnd callback. The lifecycle end is authoritative;
+        // publishing the stale UIKit value leaves the coordinator believing
+        // Find still owns input after the navigator has disappeared.
+        notifyFindNavigatorVisibilityChange(false)
+        endGhosttyFindSearchForNavigatorDismissal()
+        if shouldRestoreTerminalFocus {
+            DispatchQueue.main.async { [weak self] in
+                self?.notifyDirectTouchOnTerminal()
+            }
+        }
+        logKeyboardLifecycle(
+            "find.end.complete",
+            detail: "restoreTerminalFocus=\(shouldRestoreTerminalFocus)"
+        )
     }
 
     @available(iOS 16.0, *)
@@ -2909,8 +3020,12 @@ class GhosttyTerminalView: UIView {
     }
 
     func dismissFindNavigator() {
-        guard #available(iOS 16.0, *), nativeFindInteraction?.isFindNavigatorVisible == true else { return }
-        nativeFindInteraction?.dismissFindNavigator()
+        guard #available(iOS 16.0, *), isFindNavigatorActive else { return }
+        if nativeFindInteraction?.isFindNavigatorVisible == true {
+            nativeFindInteraction?.dismissFindNavigator()
+        } else if findNavigatorLifecycle.isActive {
+            completeFindNavigatorDismissal()
+        }
     }
 
     @MainActor
@@ -3023,7 +3138,14 @@ class GhosttyTerminalView: UIView {
     }
 
     private var usesNativeTouchSelection: Bool {
-        UIDevice.current.userInterfaceIdiom == .phone
+        #if DEBUG
+        if Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-native-find-navigator"
+        ) {
+            return true
+        }
+        #endif
+        return UIDevice.current.userInterfaceIdiom == .phone
     }
 
     private var usesAppOwnedTouchSelection: Bool {
@@ -4843,17 +4965,7 @@ extension GhosttyTerminalView: UIFindInteractionDelegate {
     }
 
     func findInteraction(_ interaction: UIFindInteraction, didEnd session: UIFindSession) {
-        let shouldRestoreTerminalFocus = endFindNavigatorLifecycle()
-        nativeFindDecorations.removeAll()
-        nativeFindSession?.resetReportedResults()
-        nativeFindSession = nil
-        ghosttyFindReportedTotal = 0
-        ghosttyFindReportedSelectedIndex = nil
-        notifyFindNavigatorVisibilityChange()
-        endGhosttyFindSearchForNavigatorDismissal()
-        if shouldRestoreTerminalFocus {
-            notifyDirectTouchOnTerminal()
-        }
+        completeFindNavigatorDismissal()
     }
 }
 
@@ -5140,7 +5252,12 @@ extension GhosttyTerminalView {
     }
 
     fileprivate func resolvedInputView() -> UIView? {
-        shouldSuppressSoftwareKeyboard ? hiddenKeyboardInputView : nil
+        #if DEBUG
+        if keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild {
+            return hiddenKeyboardInputView
+        }
+        #endif
+        return shouldSuppressSoftwareKeyboard ? hiddenKeyboardInputView : nil
     }
 
     fileprivate func resolvedInputAccessoryView() -> UIView? {
@@ -5176,10 +5293,16 @@ extension GhosttyTerminalView {
         let accessoryAttached = keyboardToolbar?.window != nil
         let keyboardHeightText = String(format: "%.1f", Double(keyboardHeight))
         let size = terminalSize()
+        let inputViewMode = keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild
+            ? "testUnexpectedHidden"
+            : (shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")
         return [
             "windowAttached=\(snapshot.windowAttached)",
             "keyWindow=\(snapshot.windowIsKey)",
             "scene=\(snapshot.sceneActivationState)",
+            "terminalId=\(ObjectIdentifier(self))",
+            "inputResponderId=\(ObjectIdentifier(imeProxyTextView))",
+            "windowId=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil")",
             "terminalFirstResponder=\(snapshot.isFirstResponder)",
             "softwareInputActive=\(snapshot.isSoftwareInputActive)",
             "imeProxyFirstResponder=\(imeProxyTextView.isFirstResponder)",
@@ -5195,7 +5318,9 @@ extension GhosttyTerminalView {
             "hardware=\(hasHardwareKeyboardAttached)",
             "keyboardForced=\(keyboardFocusPolicy.forcesSoftwareKeyboardPresentation)",
             "softwareKeyboardSuppressed=\(shouldSuppressSoftwareKeyboard)",
+            "inputViewMode=\(inputViewMode)",
             "browse=\(keyboardFocusPolicy.isBrowsing)",
+            "find=\(isFindNavigatorActive)",
             "eligible=\(isTextInputSessionEligible)",
             "imeProxyCanBecome=\(imeProxyTextView.canBecomeFirstResponder)",
             "imeComposing=\(textInputModel.hasActiveIMEComposition)",
@@ -5248,6 +5373,11 @@ extension GhosttyTerminalView {
         } else {
             notifyKeyboardBrowseModeChange()
         }
+        reloadTerminalInputViewsIfActive()
+    }
+
+    func keyboardUITestBeginUnexpectedSoftwareKeyboardLoss() {
+        keyboardUITestSoftwareKeyboardFailure = .untilSessionRebuild
         reloadTerminalInputViewsIfActive()
     }
 

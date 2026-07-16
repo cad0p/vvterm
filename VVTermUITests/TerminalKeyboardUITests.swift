@@ -110,6 +110,118 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(for: diagnostics, labelContaining: "hardware=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "browse=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        let transitionBaseline = try induceUnexpectedKeyboardLoss(in: app)
+        repairUnexpectedKeyboardLossFromMenu(since: transitionBaseline, in: app)
+
+        let key = app.keys["x"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
+    func testKeyboardMenuDismissesFindAndTransfersInputToTerminal() throws {
+        let app = launchKeyboardHarness(usesNativeFindNavigator: true)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let menu = app.buttons["vvterm.keyboardTest.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        menu.tap()
+
+        let findItem = app.descendants(matching: .any)["vvterm.keyboardTest.menu.find"]
+        XCTAssertTrue(findItem.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        findItem.tap()
+
+        let searchField = app.searchFields.firstMatch
+        XCTAssertTrue(
+            searchField.waitForExistence(timeout: 8),
+            "Native Find search field did not appear. \(diagnosticsText(in: app))"
+        )
+        searchField.tap()
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(for: diagnostics, labelContaining: "find=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "findPresented=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8), diagnosticsText(in: app))
+        searchField.typeText("focus")
+        XCTAssertEqual(searchField.value as? String, "focus", diagnosticsText(in: app))
+
+        requestKeyboardFromMenu(in: app)
+
+        wait(for: diagnostics, labelContaining: "find=false", timeout: 8, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "findPresented=false", timeout: 8, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=true", timeout: 8, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let key = app.keys["x"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+    }
+
+    @MainActor
+    func testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal() throws {
+        let app = launchKeyboardHarness(simulatesCodexTUIResponse: true)
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(for: diagnostics, labelContaining: "hardware=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        let transitionBaseline = try keyboardTransitionBaseline(in: app)
+
+        terminal.typeText("hello")
+        assertKeyboardAndAccessoryVisible(in: app)
+        wait(for: diagnostics, labelContaining: "hardware=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        let returnKey = app.buttons["Return"]
+        XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        returnKey.tap()
+        wait(for: diagnostics, labelContaining: "returnInputs=1", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "codexResponses=1", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryVisible(in: app)
+        wait(for: diagnostics, labelContaining: "hardware=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardStateStable(since: transitionBaseline, in: app)
+
+        let repairBaseline = try induceUnexpectedKeyboardLoss(in: app)
+        repairUnexpectedKeyboardLossFromMenu(since: repairBaseline, in: app)
+
+        let key = app.keys["x"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        key.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        assertKeyboardAndAccessoryVisible(in: app)
+    }
+
+    @MainActor
     func testPrivacyModeBackgroundResumeRestoresResponsiveTerminal() throws {
         let app = launchKeyboardHarness(privacyModeEnabled: true)
         let terminal = waitForTerminal(in: app)
@@ -512,6 +624,10 @@ final class TerminalKeyboardUITests: XCTestCase {
 
         let firstRestoreBaseline = try keyboardTransitionBaseline(in: app)
         app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        waitForDiagnosticMetrics(in: app) { metrics in
+            metrics["inputRebuilds"] == firstRestoreBaseline.rebuilds + 1
+        }
+        app.buttons["vvterm.keyboardTest.geometry.docked"].tap()
         wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
@@ -534,7 +650,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
-        assertSingleKeyboardRestore(since: firstRestoreBaseline, in: app)
+        assertSingleKeyboardRepair(since: firstRestoreBaseline, in: app)
 
         app.buttons["vvterm.keyboardTest.geometry.hidden"].tap()
         wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
@@ -545,12 +661,16 @@ final class TerminalKeyboardUITests: XCTestCase {
 
         let forcedRetryBaseline = try keyboardTransitionBaseline(in: app)
         app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        waitForDiagnosticMetrics(in: app) { metrics in
+            metrics["inputRebuilds"] == forcedRetryBaseline.rebuilds + 1
+        }
+        app.buttons["vvterm.keyboardTest.geometry.docked"].tap()
         wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "keyboardVisible=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "accessorySuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
-        assertSingleKeyboardRestore(since: forcedRetryBaseline, in: app)
+        assertSingleKeyboardRepair(since: forcedRetryBaseline, in: app)
 
         app.buttons["vvterm.keyboardTest.hideViaToolbar"].tap()
         wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
@@ -564,6 +684,7 @@ final class TerminalKeyboardUITests: XCTestCase {
 
         let secondRestoreBaseline = try keyboardTransitionBaseline(in: app)
         app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        app.buttons["vvterm.keyboardTest.geometry.docked"].tap()
         wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
@@ -665,11 +786,14 @@ final class TerminalKeyboardUITests: XCTestCase {
     private func launchKeyboardHarness(
         preservesTerminalSize: Bool = false,
         privacyModeEnabled: Bool = false,
-        simulatesKeyboardFrames: Bool = false
+        simulatesKeyboardFrames: Bool = false,
+        simulatesCodexTUIResponse: Bool = false,
+        usesNativeFindNavigator: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "--vvterm-ui-test-terminal-keyboard-harness",
+            "--vvterm-debug-log", "keyboard",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
             "-security.privacyModeEnabled", privacyModeEnabled ? "YES" : "NO"
@@ -680,11 +804,26 @@ final class TerminalKeyboardUITests: XCTestCase {
         if simulatesKeyboardFrames {
             app.launchArguments.append("--vvterm-ui-test-simulate-keyboard-frames")
         }
+        if simulatesCodexTUIResponse {
+            app.launchArguments.append("--vvterm-ui-test-codex-tui-response")
+        }
+        if usesNativeFindNavigator {
+            app.launchArguments.append("--vvterm-ui-test-native-find-navigator")
+        }
         app.launch()
 
         let ready = app.staticTexts["vvterm.keyboardTest.ready"]
-        XCTAssertTrue(ready.waitForExistence(timeout: 20), "Keyboard harness did not mount")
-        wait(for: ready, labelContaining: "ready=true", timeout: 20, diagnostics: diagnosticsText(in: app))
+        let readinessTimeout: TimeInterval = 45
+        XCTAssertTrue(
+            ready.waitForExistence(timeout: readinessTimeout),
+            "Keyboard harness did not mount"
+        )
+        wait(
+            for: ready,
+            labelContaining: "ready=true",
+            timeout: readinessTimeout,
+            diagnostics: diagnosticsText(in: app)
+        )
         return app
     }
 
@@ -695,6 +834,63 @@ final class TerminalKeyboardUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticsText(in: app))
         return terminal
+    }
+
+    @MainActor
+    private func requestKeyboardFromMenu(in app: XCUIApplication) {
+        let menu = app.buttons["vvterm.keyboardTest.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        menu.tap()
+
+        let keyboardItem = app.descendants(matching: .any)["vvterm.keyboardTest.menu.showKeyboard"]
+        XCTAssertTrue(keyboardItem.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        keyboardItem.tap()
+    }
+
+    @MainActor
+    private func induceUnexpectedKeyboardLoss(
+        in app: XCUIApplication
+    ) throws -> KeyboardTransitionBaseline {
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        let lossButton = app.buttons["vvterm.keyboardTest.keyboard.unexpectedLoss"]
+        XCTAssertTrue(lossButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        lossButton.tap()
+
+        wait(for: diagnostics, labelContaining: "keyboardVisible=false", timeout: 8, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "inputViewMode=testUnexpectedHidden", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessorySuppressed=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "hardware=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "browse=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "hideRequests=0", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryHidden(in: app)
+        return try keyboardTransitionBaseline(in: app)
+    }
+
+    @MainActor
+    private func repairUnexpectedKeyboardLossFromMenu(
+        since baseline: KeyboardTransitionBaseline,
+        in app: XCUIApplication
+    ) {
+        requestKeyboardFromMenu(in: app)
+        waitForDiagnosticMetrics(in: app) { metrics in
+            metrics["inputRebuilds"] == baseline.rebuilds + 1
+        }
+        assertKeyboardAndAccessoryVisible(in: app)
+        assertSingleKeyboardRepair(since: baseline, in: app)
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(
+            for: diagnostics,
+            labelContaining: "accessoryPairingObservation=completed",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        XCTAssertTrue(
+            diagnostics.label.contains("orphanAccessoryObserved=false"),
+            "The keyboard repair exposed an accessory without its software keyboard. \(diagnosticsText(in: app))"
+        )
     }
 
     private func assertKeyboardAndAccessoryVisible(
@@ -839,10 +1035,69 @@ final class TerminalKeyboardUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
             let metrics = diagnosticMetrics(in: app)
+            assertTerminalOwnsVisibleKeyboard(in: app, file: file, line: line)
             XCTAssertEqual(metrics["keyboardShows"], baseline.shows + 1, diagnosticsText(in: app), file: file, line: line)
             XCTAssertEqual(metrics["keyboardHides"], baseline.hides, diagnosticsText(in: app), file: file, line: line)
             XCTAssertEqual(metrics["inputRebuilds"], baseline.rebuilds, diagnosticsText(in: app), file: file, line: line)
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
+    private func assertSingleKeyboardRepair(
+        since baseline: KeyboardTransitionBaseline,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        waitForDiagnosticMetrics(in: app, file: file, line: line) { metrics in
+            metrics["keyboardShows"] == baseline.shows + 1
+                && metrics["keyboardHides"] == baseline.hides
+                && metrics["inputRebuilds"] == baseline.rebuilds + 1
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let metrics = diagnosticMetrics(in: app)
+            assertTerminalOwnsVisibleKeyboard(in: app, file: file, line: line)
+            XCTAssertEqual(metrics["keyboardShows"], baseline.shows + 1, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["keyboardHides"], baseline.hides, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["inputRebuilds"], baseline.rebuilds + 1, diagnosticsText(in: app), file: file, line: line)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
+    private func assertKeyboardStateStable(
+        since baseline: KeyboardTransitionBaseline,
+        in app: XCUIApplication,
+        duration: TimeInterval = 2,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(duration)
+        while Date() < deadline {
+            let metrics = diagnosticMetrics(in: app)
+            assertTerminalOwnsVisibleKeyboard(in: app, file: file, line: line)
+            XCTAssertEqual(metrics["keyboardShows"], baseline.shows, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["keyboardHides"], baseline.hides, diagnosticsText(in: app), file: file, line: line)
+            XCTAssertEqual(metrics["inputRebuilds"], baseline.rebuilds, diagnosticsText(in: app), file: file, line: line)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
+    private func assertTerminalOwnsVisibleKeyboard(
+        in app: XCUIApplication,
+        file: StaticString,
+        line: UInt
+    ) {
+        let diagnostics = diagnosticsText(in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.exists, diagnostics, file: file, line: line)
+        for expected in [
+            "keyboardVisible=true",
+            "accessoryAttached=true",
+            "accessorySuppressed=false",
+            "imeProxyFirstResponder=true",
+        ] {
+            XCTAssertTrue(diagnostics.contains(expected), diagnostics, file: file, line: line)
         }
     }
 

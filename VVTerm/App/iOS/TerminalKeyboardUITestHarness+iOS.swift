@@ -5,6 +5,9 @@ import UIKit
 
 struct TerminalKeyboardUITestHarness: View {
     private static let paneId = UUID(uuidString: "B54F29D8-7C3E-4DB8-B3D7-9D9F1604B755")!
+    private static let codexTUIResponse = Data(
+        "\u{1B}[?1049h\u{1B}[?2004h\u{1B}[?1004h\u{1B}]0;Codex\u{07}\u{1B}[2J\u{1B}[HCodex response\r\n\u{1B}[?25h".utf8
+    )
 
     private enum LifecycleStatus: String {
         case initial
@@ -20,6 +23,33 @@ struct TerminalKeyboardUITestHarness: View {
         case hidden
     }
 
+    private enum KeyboardAccessoryPairingObservation {
+        case idle
+        case observing(accessoryOnlyObserved: Bool)
+        case completed(accessoryOnlyObserved: Bool)
+
+        var status: String {
+            switch self {
+            case .idle:
+                "idle"
+            case .observing:
+                "observing"
+            case .completed:
+                "completed"
+            }
+        }
+
+        var observedAccessoryOnly: Bool {
+            switch self {
+            case .idle:
+                false
+            case .observing(let accessoryOnlyObserved),
+                 .completed(let accessoryOnlyObserved):
+                accessoryOnlyObserved
+            }
+        }
+    }
+
     @EnvironmentObject private var ghosttyApp: Ghostty.App
     @EnvironmentObject private var appLockManager: AppLockManager
     @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
@@ -33,9 +63,12 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var keyboardFrame: CGRect?
     @State private var keyboardShowTransitionCount = 0
     @State private var keyboardHideTransitionCount = 0
+    @State private var keyboardAccessoryPairingObservation = KeyboardAccessoryPairingObservation.idle
     @State private var diagnostics = "notReady"
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
+    @State private var returnInputCount = 0
+    @State private var codexResponseCount = 0
     @Environment(\.scenePhase) private var scenePhase
 
     private var preservesTerminalSize: Bool {
@@ -44,6 +77,10 @@ struct TerminalKeyboardUITestHarness: View {
 
     private var simulatesKeyboardFrames: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-simulate-keyboard-frames")
+    }
+
+    private var simulatesCodexTUIResponse: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-codex-tui-response")
     }
 
     private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
@@ -58,6 +95,15 @@ struct TerminalKeyboardUITestHarness: View {
                     paneId: Self.paneId,
                     onInput: { data in
                         receivedInputHex = data.map { String(format: "%02x", $0) }.joined()
+                        if data.contains(0x0D) {
+                            returnInputCount += 1
+                        }
+                        if simulatesCodexTUIResponse, data.contains(0x0D), codexResponseCount == 0 {
+                            DispatchQueue.main.async {
+                                terminalView?.feedData(Self.codexTUIResponse)
+                                codexResponseCount += 1
+                            }
+                        }
                     }
                 )
                 .terminalKeyboardAvoidance(
@@ -120,12 +166,24 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.hideViaToolbar")
 
                     Button("Keyboard") {
-                        TerminalTabManager.shared.keyboardCoordinator.userRequestedShow()
-                        if simulatesKeyboardFrames {
-                            applySimulatedKeyboardGeometry(.docked)
-                        }
+                        requestSoftwareKeyboard()
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.showKeyboard")
+
+                    Menu {
+                        Button("Find") {
+                            showFindInput()
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.menu.find")
+
+                        Button("Keyboard") {
+                            requestSoftwareKeyboard()
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.menu.showKeyboard")
+                    } label: {
+                        Text("More")
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.menu")
                 }
 
                 HStack(spacing: 8) {
@@ -158,6 +216,11 @@ struct TerminalKeyboardUITestHarness: View {
                         terminalView?.keyboardUITestSetHardwareKeyboardAttached(false)
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.hardware.detach")
+
+                    Button("Lose Keyboard") {
+                        terminalView?.keyboardUITestBeginUnexpectedSoftwareKeyboardLoss()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.keyboard.unexpectedLoss")
                 }
 
                 Button("Cursor Bottom") {
@@ -338,12 +401,37 @@ struct TerminalKeyboardUITestHarness: View {
             diagnostics = "notReady ghostty=\(ghosttyApp.readiness.rawValue)"
             return
         }
-        diagnostics = terminalView.keyboardUITestDiagnostics(
+        let terminalDiagnostics = terminalView.keyboardUITestDiagnostics(
             keyboardVisible: keyboardVisible,
             keyboardHeight: keyboardHeight
-        ) + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+        )
+        observeKeyboardAccessoryPairing(terminalDiagnostics: terminalDiagnostics)
+        diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardShows=\(keyboardShowTransitionCount) keyboardHides=\(keyboardHideTransitionCount)"
+            + " accessoryPairingObservation=\(keyboardAccessoryPairingObservation.status)"
+            + " orphanAccessoryObserved=\(keyboardAccessoryPairingObservation.observedAccessoryOnly)"
             + " reconnect=\(lifecycleStatus.rawValue) inputHex=\(receivedInputHex)"
+            + " returnInputs=\(returnInputCount) codexResponses=\(codexResponseCount)"
+            + " findPresented=\(terminalView.isFindNavigatorVisible)"
+    }
+
+    private func observeKeyboardAccessoryPairing(terminalDiagnostics: String) {
+        guard case .observing(let accessoryOnlyObserved) = keyboardAccessoryPairingObservation else {
+            return
+        }
+
+        let accessoryAttached = terminalDiagnostics.contains("accessoryAttached=true")
+        let observedAccessoryOnly = accessoryOnlyObserved || (accessoryAttached && !keyboardVisible)
+        if keyboardVisible, accessoryAttached {
+            keyboardAccessoryPairingObservation = .completed(
+                accessoryOnlyObserved: observedAccessoryOnly
+            )
+            return
+        }
+
+        keyboardAccessoryPairingObservation = .observing(
+            accessoryOnlyObserved: observedAccessoryOnly
+        )
     }
 
     private func configureLifecycleHarness() {
@@ -362,6 +450,18 @@ struct TerminalKeyboardUITestHarness: View {
         manager.keyboardCoordinator.setActivePane(Self.paneId)
         manager.keyboardCoordinator.setViewActive(true)
         lifecycleStatus = .connected
+    }
+
+    private func requestSoftwareKeyboard() {
+        keyboardAccessoryPairingObservation = .observing(
+            accessoryOnlyObserved: false
+        )
+        TerminalTabManager.shared.keyboardCoordinator.userRequestedShow()
+        terminalView?.dismissFindNavigator()
+    }
+
+    private func showFindInput() {
+        terminalView?.showFindNavigator()
     }
 
     private func applyRouteActivation(

@@ -14,7 +14,7 @@ protocol TerminalKeyboardInputSession: AnyObject {
     @discardableResult
     func focusTerminalInputWithoutShowingSoftwareKeyboard() -> Bool
     func releaseTerminalInput()
-    func rebuildTerminalInputSession()
+    func releaseTerminalInputForReacquisition(completion: @escaping () -> Void)
     func setTerminalInputAccessorySuppressed(_ suppressed: Bool)
 }
 
@@ -41,7 +41,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private enum PresentationRequest: Equatable {
         case none
         case automaticRefresh
-        case forceSoftwareKeyboard
+        case forceSoftwareKeyboard(repairActiveSession: Bool)
+
+        var isExplicitSoftwareKeyboardRequest: Bool {
+            if case .forceSoftwareKeyboard = self {
+                return true
+            }
+            return false
+        }
     }
 
     struct StateInputs: Equatable {
@@ -92,6 +99,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         self.lifecycleLoggingEnabled = lifecycleLoggingEnabled
 
         let center = NotificationCenter.default
+        let shouldLogLifecycle = lifecycleLoggingEnabled
         // willShow/willHide fire at animation START so the bar travels with
         // the keyboard instead of trailing it; willChangeFrame catches
         // transitions that skip show/hide (hardware keyboard attaching while
@@ -102,11 +110,28 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         ] {
             keyboardObservers.append(
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let beginFrame = shouldLogLifecycle
+                        ? (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue
+                        : nil
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?
                         .cgRectValue
                     let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval
                     let curveRawValue = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
+                    let isLocal = shouldLogLifecycle
+                        ? (note.userInfo?[UIResponder.keyboardIsLocalUserInfoKey] as? NSNumber)?.boolValue
+                        : nil
+                    let notificationName = shouldLogLifecycle ? note.name.rawValue : ""
+                    let notificationObject = shouldLogLifecycle ? String(describing: note.object) : ""
                     Task { @MainActor [weak self] in
+                        self?.logKeyboardNotification(
+                            name: notificationName,
+                            object: notificationObject,
+                            beginFrame: beginFrame,
+                            endFrame: frame,
+                            isLocal: isLocal,
+                            duration: duration,
+                            curveRawValue: curveRawValue
+                        )
                         self?.noteKeyboardEndFrame(
                             frame,
                             animationDuration: duration,
@@ -122,9 +147,29 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         ] {
             keyboardObservers.append(
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let beginFrame = shouldLogLifecycle
+                        ? (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue
+                        : nil
+                    let endFrame = shouldLogLifecycle
+                        ? (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                        : nil
                     let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval
                     let curveRawValue = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
+                    let isLocal = shouldLogLifecycle
+                        ? (note.userInfo?[UIResponder.keyboardIsLocalUserInfoKey] as? NSNumber)?.boolValue
+                        : nil
+                    let notificationName = shouldLogLifecycle ? note.name.rawValue : ""
+                    let notificationObject = shouldLogLifecycle ? String(describing: note.object) : ""
                     Task { @MainActor [weak self] in
+                        self?.logKeyboardNotification(
+                            name: notificationName,
+                            object: notificationObject,
+                            beginFrame: beginFrame,
+                            endFrame: endFrame,
+                            isLocal: isLocal,
+                            duration: duration,
+                            curveRawValue: curveRawValue
+                        )
                         self?.noteSoftwareKeyboardHidden(
                             animationDuration: duration,
                             animationCurveRawValue: curveRawValue
@@ -209,6 +254,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     func setActivePane(_ paneId: UUID?) {
         guard activePaneId != paneId else { return }
         cancelPresentationVerify()
+        // Presentation requests belong to the pane that was active when the
+        // interaction occurred. A tab change must not transfer an explicit
+        // software-keyboard command (or a stale automatic repair) elsewhere.
+        pendingPresentationRequest = .none
+        presentationRefreshAttemptCount = 0
         activePaneId = paneId
         markDirty(reason: "activePane")
     }
@@ -288,7 +338,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     func userRequestedShow() {
-        pendingPresentationRequest = .forceSoftwareKeyboard
+        logExplicitPresentationRequest()
+        pendingPresentationRequest = .forceSoftwareKeyboard(
+            repairActiveSession: !isUserHidden
+        )
         // The repair cap stops AUTOMATIC rebuild loops (e.g. against a
         // hardware keyboard's legitimate suppression, which can exhaust it);
         // an explicit user action re-arms it, otherwise returning from
@@ -377,7 +430,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     private func requestAutomaticPresentationRefresh() {
-        guard pendingPresentationRequest != .forceSoftwareKeyboard else { return }
+        guard !pendingPresentationRequest.isExplicitSoftwareKeyboardRequest else { return }
         pendingPresentationRequest = .automaticRefresh
     }
 
@@ -455,22 +508,38 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         lastManagedPaneId = activePaneId
 
         let presentationRequest = pendingPresentationRequest
-        if keyboardPresentationDesired || presentationRequest != .forceSoftwareKeyboard {
+        if keyboardPresentationDesired || !presentationRequest.isExplicitSoftwareKeyboardRequest {
             pendingPresentationRequest = .none
         }
 
         let before = terminal.keyboardCoordinatorDiagnosticSnapshot()
         if keyboardPresentationDesired,
-           presentationRequest == .forceSoftwareKeyboard {
-            _ = terminal.forceSoftwareKeyboardInput()
-            let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
-            if after.isSoftwareInputActive {
-                if !isSoftwareKeyboardVisible {
-                    schedulePresentationVerify()
-                }
-            } else {
-                pendingPresentationRequest = .forceSoftwareKeyboard
+           case .forceSoftwareKeyboard(let repairActiveSession) = presentationRequest {
+            if repairActiveSession,
+               before.isSoftwareInputActive,
+               before.windowAttached,
+               before.windowIsKey,
+               !isSoftwareKeyboardVisible {
+                beginInputSessionReacquisition(
+                    for: activePaneId,
+                    terminal: terminal,
+                    presentationRequest: presentationRequest
+                )
+                logCommand(
+                    inputSessionDesired: inputSessionDesired,
+                    keyboardPresentationDesired: keyboardPresentationDesired,
+                    reason: reason,
+                    inputs: inputs,
+                    before: before,
+                    after: terminal.keyboardCoordinatorDiagnosticSnapshot()
+                )
+                return
             }
+
+            let after = acquireTerminalInput(
+                terminal,
+                presentationRequest: presentationRequest
+            )
             logCommand(
                 inputSessionDesired: inputSessionDesired,
                 keyboardPresentationDesired: keyboardPresentationDesired,
@@ -507,9 +576,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
                 // suppressing it; rebuild once for the former, then the
                 // verifier folds away the native accessory if UIKit still
                 // withholds a real keyboard frame.
-                presentationRefreshAttemptCount += 1
-                terminal.rebuildTerminalInputSession()
-                schedulePresentationVerify()
+                beginInputSessionReacquisition(
+                    for: activePaneId,
+                    terminal: terminal,
+                    presentationRequest: .automaticRefresh
+                )
                 let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
                 logAsyncRebuild(inputs: inputs, after: after)
                 return
@@ -529,7 +600,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             if inputs.userHidKeyboard {
                 terminal.focusTerminalInputWithoutShowingSoftwareKeyboard()
             } else {
-                terminal.acquireTerminalInput()
+                _ = acquireTerminalInput(
+                    terminal,
+                    presentationRequest: presentationRequest
+                )
             }
         } else {
             terminal.releaseTerminalInput()
@@ -546,12 +620,135 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         )
 
         if keyboardPresentationDesired, after.isSoftwareInputActive {
-            schedulePresentationVerify()
+            if presentationVerifyTask == nil {
+                schedulePresentationVerify()
+            }
         } else {
             cancelPresentationVerify()
             if !inputSessionDesired {
                 presentationRefreshAttemptCount = 0
             }
+        }
+    }
+
+    /// UIKit must observe a responder-free runloop turn before a dead input
+    /// scene can be recreated. The terminal owns that UIKit timing detail;
+    /// this coordinator retains ownership of *whether* the same terminal may
+    /// reacquire input after the asynchronous boundary.
+    private func beginInputSessionReacquisition(
+        for paneId: UUID,
+        terminal: any TerminalKeyboardInputSession,
+        presentationRequest: PresentationRequest
+    ) {
+        guard presentationRefreshAttemptCount < presentationRefreshAttemptLimit else {
+            pendingPresentationRequest = .none
+            terminal.setTerminalInputAccessorySuppressed(true)
+            return
+        }
+        terminal.releaseTerminalInputForReacquisition { [weak self] in
+            guard let self else { return }
+            guard self.activePaneId == paneId,
+                  let activeTerminal = self.terminalProvider?(paneId),
+                  activeTerminal === terminal else {
+                self.markDirty(reason: "inputReacquisitionOwnershipChanged")
+                return
+            }
+
+            // Any pending request was created after this asynchronous reset
+            // began. Let the normal reconciliation consume that newer intent
+            // instead of spending its attempt budget with stale policy.
+            guard self.pendingPresentationRequest == .none else {
+                self.markDirty(reason: "inputReacquisitionSuperseded")
+                return
+            }
+
+            let inputs = self.currentInputs
+            guard Self.desiredKeyboardVisible(inputs: inputs) else {
+                self.markDirty(reason: "inputReacquisitionNoLongerDesired")
+                return
+            }
+            guard !terminal.keyboardCoordinatorDiagnosticSnapshot().isSoftwareInputActive else {
+                self.schedulePresentationVerify()
+                return
+            }
+
+            _ = self.acquireTerminalInput(
+                terminal,
+                presentationRequest: presentationRequest
+            )
+        }
+    }
+
+    @discardableResult
+    private func acquireTerminalInput(
+        _ terminal: any TerminalKeyboardInputSession,
+        presentationRequest: PresentationRequest
+    ) -> TerminalKeyboardCoordinatorDiagnosticSnapshot {
+        if presentationRequest == .none {
+            // A new ownership session (for example, Find relinquishing its
+            // responder) gets a fresh repair budget. Only presentation
+            // retries are capped; ordinary input ownership must never be
+            // refused because an earlier keyboard scene failed to appear.
+            presentationRefreshAttemptCount = 0
+        } else {
+            guard presentationRefreshAttemptCount < presentationRefreshAttemptLimit else {
+                pendingPresentationRequest = .none
+                terminal.setTerminalInputAccessorySuppressed(true)
+                return terminal.keyboardCoordinatorDiagnosticSnapshot()
+            }
+            presentationRefreshAttemptCount += 1
+        }
+
+        switch presentationRequest {
+        case .forceSoftwareKeyboard:
+            _ = terminal.forceSoftwareKeyboardInput()
+        case .none, .automaticRefresh:
+            _ = terminal.acquireTerminalInput()
+        }
+
+        let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
+        finishInputAcquisition(
+            terminal: terminal,
+            presentationRequest: presentationRequest,
+            acquired: after.isSoftwareInputActive
+        )
+        return after
+    }
+
+    private func finishInputAcquisition(
+        terminal: any TerminalKeyboardInputSession,
+        presentationRequest: PresentationRequest,
+        acquired: Bool
+    ) {
+        guard acquired else {
+            cancelPresentationVerify()
+            guard Self.desiredKeyboardVisible(inputs: currentInputs) else {
+                pendingPresentationRequest = .none
+                markDirty(reason: "inputAcquisitionNoLongerDesired")
+                return
+            }
+
+            let retryRequest = presentationRequest == .none
+                ? PresentationRequest.automaticRefresh
+                : presentationRequest
+            if presentationRefreshAttemptCount < presentationRefreshAttemptLimit {
+                if pendingPresentationRequest == .none || pendingPresentationRequest == retryRequest {
+                    pendingPresentationRequest = retryRequest
+                }
+                markDirty(reason: "inputAcquisitionFailed")
+            } else {
+                if pendingPresentationRequest == retryRequest {
+                    pendingPresentationRequest = .none
+                }
+                terminal.setTerminalInputAccessorySuppressed(true)
+            }
+            return
+        }
+
+        if isSoftwareKeyboardVisible {
+            terminal.setTerminalInputAccessorySuppressed(false)
+        } else {
+            schedulePresentationVerify()
         }
     }
 
@@ -598,6 +795,39 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         presentationVerifyTask = nil
     }
 
+    private func logKeyboardNotification(
+        name: String,
+        object: String,
+        beginFrame: CGRect?,
+        endFrame: CGRect?,
+        isLocal: Bool?,
+        duration: TimeInterval?,
+        curveRawValue: Int?
+    ) {
+        guard lifecycleLoggingEnabled else { return }
+        let beginDescription = beginFrame?.debugDescription ?? "nil"
+        let endDescription = endFrame?.debugDescription ?? "nil"
+        let localDescription = isLocal.map { String($0) } ?? "nil"
+        let durationDescription = duration.map { String($0) } ?? "nil"
+        let curveDescription = curveRawValue.map { String($0) } ?? "nil"
+        let terminalDescription = activeTerminal?
+            .keyboardCoordinatorDiagnosticSnapshot()
+            .lifecycleDescription ?? "noActiveTerminal=true"
+        logger.info(
+            "event=keyboardNotification name=\(name, privacy: .public) object=\(object, privacy: .public) begin=\(beginDescription, privacy: .public) end=\(endDescription, privacy: .public) local=\(localDescription, privacy: .public) duration=\(durationDescription, privacy: .public) curve=\(curveDescription, privacy: .public) \(terminalDescription, privacy: .public)"
+        )
+    }
+
+    private func logExplicitPresentationRequest() {
+        guard lifecycleLoggingEnabled else { return }
+        let terminalDescription = activeTerminal?
+            .keyboardCoordinatorDiagnosticSnapshot()
+            .lifecycleDescription ?? "noActiveTerminal=true"
+        logger.info(
+            "event=userRequestedShow userHidden=\(self.isUserHidden) keyboardVisible=\(self.isSoftwareKeyboardVisible) \(terminalDescription, privacy: .public)"
+        )
+    }
+
     private func logNoActiveTerminal(inputSessionDesired: Bool, inputs: StateInputs) {
         guard lifecycleLoggingEnabled else { return }
         logger.info("command=none reason=\(self.pendingReason, privacy: .public) inputDesired=\(inputSessionDesired) noActiveTerminal=true viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive)")
@@ -608,7 +838,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         after: TerminalKeyboardCoordinatorDiagnosticSnapshot
     ) {
         guard lifecycleLoggingEnabled else { return }
-        logger.info("command=refresh repair=asyncRebuild reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
+        logger.info("command=refresh repair=asyncRebuild reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) \(after.lifecycleDescription, privacy: .public)")
     }
 
     private func logDeferredRefresh(
@@ -616,7 +846,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         before: TerminalKeyboardCoordinatorDiagnosticSnapshot
     ) {
         guard lifecycleLoggingEnabled else { return }
-        logger.info("command=refresh repair=deferred reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) firstResponder=\(before.isFirstResponder) softwareInput=\(before.isSoftwareInputActive)")
+        logger.info("command=refresh repair=deferred reason=\(self.pendingReason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) \(before.lifecycleDescription, privacy: .public)")
     }
 
     private func logSteady(
@@ -626,14 +856,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         before: TerminalKeyboardCoordinatorDiagnosticSnapshot
     ) {
         guard lifecycleLoggingEnabled else { return }
-        logger.info("command=steady reason=\(self.pendingReason, privacy: .public) inputDesired=\(inputSessionDesired) keyboardDesired=\(keyboardPresentationDesired) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) window=\(before.windowAttached) keyWindow=\(before.windowIsKey) scene=\(before.sceneActivationState, privacy: .public) firstResponder=\(before.isFirstResponder) softwareInput=\(before.isSoftwareInputActive) kbVisible=\(self.isSoftwareKeyboardVisible)")
+        logger.info("command=steady reason=\(self.pendingReason, privacy: .public) inputDesired=\(inputSessionDesired) keyboardDesired=\(keyboardPresentationDesired) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) \(before.lifecycleDescription, privacy: .public)")
     }
 
     private func logVerifySuppressed(
         after: TerminalKeyboardCoordinatorDiagnosticSnapshot
     ) {
         guard lifecycleLoggingEnabled else { return }
-        logger.info("command=verifySuppressed kbVisible=\(self.isSoftwareKeyboardVisible) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)")
+        logger.info("command=verifySuppressed kbVisible=\(self.isSoftwareKeyboardVisible) \(after.lifecycleDescription, privacy: .public)")
     }
 
     private func logCommand(
@@ -646,7 +876,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     ) {
         guard lifecycleLoggingEnabled else { return }
         logger.info(
-            "command=\(inputSessionDesired ? "acquire" : "release", privacy: .public) inputDesired=\(inputSessionDesired) keyboardDesired=\(keyboardPresentationDesired) reason=\(reason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) beforeWindow=\(before.windowAttached) beforeKeyWindow=\(before.windowIsKey) beforeScene=\(before.sceneActivationState, privacy: .public) beforeFirstResponder=\(before.isFirstResponder) beforeSoftwareInput=\(before.isSoftwareInputActive) afterWindow=\(after.windowAttached) afterKeyWindow=\(after.windowIsKey) afterScene=\(after.sceneActivationState, privacy: .public) afterFirstResponder=\(after.isFirstResponder) afterSoftwareInput=\(after.isSoftwareInputActive)"
+            "command=\(inputSessionDesired ? "acquire" : "release", privacy: .public) inputDesired=\(inputSessionDesired) keyboardDesired=\(keyboardPresentationDesired) reason=\(reason, privacy: .public) viewActive=\(inputs.viewActive) connected=\(inputs.activePaneConnected) windowAttached=\(inputs.activePaneWindowAttached) userHidden=\(inputs.userHidKeyboard) find=\(inputs.findNavigatorActive) kbVisible=\(self.isSoftwareKeyboardVisible) before={\(before.lifecycleDescription, privacy: .public)} after={\(after.lifecycleDescription, privacy: .public)}"
         )
     }
 
