@@ -461,16 +461,18 @@ final class TerminalKeyboardUITests: XCTestCase {
     func testHardwareKeyboardFocusSuppressesAccessoryBar() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
 
         terminal.tap()
         assertKeyboardAndAccessoryVisible(in: app)
 
+        app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         app.buttons["vvterm.keyboardTest.hardwareFocus"].tap()
-        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
         wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
-        wait(for: diagnostics, labelContaining: "accessorySuppressed=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "accessoryHidden=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "accessoryAttached=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryHidden(in: app)
     }
 
     @MainActor
@@ -491,6 +493,83 @@ final class TerminalKeyboardUITests: XCTestCase {
         app.buttons["vvterm.keyboardTest.hardware.detach"].tap()
         wait(for: diagnostics, labelContaining: "hardware=false", timeout: 5, diagnostics: diagnosticsText(in: app))
         assertKeyboardAndAccessoryVisible(in: app)
+    }
+
+    @MainActor
+    func testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached() throws {
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardForced=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryHidden=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryHidden(in: app)
+
+        let firstRestoreBaseline = try keyboardTransitionBaseline(in: app)
+        app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardVisible=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryHidden=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessorySuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        terminal.typeText("h")
+        wait(for: diagnostics, labelContaining: "inputHex=68", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.buttons["vvterm.keyboardTest.hardwareFocus"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertSingleKeyboardRestore(since: firstRestoreBaseline, in: app)
+
+        app.buttons["vvterm.keyboardTest.geometry.hidden"].tap()
+        wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "browse=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardVisible=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessorySuppressed=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        let forcedRetryBaseline = try keyboardTransitionBaseline(in: app)
+        app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardVisible=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessorySuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertSingleKeyboardRestore(since: forcedRetryBaseline, in: app)
+
+        app.buttons["vvterm.keyboardTest.hideViaToolbar"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "browse=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardForced=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardVisible=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryHidden=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryHidden(in: app)
+
+        let secondRestoreBaseline = try keyboardTransitionBaseline(in: app)
+        app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardForced=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "softwareKeyboardSuppressed=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "keyboardVisible=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertSingleKeyboardRestore(since: secondRestoreBaseline, in: app)
     }
 
     @MainActor
@@ -585,7 +664,8 @@ final class TerminalKeyboardUITests: XCTestCase {
     @MainActor
     private func launchKeyboardHarness(
         preservesTerminalSize: Bool = false,
-        privacyModeEnabled: Bool = false
+        privacyModeEnabled: Bool = false,
+        simulatesKeyboardFrames: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -596,6 +676,9 @@ final class TerminalKeyboardUITests: XCTestCase {
         ]
         if preservesTerminalSize {
             app.launchArguments.append("--vvterm-ui-test-preserve-terminal-size")
+        }
+        if simulatesKeyboardFrames {
+            app.launchArguments.append("--vvterm-ui-test-simulate-keyboard-frames")
         }
         app.launch()
 
@@ -690,19 +773,21 @@ final class TerminalKeyboardUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let predicate = NSPredicate(format: "label CONTAINS %@", expectedText)
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
-        if result != .completed {
-            XCTFail(
-                """
-                Timed out waiting for \(expectedText).
-                \(diagnostics())
-                """,
-                file: file,
-                line: line
-            )
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.label.contains(expectedText) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
+        XCTFail(
+            """
+            Timed out waiting for \(expectedText).
+            \(diagnostics())
+            """,
+            file: file,
+            line: line
+        )
     }
 
     private func diagnosticsText(in app: XCUIApplication) -> String {

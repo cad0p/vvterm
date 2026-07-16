@@ -14,7 +14,9 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
         isSoftwareInputActive: true
     )
     private(set) var acquireCount = 0
+    private(set) var forceSoftwareKeyboardCount = 0
     private(set) var rebuildCount = 0
+    private(set) var accessorySuppressionRequests: [Bool] = []
 
     func keyboardCoordinatorDiagnosticSnapshot() -> TerminalKeyboardCoordinatorDiagnosticSnapshot {
         snapshot
@@ -22,6 +24,13 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
 
     func acquireTerminalInput() -> Bool {
         acquireCount += 1
+        snapshot.isFirstResponder = true
+        snapshot.isSoftwareInputActive = true
+        return true
+    }
+
+    func forceSoftwareKeyboardInput() -> Bool {
+        forceSoftwareKeyboardCount += 1
         snapshot.isFirstResponder = true
         snapshot.isSoftwareInputActive = true
         return true
@@ -42,11 +51,15 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
         rebuildCount += 1
     }
 
-    func setTerminalInputAccessorySuppressed(_ suppressed: Bool) {}
+    func setTerminalInputAccessorySuppressed(_ suppressed: Bool) {
+        accessorySuppressionRequests.append(suppressed)
+    }
 
     func resetCommands() {
         acquireCount = 0
+        forceSoftwareKeyboardCount = 0
         rebuildCount = 0
+        accessorySuppressionRequests.removeAll()
     }
 }
 
@@ -214,13 +227,122 @@ struct TerminalKeyboardCoordinatorTests {
         session.resetCommands()
 
         coordinator.userRequestedShow()
-
-        #expect(session.acquireCount == 1)
-        #expect(coordinator.keyboardUITestPresentationVerificationPending)
-
         await drainMainQueue()
 
+        #expect(session.acquireCount == 0)
+        #expect(session.forceSoftwareKeyboardCount == 1)
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
         #expect(session.rebuildCount == 0)
+    }
+
+    @Test
+    @MainActor
+    func explicitShowDuringReconnectForcesSoftwareKeyboardWhenSessionReturns() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneConnected(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        coordinator.userRequestedHide()
+        await drainMainQueue()
+        coordinator.setPaneConnected(false, for: paneId)
+        await drainMainQueue()
+        session.resetCommands()
+
+        coordinator.userRequestedShow()
+        await drainMainQueue()
+
+        #expect(session.forceSoftwareKeyboardCount == 0)
+
+        coordinator.setPaneConnected(true, for: paneId)
+        await drainMainQueue()
+
+        #expect(session.acquireCount == 0)
+        #expect(session.forceSoftwareKeyboardCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func observedKeyboardHidePreservesAccessoryPairing() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneConnected(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        coordinator.userRequestedShow()
+        await drainMainQueue()
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
+            CGRect(x: 0, y: 700, width: 1_024, height: 300)
+        )
+        #expect(session.accessorySuppressionRequests == [false])
+
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(nil)
+        #expect(session.accessorySuppressionRequests == [false, true])
+
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
+            CGRect(x: 0, y: 700, width: 1_024, height: 300)
+        )
+        #expect(session.accessorySuppressionRequests == [false, true, false])
+    }
+
+    @Test
+    @MainActor
+    func missingInitialKeyboardSuppressesAccessoryImmediately() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneConnected(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        coordinator.userRequestedShow()
+        await drainMainQueue()
+        session.resetCommands()
+
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(nil)
+
+        #expect(session.accessorySuppressionRequests == [true])
+    }
+
+    @Test
+    @MainActor
+    func automaticSessionAcquisitionDoesNotForceSoftwareKeyboard() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        session.snapshot.isFirstResponder = false
+        session.snapshot.isSoftwareInputActive = false
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneConnected(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        #expect(session.acquireCount == 1)
+        #expect(session.forceSoftwareKeyboardCount == 0)
     }
 
     @Test

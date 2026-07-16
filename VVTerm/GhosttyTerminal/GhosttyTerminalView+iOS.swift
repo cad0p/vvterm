@@ -1842,6 +1842,12 @@ class GhosttyTerminalView: UIView {
     private var keyboardFocusPolicy = TerminalKeyboardFocusPolicy()
     private var suppressDirectTouchKeyboardFocusUntil = Date.distantPast
     private var suppressAccessoryForMissingSoftwareKeyboard = false
+    private let hiddenKeyboardInputView: UIView = {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 0))
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.heightAnchor.constraint(equalToConstant: 0).isActive = true
+        return view
+    }()
     #if DEBUG
     private var keyboardHideRequestCount = 0
     private var keyboardInputSessionRebuildCount = 0
@@ -1919,25 +1925,30 @@ class GhosttyTerminalView: UIView {
 
     @discardableResult
     func acquireTerminalInput() -> Bool {
+        requestKeyboardFocus(for: .initialActivation)
+    }
+
+    @discardableResult
+    func forceSoftwareKeyboardInput() -> Bool {
         requestKeyboardFocus(for: .explicitUserRequest)
     }
 
     @discardableResult
     func requestKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
+        guard prepareKeyboardFocus(for: reason) else { return false }
+        notifyKeyboardBrowseModeChange()
+        return becomeFirstResponder()
+    }
+
+    private func prepareKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
         guard !isFindNavigatorActive else { return false }
         if reason != .hardwareKeyboard {
             refreshHardwareKeyboardAttachmentFromSystem()
         }
         guard keyboardFocusPolicy.requestFocus(for: reason) else { return false }
-        setTerminalInputAccessorySuppressed(reason == .hardwareKeyboard)
+        suppressAccessoryForMissingSoftwareKeyboard = false
         clearNativeSelectionStateForTerminalInput()
-        notifyKeyboardBrowseModeChange()
-        return becomeFirstResponder()
-    }
-
-    @discardableResult
-    func requestKeyboardFocus() -> Bool {
-        requestKeyboardFocus(for: .explicitUserRequest)
+        return true
     }
 
     func dismissKeyboardForUser(suppressDirectTouchRefocus: Bool = false) {
@@ -2190,7 +2201,6 @@ class GhosttyTerminalView: UIView {
         let hasHardwareKeyboard = detectedHardwareKeyboardAttached
         guard hasHardwareKeyboard != hasHardwareKeyboardAttached else { return }
         hasHardwareKeyboardAttached = hasHardwareKeyboard
-        notifyKeyboardBrowseModeChange()
     }
 
     private func updateHardwareKeyboardState(reloadInputViewsIfNeeded: Bool) {
@@ -2204,7 +2214,7 @@ class GhosttyTerminalView: UIView {
             focusForHardwareKeyboardIfNeeded()
         } else if didChange {
             if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
-                _ = requestKeyboardFocus(for: .explicitUserRequest)
+                _ = requestKeyboardFocus(for: .initialActivation)
             } else {
                 reloadTerminalInputViewsIfActive()
             }
@@ -5112,27 +5122,16 @@ indirect enum TerminalKey {
 
 extension GhosttyTerminalView {
     private static var keyboardToolbarKey: UInt8 = 0
-    private static var hiddenKeyboardInputViewKey: UInt8 = 0
 
     private var keyboardToolbar: TerminalInputAccessoryView? {
         get { objc_getAssociatedObject(self, &Self.keyboardToolbarKey) as? TerminalInputAccessoryView }
         set { objc_setAssociatedObject(self, &Self.keyboardToolbarKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
     }
 
-    private var hiddenKeyboardInputView: UIView {
-        if let view = objc_getAssociatedObject(self, &Self.hiddenKeyboardInputViewKey) as? UIView {
-            return view
-        }
-        let view = UIInputView(frame: CGRect(x: 0, y: 0, width: 1, height: 0), inputViewStyle: .keyboard)
-        view.allowsSelfSizing = true
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.heightAnchor.constraint(equalToConstant: 0).isActive = true
-        objc_setAssociatedObject(self, &Self.hiddenKeyboardInputViewKey, view, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        return view
-    }
-
     private var shouldSuppressSoftwareKeyboard: Bool {
-        keyboardFocusPolicy.isBrowsing || hasHardwareKeyboardAttached
+        keyboardFocusPolicy.shouldSuppressSoftwareKeyboard(
+            hasHardwareKeyboardAttached: hasHardwareKeyboardAttached
+        )
     }
 
     private var shouldHideKeyboardAccessoryBar: Bool {
@@ -5194,6 +5193,8 @@ extension GhosttyTerminalView {
             "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
             "accessoryHidden=\(shouldHideKeyboardAccessoryBar)",
             "hardware=\(hasHardwareKeyboardAttached)",
+            "keyboardForced=\(keyboardFocusPolicy.forcesSoftwareKeyboardPresentation)",
+            "softwareKeyboardSuppressed=\(shouldSuppressSoftwareKeyboard)",
             "browse=\(keyboardFocusPolicy.isBrowsing)",
             "eligible=\(isTextInputSessionEligible)",
             "imeProxyCanBecome=\(imeProxyTextView.canBecomeFirstResponder)",
@@ -5213,7 +5214,7 @@ extension GhosttyTerminalView {
     func keyboardUITestSetMarkedText(_ text: String) {
         guard !text.isEmpty else { return }
         if !imeProxyTextView.isFirstResponder {
-            _ = requestKeyboardFocus(for: .explicitUserRequest)
+            _ = requestKeyboardFocus(for: .initialActivation)
         }
         let selectedLocation = (text as NSString).length
         imeProxyTextView.setMarkedText(
@@ -5224,7 +5225,7 @@ extension GhosttyTerminalView {
 
     func keyboardUITestDeleteBackwardThroughIMEProxy() {
         if !imeProxyTextView.isFirstResponder {
-            _ = requestKeyboardFocus(for: .explicitUserRequest)
+            _ = requestKeyboardFocus(for: .initialActivation)
         }
         imeProxyTextView.deleteBackward()
     }
@@ -5243,7 +5244,7 @@ extension GhosttyTerminalView {
         if attached {
             focusForHardwareKeyboardIfNeeded()
         } else if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
-            _ = requestKeyboardFocus(for: .explicitUserRequest)
+            _ = requestKeyboardFocus(for: .initialActivation)
         } else {
             notifyKeyboardBrowseModeChange()
         }

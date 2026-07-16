@@ -42,6 +42,10 @@ struct TerminalKeyboardUITestHarness: View {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-preserve-terminal-size")
     }
 
+    private var simulatesKeyboardFrames: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-simulate-keyboard-frames")
+    }
+
     private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -109,11 +113,17 @@ struct TerminalKeyboardUITestHarness: View {
 
                     Button("Hide") {
                         terminalView?.dismissKeyboardFromToolbar()
+                        if simulatesKeyboardFrames {
+                            applySimulatedKeyboardGeometry(.hidden)
+                        }
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.hideViaToolbar")
 
                     Button("Keyboard") {
                         TerminalTabManager.shared.keyboardCoordinator.userRequestedShow()
+                        if simulatesKeyboardFrames {
+                            applySimulatedKeyboardGeometry(.docked)
+                        }
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.showKeyboard")
                 }
@@ -291,6 +301,7 @@ struct TerminalKeyboardUITestHarness: View {
     }
 
     private func noteKeyboardFrame(_ note: Notification) {
+        guard !simulatesKeyboardFrames else { return }
         guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else {
             return
         }
@@ -312,6 +323,7 @@ struct TerminalKeyboardUITestHarness: View {
     }
 
     private func noteKeyboardHidden() {
+        guard !simulatesKeyboardFrames else { return }
         if keyboardVisible {
             keyboardHideTransitionCount += 1
         }
@@ -405,6 +417,16 @@ struct TerminalKeyboardUITestHarness: View {
             frame = nil
         }
 
+        let visible = frame != nil
+        if visible != keyboardVisible {
+            if visible {
+                keyboardShowTransitionCount += 1
+            } else {
+                keyboardHideTransitionCount += 1
+            }
+        }
+        keyboardVisible = visible
+        keyboardHeight = frame?.height ?? 0
         keyboardFrame = frame
         TerminalTabManager.shared.keyboardCoordinator
             .keyboardUITestSetSoftwareKeyboardEndFrame(frame)
@@ -568,7 +590,7 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
         guard lastHandledFocusRequestID != pendingFocusRequestID else { return }
         lastHandledFocusRequestID = pendingFocusRequestID
         terminalView.acceptsTerminalInput = true
-        _ = terminalView.requestKeyboardFocus(for: .explicitUserRequest)
+        _ = terminalView.requestKeyboardFocus(for: .initialActivation)
     }
 
     func releaseTerminalInput() {

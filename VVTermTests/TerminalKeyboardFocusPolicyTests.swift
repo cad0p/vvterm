@@ -77,4 +77,37 @@ struct TerminalKeyboardFocusPolicyTests {
         let reconnectAfterDismiss = policy.requestFocus(for: .reconnectRestore)
         #expect(!reconnectAfterDismiss)
     }
+
+    @Test
+    func explicitKeyboardRequestOverridesHardwareSuppressionUntilDismissed() {
+        var policy = TerminalKeyboardFocusPolicy()
+
+        #expect(policy.shouldSuppressSoftwareKeyboard(hasHardwareKeyboardAttached: true))
+        #expect(!policy.forcesSoftwareKeyboardPresentation)
+
+        let explicitRequestAccepted = policy.requestFocus(for: .explicitUserRequest)
+        #expect(explicitRequestAccepted)
+        #expect(policy.forcesSoftwareKeyboardPresentation)
+        #expect(!policy.shouldSuppressSoftwareKeyboard(hasHardwareKeyboardAttached: true))
+
+        for reason in [
+            TerminalKeyboardFocusReason.hardwareKeyboard,
+            .initialActivation,
+            .directTouch,
+            .selectionGesture,
+            .reconnectRestore,
+        ] {
+            let requestAccepted = policy.requestFocus(for: reason)
+            #expect(requestAccepted)
+            #expect(policy.forcesSoftwareKeyboardPresentation)
+            #expect(!policy.shouldSuppressSoftwareKeyboard(hasHardwareKeyboardAttached: true))
+        }
+
+        policy.dismissForUser()
+
+        #expect(!policy.forcesSoftwareKeyboardPresentation)
+        #expect(policy.shouldSuppressSoftwareKeyboard(hasHardwareKeyboardAttached: true))
+        let hardwareFocusAccepted = policy.requestFocus(for: .hardwareKeyboard)
+        #expect(!hardwareFocusAccepted)
+    }
 }

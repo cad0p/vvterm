@@ -10,6 +10,8 @@ protocol TerminalKeyboardInputSession: AnyObject {
     @discardableResult
     func acquireTerminalInput() -> Bool
     @discardableResult
+    func forceSoftwareKeyboardInput() -> Bool
+    @discardableResult
     func focusTerminalInputWithoutShowingSoftwareKeyboard() -> Bool
     func releaseTerminalInput()
     func rebuildTerminalInputSession()
@@ -34,6 +36,12 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         case none
         case deferUntilVerification
         case rebuild
+    }
+
+    private enum PresentationRequest: Equatable {
+        case none
+        case automaticRefresh
+        case forceSoftwareKeyboard
     }
 
     struct StateInputs: Equatable {
@@ -67,7 +75,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private var pendingSyncAfterCurrent = false
     private var pendingReason = "initial"
     private var lastManagedPaneId: UUID?
-    private var wantsPresentationRefresh = false
+    private var pendingPresentationRequest = PresentationRequest.none
     private var presentationVerifyTask: Task<Void, Never>?
     /// Rebuilding a session UIKit refuses to present cannot succeed by
     /// repetition; cap attempts until a keyboard actually shows (which
@@ -139,7 +147,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    self.wantsPresentationRefresh = true
+                    self.requestAutomaticPresentationRefresh()
                     self.presentationRefreshAttemptCount = 0
                     self.markDirty(reason: "sceneActivated")
                 }
@@ -151,6 +159,12 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
         category: "KeyboardCoordinator"
     )
+
+    #if DEBUG
+    nonisolated private static var usesUITestKeyboardFrameSimulation: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-simulate-keyboard-frames")
+    }
+    #endif
 
     nonisolated private static var defaultLifecycleLoggingEnabled: Bool {
         DebugLogConfiguration.isEnabled("keyboard")
@@ -266,14 +280,15 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     func userRequestedHide() {
-        guard !isUserHidden else { return }
+        pendingPresentationRequest = .none
         cancelPresentationVerify()
+        guard !isUserHidden else { return }
         isUserHidden = true
         markDirty(reason: "userHide")
     }
 
     func userRequestedShow() {
-        wantsPresentationRefresh = true
+        pendingPresentationRequest = .forceSoftwareKeyboard
         // The repair cap stops AUTOMATIC rebuild loops (e.g. against a
         // hardware keyboard's legitimate suppression, which can exhaust it);
         // an explicit user action re-arms it, otherwise returning from
@@ -282,21 +297,6 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         if isUserHidden {
             isUserHidden = false
         }
-
-        // A user-hidden keyboard keeps the text-input session active for
-        // hardware keys. Start one normal presentation attempt here and
-        // establish its verifier before queued reconciliation can mistake
-        // the in-flight animation for a settled failure and rebuild it.
-        let inputs = currentInputs
-        if Self.desiredKeyboardVisible(inputs: inputs),
-           let terminal = activeTerminal,
-           terminal.keyboardCoordinatorDiagnosticSnapshot().isSoftwareInputActive {
-            _ = terminal.acquireTerminalInput()
-            if terminal.keyboardCoordinatorDiagnosticSnapshot().isSoftwareInputActive,
-               !isSoftwareKeyboardVisible {
-                schedulePresentationVerify()
-            }
-        }
         markDirty(reason: "userShow")
     }
 
@@ -304,7 +304,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         if isUserHidden {
             return
         }
-        wantsPresentationRefresh = true
+        requestAutomaticPresentationRefresh()
         // See userRequestedShow: user actions get a fresh repair budget.
         presentationRefreshAttemptCount = 0
         markDirty(reason: "directTouch")
@@ -315,6 +315,9 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         animationDuration: TimeInterval?,
         animationCurveRawValue: Int?
     ) {
+        #if DEBUG
+        guard !Self.usesUITestKeyboardFrameSimulation else { return }
+        #endif
         guard viewActive, let frame else { return }
         updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
         guard let screenBounds = UIApplication.shared.connectedScenes
@@ -335,6 +338,9 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         animationDuration: TimeInterval?,
         animationCurveRawValue: Int?
     ) {
+        #if DEBUG
+        guard !Self.usesUITestKeyboardFrameSimulation else { return }
+        #endif
         updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
         clearSoftwareKeyboardObservation()
     }
@@ -358,6 +364,8 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             cancelPresentationVerify()
             presentationRefreshAttemptCount = 0
             activeTerminal?.setTerminalInputAccessorySuppressed(false)
+        } else {
+            activeTerminal?.setTerminalInputAccessorySuppressed(true)
         }
         guard isSoftwareKeyboardVisible != visible else { return }
         isSoftwareKeyboardVisible = visible
@@ -366,6 +374,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     private var activeTerminal: (any TerminalKeyboardInputSession)? {
         activePaneId.flatMap { terminalProvider?($0) }
+    }
+
+    private func requestAutomaticPresentationRefresh() {
+        guard pendingPresentationRequest != .forceSoftwareKeyboard else { return }
+        pendingPresentationRequest = .automaticRefresh
     }
 
     private var currentInputs: StateInputs {
@@ -441,10 +454,35 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         }
         lastManagedPaneId = activePaneId
 
-        let refreshRequested = wantsPresentationRefresh
-        wantsPresentationRefresh = false
+        let presentationRequest = pendingPresentationRequest
+        if keyboardPresentationDesired || presentationRequest != .forceSoftwareKeyboard {
+            pendingPresentationRequest = .none
+        }
 
         let before = terminal.keyboardCoordinatorDiagnosticSnapshot()
+        if keyboardPresentationDesired,
+           presentationRequest == .forceSoftwareKeyboard {
+            _ = terminal.forceSoftwareKeyboardInput()
+            let after = terminal.keyboardCoordinatorDiagnosticSnapshot()
+            if after.isSoftwareInputActive {
+                if !isSoftwareKeyboardVisible {
+                    schedulePresentationVerify()
+                }
+            } else {
+                pendingPresentationRequest = .forceSoftwareKeyboard
+            }
+            logCommand(
+                inputSessionDesired: inputSessionDesired,
+                keyboardPresentationDesired: keyboardPresentationDesired,
+                reason: reason,
+                inputs: inputs,
+                before: before,
+                after: after
+            )
+            return
+        }
+
+        let refreshRequested = presentationRequest == .automaticRefresh
         // Compare against the software input session, not the combined
         // responder state: the view can hold first responder for native
         // selection, which must not read as "keyboard is up".
@@ -460,7 +498,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             )
             switch refreshAction {
             case .deferUntilVerification:
-                wantsPresentationRefresh = true
+                requestAutomaticPresentationRefresh()
                 logDeferredRefresh(inputs: inputs, before: before)
                 return
             case .rebuild:
@@ -541,7 +579,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             guard Self.desiredKeyboardVisible(inputs: inputs) else { return }
             let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
             guard snapshot.isSoftwareInputActive else { return }
-            if self.wantsPresentationRefresh {
+            if self.pendingPresentationRequest != .none {
                 self.markDirty(reason: "presentationUnverified")
                 return
             }
@@ -619,6 +657,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     func keyboardUITestSetSoftwareKeyboardEndFrame(_ frame: CGRect?) {
         softwareKeyboardEndFrame = frame
+        noteSoftwareKeyboardVisible(frame != nil)
     }
     #endif
 }
