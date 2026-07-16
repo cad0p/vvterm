@@ -344,6 +344,7 @@ struct ServerTerminalRoute: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+            .accessibilityIdentifier("vvterm.terminal.moreMenu")
         }
     }
 
@@ -430,6 +431,9 @@ struct ServerTerminalRoute: View {
             return
         }
         updateKeyboardCoordinatorInputs()
+        if notifyingWindow.isKeyWindow, let focusedPaneId {
+            keyboardCoordinator.activeTerminalWindowDidBecomeKey(for: focusedPaneId)
+        }
     }
 
     private func updateKeyboardCoordinatorInputs() {
@@ -454,7 +458,12 @@ struct ServerTerminalRoute: View {
 
         keyboardCoordinator.setActivePane(activePaneId)
         keyboardCoordinator.setViewActive(effect == .activate)
-        keyboardCoordinator.setFindNavigatorActive(activePaneId != nil && isFocusedTerminalFindNavigatorVisible)
+        if let activePaneId {
+            keyboardCoordinator.setFindNavigatorActive(
+                isFocusedTerminalFindNavigatorVisible,
+                for: activePaneId
+            )
+        }
     }
 
     private func showKeyboardForFocusedTerminal() {

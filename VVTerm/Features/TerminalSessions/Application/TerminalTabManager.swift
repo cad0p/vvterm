@@ -783,12 +783,10 @@ final class TerminalTabManager: ObservableObject {
                 self?.keyboardCoordinator.userRequestedHide()
             }
         }
-        terminal.onFindNavigatorVisibilityChange = { [weak self] isVisible in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.setTerminalFindNavigatorVisible(isVisible, for: paneId)
-                self.keyboardCoordinator.setFindNavigatorActive(isVisible)
-            }
+        terminal.onFindNavigatorVisibilityChange = { [weak self, weak terminal] isVisible in
+            guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
+            self.setTerminalFindNavigatorVisible(isVisible, for: paneId)
+            self.keyboardCoordinator.setFindNavigatorActive(isVisible, for: paneId)
         }
         #endif
         terminalViews[paneId] = terminal
@@ -806,7 +804,10 @@ final class TerminalTabManager: ObservableObject {
             self.keyboardCoordinator.setWindowAttached(terminal.window != nil, for: paneId)
             self.publishTerminalInputAvailability(for: paneId)
             self.setTerminalFindNavigatorVisible(terminal.isFindNavigatorVisible, for: paneId)
-            self.keyboardCoordinator.setFindNavigatorActive(terminal.isFindNavigatorVisible)
+            self.keyboardCoordinator.setFindNavigatorActive(
+                terminal.isFindNavigatorVisible,
+                for: paneId
+            )
         }
         #endif
         scheduleTerminalRegistryVersionUpdate()

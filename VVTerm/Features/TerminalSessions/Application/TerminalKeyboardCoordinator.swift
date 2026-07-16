@@ -51,6 +51,42 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         }
     }
 
+    private enum FindNavigatorState: Equatable {
+        case inactive
+        case active(terminalKeyboardWasMissing: Bool)
+        /// Find can disappear while its last keyboard frame remains visible.
+        /// Keep the pre-Find failure scoped to this terminal until the user's
+        /// Keyboard command performs one real responder-session rebuild.
+        case terminalRepairPending
+
+        var isActive: Bool {
+            if case .active = self {
+                return true
+            }
+            return false
+        }
+
+        var requiresTerminalRepair: Bool {
+            switch self {
+            case .active(terminalKeyboardWasMissing: true), .terminalRepairPending:
+                return true
+            case .inactive, .active(terminalKeyboardWasMissing: false):
+                return false
+            }
+        }
+    }
+
+    private struct ExplicitPresentationRecovery: Equatable {
+        enum Phase: Equatable {
+            case rebuilding
+            case waitingForActivation
+        }
+
+        let paneId: UUID
+        let terminalIdentifier: ObjectIdentifier
+        var phase: Phase
+    }
+
     struct StateInputs: Equatable {
         var viewActive: Bool
         var activePaneInputEligible: Bool
@@ -76,13 +112,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private var viewActive = false
     private var paneInputEligibleById: [UUID: Bool] = [:]
     private var paneWindowAttachedById: [UUID: Bool] = [:]
-    private var findNavigatorActive = false
+    private var findNavigatorState = FindNavigatorState.inactive
     private var syncScheduled = false
     private var isSyncing = false
     private var pendingSyncAfterCurrent = false
     private var pendingReason = "initial"
     private var lastManagedPaneId: UUID?
     private var pendingPresentationRequest = PresentationRequest.none
+    private var explicitPresentationRecovery: ExplicitPresentationRecovery?
     private var presentationVerifyTask: Task<Void, Never>?
     /// Rebuilding a session UIKit refuses to present cannot succeed by
     /// repetition; cap attempts until a keyboard actually shows (which
@@ -261,6 +298,11 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         // software-keyboard command (or a stale automatic repair) elsewhere.
         pendingPresentationRequest = .none
         presentationRefreshAttemptCount = 0
+        findNavigatorState = .inactive
+        if let paneId,
+           explicitPresentationRecovery?.paneId != paneId {
+            explicitPresentationRecovery = nil
+        }
         activePaneId = paneId
         markDirty(reason: "activePane")
     }
@@ -270,10 +312,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     /// published pane facts are unchanged, and discard repair work that was
     /// scoped to the terminal it replaced.
     func terminalProviderIdentityDidChange(for paneId: UUID) {
+        if explicitPresentationRecovery?.paneId == paneId {
+            explicitPresentationRecovery = nil
+        }
         guard activePaneId == paneId else { return }
         cancelPresentationVerify()
         pendingPresentationRequest = .none
         presentationRefreshAttemptCount = 0
+        findNavigatorState = .inactive
         markDirty(reason: "terminalProviderIdentityChanged")
     }
 
@@ -281,6 +327,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         if !active {
             cancelPresentationVerify()
             clearSoftwareKeyboardObservation()
+            findNavigatorState = .inactive
         }
         guard viewActive != active else { return }
         viewActive = active
@@ -297,10 +344,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     func removePane(_ paneId: UUID) {
+        if explicitPresentationRecovery?.paneId == paneId {
+            explicitPresentationRecovery = nil
+        }
         let didRemoveInputEligibility = paneInputEligibleById.removeValue(forKey: paneId) != nil
         let didRemoveWindow = paneWindowAttachedById.removeValue(forKey: paneId) != nil
         if activePaneId == paneId {
             cancelPresentationVerify()
+            findNavigatorState = .inactive
             activePaneId = nil
             markDirty(reason: "removeActivePane")
         } else if didRemoveInputEligibility || didRemoveWindow {
@@ -318,6 +369,12 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         markDirty(reason: "sceneActivated")
     }
 
+    func activeTerminalWindowDidBecomeKey(for paneId: UUID) {
+        guard activePaneId == paneId else { return }
+        requestAutomaticPresentationRefresh()
+        markDirty(reason: "windowBecameKey")
+    }
+
     func setWindowAttached(_ attached: Bool, for paneId: UUID) {
         guard paneWindowAttachedById[paneId] != attached else { return }
         if !attached, activePaneId == paneId {
@@ -327,12 +384,22 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         markDirty(reason: "windowAttached")
     }
 
-    func setFindNavigatorActive(_ active: Bool) {
-        guard findNavigatorActive != active else { return }
+    func setFindNavigatorActive(_ active: Bool, for paneId: UUID) {
+        guard activePaneId == paneId else { return }
+        guard findNavigatorState.isActive != active else { return }
         if active {
             cancelPresentationVerify()
+            let terminalKeyboardWasMissing = findNavigatorState.requiresTerminalRepair
+                || (Self.desiredKeyboardVisible(inputs: currentInputs)
+                    && !isSoftwareKeyboardVisible)
+            findNavigatorState = .active(
+                terminalKeyboardWasMissing: terminalKeyboardWasMissing
+            )
+        } else if case .active(let terminalKeyboardWasMissing) = findNavigatorState {
+            findNavigatorState = terminalKeyboardWasMissing
+                ? .terminalRepairPending
+                : .inactive
         }
-        findNavigatorActive = active
         markDirty(reason: "findNavigator")
     }
 
@@ -341,12 +408,17 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     /// run too late because the keyboard belongs to a separate system scene.
     func deactivateInputImmediately() {
         clearSoftwareKeyboardObservation()
-        guard activePaneId != nil || viewActive || findNavigatorActive || lastManagedPaneId != nil else {
+        pendingPresentationRequest = .none
+        explicitPresentationRecovery = nil
+        guard activePaneId != nil
+                || viewActive
+                || findNavigatorState != .inactive
+                || lastManagedPaneId != nil else {
             return
         }
         activePaneId = nil
         viewActive = false
-        findNavigatorActive = false
+        findNavigatorState = .inactive
         cancelPresentationVerify()
         pendingReason = "contentProtection"
         syncScheduled = false
@@ -355,6 +427,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     func userRequestedHide() {
         pendingPresentationRequest = .none
+        explicitPresentationRecovery = nil
         cancelPresentationVerify()
         guard !isUserHidden else { return }
         isUserHidden = true
@@ -363,8 +436,13 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
     func userRequestedShow() {
         logExplicitPresentationRequest()
+        if explicitPresentationRecovery?.phase == .waitingForActivation {
+            explicitPresentationRecovery = nil
+        }
+        let requiresFindRepair = findNavigatorState.requiresTerminalRepair
         pendingPresentationRequest = .forceSoftwareKeyboard(
-            repairActiveSession: !isUserHidden
+            repairActiveSession: requiresFindRepair
+                || (!isUserHidden && !isSoftwareKeyboardVisible)
         )
         // The repair cap stops AUTOMATIC rebuild loops (e.g. against a
         // hardware keyboard's legitimate suppression, which can exhaust it);
@@ -454,7 +532,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     }
 
     private func requestAutomaticPresentationRefresh() {
-        guard !pendingPresentationRequest.isExplicitSoftwareKeyboardRequest else { return }
+        guard explicitPresentationRecovery == nil,
+              !pendingPresentationRequest.isExplicitSoftwareKeyboardRequest else {
+            return
+        }
         pendingPresentationRequest = .automaticRefresh
     }
 
@@ -465,7 +546,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             activePaneInputEligible: paneId.flatMap { paneInputEligibleById[$0] } ?? false,
             activePaneWindowAttached: paneId.flatMap { paneWindowAttachedById[$0] } ?? false,
             userHidKeyboard: isUserHidden,
-            findNavigatorActive: findNavigatorActive
+            findNavigatorActive: findNavigatorState.isActive
         )
     }
 
@@ -531,19 +612,69 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         }
         lastManagedPaneId = activePaneId
 
+        if let recovery = explicitPresentationRecovery,
+           recovery.paneId == activePaneId {
+            if ObjectIdentifier(terminal) != recovery.terminalIdentifier {
+                explicitPresentationRecovery = nil
+            } else if recovery.phase == .rebuilding {
+                logSteady(
+                    inputSessionDesired: inputSessionDesired,
+                    keyboardPresentationDesired: keyboardPresentationDesired,
+                    inputs: inputs,
+                    before: terminal.keyboardCoordinatorDiagnosticSnapshot()
+                )
+                return
+            } else {
+                let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+                guard keyboardPresentationDesired,
+                      snapshot.windowAttached,
+                      snapshot.windowIsKey else {
+                    logSteady(
+                        inputSessionDesired: inputSessionDesired,
+                        keyboardPresentationDesired: keyboardPresentationDesired,
+                        inputs: inputs,
+                        before: snapshot
+                    )
+                    return
+                }
+                explicitPresentationRecovery = nil
+                // The responder-free repair turn already completed before
+                // entering this phase. Resume with a direct explicit force;
+                // never start a second rebuild if focus returned meanwhile.
+                pendingPresentationRequest = .forceSoftwareKeyboard(
+                    repairActiveSession: false
+                )
+            }
+        }
+
         let presentationRequest = pendingPresentationRequest
+        let before = terminal.keyboardCoordinatorDiagnosticSnapshot()
+        if keyboardPresentationDesired,
+           presentationRequest.isExplicitSoftwareKeyboardRequest,
+           (!before.windowAttached || !before.windowIsKey) {
+            // Keep an explicit Keyboard command scoped to this pane until its
+            // window can own InputUI. Automatic lifecycle refreshes must not
+            // downgrade the user's request while another iPad window is key.
+            logSteady(
+                inputSessionDesired: inputSessionDesired,
+                keyboardPresentationDesired: keyboardPresentationDesired,
+                inputs: inputs,
+                before: before
+            )
+            return
+        }
         if keyboardPresentationDesired || !presentationRequest.isExplicitSoftwareKeyboardRequest {
             pendingPresentationRequest = .none
         }
 
-        let before = terminal.keyboardCoordinatorDiagnosticSnapshot()
         if keyboardPresentationDesired,
            case .forceSoftwareKeyboard(let repairActiveSession) = presentationRequest {
+            let requiresFindRepair = findNavigatorState.requiresTerminalRepair
             if repairActiveSession,
-               before.isSoftwareInputActive,
                before.windowAttached,
                before.windowIsKey,
-               !isSoftwareKeyboardVisible {
+               (requiresFindRepair
+                    || (before.isSoftwareInputActive && !isSoftwareKeyboardVisible)) {
                 beginInputSessionReacquisition(
                     for: activePaneId,
                     terminal: terminal,
@@ -681,11 +812,68 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             terminal.setTerminalInputAccessorySuppressed(true)
             return
         }
+        if findNavigatorState.requiresTerminalRepair {
+            findNavigatorState = .inactive
+        }
+        let explicitRecovery: ExplicitPresentationRecovery?
+        if presentationRequest.isExplicitSoftwareKeyboardRequest {
+            let recovery = ExplicitPresentationRecovery(
+                paneId: paneId,
+                terminalIdentifier: ObjectIdentifier(terminal),
+                phase: .rebuilding
+            )
+            explicitPresentationRecovery = recovery
+            explicitRecovery = recovery
+        } else {
+            explicitRecovery = nil
+        }
         terminal.releaseTerminalInputForReacquisition { [weak self] in
             guard let self else { return }
-            guard self.activePaneId == paneId,
-                  let activeTerminal = self.terminalProvider?(paneId),
+            guard let activeTerminal = self.terminalProvider?(paneId),
                   activeTerminal === terminal else {
+                if let explicitRecovery,
+                   self.explicitPresentationRecovery == explicitRecovery {
+                    self.explicitPresentationRecovery = nil
+                }
+                self.markDirty(reason: "inputReacquisitionOwnershipChanged")
+                return
+            }
+
+            if var explicitRecovery {
+                guard self.explicitPresentationRecovery == explicitRecovery else {
+                    return
+                }
+                if self.pendingPresentationRequest.isExplicitSoftwareKeyboardRequest {
+                    self.explicitPresentationRecovery = nil
+                    self.markDirty(reason: "inputReacquisitionSuperseded")
+                    return
+                }
+                if self.pendingPresentationRequest == .automaticRefresh {
+                    self.pendingPresentationRequest = .none
+                }
+
+                let inputs = self.currentInputs
+                let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+                guard self.activePaneId == paneId,
+                      Self.desiredKeyboardVisible(inputs: inputs),
+                      snapshot.windowAttached,
+                      snapshot.windowIsKey else {
+                    explicitRecovery.phase = .waitingForActivation
+                    self.explicitPresentationRecovery = explicitRecovery
+                    return
+                }
+
+                self.explicitPresentationRecovery = nil
+                _ = self.acquireTerminalInput(
+                    terminal,
+                    for: paneId,
+                    presentationRequest: presentationRequest,
+                    retryPresentationAfterVerification: nil
+                )
+                return
+            }
+
+            guard self.activePaneId == paneId else {
                 self.markDirty(reason: "inputReacquisitionOwnershipChanged")
                 return
             }
@@ -703,7 +891,9 @@ final class TerminalKeyboardCoordinator: ObservableObject {
                 self.markDirty(reason: "inputReacquisitionNoLongerDesired")
                 return
             }
-            guard !terminal.keyboardCoordinatorDiagnosticSnapshot().isSoftwareInputActive else {
+            let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+            guard snapshot.windowAttached, snapshot.windowIsKey else { return }
+            guard !snapshot.isSoftwareInputActive else {
                 self.schedulePresentationVerify(for: paneId, terminal: terminal)
                 return
             }

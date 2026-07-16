@@ -50,27 +50,26 @@ struct TerminalReconnectUITestHarness: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            NavigationStack {
-                switch fixtureState {
-                case .preparing:
-                    ProgressView()
-                case .ready(let server):
-                    ServerTerminalRoute(
-                        tabManager: tabManager,
-                        serverManager: serverManager,
-                        fileTabs: fileTabs,
-                        fileBrowser: fileBrowser,
-                        requestedServerId: server.id,
-                        connectingServer: server,
-                        isConnecting: false,
-                        onBack: {}
-                    )
-                case .failed(let message):
-                    Text(message)
-                }
+        NavigationStack {
+            switch fixtureState {
+            case .preparing:
+                ProgressView()
+            case .ready(let server):
+                ServerTerminalRoute(
+                    tabManager: tabManager,
+                    serverManager: serverManager,
+                    fileTabs: fileTabs,
+                    fileBrowser: fileBrowser,
+                    requestedServerId: server.id,
+                    connectingServer: server,
+                    isConnecting: false,
+                    onBack: {}
+                )
+            case .failed(let message):
+                Text(message)
             }
-
+        }
+        .overlay(alignment: .topLeading) {
             TerminalReconnectDiagnosticsLabel(
                 serverId: activeServer?.id,
                 fallback: fixtureDiagnosticFallback
@@ -78,6 +77,27 @@ struct TerminalReconnectUITestHarness: View {
                 .padding(6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            if exposesKeyboardLossControl {
+                HStack(spacing: 6) {
+                    Button("Lose Input") {
+                        beginUnexpectedKeyboardLoss()
+                    }
+                    .accessibilityIdentifier("vvterm.reconnectTest.keyboard.unexpectedLoss")
+
+                    if simulatesKeyboardFrames {
+                        Button("Stale Find Frame") {
+                            simulateVisibleFindKeyboardFrame()
+                        }
+                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.staleFindFrame")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .padding(.top, 140)
+                .padding(.leading, 8)
+            }
         }
         .task {
             await prepareFixture()
@@ -87,6 +107,44 @@ struct TerminalReconnectUITestHarness: View {
     private var activeServer: Server? {
         guard case .ready(let server) = fixtureState else { return nil }
         return server
+    }
+
+    private var exposesKeyboardLossControl: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-unexpected-keyboard-loss-control"
+        )
+    }
+
+    private var simulatesKeyboardFrames: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-simulate-keyboard-frames"
+        )
+    }
+
+    private var focusedTerminal: GhosttyTerminalView? {
+        guard let serverId = activeServer?.id,
+              let paneId = tabManager.selectedTab(for: serverId)?.focusedPaneId else {
+            return nil
+        }
+        return tabManager.getTerminal(for: paneId)
+    }
+
+    private func beginUnexpectedKeyboardLoss() {
+        focusedTerminal?.keyboardUITestBeginUnexpectedSoftwareKeyboardLoss()
+        if simulatesKeyboardFrames {
+            tabManager.keyboardCoordinator.keyboardUITestSetSoftwareKeyboardEndFrame(nil)
+        }
+    }
+
+    private func simulateVisibleFindKeyboardFrame() {
+        guard simulatesKeyboardFrames,
+              let focusedTerminal,
+              let frame = terminalReconnectVisibleKeyboardFrame(for: focusedTerminal) else {
+            return
+        }
+        tabManager.keyboardCoordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
+            frame
+        )
     }
 
     private var fixtureDiagnosticFallback: String {
@@ -229,7 +287,14 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
 
             if configuredTerminal !== terminal {
                 terminal.keyboardUITestSetHardwareKeyboardAttached(false)
-                configuredTerminal = terminal
+                if usesKeyboardFrameSimulation {
+                    if let frame = terminalReconnectVisibleKeyboardFrame(for: terminal) {
+                        tabManager.keyboardCoordinator.keyboardUITestSetSoftwareKeyboardEndFrame(frame)
+                        configuredTerminal = terminal
+                    }
+                } else {
+                    configuredTerminal = terminal
+                }
             }
             terminal.isAccessibilityElement = true
             terminal.accessibilityIdentifier = "vvterm.reconnectTest.terminalSurface"
@@ -256,6 +321,12 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             label?.accessibilityLabel = diagnostics
         }
 
+        private var usesKeyboardFrameSimulation: Bool {
+            Foundation.ProcessInfo.processInfo.arguments.contains(
+                "--vvterm-ui-test-simulate-keyboard-frames"
+            )
+        }
+
         private func connectionToken(_ state: ConnectionState) -> String {
             switch state {
             case .disconnected:
@@ -273,5 +344,21 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             }
         }
     }
+}
+
+private func terminalReconnectVisibleKeyboardFrame(for terminal: UIView) -> CGRect? {
+    // Keyboard notifications use screen coordinates, while an iPad app window
+    // can occupy only part of the display. Keep the simulated frame within the
+    // terminal's actual window and convert it to the notification coordinate
+    // space before forwarding it to the production coordinator.
+    guard let window = terminal.window else { return nil }
+    let bounds = window.screen.coordinateSpace.convert(window.bounds, from: window)
+    let height = min(CGFloat(400), bounds.height)
+    return CGRect(
+        x: bounds.minX,
+        y: bounds.maxY - height,
+        width: bounds.width,
+        height: height
+    )
 }
 #endif

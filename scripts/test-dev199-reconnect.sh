@@ -7,13 +7,45 @@ ssh_port=22229
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/vvterm-dev199.XXXXXX")"
 sshd_log="$fixture_root/sshd.log"
 session_input_log="$fixture_root/session-input.log"
-result_bundle="${VVTERM_RESULT_BUNDLE:-/tmp/DEV199-production-reconnect.xcresult}"
+ui_test_case="${VVTERM_UI_TEST_CASE:-dev199-reconnect}"
 keyboard_domain="com.apple.keyboard.preferences"
 fixture_defaults_domain="app.vivy.vvterm.dev199-ui-test"
 fixture_private_key_key="sshPrivateKeyBase64"
 fixture_username_key="sshUsername"
 missing_value="__VVTERM_MISSING__"
 sshd_pid=""
+
+case "$ui_test_case" in
+    dev199-reconnect)
+        default_result_bundle="/tmp/DEV199-production-reconnect.xcresult"
+        expected_connection_count=4
+        test_label="DEV-199 production reconnect"
+        test_identifier="VVTermUITests/TerminalReconnectUITests/testProductionSSHForegroundReconnectRestoresTyping"
+        result_test_name="testProductionSSHForegroundReconnectRestoresTyping()"
+        codex_emulation=false
+        ;;
+    dev212-codex-modes)
+        default_result_bundle="/tmp/DEV212-production-codex-modes.xcresult"
+        expected_connection_count=1
+        test_label="DEV-212 production Codex modes"
+        test_identifier="VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping"
+        result_test_name="testProductionCodexModesKeepKeyboardAndPTYTyping()"
+        codex_emulation=true
+        ;;
+    dev212-find-keyboard)
+        default_result_bundle="/tmp/DEV212-production-find-keyboard.xcresult"
+        expected_connection_count=1
+        test_label="DEV-212 production Find keyboard recovery"
+        test_identifier="VVTermUITests/TerminalReconnectUITests/testProductionCodexFindKeyboardMenuRestoresPTYTyping"
+        result_test_name="testProductionCodexFindKeyboardMenuRestoresPTYTyping()"
+        codex_emulation=true
+        ;;
+    *)
+        printf 'Unknown VVTERM_UI_TEST_CASE: %s\n' "$ui_test_case" >&2
+        exit 2
+        ;;
+esac
+result_bundle="${VVTERM_RESULT_BUNDLE:-$default_result_bundle}"
 
 read_keyboard_preference() {
     xcrun simctl spawn "$simulator_id" defaults read "$keyboard_domain" "$1" 2>/dev/null \
@@ -126,15 +158,77 @@ printf '%s\n' "\$count" > "\$count_file"
 
 stty -icanon -echo min 1 time 0
 printf '\033]0;DEV199_READY_%s\007' "\$count"
+escape=\$'\033'
+encoded_key=""
+codex_active=false
+codex_emulation=$codex_emulation
+
+emit_terminal_key() {
+    local key_code="\$1"
+    case "\$key_code" in
+        return)
+            if [[ "\$codex_emulation" != true ]]; then
+                return
+            fi
+            codex_active=true
+            # Codex enables the alternate screen, Kitty keyboard protocol,
+            # bracketed paste, and focus reporting in this exact order.
+            printf '\033[?1049h\033[>7u\033[?2004h\033[?1004h'
+            printf '\033]0;DEV212_CODEX_READY_%s\007' "\$count"
+            ;;
+        z)
+            if [[ "\$codex_active" == true ]]; then
+                printf '\033]7;file://localhost/tmp/DEV212_INPUT_Z_%s\007' "\$count"
+            fi
+            ;;
+        x)
+            if [[ "\$codex_active" == true ]]; then
+                printf '\033]0;DEV212_INPUT_X_%s\007' "\$count"
+                printf '\033]7;file://localhost/tmp/DEV212_INPUT_X_%s\007' "\$count"
+            else
+                printf '\033]0;DEV199_INPUT_X_%s\007' "\$count"
+                printf '\033]7;file://localhost/tmp/DEV199_INPUT_X_%s\007' "\$count"
+            fi
+            ;;
+    esac
+}
+
 while IFS= read -r -n 1 key; do
     printf '%q\n' "\$key" >> "$session_input_log"
-    if [[ "\$key" == x ]]; then
-        printf '\033]0;DEV199_INPUT_X_%s\007' "\$count"
-        printf '\033]7;file://localhost/tmp/DEV199_INPUT_X_%s\007' "\$count"
+
+    if [[ -n "\$encoded_key" ]]; then
+        encoded_key+="\$key"
+        # Finish any CSI sequence at its first final byte. Codex's focus
+        # reporting sends ESC[I before the next key; leaving that sequence
+        # open would swallow the following raw character and Kitty event.
+        if (( \${#encoded_key} > 2 )) && [[ "\$encoded_key" == "\${escape}["* ]] && [[ "\$key" =~ [@-~] ]]; then
+            if [[ "\$key" == u ]]; then
+                if [[ "\$encoded_key" == "\${escape}[120"*u ]]; then
+                    emit_terminal_key x
+                elif [[ "\$encoded_key" == "\${escape}[122"*u ]]; then
+                    emit_terminal_key z
+                elif [[ "\$encoded_key" == "\${escape}[13"*u ]]; then
+                    emit_terminal_key return
+                fi
+            fi
+            encoded_key=""
+        elif (( \${#encoded_key} > 64 )); then
+            encoded_key=""
+        fi
+        continue
     fi
+
+    case "\$key" in
+        "\$escape") encoded_key="\$key" ;;
+        "") emit_terminal_key return ;;
+        \$'\r') emit_terminal_key return ;;
+        x) emit_terminal_key x ;;
+        z) emit_terminal_key z ;;
+    esac
 done
 EOF
 chmod 700 "$fixture_root/session.sh"
+bash -n "$fixture_root/session.sh"
 
 cat > "$fixture_root/sshd_config" <<EOF
 Port $ssh_port
@@ -195,17 +289,19 @@ xcodebuild test -quiet \
     -destination "platform=iOS Simulator,id=$simulator_id" \
     -parallel-testing-enabled NO \
     -collect-test-diagnostics never \
-    -only-testing:VVTermUITests/TerminalReconnectUITests/testProductionSSHForegroundReconnectRestoresTyping \
+    "-only-testing:$test_identifier" \
     -resultBundlePath "$result_bundle"
 
 read -r final_connection_count < "$fixture_root/connection-count"
-if [[ "$final_connection_count" != 4 ]]; then
-    printf 'Expected exactly 4 PTY sessions, found %s.\n' "$final_connection_count" >&2
+if [[ "$final_connection_count" != "$expected_connection_count" ]]; then
+    printf 'Expected exactly %s PTY sessions, found %s.\n' \
+        "$expected_connection_count" "$final_connection_count" >&2
     exit 1
 fi
 
-xcrun xcresulttool get test-results tests --path "$result_bundle" --compact \
-    | jq -e '.. | objects | select(.nodeType == "Test Case" and .name == "testProductionSSHForegroundReconnectRestoresTyping()" and .result == "Passed")' \
-    >/dev/null
+test_results="$(xcrun xcresulttool get test-results tests --path "$result_bundle" --compact)"
+jq -e --arg test_name "$result_test_name" \
+    '.. | objects | select(.nodeType == "Test Case" and .name == $test_name and .result == "Passed")' \
+    <<< "$test_results" >/dev/null
 
-printf 'DEV-199 production reconnect test passed: %s\n' "$result_bundle"
+printf '%s tests passed: %s\n' "$test_label" "$result_bundle"
