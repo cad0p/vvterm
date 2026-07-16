@@ -174,7 +174,7 @@ PY
         -Demit-docs=false
         -Demit-webdata=false
         -Demit-helpgen=false
-        -Demit-terminfo=false
+        -Demit-terminfo=true
         -Demit-termcap=false
         -Demit-themes=false
         -Doptimize=ReleaseFast
@@ -183,6 +183,21 @@ PY
     )
 
     (cd "${workdir}/ghostty" && zig build "${zig_flags[@]}" -p "${workdir}/zig-out")
+
+    local generated_terminfo="${workdir}/zig-out/share/terminfo"
+    local bundled_terminfo="${PROJECT_ROOT}/VVTerm/Resources/terminfo"
+    if [ ! -f "${generated_terminfo}/ghostty.terminfo" ] || \
+       [ ! -f "${generated_terminfo}/67/ghostty" ] || \
+       [ ! -f "${generated_terminfo}/78/xterm-ghostty" ]; then
+        log_error "Generated Ghostty terminfo resources not found"
+        exit 1
+    fi
+
+    mkdir -p "${bundled_terminfo}/67" "${bundled_terminfo}/78"
+    cp "${generated_terminfo}/ghostty.terminfo" "${bundled_terminfo}/xterm-ghostty.src"
+    cp "${generated_terminfo}/67/ghostty" "${bundled_terminfo}/67/ghostty"
+    cp "${generated_terminfo}/78/xterm-ghostty" "${bundled_terminfo}/78/xterm-ghostty"
+    /bin/bash "${SCRIPT_DIR}/validate_terminfo.sh"
 
     local xcframework="${workdir}/ghostty/macos/GhosttyKit.xcframework"
     if [ ! -d "${xcframework}" ]; then

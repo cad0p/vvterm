@@ -57,8 +57,8 @@ enum RemoteTerminalTypeResolver {
     static func probeCommand(okMarker: String = probeMarker) -> String {
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
-        \(hasGhosttyTerminfoFunction())
-        if { command -v infocmp >/dev/null 2>&1 && infocmp -x xterm-ghostty >/dev/null 2>&1; } || vvterm_has_xterm_ghostty_terminfo; then
+        \(currentGhosttyTerminfoFunction())
+        if vvterm_xterm_ghostty_is_current; then
           printf '\(okMarker)';
         else
           printf '\(probeMissMarker)';
@@ -75,8 +75,8 @@ enum RemoteTerminalTypeResolver {
     ) -> String {
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
-        \(hasGhosttyTerminfoFunction())
-        if { command -v infocmp >/dev/null 2>&1 && infocmp -x xterm-ghostty >/dev/null 2>&1; } || vvterm_has_xterm_ghostty_terminfo; then
+        \(currentGhosttyTerminfoFunction())
+        if vvterm_xterm_ghostty_is_current; then
           printf '\(okMarker)';
           exit 0;
         fi;
@@ -84,12 +84,19 @@ enum RemoteTerminalTypeResolver {
           printf '\(missingTicMarker)';
           exit 0;
         fi;
-        mkdir -p ~/.terminfo 2>/dev/null || true;
-        cat <<'\(hereDocMarker)' | tic -x - >/dev/null 2>&1
+        if ! mkdir -p "$HOME/.terminfo" 2>/dev/null; then
+          printf '\(failedMarker)';
+          exit 0;
+        fi;
+        cat <<'\(hereDocMarker)' | tic -x -o "$HOME/.terminfo" - >/dev/null 2>&1
         \(terminfoSource.trimmingCharacters(in: .newlines))
         \(hereDocMarker)
         if [ $? -eq 0 ]; then
-          printf '\(okMarker)';
+          if ! command -v infocmp >/dev/null 2>&1 || vvterm_xterm_ghostty_is_current; then
+            printf '\(okMarker)';
+          else
+            printf '\(failedMarker)';
+          fi;
         else
           printf '\(failedMarker)';
         fi
@@ -126,20 +133,12 @@ enum RemoteTerminalTypeResolver {
         }
     }
 
-    private static func hasGhosttyTerminfoFunction() -> String {
+    private static func currentGhosttyTerminfoFunction() -> String {
         """
-        vvterm_has_xterm_ghostty_terminfo() {
-          VVTERM_OLD_IFS=$IFS;
-          IFS=:;
-          for dir in ${TERMINFO:-}:${TERMINFO_DIRS:-}:$HOME/.terminfo:/etc/terminfo:/lib/terminfo:/usr/share/terminfo:/usr/share/lib/terminfo:/usr/local/share/terminfo:/opt/homebrew/share/terminfo:/opt/local/share/terminfo; do
-            [ -n "$dir" ] || continue;
-            if [ -r "$dir/x/xterm-ghostty" ] || [ -r "$dir/78/xterm-ghostty" ]; then
-              IFS=$VVTERM_OLD_IFS;
-              return 0;
-            fi;
-          done;
-          IFS=$VVTERM_OLD_IFS;
-          return 1;
+        vvterm_xterm_ghostty_is_current() {
+          command -v infocmp >/dev/null 2>&1 || return 1;
+          LC_ALL=C infocmp -1 -x xterm-ghostty 2>/dev/null |
+            grep -F 'E3=\\E[3J,' >/dev/null 2>&1;
         }
         """
     }
