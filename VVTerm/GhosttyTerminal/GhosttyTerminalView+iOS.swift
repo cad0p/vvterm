@@ -960,6 +960,9 @@ class GhosttyTerminalView: UIView {
     /// Prevent rendering when the view is offscreen or being torn down.
     private var isShuttingDown = false
     private var isPaused = false
+    #if DEBUG
+    private var keyboardUITestSurfaceFocused = false
+    #endif
     private var customIORedrawScheduled = false
     private var keyRepeatTimer: DispatchSourceTimer?
     private var repeatingHardwareKey: UIKey?
@@ -1347,7 +1350,7 @@ class GhosttyTerminalView: UIView {
         // Stop rendering/input callbacks and mark the surface as not visible.
         if let cSurface = surface?.unsafeCValue {
             ghostty_surface_set_write_callback(cSurface, nil, nil)
-            ghostty_surface_set_focus(cSurface, false)
+            setSurfaceFocus(false)
             ghostty_surface_set_occlusion(cSurface, false)
         }
 
@@ -1364,12 +1367,16 @@ class GhosttyTerminalView: UIView {
     }
 
     /// Pause rendering and input without destroying the surface.
+    var isRenderingPaused: Bool {
+        isPaused
+    }
+
     func pauseRendering() {
         guard !isShuttingDown else { return }
         isPaused = true
 
         if let surface = surface?.unsafeCValue {
-            ghostty_surface_set_focus(surface, false)
+            setSurfaceFocus(false)
             ghostty_surface_set_occlusion(surface, false)
         }
     }
@@ -1381,10 +1388,23 @@ class GhosttyTerminalView: UIView {
 
         if let surface = surface?.unsafeCValue {
             ghostty_surface_set_occlusion(surface, true)
+            // Pausing explicitly clears Ghostty's focus without resigning the
+            // UIKit text-input owner. Restore that live ownership on resume;
+            // the native Find navigator keeps its own responder and must not
+            // make the terminal report focus.
+            setSurfaceFocus(isTerminalTextInputActive && !isFindNavigatorActive)
         }
 
         sizeDidChange(bounds.size)
         requestRender()
+    }
+
+    private func setSurfaceFocus(_ isFocused: Bool) {
+        guard let surface = surface?.unsafeCValue else { return }
+        ghostty_surface_set_focus(surface, isFocused)
+        #if DEBUG
+        keyboardUITestSurfaceFocused = isFocused
+        #endif
     }
 
     // MARK: - Layer Type
@@ -1683,9 +1703,7 @@ class GhosttyTerminalView: UIView {
     }
 
     fileprivate func imeProxyFocusDidChange(isFocused: Bool) {
-        if let surface = surface?.unsafeCValue {
-            ghostty_surface_set_focus(surface, isFocused)
-        }
+        setSurfaceFocus(isFocused)
         if isFocused {
             updateHardwareKeyboardState(reloadInputViewsIfNeeded: true)
         } else {
@@ -2959,9 +2977,7 @@ class GhosttyTerminalView: UIView {
             _ = super.becomeFirstResponder()
         }
 
-        if let surface = surface?.unsafeCValue {
-            ghostty_surface_set_focus(surface, false)
-        }
+        setSurfaceFocus(false)
     }
 
     private func endFindNavigatorLifecycle() -> Bool {
@@ -5311,6 +5327,8 @@ extension GhosttyTerminalView {
             "keyboardHeight=\(keyboardHeightText)",
             "gridCols=\(size.map { String($0.columns) } ?? "0")",
             "gridRows=\(size.map { String($0.rows) } ?? "0")",
+            "renderingPaused=\(isRenderingPaused)",
+            "surfaceFocused=\(keyboardUITestSurfaceFocused)",
             "sizePreserved=\(keyboardAvoidancePreservedSurfaceSize != nil)",
             "accessoryAttached=\(accessoryAttached)",
             "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",

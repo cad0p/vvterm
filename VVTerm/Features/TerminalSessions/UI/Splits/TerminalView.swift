@@ -233,9 +233,14 @@ struct TerminalTabView: View {
     }
 
     private func handlePaneExit(paneId: UUID) {
+        let client = tabManager.getConnectionOwnerClient(for: paneId)
         tabManager.updatePaneState(paneId, connectionState: .disconnected)
+        guard let client else { return }
         Task {
-            await tabManager.unregisterSSHClient(for: paneId)
+            await tabManager.unregisterSSHClient(
+                for: paneId,
+                ifOwnedBy: client
+            )
         }
     }
 
@@ -887,7 +892,8 @@ struct TerminalPaneView: View {
             terminalContextMenuActions: terminalContextMenuActions,
             onProcessExit: onProcessExit,
             onReady: { isReady = true },
-            onVoiceTrigger: voiceTriggerHandlerForTerminal
+            onVoiceTrigger: voiceTriggerHandlerForTerminal,
+            onSceneActivation: attemptAutoReconnectIfNeeded
         )
         .id(reconnectToken)
         .allowsHitTesting(connectionState.isConnected)
@@ -937,7 +943,7 @@ struct TerminalPaneView: View {
         let applicationIsActive = true
         #endif
         guard TerminalAutoReconnectPolicy.shouldAttempt(
-            sceneIsActive: scenePhase == .active,
+            sceneIsActive: foregroundSceneIsActive,
             applicationIsActive: applicationIsActive,
             automaticReconnectAllowed: automaticReconnectAllowed,
             reconnectInFlight: reconnectInFlight,
@@ -960,42 +966,37 @@ struct TerminalPaneView: View {
                 return
             }
         }
+        let tabManager = TerminalTabManager.shared
+        guard tabManager.tryBeginReconnectPreparation(for: paneId) else { return }
         reconnectInFlight = true
         connectWatchdogToken = UUID()
         Task {
+            defer {
+                tabManager.finishReconnectPreparation(for: paneId)
+                reconnectInFlight = false
+            }
             #if os(iOS)
             guard UIApplication.shared.applicationState == .active,
-                  scenePhase == .active else {
-                reconnectInFlight = false
+                  foregroundSceneIsActive else {
                 return
             }
-            TerminalTabManager.shared.noteForegroundActivation()
+            tabManager.noteForegroundActivation()
             #endif
-            guard await TerminalTabManager.shared.prepareForForegroundReconnect() else {
-                reconnectInFlight = false
-                return
-            }
+            guard await tabManager.prepareForForegroundReconnect() else { return }
 
-            await TerminalTabManager.shared.unregisterSSHClient(for: paneId)
-            guard TerminalTabManager.shared.paneStates[paneId] != nil else {
-                reconnectInFlight = false
-                return
-            }
+            await tabManager.unregisterSSHClient(for: paneId)
+            guard tabManager.paneStates[paneId] != nil else { return }
             #if os(iOS)
             guard UIApplication.shared.applicationState == .active,
-                  scenePhase == .active else {
-                reconnectInFlight = false
+                  foregroundSceneIsActive else {
                 return
             }
             #endif
-            guard await TerminalTabManager.shared.prepareForForegroundReconnect() else {
-                reconnectInFlight = false
-                return
-            }
+            guard await tabManager.prepareForForegroundReconnect() else { return }
 
             isReady = false
             let hasEstablishedConnection = paneState?.hasEstablishedConnection == true
-            TerminalTabManager.shared.updatePaneState(
+            tabManager.updatePaneState(
                 paneId,
                 connectionState: TerminalConnectionAttemptPolicy.state(
                     attempt: 1,
@@ -1003,10 +1004,27 @@ struct TerminalPaneView: View {
                 )
             )
             reconnectToken = UUID()
-            reconnectInFlight = false
             connectWatchdogToken = UUID()
             startConnectWatchdog()
         }
+    }
+
+    private var foregroundSceneIsActive: Bool {
+        #if os(iOS)
+        let windowScene = TerminalTabManager.shared
+            .getTerminal(for: paneId)?
+            .window?
+            .windowScene
+        let windowSceneIsActive = windowScene.map {
+            $0.activationState == .foregroundActive
+        }
+        return TerminalSceneActivityPolicy.isActive(
+            environmentIsActive: scenePhase == .active,
+            windowSceneIsActive: windowSceneIsActive
+        )
+        #else
+        return scenePhase == .active
+        #endif
     }
 
     private func startConnectWatchdog() {

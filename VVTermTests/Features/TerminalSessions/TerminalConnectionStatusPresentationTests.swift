@@ -156,6 +156,47 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
+    func reconnectAlreadyInFlightRejectsOverlappingActivationTrigger() {
+        let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: true,
+            applicationIsActive: true,
+            automaticReconnectAllowed: true,
+            reconnectInFlight: true,
+            connectionState: .disconnected
+        )
+
+        #expect(!shouldReconnect)
+    }
+
+    @Test
+    func activeWindowSceneWinsWhileSwiftUIPhaseCatchesUp() {
+        #expect(
+            TerminalSceneActivityPolicy.isActive(
+                environmentIsActive: false,
+                windowSceneIsActive: true
+            )
+        )
+    }
+
+    @Test
+    func backgroundWindowSceneWinsWhileSwiftUIPhaseCatchesUp() {
+        #expect(!TerminalSceneActivityPolicy.isActive(
+            environmentIsActive: true,
+            windowSceneIsActive: false
+        ))
+    }
+
+    @Test
+    func windowSceneActivityFallsBackToSwiftUIBeforeTerminalAttaches() {
+        #expect(
+            TerminalSceneActivityPolicy.isActive(
+                environmentIsActive: true,
+                windowSceneIsActive: nil
+            )
+        )
+    }
+
+    @Test
     func initialConnectionUsesProgressSheet() {
         let presentation = resolve(
             connectionState: .connecting,

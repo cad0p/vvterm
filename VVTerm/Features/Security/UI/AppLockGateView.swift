@@ -39,19 +39,23 @@ struct AppLockContainer<Content: View>: View {
         .animation(.easeInOut(duration: 0.15), value: appLockManager.isAppLocked)
         .animation(.easeInOut(duration: 0.15), value: scenePhase)
         .onAppear {
-            appLockManager.handleScenePhaseChange(scenePhase)
-            if appLockManager.fullAppLockEnabled {
-                Task {
-                    _ = await appLockManager.ensureAppUnlocked()
-                }
+            if scenePhase == .active {
+                handleActiveSceneAfterViewUpdate()
             }
         }
         .onChange(of: scenePhase) { newPhase in
-            appLockManager.handleScenePhaseChange(newPhase)
-            if newPhase == .active, appLockManager.fullAppLockEnabled {
-                Task {
-                    _ = await appLockManager.ensureAppUnlocked()
-                }
+            guard newPhase == .active else { return }
+            handleActiveSceneAfterViewUpdate()
+        }
+    }
+
+    private func handleActiveSceneAfterViewUpdate() {
+        let manager = appLockManager
+        DispatchQueue.main.async {
+            manager.handleSceneActivation()
+            guard manager.fullAppLockEnabled else { return }
+            Task {
+                _ = await manager.ensureAppUnlocked()
             }
         }
     }

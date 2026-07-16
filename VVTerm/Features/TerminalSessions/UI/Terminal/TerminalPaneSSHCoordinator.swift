@@ -12,7 +12,6 @@ final class TerminalPaneSSHCoordinator {
     var shellTask: Task<Void, Never>?
     var isTerminalReady = false
     var preservePane = false
-    var wasActive = false
     var lastReportedSize: CGSize = .zero
 
     private let richPasteRuntime: TerminalRichPasteRuntime

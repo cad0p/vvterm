@@ -160,6 +160,10 @@ struct SSHShellRegistry {
         registrations[entityId]?.client
     }
 
+    func connectionClient(for entityId: UUID) -> SSHClient? {
+        registrations[entityId]?.client ?? startsInFlight[entityId]?.client
+    }
+
     func hasOtherRegistrations(using client: SSHClient, excluding entityId: UUID) -> Bool {
         let identifier = ObjectIdentifier(client)
         return registrations.contains { registration in

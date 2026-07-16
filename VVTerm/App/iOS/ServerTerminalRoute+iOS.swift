@@ -223,8 +223,8 @@ struct ServerTerminalRoute: View {
             .onChange(of: isContentObscured) { _ in
                 updateKeyboardCoordinatorInputs()
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
-                updateKeyboardCoordinatorInputs()
+            .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { notification in
+                handleSceneDidActivate(notification)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { notification in
                 handleSceneWillDeactivate(notification)
@@ -412,6 +412,18 @@ struct ServerTerminalRoute: View {
         }
     }
 
+    private func handleSceneDidActivate(_ notification: Notification) {
+        guard let notifyingScene = notification.object as? UIScene,
+              let terminal = focusedTerminal,
+              notifyingScene === terminal.window?.windowScene else {
+            return
+        }
+
+        updateKeyboardCoordinatorInputs()
+        guard let focusedPaneId else { return }
+        keyboardCoordinator.activeTerminalSceneDidActivate(for: focusedPaneId)
+    }
+
     private func handleTerminalWindowKeyChange(_ notification: Notification) {
         guard let notifyingWindow = notification.object as? UIWindow,
               notifyingWindow === focusedTerminal?.window else {
@@ -443,13 +455,6 @@ struct ServerTerminalRoute: View {
         keyboardCoordinator.setActivePane(activePaneId)
         keyboardCoordinator.setViewActive(effect == .activate)
         keyboardCoordinator.setFindNavigatorActive(activePaneId != nil && isFocusedTerminalFindNavigatorVisible)
-
-        if let activePaneId {
-            keyboardCoordinator.setPaneConnected(
-                tabManager.paneStates[activePaneId]?.connectionState.isConnected == true,
-                for: activePaneId
-            )
-        }
     }
 
     private func showKeyboardForFocusedTerminal() {

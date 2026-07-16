@@ -107,6 +107,95 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func reconnectPreparationHasOnePaneGlobalOwner() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Reconnect owner")
+            installTab(tab, in: manager, connectionState: .disconnected)
+
+            #expect(manager.tryBeginReconnectPreparation(for: tab.rootPaneId))
+            #expect(!manager.tryBeginReconnectPreparation(for: tab.rootPaneId))
+
+            manager.finishReconnectPreparation(for: tab.rootPaneId)
+            #expect(manager.tryBeginReconnectPreparation(for: tab.rootPaneId))
+            manager.finishReconnectPreparation(for: tab.rootPaneId)
+        }
+    }
+
+    @Test
+    func staleExitCannotUnregisterReplacementShell() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Replacement shell")
+            installTab(tab, in: manager)
+            let oldClient = SSHClient()
+            let oldShellId = UUID()
+
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: oldClient))
+            #expect(await manager.registerSSHClient(
+                oldClient,
+                shellId: oldShellId,
+                for: tab.rootPaneId,
+                serverId: tab.serverId,
+                skipTmuxLifecycle: true
+            ))
+            await manager.unregisterSSHClient(for: tab.rootPaneId)
+
+            let replacementClient = SSHClient()
+            let replacementShellId = UUID()
+            #expect(manager.tryBeginShellStart(for: tab.rootPaneId, client: replacementClient))
+            #expect(await manager.registerSSHClient(
+                replacementClient,
+                shellId: replacementShellId,
+                for: tab.rootPaneId,
+                serverId: tab.serverId,
+                skipTmuxLifecycle: true
+            ))
+
+            await manager.unregisterSSHClient(
+                for: tab.rootPaneId,
+                ifOwnedBy: oldClient,
+                shellId: oldShellId
+            )
+
+            #expect(manager.shellId(for: tab.rootPaneId) == replacementShellId)
+            #expect(manager.getSSHClient(for: tab.rootPaneId) === replacementClient)
+        }
+    }
+
+    @Test
+    func currentSurfaceExitCancelsPendingStartWithoutRemovingReplacement() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Pending surface exit")
+            installTab(tab, in: manager)
+            let exitedSurfaceClient = SSHClient()
+
+            #expect(manager.tryBeginShellStart(
+                for: tab.rootPaneId,
+                client: exitedSurfaceClient
+            ))
+            #expect(manager.getConnectionOwnerClient(for: tab.rootPaneId) === exitedSurfaceClient)
+
+            await manager.unregisterSSHClient(
+                for: tab.rootPaneId,
+                ifOwnedBy: exitedSurfaceClient
+            )
+            #expect(!manager.isShellStartInFlight(for: tab.rootPaneId))
+
+            let replacementClient = SSHClient()
+            #expect(manager.tryBeginShellStart(
+                for: tab.rootPaneId,
+                client: replacementClient
+            ))
+
+            await manager.unregisterSSHClient(
+                for: tab.rootPaneId,
+                ifOwnedBy: exitedSurfaceClient
+            )
+            #expect(manager.isShellStartInFlight(for: tab.rootPaneId))
+            #expect(manager.getConnectionOwnerClient(for: tab.rootPaneId) === replacementClient)
+        }
+    }
+
+    @Test
     func staleRegistrationFromDifferentClientDoesNotReplacePendingStart() async {
         await withCleanManager { manager in
             let serverId = UUID()

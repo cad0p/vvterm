@@ -120,6 +120,15 @@ enum TerminalConnectionStartPolicy {
     }
 }
 
+enum TerminalSceneActivityPolicy {
+    static func isActive(
+        environmentIsActive: Bool,
+        windowSceneIsActive: Bool?
+    ) -> Bool {
+        windowSceneIsActive ?? environmentIsActive
+    }
+}
+
 enum TerminalAutoReconnectPolicy {
     static func shouldAttempt(
         sceneIsActive: Bool,

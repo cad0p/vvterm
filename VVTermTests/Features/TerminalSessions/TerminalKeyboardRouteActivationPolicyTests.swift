@@ -27,7 +27,7 @@ struct TerminalKeyboardRouteActivationPolicyTests {
 
         let restoredInputs = TerminalKeyboardCoordinator.StateInputs(
             viewActive: true,
-            activePaneConnected: true,
+            activePaneInputEligible: true,
             activePaneWindowAttached: true,
             userHidKeyboard: userHidKeyboard,
             findNavigatorActive: false

@@ -86,6 +86,10 @@ struct VVTermApp: App {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-keyboard-harness")
     }
 
+    private var usesTerminalReconnectUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-reconnect-harness")
+    }
+
     private var usesNoticePresentationUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-harness")
     }
@@ -97,6 +101,12 @@ struct VVTermApp: App {
         #if DEBUG
         if usesNoticePresentationUITestHarness {
             NoticePresentationUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTerminalReconnectUITestHarness {
+            TerminalReconnectUITestHarness()
+                .environmentObject(ghosttyApp)
+                .environmentObject(terminalThemeManager)
+                .environmentObject(terminalAccessoryPreferencesManager)
                 .modifier(AppearanceModifier())
         } else if usesTerminalKeyboardUITestHarness {
             TerminalKeyboardUITestHarness()

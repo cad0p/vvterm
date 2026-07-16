@@ -4,6 +4,25 @@ import Foundation
 import SwiftUI
 import UIKit
 
+enum TerminalRenderingTransition: Equatable {
+    case none
+    case pause
+    case resume
+}
+
+enum TerminalRenderingPolicy {
+    static func transition(
+        terminalIsActive: Bool,
+        sceneIsActive: Bool,
+        renderingIsPaused: Bool
+    ) -> TerminalRenderingTransition {
+        if terminalIsActive && sceneIsActive {
+            return renderingIsPaused ? .resume : .none
+        }
+        return renderingIsPaused ? .none : .pause
+    }
+}
+
 extension View {
     func terminalCommandFocusValues(
         activeServerId: UUID?,
@@ -232,6 +251,7 @@ struct SSHTerminalPaneWrapper: View {
     let onProcessExit: () -> Void
     let onReady: () -> Void
     let onVoiceTrigger: (() -> Void)?
+    let onSceneActivation: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -247,6 +267,79 @@ struct SSHTerminalPaneWrapper: View {
                 onReady: onReady,
                 onVoiceTrigger: onVoiceTrigger
             )
+            .background {
+                TerminalSceneActivationObserver(
+                    onSceneActivation: handleSceneActivation
+                )
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func handleSceneActivation(_ activatedScene: UIScene) {
+        // A SwiftUI wrapper can briefly outlive registry ownership. Never let
+        // that stale wrapper resume or reconnect a terminal now hosted by
+        // another scene.
+        guard let terminal = TerminalTabManager.shared.getTerminal(for: paneId),
+              let terminalScene = terminal.window?.windowScene,
+              terminalScene === activatedScene else { return }
+
+        if TerminalRenderingPolicy.transition(
+            terminalIsActive: isActive,
+            sceneIsActive: terminalScene.activationState == .foregroundActive,
+            renderingIsPaused: terminal.isRenderingPaused
+        ) == .resume {
+            terminal.resumeRendering()
+            terminal.forceRefresh()
+        }
+        onSceneActivation()
+    }
+}
+
+private struct TerminalSceneActivationObserver: UIViewRepresentable {
+    let onSceneActivation: (UIScene) -> Void
+
+    func makeUIView(context: Context) -> TerminalSceneActivationView {
+        TerminalSceneActivationView(onSceneActivation: onSceneActivation)
+    }
+
+    func updateUIView(_ view: TerminalSceneActivationView, context: Context) {
+        view.onSceneActivation = onSceneActivation
+    }
+}
+
+private final class TerminalSceneActivationView: UIView {
+    var onSceneActivation: (UIScene) -> Void
+    private var observer: NSObjectProtocol?
+
+    init(onSceneActivation: @escaping (UIScene) -> Void) {
+        self.onSceneActivation = onSceneActivation
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        observer = NotificationCenter.default.addObserver(
+            forName: UIScene.didActivateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let activatedScene = notification.object as? UIScene,
+                  activatedScene === self.window?.windowScene else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      activatedScene === self.window?.windowScene else { return }
+                self.onSceneActivation(activatedScene)
+            }
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 }
@@ -333,7 +426,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
                 }
             }
         }
-        terminalView.onProcessExit = onProcessExit
+        terminalView.onProcessExit = processExitHandler(for: terminalView)
         terminalView.onVoiceButtonTapped = onVoiceTrigger
         terminalView.onPwdChange = { [paneId] rawDirectory in
             DispatchQueue.main.async {
@@ -386,8 +479,19 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
             return
         }
 
-        let wasActive = context.coordinator.wasActive
-        let shouldRenderTerminal = isActive && scenePhase == .active
+        let windowScene = terminalView.window?.windowScene
+        let windowSceneIsActive = windowScene.map {
+            $0.activationState == .foregroundActive
+        }
+        let sceneIsActive = TerminalSceneActivityPolicy.isActive(
+            environmentIsActive: scenePhase == .active,
+            windowSceneIsActive: windowSceneIsActive
+        )
+        let renderingTransition = TerminalRenderingPolicy.transition(
+            terminalIsActive: isActive,
+            sceneIsActive: sceneIsActive,
+            renderingIsPaused: terminalView.isRenderingPaused
+        )
 
         if terminalView.surfacePresentationOverrides != TerminalTabManager.shared.presentationOverrides(for: paneId) {
             terminalView.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
@@ -400,21 +504,18 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         }
 
         if context.coordinator.isTerminalReady {
-            if shouldRenderTerminal && !wasActive {
+            switch renderingTransition {
+            case .resume:
                 terminalView.resumeRendering()
                 terminalView.forceRefresh()
-            } else if !shouldRenderTerminal && wasActive {
+            case .pause:
                 terminalView.pauseRendering()
+            case .none:
+                break
             }
         }
-        context.coordinator.wasActive = shouldRenderTerminal
 
         let state = TerminalTabManager.shared.paneStates[paneId]?.connectionState ?? .idle
-        let shouldRestoreKeyboardFocus = state.isConnecting
-            && terminalView.shouldRestoreKeyboardFocusOnReconnect
-        let shouldKeepExistingKeyboardFocus = terminalView.isFirstResponder && shouldRestoreKeyboardFocus
-        terminalView.acceptsTerminalInput = state.isConnected
-
         let shouldStartSSHConnection = TerminalConnectionStartPolicy.shouldStart(
             connectionState: state
         )
@@ -426,25 +527,6 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
                 state: state
             )
         }
-
-        if shouldRenderTerminal, context.coordinator.isTerminalReady {
-            let focusReason: TerminalKeyboardFocusReason?
-            if shouldRestoreKeyboardFocus {
-                focusReason = .reconnectRestore
-            } else if state.isConnected && terminalView.allowsAutomaticKeyboardFocus {
-                focusReason = .initialActivation
-            } else {
-                focusReason = nil
-            }
-
-            if let focusReason, terminalView.window != nil, !terminalView.isFirstResponder {
-                terminalView.requestKeyboardFocus(for: focusReason)
-            }
-        } else if scenePhase == .active,
-                  terminalView.isFirstResponder,
-                  !shouldKeepExistingKeyboardFocus {
-            _ = terminalView.resignFirstResponder()
-        }
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
@@ -452,14 +534,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
 
         let paneStillExists = TerminalTabManager.shared.paneStates[coordinator.paneId] != nil
         if paneStillExists {
-            terminalView.pauseRendering()
             coordinator.preservePane = true
-            let paneId = coordinator.paneId
-            Task { @MainActor [weak terminalView] in
-                guard let terminalView,
-                      TerminalTabManager.shared.getTerminal(for: paneId) === terminalView else { return }
-                TerminalTabManager.shared.keyboardCoordinator.setWindowAttached(false, for: paneId)
-            }
             return
         }
 
@@ -472,7 +547,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
     }
 
     private func configureExistingTerminal(_ terminal: GhosttyTerminalView, coordinator: TerminalPaneSSHCoordinator) {
-        terminal.onProcessExit = onProcessExit
+        terminal.onProcessExit = processExitHandler(for: terminal)
         terminal.onVoiceButtonTapped = onVoiceTrigger
         terminal.onPwdChange = { [paneId] rawDirectory in
             DispatchQueue.main.async {
@@ -493,6 +568,14 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         coordinator.installRichPasteInterception(on: terminal)
         terminal.onResize = { [weak coordinator] cols, rows in
             coordinator?.handleResize(cols: cols, rows: rows)
+        }
+    }
+
+    private func processExitHandler(for terminal: GhosttyTerminalView) -> () -> Void {
+        { [weak terminal] in
+            guard let terminal,
+                  TerminalTabManager.shared.getTerminal(for: paneId) === terminal else { return }
+            onProcessExit()
         }
     }
 

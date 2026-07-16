@@ -52,6 +52,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         if let existingTerminal = TerminalTabManager.shared.getTerminal(for: paneId) {
             coordinator.preservePane = true
             coordinator.terminal = existingTerminal
+            existingTerminal.onProcessExit = processExitHandler(for: existingTerminal)
 
             // Update resize callback to use tab manager's registered SSH client
             existingTerminal.onResize = { [weak coordinator] cols, rows in
@@ -105,7 +106,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
                 coordinator?.startSSHConnection(terminal: terminalView)
             }
         }
-        terminalView.onProcessExit = onProcessExit
+        terminalView.onProcessExit = processExitHandler(for: terminalView)
         terminalView.onPwdChange = { [paneId] rawDirectory in
             TerminalTabManager.shared.updatePaneWorkingDirectory(paneId, rawDirectory: rawDirectory)
         }
@@ -141,6 +142,14 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         )
 
         return scrollView
+    }
+
+    private func processExitHandler(for terminal: GhosttyTerminalView) -> () -> Void {
+        { [weak terminal] in
+            guard let terminal,
+                  TerminalTabManager.shared.getTerminal(for: paneId) === terminal else { return }
+            onProcessExit()
+        }
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
