@@ -50,57 +50,81 @@ struct TerminalReconnectUITestHarness: View {
     }
 
     var body: some View {
-        NavigationStack {
-            switch fixtureState {
-            case .preparing:
-                ProgressView()
-            case .ready(let server):
-                ServerTerminalRoute(
-                    tabManager: tabManager,
-                    serverManager: serverManager,
-                    fileTabs: fileTabs,
-                    fileBrowser: fileBrowser,
-                    requestedServerId: server.id,
-                    connectingServer: server,
-                    isConnecting: false,
-                    onBack: {}
+        fixtureContent
+            .overlay(alignment: .topLeading) {
+                TerminalReconnectDiagnosticsLabel(
+                    serverId: activeServer?.id,
+                    fallback: fixtureDiagnosticFallback
                 )
-            case .failed(let message):
-                Text(message)
+                    .padding(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .allowsHitTesting(false)
             }
-        }
-        .overlay(alignment: .topLeading) {
-            TerminalReconnectDiagnosticsLabel(
-                serverId: activeServer?.id,
-                fallback: fixtureDiagnosticFallback
-            )
-                .padding(6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .topLeading) {
-            if exposesKeyboardLossControl {
-                HStack(spacing: 6) {
-                    Button("Lose Input") {
-                        beginUnexpectedKeyboardLoss()
-                    }
-                    .accessibilityIdentifier("vvterm.reconnectTest.keyboard.unexpectedLoss")
-
-                    if simulatesKeyboardFrames {
-                        Button("Stale Find Frame") {
-                            simulateVisibleFindKeyboardFrame()
+            .overlay(alignment: .topLeading) {
+                if exposesKeyboardLossControl {
+                    HStack(spacing: 6) {
+                        Button("Lose Input") {
+                            beginUnexpectedKeyboardLoss()
                         }
-                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.staleFindFrame")
+                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.unexpectedLoss")
+
+                        if simulatesKeyboardFrames {
+                            Button("Stale Find Frame") {
+                                simulateVisibleFindKeyboardFrame()
+                            }
+                            .accessibilityIdentifier("vvterm.reconnectTest.keyboard.staleFindFrame")
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .padding(.top, 140)
+                    .padding(.leading, 8)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .padding(.top, 140)
-                .padding(.leading, 8)
             }
-        }
-        .task {
-            await prepareFixture()
+            .overlay(alignment: .topTrailing) {
+                if usesNavigationHarness, activeServer != nil {
+                    Button("Toggle Servers") {
+                        toggleServerMetadata()
+                    }
+                    .accessibilityIdentifier(
+                        "vvterm.navigationTest.toggleServerMetadata"
+                    )
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .padding(.top, 140)
+                    .padding(.trailing, 8)
+                }
+            }
+            .task {
+                await prepareFixture()
+            }
+    }
+
+    @ViewBuilder
+    private var fixtureContent: some View {
+        switch fixtureState {
+        case .preparing:
+            ProgressView()
+        case .ready(let server):
+            if usesNavigationHarness {
+                iOSContentView(
+                    fileTabs: fileTabs,
+                    fileBrowser: fileBrowser
+                )
+            } else {
+                NavigationStack {
+                    ServerTerminalRoute(
+                        tabManager: tabManager,
+                        serverManager: serverManager,
+                        fileTabs: fileTabs,
+                        fileBrowser: fileBrowser,
+                        route: .active(serverId: server.id),
+                        onBack: {}
+                    )
+                }
+            }
+        case .failed(let message):
+            Text(message)
         }
     }
 
@@ -118,6 +142,12 @@ struct TerminalReconnectUITestHarness: View {
     private var simulatesKeyboardFrames: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains(
             "--vvterm-ui-test-simulate-keyboard-frames"
+        )
+    }
+
+    private var usesNavigationHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-server-navigation"
         )
     }
 
@@ -145,6 +175,15 @@ struct TerminalReconnectUITestHarness: View {
         tabManager.keyboardCoordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
             frame
         )
+    }
+
+    private func toggleServerMetadata() {
+        guard let activeServer else { return }
+        if serverManager.servers.isEmpty {
+            serverManager.servers = navigationFixtureServers(activeServer: activeServer)
+        } else {
+            serverManager.servers = []
+        }
     }
 
     private var fixtureDiagnosticFallback: String {
@@ -185,7 +224,17 @@ struct TerminalReconnectUITestHarness: View {
                 privateKey: privateKey,
                 passphrase: nil
             )
-            serverManager.servers = [server]
+            if usesNavigationHarness {
+                serverManager.workspaces = [
+                    Workspace(
+                        id: Self.workspaceId,
+                        name: "DEV-213 Navigation"
+                    )
+                ]
+                serverManager.servers = navigationFixtureServers(activeServer: server)
+            } else {
+                serverManager.servers = [server]
+            }
 
             let tab = try await tabManager.openTab(for: server)
             tabManager.selectedTabByServer[server.id] = tab.id
@@ -209,6 +258,21 @@ struct TerminalReconnectUITestHarness: View {
             throw FixtureError.invalidPrivateKey
         }
         return data
+    }
+
+    private func navigationFixtureServers(activeServer: Server) -> [Server] {
+        let fillerServers = (1...24).map { index in
+            Server(
+                workspaceId: Self.workspaceId,
+                environment: .development,
+                name: String(format: "Navigation Server %02d", index),
+                host: "192.0.2.\(index)",
+                username: "vvterm",
+                authMethod: .password,
+                tmuxEnabledOverride: false
+            )
+        }
+        return fillerServers + [activeServer]
     }
 
 }

@@ -15,16 +15,13 @@ struct ServerTerminalRoute: View {
     @ObservedObject var serverManager: ServerManager
     @ObservedObject var fileTabs: RemoteFileTabManager
     let fileBrowser: RemoteFileBrowserStore
-    let requestedServerId: UUID?
-    let connectingServer: Server?
-    let isConnecting: Bool
+    let route: ServerTerminalNavigationRoute
     let onBack: () -> Void
 
     @ObservedObject private var keyboardCoordinator: TerminalKeyboardCoordinator
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
     @EnvironmentObject private var appLockManager: AppLockManager
 
-    @State private var currentServerId: UUID?
     @State private var isRouteVisible = false
     @State private var showingSettings = false
     @State private var serverToEdit: Server?
@@ -41,50 +38,23 @@ struct ServerTerminalRoute: View {
         serverManager: ServerManager,
         fileTabs: RemoteFileTabManager,
         fileBrowser: RemoteFileBrowserStore,
-        requestedServerId: UUID?,
-        connectingServer: Server?,
-        isConnecting: Bool,
+        route: ServerTerminalNavigationRoute,
         onBack: @escaping () -> Void
     ) {
         self.tabManager = tabManager
         self.serverManager = serverManager
         self.fileTabs = fileTabs
         self.fileBrowser = fileBrowser
-        self.requestedServerId = requestedServerId
-        self.connectingServer = connectingServer
-        self.isConnecting = isConnecting
+        self.route = route
         self.onBack = onBack
         self._keyboardCoordinator = ObservedObject(wrappedValue: tabManager.keyboardCoordinator)
     }
 
-    private var activeServerIds: [UUID] {
-        var ordered: [UUID] = []
-        for (serverId, tabs) in tabManager.tabsByServer where !tabs.isEmpty {
-            ordered.append(serverId)
-        }
-        for (serverId, tabs) in fileTabs.tabsByServer where !tabs.isEmpty && !ordered.contains(serverId) {
-            ordered.append(serverId)
-        }
-        return ordered
-    }
-
     private var selectedServer: Server? {
-        if let currentServerId,
-           let server = serverManager.servers.first(where: { $0.id == currentServerId }) {
+        if let server = serverManager.servers.first(where: { $0.id == route.serverId }) {
             return server
         }
-
-        if let requestedServerId,
-           let server = serverManager.servers.first(where: { $0.id == requestedServerId }) {
-            return server
-        }
-
-        if let connectingServer {
-            return connectingServer
-        }
-
-        guard let firstActiveId = activeServerIds.first else { return nil }
-        return serverManager.servers.first { $0.id == firstActiveId }
+        return route.connectingServer
     }
 
     private var selectedView: String {
@@ -111,6 +81,12 @@ struct ServerTerminalRoute: View {
 
     private var focusedPaneId: UUID? {
         selectedTab?.focusedPaneId
+    }
+
+    private var hasNavigationContext: Bool {
+        route.isConnecting
+            || !tabManager.tabs(for: route.serverId).isEmpty
+            || !fileTabs.tabs(for: route.serverId).isEmpty
     }
 
     private var isFocusedTerminalFindNavigatorVisible: Bool {
@@ -178,21 +154,13 @@ struct ServerTerminalRoute: View {
             }
             .onAppear {
                 isRouteVisible = true
-                reconcileSelectedServer()
+                dismissIfContextEnded()
                 updateKeyboardCoordinatorInputs()
             }
             .onDisappear {
                 isRouteVisible = false
                 keyboardCoordinator.setViewActive(false)
                 keyboardCoordinator.setActivePane(nil)
-            }
-            .onChange(of: connectingServer?.id) { _ in
-                reconcileSelectedServer()
-                updateKeyboardCoordinatorInputs()
-            }
-            .onChange(of: requestedServerId) { _ in
-                reconcileSelectedServer()
-                updateKeyboardCoordinatorInputs()
             }
             .onChange(of: selectedView) { newValue in
                 if newValue != ConnectionViewTab.terminal.id {
@@ -210,11 +178,11 @@ struct ServerTerminalRoute: View {
                 updateKeyboardCoordinatorInputs()
             }
             .onChangeCompat(of: tabManager.tabsByServer) { _ in
-                reconcileSelectedServer()
+                dismissIfContextEnded()
                 updateKeyboardCoordinatorInputs()
             }
             .onChangeCompat(of: fileTabs.tabsByServer) { _ in
-                reconcileSelectedServer()
+                dismissIfContextEnded()
                 updateKeyboardCoordinatorInputs()
             }
             .onChange(of: scenePhase) { _ in
@@ -255,10 +223,11 @@ struct ServerTerminalRoute: View {
                 isSidebarVisible: false,
                 onToggleSidebar: {}
             )
-            .id(server.id)
             .navigationTitle(server.name)
-        } else if isConnecting {
-            connectingStateView(serverName: connectingServer?.name ?? String(localized: "Server"))
+        } else if route.isConnecting {
+            connectingStateView(
+                serverName: route.connectingServer?.name ?? String(localized: "Server")
+            )
         } else {
             TerminalEmptyStateView(server: nil) {
                 onBack()
@@ -268,14 +237,13 @@ struct ServerTerminalRoute: View {
 
     @ToolbarContentBuilder
     private var navigationToolbar: some ToolbarContent {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    keyboardCoordinator.setViewActive(false)
-                    keyboardCoordinator.setActivePane(nil)
-                    onBack()
-                } label: {
-                    Image(systemName: "chevron.left")
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                onBack()
+            } label: {
+                Image(systemName: "chevron.left")
             }
+            .accessibilityIdentifier("vvterm.terminal.back")
         }
 
         if let server = selectedServer, viewTabConfig.currentVisibleTabs.count > 1 {
@@ -466,6 +434,12 @@ struct ServerTerminalRoute: View {
         }
     }
 
+    private func dismissIfContextEnded() {
+        guard !hasNavigationContext else { return }
+        isZenModeEnabled = false
+        onBack()
+    }
+
     private func showKeyboardForFocusedTerminal() {
         guard selectedView == ConnectionViewTab.terminal.id else { return }
         clearPendingVoiceReturnForFocusedPane()
@@ -585,27 +559,6 @@ struct ServerTerminalRoute: View {
         )
     }
 
-    private func reconcileSelectedServer() {
-        if let currentServerId,
-           activeServerIds.contains(currentServerId)
-                || connectingServer?.id == currentServerId {
-            return
-        }
-
-        let requestedId = requestedServerId ?? connectingServer?.id
-        if let requestedId,
-           activeServerIds.contains(requestedId) || connectingServer?.id == requestedId {
-            currentServerId = requestedId
-        } else {
-            currentServerId = connectingServer?.id ?? activeServerIds.first
-        }
-
-        if currentServerId == nil && !isConnecting {
-            isZenModeEnabled = false
-            onBack()
-        }
-    }
-
     private func openNewTab(for server: Server) {
         guard tabManager.canOpenNewTab else {
             showingTabLimitAlert = true
@@ -615,11 +568,8 @@ struct ServerTerminalRoute: View {
         Task {
             do {
                 let tab = try await tabManager.openTab(for: server)
-                await MainActor.run {
-                    currentServerId = server.id
-                    tabManager.selectedViewByServer[server.id] = viewTabConfig.effectiveView(for: ConnectionViewTab.terminal.id)
-                    tabManager.selectedTabByServer[server.id] = tab.id
-                }
+                tabManager.selectedViewByServer[server.id] = viewTabConfig.effectiveView(for: ConnectionViewTab.terminal.id)
+                tabManager.selectedTabByServer[server.id] = tab.id
             } catch {
                 // No-op: user cancelled biometric auth or open failed.
             }
@@ -639,7 +589,6 @@ struct ServerTerminalRoute: View {
             ?? fileTabs.openTab(for: server, seedPath: seedPath)
 
         guard let newTab else { return }
-        currentServerId = server.id
         fileBrowser.prepareNewTab(newTab, duplicating: sourceTab)
         tabManager.selectedViewByServer[server.id] = viewTabConfig.effectiveView(for: ConnectionViewTab.files.id)
     }
@@ -648,7 +597,7 @@ struct ServerTerminalRoute: View {
         fileBrowser.disconnect(serverId: server.id)
         fileTabs.disconnect(serverId: server.id)
         tabManager.disconnectServer(server.id)
-        onBack()
+        dismissIfContextEnded()
     }
 
     @ViewBuilder

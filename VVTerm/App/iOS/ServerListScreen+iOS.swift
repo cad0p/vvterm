@@ -13,9 +13,8 @@ struct ServerListScreen: View {
     let fileBrowser: RemoteFileBrowserStore
     @Binding var selectedWorkspace: Workspace?
     @Binding var selectedEnvironment: ServerEnvironment?
-    @Binding var selectedServer: Server?
-    @Binding var showingTerminal: Bool
     let onServerSelected: (Server) -> Void
+    let onActiveConnectionSelected: (Server) -> Void
 
     @ObservedObject private var storeManager = StoreManager.shared
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
@@ -30,7 +29,6 @@ struct ServerListScreen: View {
     @State private var serverToEdit: Server?
     @State private var serverToMove: Server?
     @State private var lockedServerAlert: Server?
-    @State private var navigationBarAppearanceToken = UUID()
     @State private var showingCustomEnvironmentAlert = false
     @State private var addServerPrefill: ServerFormPrefill?
 
@@ -43,7 +41,7 @@ struct ServerListScreen: View {
             serversSection
             activeConnectionsSection
         }
-        .id(listRefreshIdentity)
+        .accessibilityIdentifier("vvterm.serverList.list")
         .overlay(alignment: .center) {
             if filteredServers.isEmpty {
                 NoServersEmptyState(
@@ -56,7 +54,6 @@ struct ServerListScreen: View {
         .searchable(text: $searchText, prompt: "Search servers")
         .navigationTitle("Servers")
         .navigationBarTitleDisplayMode(.inline)
-        .id(navigationBarAppearanceToken)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 workspaceToolbarButton
@@ -77,9 +74,6 @@ struct ServerListScreen: View {
                     Image(systemName: "gear")
                 }
             }
-        }
-        .onAppear {
-            navigationBarAppearanceToken = UUID()
         }
         .sheet(isPresented: $showingAddServer) {
             NavigationStack {
@@ -314,6 +308,9 @@ struct ServerListScreen: View {
                         onMove: { serverToMove = server },
                         onLockedTap: { lockedServerAlert = server }
                     )
+                    .accessibilityIdentifier(
+                        "vvterm.serverList.server.\(server.id.uuidString)"
+                    )
                 }
             }
         } header: {
@@ -367,6 +364,9 @@ struct ServerListScreen: View {
                         onOpen: { openActiveConnection(connection) },
                         onDisconnect: { disconnectActiveConnection(connection) }
                     )
+                    .accessibilityIdentifier(
+                        "vvterm.serverList.activeConnection.\(connection.id.uuidString)"
+                    )
                 }
             } header: {
                 Text("Active Connections")
@@ -408,14 +408,6 @@ struct ServerListScreen: View {
         return servers.sorted { $0.name < $1.name }
     }
 
-    private var listRefreshIdentity: String {
-        let workspaceID = selectedWorkspace?.id.uuidString ?? "all-workspaces"
-        let environmentID = selectedEnvironment?.id.uuidString ?? "all-environments"
-        let serverIDs = filteredServers.map { $0.id.uuidString }.joined(separator: ",")
-        let activeConnectionIDs = activeConnections.map { $0.id.uuidString }.joined(separator: ",")
-        return [workspaceID, environmentID, serverIDs, activeConnectionIDs].joined(separator: "|")
-    }
-
     private var serverCountsByEnvironment: [UUID: Int] {
         guard let workspace = selectedWorkspace else { return [:] }
 
@@ -445,17 +437,19 @@ struct ServerListScreen: View {
 
     private func openActiveConnection(_ connection: ActiveServerSummary) {
         Task {
-            guard let server = server(for: connection.id) else { return }
-            guard await AppLockManager.shared.ensureServerUnlocked(server) else { return }
-
-            await MainActor.run {
-                selectedServer = server
-                if let tab = connection.terminalTab {
-                    tabManager.selectedTabByServer[server.id] = tab.id
-                }
-                tabManager.selectedViewByServer[server.id] = connection.targetViewId
-                showingTerminal = true
+            guard let serverToUnlock = server(for: connection.id) else { return }
+            guard await AppLockManager.shared.ensureServerUnlocked(serverToUnlock) else { return }
+            guard let currentConnection = activeConnections.first(where: {
+                $0.id == connection.id
+            }), let currentServer = server(for: connection.id) else {
+                return
             }
+
+            if let tab = currentConnection.terminalTab {
+                tabManager.selectedTabByServer[currentServer.id] = tab.id
+            }
+            tabManager.selectedViewByServer[currentServer.id] = currentConnection.targetViewId
+            onActiveConnectionSelected(currentServer)
         }
     }
 

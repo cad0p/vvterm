@@ -40,6 +40,14 @@ case "$ui_test_case" in
         result_test_name="testProductionCodexFindKeyboardMenuRestoresPTYTyping()"
         codex_emulation=true
         ;;
+    dev213-navigation)
+        default_result_bundle="/tmp/DEV213-production-navigation.xcresult"
+        expected_connection_count=1
+        test_label="DEV-213 production navigation"
+        test_identifier="VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPositionAndSession"
+        result_test_name="testActiveTerminalPushPopPreservesListPositionAndSession()"
+        codex_emulation=false
+        ;;
     *)
         printf 'Unknown VVTERM_UI_TEST_CASE: %s\n' "$ui_test_case" >&2
         exit 2
