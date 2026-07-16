@@ -2,59 +2,221 @@ import Foundation
 import Combine
 import AVFoundation
 
-struct AudioCaptureCleanupPlan: Equatable {
-    let removeTap: Bool
-    let stopEngine: Bool
-    let deactivateAudioSession: Bool
+private struct AudioPCMBufferSnapshot {
+    let format: AVAudioFormat
+    let frameLength: AVAudioFrameCount
+    let buffers: [Data]
 
-    init(hasEngine: Bool, tapInstalled: Bool, audioSessionActive: Bool) {
-        removeTap = hasEngine && tapInstalled
-        stopEngine = hasEngine
-        deactivateAudioSession = audioSessionActive
+    init(_ buffer: AVAudioPCMBuffer) {
+        format = buffer.format
+        frameLength = buffer.frameLength
+        buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList).map { audioBuffer in
+            guard let data = audioBuffer.mData, audioBuffer.mDataByteSize > 0 else {
+                return Data()
+            }
+            return Data(bytes: data, count: Int(audioBuffer.mDataByteSize))
+        }
+    }
+
+    func makeBuffer() -> AVAudioPCMBuffer? {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {
+            return nil
+        }
+        let destinations = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        guard destinations.count == buffers.count else { return nil }
+
+        for index in buffers.indices {
+            let data = buffers[index]
+            guard data.count <= Int(destinations[index].mDataByteSize) else { return nil }
+            if !data.isEmpty {
+                guard let destination = destinations[index].mData else { return nil }
+                data.copyBytes(
+                    to: destination.assumingMemoryBound(to: UInt8.self),
+                    count: data.count
+                )
+            }
+            destinations[index].mDataByteSize = UInt32(data.count)
+        }
+        buffer.frameLength = frameLength
+        return buffer
+    }
+}
+
+@MainActor
+protocol AudioCaptureHardware: AnyObject {
+    var inputFormat: AVAudioFormat { get }
+
+    func activateAudioSession() throws
+    func deactivateAudioSession()
+    func installTap(
+        bufferSize: AVAudioFrameCount,
+        format: AVAudioFormat,
+        handler: @escaping @MainActor (AVAudioPCMBuffer) -> Void
+    ) throws
+    func removeTap()
+    func prepare()
+    func start() throws
+    func stop()
+}
+
+@MainActor
+final class AudioCaptureResources {
+    private var cleanupActions: [() -> Void] = []
+
+    func own(cleanup: @escaping () -> Void) {
+        cleanupActions.append(cleanup)
+    }
+
+    func releaseAll() {
+        let actions = cleanupActions
+        cleanupActions.removeAll(keepingCapacity: true)
+        for action in actions.reversed() {
+            action()
+        }
+    }
+}
+
+@MainActor
+private final class SystemAudioCaptureHardware: AudioCaptureHardware {
+    private let engine = AVAudioEngine()
+
+    var inputFormat: AVAudioFormat {
+        engine.inputNode.outputFormat(forBus: 0)
+    }
+
+    func activateAudioSession() throws {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+        try session.setActive(true, options: [])
+        #endif
+    }
+
+    func deactivateAudioSession() {
+        #if os(iOS)
+        // Release the session so system services (e.g. keyboard dictation) regain the mic.
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        #endif
+    }
+
+    func installTap(
+        bufferSize: AVAudioFrameCount,
+        format: AVAudioFormat,
+        handler: @escaping @MainActor (AVAudioPCMBuffer) -> Void
+    ) throws {
+        let inputNode = engine.inputNode
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, macOS 27.0, *) {
+            try inputNode.installAudioTap(
+                onBus: 0,
+                bufferSize: bufferSize,
+                format: format
+            ) { buffer, _ in
+                Task { @MainActor in
+                    handler(AVAudioPCMBuffer(copying: buffer))
+                }
+            }
+            return
+        }
+        #endif
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: format) { buffer, _ in
+            let snapshot = AudioPCMBufferSnapshot(buffer)
+            Task { @MainActor in
+                guard let copiedBuffer = snapshot.makeBuffer() else { return }
+                handler(copiedBuffer)
+            }
+        }
+    }
+
+    func removeTap() {
+        engine.inputNode.removeTap(onBus: 0)
+    }
+
+    func prepare() {
+        engine.prepare()
+    }
+
+    func start() throws {
+        try engine.start()
+    }
+
+    func stop() {
+        engine.stop()
     }
 }
 
 @MainActor
 final class AudioCaptureService: ObservableObject {
+    private enum CaptureState {
+        case idle
+        case starting(UUID)
+        case recording(UUID)
+
+        var generation: UUID? {
+            switch self {
+            case .idle:
+                return nil
+            case .starting(let generation), .recording(let generation):
+                return generation
+            }
+        }
+
+        var isRecording: Bool {
+            if case .recording = self { return true }
+            return false
+        }
+    }
+
     @Published var audioLevel: Float = 0.0
     @Published var recordingDuration: TimeInterval = 0
 
     var bufferHandler: ((AVAudioPCMBuffer) -> Void)?
 
     private let targetSampleRate: Double = 16_000
-    private var audioEngine: AVAudioEngine?
+    private let captureResources: AudioCaptureResources
+    private let makeHardware: () -> any AudioCaptureHardware
     private var converter: AVAudioConverter?
     private var recordedSamples: [Float] = []
-    private var isRecording = false
-    private var isTapInstalled = false
-    private var isAudioSessionActive = false
+    private var captureState: CaptureState = .idle
 
     var sampleRate: Double { targetSampleRate }
 
+    init() {
+        captureResources = AudioCaptureResources()
+        makeHardware = { SystemAudioCaptureHardware() }
+    }
+
+    init(captureResources: AudioCaptureResources) {
+        self.captureResources = captureResources
+        makeHardware = { SystemAudioCaptureHardware() }
+    }
+
+    init(makeHardware: @escaping () -> any AudioCaptureHardware) {
+        captureResources = AudioCaptureResources()
+        self.makeHardware = makeHardware
+    }
+
     func start(lifecycleState: () -> AudioCaptureLifecycleState) throws {
-        if isRecording { return }
         guard lifecycleState().allowsCapture else {
             throw RecordingError.inactiveLifecycle
         }
+        if captureState.isRecording { return }
 
         cleanupCaptureResources()
+        let generation = UUID()
+        captureState = .starting(generation)
 
         recordedSamples.removeAll(keepingCapacity: true)
         audioLevel = 0
         recordingDuration = 0
 
         do {
-            #if os(iOS)
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
-            try session.setActive(true, options: [])
-            isAudioSessionActive = true
-            #endif
+            let hardware = makeHardware()
+            captureResources.own { hardware.deactivateAudioSession() }
+            try hardware.activateAudioSession()
+            captureResources.own { hardware.stop() }
 
-            let engine = AVAudioEngine()
-            audioEngine = engine
-            let inputNode = engine.inputNode
-            let inputFormat = inputNode.outputFormat(forBus: 0)
+            let inputFormat = hardware.inputFormat
             if let rejection = AudioCaptureStartupPolicy.rejection(
                 lifecycle: lifecycleState(),
                 sampleRate: inputFormat.sampleRate,
@@ -81,23 +243,38 @@ final class AudioCaptureService: ObservableObject {
             }
             self.converter = converter
 
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-                self?.handleBuffer(buffer, inputFormat: inputFormat, targetFormat: targetFormat)
+            guard lifecycleState().allowsCapture else {
+                throw RecordingError.inactiveLifecycle
             }
-            isTapInstalled = true
+            try hardware.installTap(bufferSize: 1024, format: inputFormat) { [weak self] buffer in
+                self?.handleBuffer(
+                    buffer,
+                    inputFormat: inputFormat,
+                    targetFormat: targetFormat,
+                    generation: generation
+                )
+            }
+            captureResources.own { hardware.removeTap() }
 
-            engine.prepare()
-            try engine.start()
-            isRecording = true
+            guard lifecycleState().allowsCapture else {
+                throw RecordingError.inactiveLifecycle
+            }
+            hardware.prepare()
+            guard lifecycleState().allowsCapture else {
+                throw RecordingError.inactiveLifecycle
+            }
+            try hardware.start()
+            captureState = .recording(generation)
         } catch {
+            captureState = .idle
             cleanupCaptureResources()
             throw error
         }
     }
 
     func stop() -> [Float] {
-        let samples = isRecording ? recordedSamples : []
-        isRecording = false
+        let samples = captureState.isRecording ? recordedSamples : []
+        captureState = .idle
         cleanupCaptureResources()
         audioLevel = 0
         recordingDuration = 0
@@ -113,34 +290,24 @@ final class AudioCaptureService: ObservableObject {
     }
 
     private func cleanupCaptureResources() {
-        let plan = AudioCaptureCleanupPlan(
-            hasEngine: audioEngine != nil,
-            tapInstalled: isTapInstalled,
-            audioSessionActive: isAudioSessionActive
-        )
-        if plan.removeTap {
-            audioEngine?.inputNode.removeTap(onBus: 0)
-        }
-        if plan.stopEngine {
-            audioEngine?.stop()
-        }
-        #if os(iOS)
-        if plan.deactivateAudioSession {
-            // Release the session so system services (e.g. keyboard dictation) regain the mic.
-            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        }
-        #endif
-        isTapInstalled = false
-        isAudioSessionActive = false
-        audioEngine = nil
+        captureResources.releaseAll()
         converter = nil
     }
 
-    private func handleBuffer(_ buffer: AVAudioPCMBuffer, inputFormat: AVAudioFormat, targetFormat: AVAudioFormat) {
+    private func handleBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        inputFormat: AVAudioFormat,
+        targetFormat: AVAudioFormat,
+        generation: UUID
+    ) {
+        guard captureState.generation == generation else { return }
         guard let converter else { return }
 
-        let ratio = targetSampleRate / inputFormat.sampleRate
-        let outputFrameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
+        guard let outputFrameCapacity = AudioCaptureStartupPolicy.outputFrameCapacity(
+            inputFrameCount: buffer.frameLength,
+            inputSampleRate: inputFormat.sampleRate,
+            targetSampleRate: targetSampleRate
+        ) else { return }
         guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrameCapacity) else {
             return
         }
@@ -153,21 +320,15 @@ final class AudioCaptureService: ObservableObject {
 
         converter.convert(to: convertedBuffer, error: &error, withInputFrom: inputBlock)
 
-        if error != nil {
-            Task { @MainActor in
-                self.audioLevel = 0
-            }
-            return
-        }
+        if error != nil { audioLevel = 0; return }
 
         guard let channelData = convertedBuffer.floatChannelData else { return }
         let frameLength = Int(convertedBuffer.frameLength)
         let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
 
-        Task { @MainActor in
-            self.updateMetrics(with: samples)
-            self.bufferHandler?(convertedBuffer)
-        }
+        guard captureState.generation == generation else { return }
+        updateMetrics(with: samples)
+        bufferHandler?(convertedBuffer)
     }
 
     private func updateMetrics(with samples: [Float]) {

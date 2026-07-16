@@ -640,6 +640,8 @@
 "Microphone permission is required. The microphone will be automatically requested when recording starts." = "ต้องได้รับอนุญาตให้ใช้ไมโครโฟน ระบบจะขออัตโนมัติเมื่อเริ่มบันทึกเสียง";
 "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight." = "การรู้จำเสียงไม่พร้อมใช้งาน โปรดเปิด Siri ใน System Settings > Siri & Spotlight";
 "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone." = "เริ่มบันทึกเสียงไม่สำเร็จ โปรดตรวจสอบสิทธิ์ไมโครโฟนใน System Settings > Privacy & Security > Microphone";
+"Voice recording is only available while VVTerm is active." = "การบันทึกเสียงใช้งานได้เฉพาะเมื่อ VVTerm ทำงานอยู่เท่านั้น";
+"Audio input is temporarily unavailable. Please check the current microphone or audio route and try again." = "อินพุตเสียงไม่พร้อมใช้งานชั่วคราว โปรดตรวจสอบไมโครโฟนหรือเส้นทางเสียงปัจจุบันแล้วลองอีกครั้ง";
 "On-device MLX transcription isn't supported on this device. Apple Speech will be used instead." = "อุปกรณ์นี้ไม่รองรับการถอดเสียง MLX บนอุปกรณ์ ระบบจะใช้ Apple Speech แทน";
 
 /* Pro Required Errors */

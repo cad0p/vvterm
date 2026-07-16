@@ -26,4 +26,24 @@ enum AudioCaptureStartupPolicy {
         }
         return nil
     }
+
+    static func outputFrameCapacity(
+        inputFrameCount: UInt32,
+        inputSampleRate: Double,
+        targetSampleRate: Double
+    ) -> UInt32? {
+        guard inputSampleRate.isFinite,
+              inputSampleRate > 0,
+              targetSampleRate.isFinite,
+              targetSampleRate > 0 else {
+            return nil
+        }
+        let scaledFrameCount = Double(inputFrameCount) * targetSampleRate / inputSampleRate
+        guard scaledFrameCount.isFinite,
+              scaledFrameCount >= 0,
+              scaledFrameCount < Double(UInt32.max) else {
+            return nil
+        }
+        return UInt32(scaledFrameCount) + 1
+    }
 }

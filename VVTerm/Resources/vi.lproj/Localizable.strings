@@ -677,6 +677,8 @@
 "Microphone permission is required. The microphone will be automatically requested when recording starts." = "Cần quyền dùng micro. Quyền sẽ được yêu cầu tự động khi bắt đầu ghi.";
 "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight." = "Nhận dạng giọng nói không khả dụng. Vui lòng bật Siri trong System Settings > Siri & Spotlight.";
 "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone." = "Không thể bắt đầu ghi. Vui lòng kiểm tra quyền micro trong System Settings > Privacy & Security > Microphone.";
+"Voice recording is only available while VVTerm is active." = "Chỉ có thể ghi âm khi VVTerm đang hoạt động.";
+"Audio input is temporarily unavailable. Please check the current microphone or audio route and try again." = "Đầu vào âm thanh tạm thời không khả dụng. Hãy kiểm tra micro hoặc tuyến âm thanh hiện tại rồi thử lại.";
 "On-device MLX transcription isn't supported on this device. Apple Speech will be used instead." = "Thiết bị này không hỗ trợ phiên âm MLX trên thiết bị. Apple Speech sẽ được sử dụng thay thế.";
 
 /* Pro Required Errors */

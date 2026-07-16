@@ -641,6 +641,8 @@
 "Microphone permission is required. The microphone will be automatically requested when recording starts." = "Патрэбны дазвол на мікрафон. Ён будзе запытаны аўтаматычна пры пачатку запісу.";
 "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight." = "Распазнаванне маўлення недаступна. Уключыце Siri ў Наладах сістэмы > Siri і Spotlight.";
 "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone." = "Не ўдалося пачаць запіс. Праверце дазволы мікрафона ў Наладах сістэмы > Прыватнасць і бяспека > Мікрафон.";
+"Voice recording is only available while VVTerm is active." = "Запіс голасу даступны толькі тады, калі VVTerm актыўны.";
+"Audio input is temporarily unavailable. Please check the current microphone or audio route and try again." = "Аўдыяўваход часова недаступны. Праверце бягучы мікрафон або аўдыямаршрут і паўтарыце спробу.";
 "On-device MLX transcription isn't supported on this device. Apple Speech will be used instead." = "Транскрыпцыя MLX на гэтай прыладзе не падтрымліваецца. Замест яе будзе выкарыстоўвацца Apple Speech.";
 
 /* Pro Required Errors */

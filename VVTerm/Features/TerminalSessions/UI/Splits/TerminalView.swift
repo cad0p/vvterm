@@ -37,6 +37,7 @@ struct TerminalTabView: View {
     @AppStorage("terminalVoiceButtonEnabled") private var voiceButtonEnabled = true
 
     @StateObject private var audioService = AudioService()
+    @StateObject private var voiceRecordingOperation = VoiceRecordingOperationCoordinator()
     @State private var showingVoiceRecording = false
     @State private var voiceProcessing = false
     @State private var showingPermissionError = false
@@ -133,12 +134,12 @@ struct TerminalTabView: View {
         }
         .onChange(of: isSelected) { _ in
             updateKeyMonitor()
-            if !isSelected, showingVoiceRecording {
+            if !isSelected {
                 cancelVoiceRecording()
             }
         }
         .onChange(of: scenePhase) { phase in
-            if phase != .active, showingVoiceRecording {
+            if phase != .active {
                 cancelVoiceRecording()
             }
         }
@@ -152,9 +153,7 @@ struct TerminalTabView: View {
         }
         .onDisappear {
             cleanupKeyMonitor()
-            if showingVoiceRecording {
-                cancelVoiceRecording()
-            }
+            cancelVoiceRecording()
             publishVoiceRecordingState(false)
         }
     }
@@ -304,14 +303,9 @@ struct TerminalTabView: View {
     private var voiceOverlay: some View {
         VoiceRecordingView(
             audioService: audioService,
-            onSend: { transcribedText in
-                sendTranscriptionToTerminal(transcribedText)
-                showingVoiceRecording = false
-                voiceProcessing = false
-            },
+            onStop: { finishVoiceRecording() },
             onCancel: {
-                showingVoiceRecording = false
-                voiceProcessing = false
+                cancelVoiceRecording()
             },
             isProcessing: $voiceProcessing
         )
@@ -376,9 +370,7 @@ struct TerminalTabView: View {
 
         if showingVoiceRecording {
             if event.keyCode == keyCodeEscape {
-                audioService.cancelRecording()
-                showingVoiceRecording = false
-                voiceProcessing = false
+                cancelVoiceRecording()
                 return nil
             }
             if event.keyCode == keyCodeReturn {
@@ -400,15 +392,7 @@ struct TerminalTabView: View {
 
     private func toggleVoiceRecording() {
         if showingVoiceRecording {
-            Task {
-                let text = await audioService.stopRecording()
-                await MainActor.run {
-                    let fallback = text.isEmpty ? audioService.partialTranscription : text
-                    sendTranscriptionToTerminal(fallback)
-                    showingVoiceRecording = false
-                    voiceProcessing = false
-                }
-            }
+            finishVoiceRecording()
         } else {
             startVoiceRecording()
         }
@@ -416,29 +400,36 @@ struct TerminalTabView: View {
 
     private func startVoiceRecording() {
         clearPendingVoiceReturnForFocusedPane()
+        voiceRecordingOperation.cancel()
+        audioService.cancelRecording()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            showingVoiceRecording = true
+        }
         #if os(iOS)
         let terminal = focusedTerminal
-        let lifecycleState = { [weak terminal] in
+        let lifecycleState: @MainActor @Sendable () -> AudioCaptureLifecycleState = { [weak terminal] in
             AudioCaptureLifecycleState(
                 applicationIsActive: UIApplication.shared.applicationState == .active,
                 sceneIsActive: terminal?.window?.windowScene?.activationState == .foregroundActive
             )
         }
         #else
-        let lifecycleState = {
+        let lifecycleState: @MainActor @Sendable () -> AudioCaptureLifecycleState = {
             AudioCaptureLifecycleState(
                 applicationIsActive: NSApplication.shared.isActive,
                 sceneIsActive: NSApplication.shared.isActive
             )
         }
         #endif
-        Task {
-            do {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    showingVoiceRecording = true
-                }
-                try await audioService.startRecording(lifecycleState: lifecycleState)
-            } catch {
+        voiceRecordingOperation.start(
+            operation: { [audioService] operationID in
+                try await audioService.startRecording(
+                    operationID: operationID,
+                    lifecycleState: lifecycleState
+                )
+            },
+            onSuccess: { _ in },
+            onFailure: { error in
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                     showingVoiceRecording = false
                 }
@@ -450,13 +441,34 @@ struct TerminalTabView: View {
                 }
                 showingPermissionError = true
             }
-        }
+        )
     }
 
     private func cancelVoiceRecording() {
+        voiceRecordingOperation.cancel()
         audioService.cancelRecording()
         showingVoiceRecording = false
         voiceProcessing = false
+    }
+
+    private func finishVoiceRecording() {
+        guard !voiceProcessing else { return }
+        voiceProcessing = true
+        voiceRecordingOperation.start(
+            operation: { [audioService] operationID in
+                await audioService.stopRecording(operationID: operationID)
+            },
+            onSuccess: { text in
+                let fallback = text.isEmpty ? audioService.partialTranscription : text
+                sendTranscriptionToTerminal(fallback)
+                showingVoiceRecording = false
+                voiceProcessing = false
+            },
+            onFailure: { _ in
+                showingVoiceRecording = false
+                voiceProcessing = false
+            }
+        )
     }
 
     private func sendTranscriptionToTerminal(_ text: String) {
@@ -467,14 +479,12 @@ struct TerminalTabView: View {
         #if os(iOS)
         let shouldShowReturnControl = tabManager.keyboardCoordinator.isUserHidden
         #endif
-        DispatchQueue.main.async {
-            terminal.sendText(trimmed)
-            #if os(iOS)
-            if shouldShowReturnControl {
-                tabManager.setTerminalPendingVoiceReturn(true, for: paneId)
-            }
-            #endif
+        terminal.sendText(trimmed)
+        #if os(iOS)
+        if shouldShowReturnControl {
+            tabManager.setTerminalPendingVoiceReturn(true, for: paneId)
         }
+        #endif
     }
 
     private func publishVoiceRecordingState(_ isRecording: Bool) {

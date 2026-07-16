@@ -640,6 +640,8 @@
 "Microphone permission is required. The microphone will be automatically requested when recording starts." = "マイクの許可が必要です。録音開始時に自動で要求されます。";
 "Speech recognition is not available. Please enable Siri in System Settings > Siri & Spotlight." = "音声認識が利用できません。システム設定 > SiriとSpotlight でSiriを有効にしてください。";
 "Failed to start recording. Please check microphone permissions in System Settings > Privacy & Security > Microphone." = "録音の開始に失敗しました。システム設定 > プライバシーとセキュリティ > マイク で権限を確認してください。";
+"Voice recording is only available while VVTerm is active." = "音声録音はVVTermがアクティブな間のみ利用できます。";
+"Audio input is temporarily unavailable. Please check the current microphone or audio route and try again." = "音声入力を一時的に利用できません。現在のマイクまたは音声経路を確認して、もう一度お試しください。";
 "On-device MLX transcription isn't supported on this device. Apple Speech will be used instead." = "このデバイスではオンデバイスのMLX文字起こしはサポートされていません。代わりにApple Speechが使用されます。";
 
 /* Pro Required Errors */
