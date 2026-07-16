@@ -1,10 +1,45 @@
-#if os(macOS)
 import Foundation
 import Testing
 @testable import VVTerm
 
 @Suite(.serialized)
 struct SSHStartupIntegrationTests {
+    private final class ShellStartupBarrier: @unchecked Sendable {
+        private let targetStage: SSHSession.ShellStartupStage
+        private let entered = DispatchSemaphore(value: 0)
+        private let release = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var observedSessionIsBlocking: Bool?
+
+        init(stage: SSHSession.ShellStartupStage) {
+            targetStage = stage
+        }
+
+        func handle(_ event: SSHSession.ShellStartupTestEvent) {
+            guard event.stage == targetStage else { return }
+            let shouldWait = lock.withLock { () -> Bool in
+                guard observedSessionIsBlocking == nil else { return false }
+                observedSessionIsBlocking = event.sessionIsBlocking
+                return true
+            }
+            guard shouldWait else { return }
+            entered.signal()
+            _ = release.wait(timeout: .now() + 10)
+        }
+
+        func waitUntilEntered() -> Bool {
+            entered.wait(timeout: .now() + 10) == .success
+        }
+
+        func resume() {
+            release.signal()
+        }
+
+        var sessionWasBlocking: Bool? {
+            lock.withLock { observedSessionIsBlocking }
+        }
+    }
+
     private struct Configuration {
         let host: String
         let port: Int
@@ -14,18 +49,21 @@ struct SSHStartupIntegrationTests {
         static func fromEnvironment() throws -> Configuration? {
             let environment = ProcessInfo.processInfo.environment
             guard environment["VVTERM_SSH_INTEGRATION"] == "1" else { return nil }
-            guard let keyPath = environment["VVTERM_SSH_PRIVATE_KEY_PATH"] else {
-                throw IntegrationError.missingEnvironment("VVTERM_SSH_PRIVATE_KEY_PATH")
+            guard let encodedKey = environment["VVTERM_SSH_PRIVATE_KEY_BASE64"] else {
+                throw IntegrationError.missingEnvironment("VVTERM_SSH_PRIVATE_KEY_BASE64")
+            }
+            guard let privateKey = Data(base64Encoded: encodedKey) else {
+                throw IntegrationError.invalidPrivateKey
             }
             guard let port = Int(environment["VVTERM_SSH_PORT"] ?? "22"),
                   (1...65_535).contains(port) else {
                 throw IntegrationError.invalidPort
             }
-            return try Configuration(
+            return Configuration(
                 host: environment["VVTERM_SSH_HOST"] ?? "127.0.0.1",
                 port: port,
-                username: environment["VVTERM_SSH_USERNAME"] ?? NSUserName(),
-                privateKey: Data(contentsOf: URL(fileURLWithPath: keyPath))
+                username: environment["VVTERM_SSH_USERNAME"] ?? "vvterm",
+                privateKey: privateKey
             )
         }
 
@@ -42,6 +80,7 @@ struct SSHStartupIntegrationTests {
 
     private enum IntegrationError: Error {
         case invalidPort
+        case invalidPrivateKey
         case missingEnvironment(String)
         case noTerminalData
     }
@@ -91,6 +130,228 @@ struct SSHStartupIntegrationTests {
         )
         #expect(result.transport == .sshFallback)
         #expect(result.fallbackReason == .udpTimeout)
+    }
+
+    @Test
+    func cancellingAtEachStartupBoundaryStopsStartupAndAllowsFreshConnection() async throws {
+        guard let configuration = try Configuration.fromEnvironment() else { return }
+        let previousKnownHost = KnownHostsManager.shared.entry(
+            for: configuration.host,
+            port: configuration.port
+        )
+        defer {
+            restoreKnownHost(
+                previousKnownHost,
+                host: configuration.host,
+                port: configuration.port
+            )
+        }
+
+        for testCase in shellStartupCases {
+            let stage = testCase.stage
+            let client = SSHClient()
+            let (server, credentials) = makeStandardConnection(configuration: configuration)
+            let session = try await client.connect(to: server, credentials: credentials)
+            let barrier = ShellStartupBarrier(stage: stage)
+            await session.setShellStartupTestHook { event in
+                barrier.handle(event)
+            }
+
+            let startup = Task {
+                try await client.startShell(
+                    cols: 80,
+                    rows: 24,
+                    startupCommand: testCase.startupCommand
+                )
+            }
+
+            guard barrier.waitUntilEntered() else {
+                startup.cancel()
+                barrier.resume()
+                await client.disconnect()
+                Issue.record("Shell startup did not reach the \(stage) boundary")
+                continue
+            }
+
+            startup.cancel()
+            barrier.resume()
+
+            do {
+                let shell = try await startup.value
+                await client.closeShell(shell.id)
+                Issue.record("Cancelled \(stage) startup returned a live shell")
+            } catch is CancellationError {
+                // Expected controlled cancellation.
+            } catch {
+                Issue.record("Cancelled \(stage) startup returned unexpected error: \(error)")
+            }
+
+            #expect(barrier.sessionWasBlocking == false)
+            #expect(await client.isConnected == false)
+            await session.setShellStartupTestHook(nil)
+            await client.disconnect()
+
+            _ = try await client.connect(to: server, credentials: credentials)
+            let replacement = try await client.startShell(cols: 80, rows: 24)
+            await client.closeShell(replacement.id)
+            await client.disconnect()
+        }
+    }
+
+    @Test
+    func disconnectingAtEachStartupBoundaryFailsCleanly() async throws {
+        guard let configuration = try Configuration.fromEnvironment() else { return }
+        let previousKnownHost = KnownHostsManager.shared.entry(
+            for: configuration.host,
+            port: configuration.port
+        )
+        defer {
+            restoreKnownHost(
+                previousKnownHost,
+                host: configuration.host,
+                port: configuration.port
+            )
+        }
+
+        for testCase in shellStartupCases {
+            let stage = testCase.stage
+            let client = SSHClient()
+            let (server, credentials) = makeStandardConnection(configuration: configuration)
+            let session = try await client.connect(to: server, credentials: credentials)
+            let barrier = ShellStartupBarrier(stage: stage)
+            await session.setShellStartupTestHook { event in
+                barrier.handle(event)
+            }
+
+            let startup = Task {
+                try await client.startShell(
+                    cols: 80,
+                    rows: 24,
+                    startupCommand: testCase.startupCommand
+                )
+            }
+
+            guard barrier.waitUntilEntered() else {
+                startup.cancel()
+                barrier.resume()
+                await client.disconnect()
+                Issue.record("Shell startup did not reach the \(stage) boundary")
+                continue
+            }
+
+            let disconnect = Task {
+                await client.disconnect()
+            }
+            for _ in 0..<1_000 {
+                if await client.isAborted { break }
+                await Task.yield()
+            }
+            #expect(await client.isAborted)
+            barrier.resume()
+
+            do {
+                let shell = try await startup.value
+                await client.closeShell(shell.id)
+                Issue.record("Disconnected \(stage) startup returned a live shell")
+            } catch SSHError.notConnected {
+                // Expected controlled transport invalidation.
+            } catch {
+                Issue.record("Disconnected \(stage) startup returned unexpected error: \(error)")
+            }
+
+            #expect(barrier.sessionWasBlocking == false)
+            await session.setShellStartupTestHook(nil)
+            await disconnect.value
+
+            _ = try await client.connect(to: server, credentials: credentials)
+            let replacement = try await client.startShell(cols: 80, rows: 24)
+            await client.closeShell(replacement.id)
+            await client.disconnect()
+        }
+    }
+
+    @Test
+    func rejectedPTYCleansChannelAndLeavesSessionUsable() async throws {
+        guard let configuration = try Configuration.fromEnvironment(),
+              let rejectedPTYPort = integrationPort(named: "VVTERM_SSH_REJECT_PTY_PORT") else { return }
+
+        let rejectedConfiguration = configuration.withPort(rejectedPTYPort)
+        let previousKnownHost = KnownHostsManager.shared.entry(
+            for: rejectedConfiguration.host,
+            port: rejectedConfiguration.port
+        )
+        defer {
+            restoreKnownHost(
+                previousKnownHost,
+                host: rejectedConfiguration.host,
+                port: rejectedConfiguration.port
+            )
+        }
+
+        let client = SSHClient()
+        let (server, credentials) = makeStandardConnection(configuration: rejectedConfiguration)
+        do {
+            let session = try await client.connect(to: server, credentials: credentials)
+            do {
+                let shell = try await client.startShell(cols: 80, rows: 24)
+                await client.closeShell(shell.id)
+                Issue.record("PTY-rejecting server returned a live shell")
+            } catch SSHError.shellRequestFailed {
+                // Expected server rejection.
+            } catch {
+                Issue.record("PTY-rejecting server returned unexpected error: \(error)")
+            }
+
+            #expect(await session.discardedShellStartupChannelsForTesting() == 1)
+            let output = try await client.execute("printf '__VVTERM_DEV201_CHANNEL_OK__'")
+            #expect(output == "__VVTERM_DEV201_CHANNEL_OK__")
+            await client.disconnect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+    }
+
+    private var shellStartupCases: [(
+        stage: SSHSession.ShellStartupStage,
+        startupCommand: String?
+    )] {
+        [
+            (.channelOpenRetry, nil),
+            (.ptyRequest, nil),
+            (.shellRequest, nil),
+            (.shellRequest, "exec /bin/sh"),
+        ]
+    }
+
+    private func restoreKnownHost(
+        _ entry: KnownHostsManager.Entry?,
+        host: String,
+        port: Int
+    ) {
+        if let entry {
+            KnownHostsManager.shared.save(entry: entry)
+        } else {
+            KnownHostsManager.shared.remove(host: host, port: port)
+        }
+    }
+
+    private func makeStandardConnection(
+        configuration: Configuration
+    ) -> (Server, ServerCredentials) {
+        let server = Server(
+            workspaceId: UUID(),
+            name: "DEV-201 integration",
+            host: configuration.host,
+            port: configuration.port,
+            username: configuration.username,
+            connectionMode: .standard,
+            authMethod: .sshKey
+        )
+        return (
+            server,
+            ServerCredentials(serverId: server.id, privateKey: configuration.privateKey)
+        )
     }
 
     private func measureStartup(
@@ -195,4 +456,3 @@ struct SSHStartupIntegrationTests {
         return port
     }
 }
-#endif

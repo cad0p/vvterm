@@ -78,17 +78,8 @@ actor SSHClient {
     private let downloadTimeout: Duration = .seconds(120)
     private let uploadTimeout: Duration = .seconds(60)
 
-    /// Stored session reference for nonisolated abort access
-    private nonisolated(unsafe) var _sessionForAbort: SSHSession?
-
-    /// Flag to track if abort was called - prevents new operations
-    private nonisolated(unsafe) var _isAborted = false
-
-    /// Immediately abort the connection by closing the socket (non-blocking, can be called from any thread)
-    nonisolated func abort() {
-        _isAborted = true
-        _sessionForAbort?.abort()
-    }
+    /// Prevents new client operations after disconnect begins.
+    private var _isAborted = false
 
     /// Check if the client has been aborted
     var isAborted: Bool {
@@ -182,13 +173,11 @@ actor SSHClient {
                 connectTask = nil
                 connectionKey = nil
                 self.session = nil
-                self._sessionForAbort = nil
                 self.connectedServer = nil
                 await disconnectCloudflareTransport(reason: "connect cancellation")
                 throw CancellationError()
             }
             self.session = session
-            self._sessionForAbort = session
             self.connectedServer = server
             self.resolvedRemoteEnvironment = nil
             self.resolvedRemoteTerminalType = nil
@@ -201,7 +190,6 @@ actor SSHClient {
             connectTask = nil
             connectionKey = nil
             self.session = nil
-            self._sessionForAbort = nil
             self.connectedServer = nil
             self.resolvedRemoteEnvironment = nil
             self.resolvedRemoteTerminalType = nil
@@ -239,12 +227,10 @@ actor SSHClient {
 
         let activeSession = session
         session = nil
-        _sessionForAbort = nil
         connectedServer = nil
         resolvedRemoteEnvironment = nil
         resolvedRemoteTerminalType = nil
         startupTrace = nil
-        activeSession?.abort()
         await disconnectSSHSession(activeSession)
         await disconnectCloudflareTransport(reason: "client disconnect")
 
@@ -450,15 +436,19 @@ actor SSHClient {
     // MARK: - Shell
 
     func startShell(cols: Int = 80, rows: Int = 24, startupCommand: String? = nil) async throws -> ShellHandle {
-        guard let session = session else {
+        try Task.checkCancellation()
+        guard !_isAborted, let sshSession = session else {
             throw SSHError.notConnected
         }
 
         let connectionMode = connectedServer?.connectionMode ?? .standard
         let environment = await remoteEnvironment()
+        try validateShellStartupSession(sshSession)
         let terminalType = await remoteTerminalType()
+        try validateShellStartupSession(sshSession)
         if connectionMode != .mosh {
-            let sshShell = try await session.startShell(
+            let sshShell = try await startValidatedSSHShell(
+                using: sshSession,
                 cols: cols,
                 rows: rows,
                 startupCommand: startupCommand,
@@ -475,7 +465,8 @@ actor SSHClient {
         guard environment.platform != .windows && environment.shellProfile.family == .posix else {
             logger.warning("Mosh requested, but remote environment does not support Mosh runtime. Falling back to SSH.")
             let fallbackToken = startupTrace?.begin(.sshFallback)
-            let fallbackShell = try await session.startShell(
+            let fallbackShell = try await startValidatedSSHShell(
+                using: sshSession,
                 cols: cols,
                 rows: rows,
                 startupCommand: startupCommand,
@@ -492,10 +483,24 @@ actor SSHClient {
         }
 
         do {
-            return try await startMoshShell(cols: cols, rows: rows, startupCommand: startupCommand)
+            let moshShell = try await startMoshShell(
+                cols: cols,
+                rows: rows,
+                startupCommand: startupCommand
+            )
+            do {
+                try validateShellStartupSession(sshSession)
+                return moshShell
+            } catch {
+                await closeShell(moshShell.id)
+                throw error
+            }
         } catch {
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
+            }
+            if let sshError = error as? SSHError, case .notConnected = sshError {
+                throw sshError
             }
             let moshError = error
             let fallbackReason = fallbackReason(for: moshError)
@@ -503,7 +508,8 @@ actor SSHClient {
 
             do {
                 let fallbackToken = startupTrace?.begin(.sshFallback)
-                let fallbackShell = try await session.startShell(
+                let fallbackShell = try await startValidatedSSHShell(
+                    using: sshSession,
                     cols: cols,
                     rows: rows,
                     startupCommand: startupCommand,
@@ -520,10 +526,50 @@ actor SSHClient {
                     fallbackReason: fallbackReason
                 )
             } catch {
+                if error is CancellationError || Task.isCancelled {
+                    throw CancellationError()
+                }
+                if let sshError = error as? SSHError, case .notConnected = sshError {
+                    throw sshError
+                }
                 throw SSHError.moshSessionFailed(
                     "Mosh startup failed (\(moshError.localizedDescription)); SSH fallback failed (\(error.localizedDescription))"
                 )
             }
+        }
+    }
+
+    private func startValidatedSSHShell(
+        using expectedSession: SSHSession,
+        cols: Int,
+        rows: Int,
+        startupCommand: String?,
+        environment: RemoteEnvironment,
+        terminalType: RemoteTerminalType
+    ) async throws -> ShellHandle {
+        try validateShellStartupSession(expectedSession)
+        let shell = try await expectedSession.startShell(
+            cols: cols,
+            rows: rows,
+            startupCommand: startupCommand,
+            environment: environment,
+            terminalType: terminalType
+        )
+        do {
+            try validateShellStartupSession(expectedSession)
+            return shell
+        } catch {
+            await expectedSession.closeShell(shell.id)
+            throw error
+        }
+    }
+
+    private func validateShellStartupSession(_ expectedSession: SSHSession) throws {
+        try Task.checkCancellation()
+        guard !_isAborted,
+              let currentSession = session,
+              currentSession === expectedSession else {
+            throw SSHError.notConnected
         }
     }
 
@@ -587,14 +633,19 @@ actor SSHClient {
 
     private func disconnectSSHSession(_ activeSession: SSHSession?) async {
         guard let activeSession else { return }
-        do {
-            try await SSHClient.runWithTimeout(disconnectTimeout) {
-                await activeSession.disconnect()
+
+        let abortWatchdog = Task { [disconnectTimeout, logger] in
+            do {
+                try await Task.sleep(for: disconnectTimeout)
+            } catch {
+                return
             }
-        } catch {
             logger.warning("Timed out while disconnecting SSH session; aborting socket")
             activeSession.abort()
         }
+        defer { abortWatchdog.cancel() }
+
+        await activeSession.disconnect()
     }
 
     private func disconnectCloudflareTransport(reason: String) async {
@@ -944,6 +995,19 @@ nonisolated(unsafe) private let kbdintCallback: @convention(c) (
 // MARK: - SSH Session using libssh2
 
 actor SSHSession {
+    enum ShellStartupStage: Sendable {
+        case channelOpenRetry
+        case ptyRequest
+        case shellRequest
+    }
+
+    #if DEBUG
+    struct ShellStartupTestEvent: Sendable {
+        let stage: ShellStartupStage
+        let sessionIsBlocking: Bool
+    }
+    #endif
+
     private final class ExecRequest {
         let id: UUID
         let command: String
@@ -980,6 +1044,7 @@ actor SSHSession {
     private var libssh2Session: OpaquePointer?
     private var sftpSession: OpaquePointer?
     private var shellChannels: [UUID: ShellChannelState] = [:]
+    private var shellStartupsInFlight: Set<UUID> = []
     private var socket: Int32 = -1
     private var isActive = false
     private var ioTask: Task<Void, Never>?
@@ -997,6 +1062,11 @@ actor SSHSession {
     /// Track if cleanup has been performed
     private var hasBeenCleaned = false
 
+    #if DEBUG
+    private var shellStartupTestHook: (@Sendable (ShellStartupTestEvent) -> Void)?
+    private var discardedShellStartupChannelCount = 0
+    #endif
+
     init(config: SSHSessionConfig, startupTrace: SSHStartupTrace? = nil) {
         self.config = config
         self.startupTrace = startupTrace
@@ -1006,10 +1076,34 @@ actor SSHSession {
         isActive && libssh2Session != nil
     }
 
-    /// Immediately abort the connection by closing the socket (can be called from any thread)
+    /// Interrupt socket I/O from any thread; actor-owned cleanup performs the final close.
     nonisolated func abort() {
-        atomicSocket.closeImmediately()
+        atomicSocket.interrupt()
     }
+
+    #if DEBUG
+    func setShellStartupTestHook(
+        _ hook: (@Sendable (ShellStartupTestEvent) -> Void)?
+    ) {
+        shellStartupTestHook = hook
+    }
+
+    func discardedShellStartupChannelsForTesting() -> Int {
+        discardedShellStartupChannelCount
+    }
+
+    private func notifyShellStartupTestHook(
+        _ stage: ShellStartupStage,
+        session: OpaquePointer
+    ) {
+        shellStartupTestHook?(
+            ShellStartupTestEvent(
+                stage: stage,
+                sessionIsBlocking: libssh2_session_get_blocking(session) != 0
+            )
+        )
+    }
+    #endif
 
     // MARK: - Connection
 
@@ -1042,15 +1136,16 @@ actor SSHSession {
         var noSigPipe: Int32 = 1
         setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
 
-        // Store in atomic storage for emergency abort
-        atomicSocket.socket = socket
+        // Store in atomic storage for emergency I/O interruption.
+        atomicSocket.install(socket)
         connectedPeerAddress = resolveNumericPeerAddress(for: socket)
 
         // Create libssh2 session (use _ex variant since macros not available in Swift)
         let sessionAbstract = Unmanaged.passUnretained(keyboardInteractiveContext).toOpaque()
         libssh2Session = libssh2_session_init_ex(nil, nil, nil, sessionAbstract)
         guard let session = libssh2Session else {
-            Darwin.close(socket)
+            atomicSocket.close()
+            self.socket = -1
             throw SSHError.unknown("Failed to create libssh2 session")
         }
 
@@ -1282,49 +1377,62 @@ actor SSHSession {
     }
 
     func disconnect() async {
-        // Mark as inactive first to stop any pending operations
-        isActive = false
-        connectedPeerAddress = nil
-
-        // Finish shell streams first to unblock any waiting consumers
-        closeAllShellChannels()
-
-        // Cancel IO task
-        ioTask?.cancel()
-        ioTask = nil
-
-        // Fail any pending exec requests
-        failAllExecRequests(error: SSHError.notConnected)
-
-        // Close socket first to abort any blocking I/O in libssh2
-        atomicSocket.closeImmediately()
-        socket = -1
-
-        // Now cleanup libssh2 resources (won't block since socket is closed)
+        invalidateTransport()
         cleanupLibssh2()
 
         logger.info("Disconnected")
     }
 
+    private func invalidateTransport() {
+        isActive = false
+        connectedPeerAddress = nil
+        abandonAllShellChannels()
+        ioTask?.cancel()
+        ioTask = nil
+        failAllExecRequests(error: SSHError.notConnected)
+        atomicSocket.interrupt()
+        socket = -1
+    }
+
     private func cleanupLibssh2() {
+        // A startup operation may still own a channel pointer across an actor
+        // suspension. Its defer releases that ownership before final cleanup.
+        guard shellStartupsInFlight.isEmpty else { return }
         // Prevent double cleanup
         guard !hasBeenCleaned else { return }
-        hasBeenCleaned = true
+        sftpSession = nil
 
-        closeSFTPSession()
-        closeAllShellChannels()
-        closeAllExecChannels()
+        guard let session = libssh2Session else {
+            hasBeenCleaned = true
+            atomicSocket.close()
+            return
+        }
 
-        if let session = libssh2Session {
-            libssh2_session_disconnect_ex(session, 11, "Normal shutdown", "")
-            libssh2_session_free(session)
+        var freeResult = Int32(LIBSSH2_ERROR_EAGAIN)
+        for _ in 0..<1_024 {
+            freeResult = libssh2_session_free(session)
+            if freeResult != LIBSSH2_ERROR_EAGAIN {
+                break
+            }
+        }
+        if freeResult == 0 {
             libssh2Session = nil
+            hasBeenCleaned = true
+            atomicSocket.close()
+        } else {
+            // No Swift operation may call the native session at this point. If
+            // libssh2 still cannot finish, abandon its allocation rather than
+            // calling into a partial operation or leaking the descriptor.
+            logger.error("Abandoning incomplete libssh2 session cleanup: \(freeResult)")
+            libssh2Session = nil
+            hasBeenCleaned = true
+            atomicSocket.close()
         }
     }
 
     private func cleanup() {
         // Close socket first to abort any blocking I/O
-        atomicSocket.closeImmediately()
+        atomicSocket.interrupt()
         socket = -1
         connectedPeerAddress = nil
         cleanupLibssh2()
@@ -1762,115 +1870,318 @@ actor SSHSession {
         environment: RemoteEnvironment = .fallbackPOSIX,
         terminalType: RemoteTerminalType = RemoteTerminalBootstrap.defaultTerminalType
     ) async throws -> ShellHandle {
-        guard let session = libssh2Session else {
+        guard isActive, let session = libssh2Session else {
             throw SSHError.notConnected
         }
 
-        // Set blocking for channel setup
-        libssh2_session_set_blocking(session, 1)
-        defer { libssh2_session_set_blocking(session, 0) }
-
-        // Open channel (use _ex variant since macros not available in Swift)
-        // LIBSSH2_CHANNEL_WINDOW_DEFAULT = 2*1024*1024, LIBSSH2_CHANNEL_PACKET_DEFAULT = 32768
-        let channelToken = startupTrace?.begin(.shellChannel)
-        guard let channel = libssh2_channel_open_ex(
-            session,
-            "session",
-            UInt32("session".utf8.count),
-            2 * 1024 * 1024,  // window size
-            32768,             // packet size
-            nil,
-            0
-        ) else {
-            if let channelToken { startupTrace?.end(channelToken, outcome: "failed") }
-            throw SSHError.channelOpenFailed
-        }
-        if let channelToken { startupTrace?.end(channelToken) }
-
-        // Mirror Ghostty's SSH behavior so remote prompts/themes can detect
-        // 24-bit color support without changing TERM compatibility.
-        for variable in RemoteTerminalBootstrap.terminalEnvironment() {
-            let result = libssh2_channel_setenv_ex(
-                channel,
-                variable.name,
-                UInt32(variable.name.utf8.count),
-                variable.value,
-                UInt32(variable.value.utf8.count)
-            )
-
-            // Many SSH servers gate env forwarding via AcceptEnv; continue when
-            // a variable is rejected so interactive sessions still start.
-            if result != 0 {
-                logger.debug("Remote SSH server rejected env \(variable.name, privacy: .public): \(result)")
+        let startupId = UUID()
+        shellStartupsInFlight.insert(startupId)
+        var pendingChannel: OpaquePointer?
+        var shouldInvalidateTransport = false
+        defer {
+            if shouldInvalidateTransport {
+                invalidateTransport()
+            }
+            shellStartupsInFlight.remove(startupId)
+            if !isActive {
+                cleanupLibssh2()
             }
         }
 
-        // Request PTY
-        let ptyToken = startupTrace?.begin(.ptyRequest)
-        let ptyResult = libssh2_channel_request_pty_ex(
-            channel,
-            terminalType.rawValue,
-            UInt32(terminalType.rawValue.utf8.count),
-            nil,
-            0,
-            Int32(cols),
-            Int32(rows),
-            0,
-            0
-        )
-        guard ptyResult == 0 else {
-            if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed") }
-            libssh2_channel_close(channel)
-            libssh2_channel_free(channel)
-            throw SSHError.shellRequestFailed
-        }
-        if let ptyToken { startupTrace?.end(ptyToken) }
-
-        // Route shell startup through a single bootstrap helper so SSH, tmux,
-        // and mosh share the same environment and quoting behavior.
-        let shellToken = startupTrace?.begin(.shellRequest)
-        switch RemoteTerminalBootstrap.launchPlan(startupCommand: startupCommand, environment: environment) {
-        case .shell:
-            let shellResult = libssh2_channel_process_startup(channel, "shell", 5, nil, 0)
-            guard shellResult == 0 else {
-                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
-                libssh2_channel_close(channel)
-                libssh2_channel_free(channel)
-                throw SSHError.shellRequestFailed
+        do {
+            // Keep the shared session nonblocking. libssh2 1.11.1 returns
+            // EAGAIN when another caller owns a partial packet; yielding here
+            // lets that owner finish instead of making a blocking caller spin.
+            let channelToken = startupTrace?.begin(.shellChannel)
+            let channel: OpaquePointer
+            do {
+                channel = try await openShellStartupChannel(session: session)
+                pendingChannel = channel
+                try validateShellStartup(session: session)
+                if let channelToken { startupTrace?.end(channelToken) }
+            } catch {
+                if let channelToken {
+                    startupTrace?.end(
+                        channelToken,
+                        outcome: error is CancellationError ? "cancelled" : "failed"
+                    )
+                }
+                throw error
             }
-        case .exec(let command):
-            let commandLength = UInt32(command.utf8.count)
-            let execResult: Int32 = command.withCString { ptr in
-                libssh2_channel_process_startup(channel, "exec", 4, ptr, commandLength)
-            }
-            guard execResult == 0 else {
-                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
-                libssh2_channel_close(channel)
-                libssh2_channel_free(channel)
-                throw SSHError.shellRequestFailed
-            }
-        }
-        if let shellToken { startupTrace?.end(shellToken) }
 
-        logger.info("Shell started (\(cols)x\(rows))")
+            // Mirror Ghostty's SSH behavior so remote prompts/themes can detect
+            // 24-bit color support without changing TERM compatibility.
+            for variable in RemoteTerminalBootstrap.terminalEnvironment() {
+                let result = try await performShellStartupCall(session: session) {
+                    libssh2_channel_setenv_ex(
+                        channel,
+                        variable.name,
+                        UInt32(variable.name.utf8.count),
+                        variable.value,
+                        UInt32(variable.value.utf8.count)
+                    )
+                }
 
-        let shellId = UUID()
-        let stream = AsyncStream<Data> { continuation in
-            let state = ShellChannelState(id: shellId, channel: channel, continuation: continuation)
-            self.shellChannels[shellId] = state
-
-            continuation.onTermination = { [weak self] _ in
-                Task { [weak self] in
-                    await self?.closeShell(shellId)
+                // Many SSH servers gate env forwarding via AcceptEnv; continue when
+                // a variable is rejected so interactive sessions still start.
+                if result != 0 {
+                    logger.debug("Remote SSH server rejected env \(variable.name, privacy: .public): \(result)")
                 }
             }
+
+            let ptyToken = startupTrace?.begin(.ptyRequest)
+            let ptyResult: Int32
+            do {
+                #if DEBUG
+                notifyShellStartupTestHook(.ptyRequest, session: session)
+                #endif
+                ptyResult = try await performShellStartupCall(session: session) {
+                    libssh2_channel_request_pty_ex(
+                        channel,
+                        terminalType.rawValue,
+                        UInt32(terminalType.rawValue.utf8.count),
+                        nil,
+                        0,
+                        Int32(cols),
+                        Int32(rows),
+                        0,
+                        0
+                    )
+                }
+            } catch {
+                if let ptyToken {
+                    startupTrace?.end(
+                        ptyToken,
+                        outcome: error is CancellationError ? "cancelled" : "failed"
+                    )
+                }
+                throw error
+            }
+            guard ptyResult == 0 else {
+                if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed") }
+                throw SSHError.shellRequestFailed
+            }
+            if let ptyToken { startupTrace?.end(ptyToken) }
+
+            let shellToken = startupTrace?.begin(.shellRequest)
+            let shellResult: Int32
+            do {
+                #if DEBUG
+                notifyShellStartupTestHook(.shellRequest, session: session)
+                #endif
+                switch RemoteTerminalBootstrap.launchPlan(
+                    startupCommand: startupCommand,
+                    environment: environment
+                ) {
+                case .shell:
+                    shellResult = try await performShellStartupCall(session: session) {
+                        libssh2_channel_process_startup(channel, "shell", 5, nil, 0)
+                    }
+                case .exec(let command):
+                    shellResult = try await performShellStartupCall(session: session) {
+                        command.withCString { pointer in
+                            libssh2_channel_process_startup(
+                                channel,
+                                "exec",
+                                4,
+                                pointer,
+                                UInt32(command.utf8.count)
+                            )
+                        }
+                    }
+                }
+            } catch {
+                if let shellToken {
+                    startupTrace?.end(
+                        shellToken,
+                        outcome: error is CancellationError ? "cancelled" : "failed"
+                    )
+                }
+                throw error
+            }
+            guard shellResult == 0 else {
+                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
+                throw SSHError.shellRequestFailed
+            }
+            if let shellToken { startupTrace?.end(shellToken) }
+
+            try validateShellStartup(session: session)
+            logger.info("Shell started (\(cols)x\(rows))")
+
+            let shellId = UUID()
+            let stream = AsyncStream<Data> { continuation in
+                let state = ShellChannelState(id: shellId, channel: channel, continuation: continuation)
+                self.shellChannels[shellId] = state
+
+                continuation.onTermination = { [weak self] _ in
+                    Task { [weak self] in
+                        await self?.closeShell(shellId)
+                    }
+                }
+            }
+
+            pendingChannel = nil
+            startIOLoop()
+            return ShellHandle(id: shellId, stream: stream)
+        } catch is CancellationError {
+            shouldInvalidateTransport = true
+            throw CancellationError()
+        } catch SSHError.notConnected {
+            shouldInvalidateTransport = true
+            throw SSHError.notConnected
+        } catch {
+            if let pendingChannel {
+                if await discardShellStartupChannel(pendingChannel, session: session) {
+                    #if DEBUG
+                    discardedShellStartupChannelCount += 1
+                    #endif
+                    self.logger.debug("Discarded failed shell startup channel")
+                } else {
+                    shouldInvalidateTransport = true
+                }
+            }
+            throw error
         }
-
-        // Start IO loop
-        startIOLoop()
-
-        return ShellHandle(id: shellId, stream: stream)
     }
+
+    private func validateShellStartup(session: OpaquePointer) throws {
+        try Task.checkCancellation()
+        guard isActive,
+              !hasBeenCleaned,
+              let currentSession = libssh2Session,
+              currentSession == session,
+              socket >= 0,
+              atomicSocket.isUsable else {
+            throw SSHError.notConnected
+        }
+    }
+
+    private func waitForShellStartupRetry(session: OpaquePointer) async throws {
+        try validateShellStartup(session: session)
+        await waitForSocket()
+        await Task.yield()
+        try validateShellStartup(session: session)
+    }
+
+    private func openShellStartupChannel(session: OpaquePointer) async throws -> OpaquePointer {
+        while true {
+            try validateShellStartup(session: session)
+            if let channel = libssh2_channel_open_ex(
+                session,
+                "session",
+                UInt32("session".utf8.count),
+                2 * 1024 * 1024,
+                32768,
+                nil,
+                0
+            ) {
+                return channel
+            }
+
+            let error = libssh2_session_last_errno(session)
+            guard error == LIBSSH2_ERROR_EAGAIN else {
+                throw SSHError.channelOpenFailed
+            }
+            #if DEBUG
+            notifyShellStartupTestHook(.channelOpenRetry, session: session)
+            #endif
+            do {
+                try await waitForShellStartupRetry(session: session)
+            } catch {
+                invalidateTransport()
+                await drainAbortedChannelOpen(session: session)
+                throw error
+            }
+        }
+    }
+
+    private func performShellStartupCall(
+        session: OpaquePointer,
+        operation: () -> Int32
+    ) async throws -> Int32 {
+        while true {
+            try validateShellStartup(session: session)
+            let result = operation()
+            if result != LIBSSH2_ERROR_EAGAIN {
+                try validateShellStartup(session: session)
+                return result
+            }
+            do {
+                try await waitForShellStartupRetry(session: session)
+            } catch {
+                invalidateTransport()
+                await drainAbortedShellStartupCall(operation)
+                throw error
+            }
+        }
+    }
+
+    private func drainAbortedChannelOpen(session: OpaquePointer) async {
+        for _ in 0..<1_024 {
+            if libssh2_channel_open_ex(
+                session,
+                "session",
+                UInt32("session".utf8.count),
+                2 * 1024 * 1024,
+                32768,
+                nil,
+                0
+            ) != nil || libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN {
+                return
+            }
+            await Task.yield()
+        }
+        logger.error("Unable to drain aborted libssh2 channel-open operation")
+    }
+
+    private func drainAbortedShellStartupCall(_ operation: () -> Int32) async {
+        for _ in 0..<1_024 {
+            if operation() != LIBSSH2_ERROR_EAGAIN {
+                return
+            }
+            await Task.yield()
+        }
+        logger.error("Unable to drain aborted libssh2 shell-startup operation")
+    }
+
+    private func discardShellStartupChannel(
+        _ channel: OpaquePointer,
+        session: OpaquePointer
+    ) async -> Bool {
+        let closeResult = await completeActiveChannelCleanupCall(session: session) {
+            libssh2_channel_close(channel)
+        }
+        guard closeResult == 0 else { return false }
+
+        let freeResult = await completeActiveChannelCleanupCall(session: session) {
+            libssh2_channel_free(channel)
+        }
+        return freeResult == 0
+    }
+
+    private func completeActiveChannelCleanupCall(
+        session: OpaquePointer,
+        operation: () -> Int32
+    ) async -> Int32 {
+        for _ in 0..<1_024 {
+            guard isActive,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                return -1
+            }
+
+            let result = operation()
+            if result != LIBSSH2_ERROR_EAGAIN {
+                return result
+            }
+            await waitForSocket()
+            await Task.yield()
+        }
+        return LIBSSH2_ERROR_EAGAIN
+    }
+
     private func startIOLoop() {
         guard ioTask == nil else { return }
         ioTask = Task { [weak self] in
@@ -2049,26 +2360,22 @@ actor SSHSession {
         }
     }
 
-    private func closeAllExecChannels() {
-        for request in execRequests.values {
-            if let channel = request.channel {
-                libssh2_channel_close(channel)
-                libssh2_channel_free(channel)
-                request.channel = nil
+    private func abandonAllShellChannels() {
+        let states = shellChannels
+        shellChannels.removeAll()
+        for state in states.values {
+            if !state.batchBuffer.isEmpty {
+                state.continuation.yield(state.batchBuffer)
             }
+            state.continuation.finish()
         }
-        execRequests.removeAll()
     }
 
     private func failAllExecRequests(error: Error) {
         let requests = execRequests
         execRequests.removeAll()
         for request in requests.values {
-            if let channel = request.channel {
-                libssh2_channel_close(channel)
-                libssh2_channel_free(channel)
-                request.channel = nil
-            }
+            request.channel = nil
             request.continuation.resume(throwing: error)
         }
     }
@@ -2787,12 +3094,6 @@ actor SSHSession {
         }
     }
 
-    private func closeSFTPSession() {
-        guard let sftpSession else { return }
-        _ = libssh2_sftp_shutdown(sftpSession)
-        self.sftpSession = nil
-    }
-
     private static func fileName(for path: String) -> String {
         let normalized = RemoteFilePath.normalize(path)
         guard normalized != "/" else { return "/" }
@@ -2959,37 +3260,58 @@ private func fdSet(_ fd: Int32, _ set: inout fd_set) {
     }
 }
 
-// MARK: - Atomic Socket for Thread-Safe Abort
+// MARK: - Atomic Socket for Thread-Safe Interruption
 
-/// Thread-safe socket storage that allows closing from any thread
+/// Thread-safe socket storage that separates cross-thread I/O interruption
+/// from the actor-owned final descriptor close.
 final class AtomicSocket: @unchecked Sendable {
-    private nonisolated(unsafe) var _socket: Int32 = -1
+    private enum State: Sendable {
+        case closed
+        case open(Int32)
+        case interrupted(Int32)
+    }
+
+    private nonisolated(unsafe) var state = State.closed
     private let lock = NSLock()
 
     nonisolated init() {}
 
-    nonisolated var socket: Int32 {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _socket
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _socket = newValue
+    nonisolated var isUsable: Bool {
+        lock.withLock {
+            if case .open = state {
+                true
+            } else {
+                false
+            }
         }
     }
 
-    /// Close the socket immediately from any thread
-    nonisolated func closeImmediately() {
-        lock.lock()
-        let sock = _socket
-        _socket = -1
-        lock.unlock()
+    nonisolated func install(_ socket: Int32) {
+        lock.withLock {
+            state = .open(socket)
+        }
+    }
 
-        if sock >= 0 {
-            Darwin.close(sock)
+    /// Wake blocking socket I/O without releasing the descriptor. This avoids
+    /// descriptor reuse while libssh2 may still be returning from a native call.
+    nonisolated func interrupt() {
+        lock.withLock {
+            guard case .open(let socket) = state else { return }
+            Darwin.shutdown(socket, SHUT_RDWR)
+            state = .interrupted(socket)
+        }
+    }
+
+    /// Release the descriptor after the SSHSession actor has finished libssh2 cleanup.
+    nonisolated func close() {
+        lock.withLock {
+            switch state {
+            case .closed:
+                return
+            case .open(let socket), .interrupted(let socket):
+                Darwin.close(socket)
+                state = .closed
+            }
         }
     }
 }
