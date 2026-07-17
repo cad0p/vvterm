@@ -25,6 +25,7 @@ struct VVTermApp: App {
 
     #if os(iOS)
     @StateObject private var ghosttyApp = Ghostty.App(autoStart: false)
+    @StateObject private var screenAwakeCoordinator = TerminalScreenAwakeCoordinator()
     #else
     @StateObject private var ghosttyApp = Ghostty.App()
     #endif
@@ -90,6 +91,10 @@ struct VVTermApp: App {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-reconnect-harness")
     }
 
+    private var usesTerminalScreenAwakeUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-screen-awake-harness")
+    }
+
     private var usesNoticePresentationUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-harness")
     }
@@ -101,6 +106,9 @@ struct VVTermApp: App {
         #if DEBUG
         if usesNoticePresentationUITestHarness {
             NoticePresentationUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTerminalScreenAwakeUITestHarness {
+            TerminalScreenAwakeUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesTerminalReconnectUITestHarness {
             TerminalReconnectUITestHarness()
@@ -152,6 +160,7 @@ struct VVTermApp: App {
                     Group {
                         #if os(iOS)
                         iOSRootContent
+                            .environmentObject(screenAwakeCoordinator)
                         #else
                         ContentView(
                             fileTabs: remoteFileTabManager,

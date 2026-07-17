@@ -136,6 +136,7 @@
 "Dark Mode Theme" = "Motiv tmavého režimu";
 "Light Mode Theme" = "Motiv světlého režimu";
 "Terminal Behavior" = "Chování terminálu";
+"Keep screen awake" = "Nechat obrazovku zapnutou";
 "Enable terminal notifications" = "Povolit oznámení terminálu";
 "Show progress overlays" = "Zobrazit překryvy průběhu";
 "Show voice input button" = "Zobrazit tlačítko hlasového vstupu";

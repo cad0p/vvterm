@@ -388,6 +388,9 @@ struct TerminalSettingsView: View {
 
     private var terminalBehaviorSection: some View {
         Section("Terminal Behavior") {
+            #if os(iOS)
+            TerminalScreenAwakeSettingRow()
+            #endif
             Toggle("Enable terminal notifications", isOn: $terminalNotificationsEnabled)
             Toggle("Show progress overlays", isOn: $terminalProgressEnabled)
         }

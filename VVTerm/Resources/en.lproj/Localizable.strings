@@ -136,6 +136,7 @@
 "Dark Mode Theme" = "Dark Mode Theme";
 "Light Mode Theme" = "Light Mode Theme";
 "Terminal Behavior" = "Terminal Behavior";
+"Keep screen awake" = "Keep screen awake";
 "Enable terminal notifications" = "Enable terminal notifications";
 "Show progress overlays" = "Show progress overlays";
 "Show voice input button" = "Show voice input button";

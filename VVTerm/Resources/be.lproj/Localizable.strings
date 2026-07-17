@@ -136,6 +136,7 @@
 "Dark Mode Theme" = "Тэма цёмнага рэжыму";
 "Light Mode Theme" = "Тэма светлага рэжыму";
 "Terminal Behavior" = "Паводзіны тэрмінала";
+"Keep screen awake" = "Не выключаць экран";
 "Enable terminal notifications" = "Уключыць апавяшчэнні тэрмінала";
 "Show progress overlays" = "Паказваць накладкі прагрэсу";
 "Show voice input button" = "Паказваць кнопку галасавога ўводу";

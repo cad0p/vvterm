@@ -130,6 +130,7 @@ enum TerminalDefaults {
     static let cursorStyleKey = "terminalCursorStyle"
     static let cursorBlinkKey = "terminalCursorBlink"
     static let sshAutoReconnectKey = "sshAutoReconnect"
+    static let keepScreenAwakeKey = "terminalKeepScreenAwake"
     static let optionAsAltModeKey = "terminalOptionAsAltMode"
     static let preserveTerminalSizeForKeyboardKey = "terminalPreserveSizeForKeyboard"
     static let legacyDefaultFontName = "JetBrainsMono Nerd Font"
@@ -138,6 +139,7 @@ enum TerminalDefaults {
     static let fontSizeStep = 1.0
     static let defaultCursorStyle: TerminalCursorStyle = .block
     static let defaultCursorBlink = true
+    static let defaultKeepScreenAwake = true
     #if os(macOS)
     static let defaultPrimaryFontName = "Menlo"
     static let macOSFallbackFontFamilies = [
@@ -171,6 +173,10 @@ enum TerminalDefaults {
 
     static func sshAutoReconnectEnabled(defaults: UserDefaults = .standard) -> Bool {
         (defaults.object(forKey: sshAutoReconnectKey) as? Bool) ?? true
+    }
+
+    static func keepScreenAwakeEnabled(defaults: UserDefaults = .standard) -> Bool {
+        (defaults.object(forKey: keepScreenAwakeKey) as? Bool) ?? defaultKeepScreenAwake
     }
 
     static func optionAsAltMode(defaults: UserDefaults = .standard) -> TerminalOptionAsAltMode {

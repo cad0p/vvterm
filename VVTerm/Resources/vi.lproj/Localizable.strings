@@ -145,6 +145,7 @@
 "Dark Mode Theme" = "Chủ đề chế độ tối";
 "Light Mode Theme" = "Chủ đề chế độ sáng";
 "Terminal Behavior" = "Hành vi terminal";
+"Keep screen awake" = "Luôn bật màn hình";
 "Enable terminal notifications" = "Bật thông báo terminal";
 "Show progress overlays" = "Hiển thị lớp phủ tiến trình";
 "Show voice input button" = "Hiển thị nút nhập giọng nói";

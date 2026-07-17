@@ -136,6 +136,7 @@
 "Dark Mode Theme" = "Design für Dunkelmodus";
 "Light Mode Theme" = "Design für Hellmodus";
 "Terminal Behavior" = "Terminalverhalten";
+"Keep screen awake" = "Bildschirm eingeschaltet lassen";
 "Enable terminal notifications" = "Terminal‑Benachrichtigungen aktivieren";
 "Show progress overlays" = "Fortschritts‑Overlays anzeigen";
 "Show voice input button" = "Sprach‑Eingabetaste anzeigen";

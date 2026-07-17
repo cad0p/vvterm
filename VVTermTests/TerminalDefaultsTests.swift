@@ -55,6 +55,24 @@ struct TerminalDefaultsTests {
     }
 
     @Test
+    func keepScreenAwakeDefaultsToEnabledAndPreservesExplicitOverride() {
+        let suiteName = "TerminalDefaultsTests.keepScreenAwake.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(defaults.object(forKey: TerminalDefaults.keepScreenAwakeKey) == nil)
+        #expect(
+            TerminalDefaults.keepScreenAwakeEnabled(defaults: defaults)
+                == TerminalDefaults.defaultKeepScreenAwake
+        )
+
+        defaults.set(false, forKey: TerminalDefaults.keepScreenAwakeKey)
+
+        let reloadedDefaults = UserDefaults(suiteName: suiteName)!
+        #expect(!TerminalDefaults.keepScreenAwakeEnabled(defaults: reloadedDefaults))
+    }
+
+    @Test
     func applyIfNeededNormalizesBlankFontNameWithoutOverwritingExistingFontSize() {
         let defaults = makeDefaults()
 

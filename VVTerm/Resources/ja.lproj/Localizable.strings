@@ -136,6 +136,7 @@
 "Dark Mode Theme" = "ダークモードのテーマ";
 "Light Mode Theme" = "ライトモードのテーマ";
 "Terminal Behavior" = "ターミナルの動作";
+"Keep screen awake" = "画面をスリープさせない";
 "Enable terminal notifications" = "ターミナル通知を有効化";
 "Show progress overlays" = "進行状況オーバーレイを表示";
 "Show voice input button" = "音声入力ボタンを表示";

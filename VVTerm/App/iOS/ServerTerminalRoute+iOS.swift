@@ -21,14 +21,17 @@ struct ServerTerminalRoute: View {
     @ObservedObject private var keyboardCoordinator: TerminalKeyboardCoordinator
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
     @EnvironmentObject private var appLockManager: AppLockManager
+    @EnvironmentObject private var screenAwakeCoordinator: TerminalScreenAwakeCoordinator
 
     @State private var isRouteVisible = false
+    @State private var screenAwakeRequestID = UUID()
     @State private var showingSettings = false
     @State private var serverToEdit: Server?
     @State private var showingTabLimitAlert = false
     @State private var showingFileTabLimitAlert = false
     @SceneStorage("vvterm.zenMode.ios") private var isZenModeEnabled = false
     @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
+    @AppStorage(TerminalDefaults.keepScreenAwakeKey) private var keepScreenAwakeEnabled = TerminalDefaults.defaultKeepScreenAwake
     @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -155,41 +158,45 @@ struct ServerTerminalRoute: View {
             .onAppear {
                 isRouteVisible = true
                 dismissIfContextEnded()
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onDisappear {
                 isRouteVisible = false
                 keyboardCoordinator.setViewActive(false)
                 keyboardCoordinator.setActivePane(nil)
+                screenAwakeCoordinator.update(isRequested: false, for: screenAwakeRequestID)
             }
             .onChange(of: selectedView) { newValue in
                 if newValue != ConnectionViewTab.terminal.id {
                     clearPendingVoiceReturnForFocusedPane()
                 }
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChange(of: selectedTab?.id) { _ in
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChange(of: focusedPaneId) { _ in
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChange(of: tabManager.terminalRegistryVersion) { _ in
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChangeCompat(of: tabManager.tabsByServer) { _ in
                 dismissIfContextEnded()
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChangeCompat(of: fileTabs.tabsByServer) { _ in
                 dismissIfContextEnded()
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChange(of: scenePhase) { _ in
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .onChange(of: isContentObscured) { _ in
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
+            }
+            .onChange(of: keepScreenAwakeEnabled) { _ in
+                updateTerminalRouteActivation()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { notification in
                 handleSceneDidActivate(notification)
@@ -204,7 +211,7 @@ struct ServerTerminalRoute: View {
                 handleTerminalWindowKeyChange(notification)
             }
             .onChange(of: isFocusedTerminalFindNavigatorVisible) { _ in
-                updateKeyboardCoordinatorInputs()
+                updateTerminalRouteActivation()
             }
             .animation(.spring(response: 0.28, dampingFraction: 0.84), value: shouldShowFloatingTerminalControls)
             .animation(.spring(response: 0.28, dampingFraction: 0.84), value: shouldShowFloatingReturnButton)
@@ -328,7 +335,7 @@ struct ServerTerminalRoute: View {
     /// Prefer the terminal's own UIKit scene because SwiftUI's scenePhase can
     /// lag under iPhone Mirroring and another foreground scene must not make
     /// this route appear active.
-    private var keyboardSceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation {
+    private var terminalSceneActivation: TerminalKeyboardRouteActivationPolicy.SceneActivation {
         if let activationState = focusedTerminal?.window?.windowScene?.activationState {
             switch activationState {
             case .foregroundActive:
@@ -363,6 +370,15 @@ struct ServerTerminalRoute: View {
         )
     }
 
+    private var screenAwakeSceneIsInBackground: Bool {
+        switch terminalSceneActivation {
+        case .foregroundActive, .foregroundInactive:
+            false
+        case .background:
+            true
+        }
+    }
+
     private func handleSceneWillDeactivate(_ notification: Notification) {
         if let notifyingScene = notification.object as? UIScene,
            let terminalScene = focusedTerminal?.window?.windowScene,
@@ -377,7 +393,7 @@ struct ServerTerminalRoute: View {
         ) {
             keyboardCoordinator.deactivateInputImmediately()
         } else {
-            updateKeyboardCoordinatorInputs()
+            updateTerminalRouteActivation()
         }
     }
 
@@ -388,7 +404,7 @@ struct ServerTerminalRoute: View {
             return
         }
 
-        updateKeyboardCoordinatorInputs()
+        updateTerminalRouteActivation()
         guard let focusedPaneId else { return }
         keyboardCoordinator.activeTerminalSceneDidActivate(for: focusedPaneId)
     }
@@ -398,21 +414,31 @@ struct ServerTerminalRoute: View {
               notifyingWindow === focusedTerminal?.window else {
             return
         }
-        updateKeyboardCoordinatorInputs()
+        updateTerminalRouteActivation()
         if notifyingWindow.isKeyWindow, let focusedPaneId {
             keyboardCoordinator.activeTerminalWindowDidBecomeKey(for: focusedPaneId)
         }
     }
 
-    private func updateKeyboardCoordinatorInputs() {
+    private func updateTerminalRouteActivation() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: isRouteVisible,
             terminalSelected: selectedView == ConnectionViewTab.terminal.id,
-            sceneActivation: keyboardSceneActivation,
+            sceneActivation: terminalSceneActivation,
             windowOwnership: focusedTerminal?.window.map {
                 $0.isKeyWindow ? .key : .notKey
             } ?? .unknown,
             contentObscured: isContentObscured
+        )
+
+        screenAwakeCoordinator.update(
+            isRequested: TerminalScreenAwakeCoordinator.shouldRequest(
+                preferenceEnabled: keepScreenAwakeEnabled,
+                routeVisible: isRouteVisible,
+                terminalSelected: selectedView == ConnectionViewTab.terminal.id,
+                sceneIsInBackground: screenAwakeSceneIsInBackground
+            ),
+            for: screenAwakeRequestID
         )
 
         guard effect != .preserve else { return }

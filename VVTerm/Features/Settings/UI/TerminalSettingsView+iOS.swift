@@ -2,6 +2,15 @@
 import SwiftUI
 import UIKit
 
+struct TerminalScreenAwakeSettingRow: View {
+    @AppStorage(TerminalDefaults.keepScreenAwakeKey) private var isEnabled = TerminalDefaults.defaultKeepScreenAwake
+
+    var body: some View {
+        Toggle("Keep screen awake", isOn: $isEnabled)
+            .accessibilityIdentifier("vvterm.settings.terminal.keepScreenAwake")
+    }
+}
+
 extension TerminalSettingsView {
     func loadSystemFonts() -> [String] {
         var fonts = ["Menlo", "SF Mono", "Courier New"]

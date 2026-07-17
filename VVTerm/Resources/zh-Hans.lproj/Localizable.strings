@@ -136,6 +136,7 @@
 "Dark Mode Theme" = "深色模式主题";
 "Light Mode Theme" = "浅色模式主题";
 "Terminal Behavior" = "终端行为";
+"Keep screen awake" = "保持屏幕常亮";
 "Enable terminal notifications" = "启用终端通知";
 "Show progress overlays" = "显示进度覆盖层";
 "Show voice input button" = "显示语音输入按钮";
