@@ -22,7 +22,7 @@ VVTerm is a cross-platform SSH terminal app for Apple platforms. The current cod
 - Runtime targets: `macOS 13.3+` and `iOS 16.1+`
 - Hardware targets: Apple Silicon / arm64 only
 - App-owned code is organized under `VVTerm/App`, `VVTerm/Core`, and `VVTerm/Features`
-- The repo also contains tests, native vendor builds, feature specs under `docs/specs`, and the marketing site under `web/`
+- The repo also contains tests, native vendor builds, and the marketing site under `web/`
 
 ## Implemented Feature Areas
 
@@ -125,7 +125,6 @@ VVTermShared/                   # Shared Activity attributes and small shared ty
 VVTermTests/                    # Unit and integration tests
 VVTermUITests/                  # UI tests
 Vendor/                         # Vendored native dependencies
-docs/specs/                     # Feature specs and implementation notes
 scripts/                        # Vendor build scripts
 web/                            # Astro site for vvterm.com
 ```
@@ -197,7 +196,6 @@ Swift package dependencies currently resolved by the Xcode project:
 - [SECURITY.md](SECURITY.md) for vulnerability reporting
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party notices
 - [CLA.md](CLA.md) for the contributor license agreement
-- `docs/specs/` for feature specs such as biometric locks, local discovery, terminal themes, terminal accessories, remote rich clipboard, and the SFTP browser
 
 ## License
 
