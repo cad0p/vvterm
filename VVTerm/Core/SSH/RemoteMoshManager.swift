@@ -58,17 +58,11 @@ actor RemoteMoshManager {
         portRange: ClosedRange<Int> = 60001...61000,
         execute: @escaping CommandExecutor
     ) async throws -> MoshServerConnectInfo {
-        let resolvedStartup = moshChildStartupScript(
+        let command = bootstrapCommand(
+            terminalType: terminalType,
             startCommand: startCommand,
-            terminalType: terminalType
+            portRange: portRange
         )
-        let quotedStartup = RemoteTerminalBootstrap.shellQuoted(resolvedStartup)
-        let body = """
-        \(RemoteTerminalBootstrap.shellPathExport());
-        \(utf8LocaleExportScript());
-        mosh-server new -s -c 256 -p \(portRange.lowerBound):\(portRange.upperBound) -- /bin/sh -lc \(quotedStartup) 2>&1
-        """
-        let command = "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
         logger.info(
             "Starting Mosh bootstrap [custom startup: \(startCommand != nil)] [terminal: \(terminalType.rawValue, privacy: .public)]"
         )
@@ -82,6 +76,30 @@ actor RemoteMoshManager {
             }
             throw error
         }
+    }
+
+    nonisolated func bootstrapCommand(
+        terminalType: RemoteTerminalType,
+        startCommand: String?,
+        portRange: ClosedRange<Int> = 60001...61000
+    ) -> String {
+        let resolvedStartup = moshChildStartupScript(
+            startCommand: startCommand,
+            terminalType: terminalType
+        )
+        let quotedStartup = RemoteTerminalBootstrap.shellQuoted(resolvedStartup)
+        let body = """
+        \(RemoteTerminalBootstrap.shellPathExport());
+        \(utf8LocaleExportScript());
+        mosh-server new -s -c 256 -p \(portRange.lowerBound):\(portRange.upperBound) -- /bin/sh -lc \(quotedStartup) 2>&1
+        """
+        let loginShellCommand = "exec /bin/sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+        let encodedBody = Data(loginShellCommand.utf8).base64EncodedString()
+        // SSH servers parse an exec command with the account's login shell
+        // before launching any explicit /bin/sh. Keep that outer command free
+        // of shell-specific quoting so fish and POSIX shells decode the same
+        // login-shell bootstrap command.
+        return "printf %s \(encodedBody) | base64 -d | /bin/sh"
     }
 
     nonisolated static func terminateBootstrappedServer(

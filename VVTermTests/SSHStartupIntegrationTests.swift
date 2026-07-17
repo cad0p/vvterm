@@ -132,6 +132,90 @@ struct SSHStartupIntegrationTests {
         #expect(result.fallbackReason == .udpTimeout)
     }
 
+    @Test @MainActor
+    func managedTmuxCreateAndQuietReattachStayOnMosh() async throws {
+        guard let configuration = try Configuration.fromEnvironment() else { return }
+        let previousKnownHost = KnownHostsManager.shared.entry(
+            for: configuration.host,
+            port: configuration.port
+        )
+        defer {
+            restoreKnownHost(
+                previousKnownHost,
+                host: configuration.host,
+                port: configuration.port
+            )
+        }
+
+        let server = Server(
+            workspaceId: UUID(),
+            name: "DEV-223 integration",
+            host: configuration.host,
+            port: configuration.port,
+            username: configuration.username,
+            connectionMode: .mosh,
+            authMethod: .sshKey
+        )
+        let credentials = ServerCredentials(
+            serverId: server.id,
+            privateKey: configuration.privateKey
+        )
+        let client = SSHClient()
+        let sessionName = "vvterm_dev223_\(UUID().uuidString.lowercased())"
+
+        do {
+            _ = try await client.connect(to: server, credentials: credentials)
+            let createCommand = RemoteTmuxManager.shared.attachCommand(
+                sessionName: sessionName,
+                workingDirectory: "~",
+                lifecycleMarkerToken: UUID().uuidString
+            )
+            let created = try await client.startShell(
+                cols: 80,
+                rows: 24,
+                startupCommand: createCommand
+            )
+            try #require(created.transport == .mosh)
+            try await awaitFirstData(from: created.stream)
+            try await awaitTmuxSession(named: sessionName, using: client)
+
+            let target = "=\(sessionName):"
+            let quietCommand = RemoteTerminalBootstrap.shellQuoted("sleep 30")
+            let respawnMarker = "__VVTERM_DEV223_RESPAWNED__"
+            let respawnOutput = try await client.execute(
+                "\(RemoteTerminalBootstrap.shellPathExport()); tmux respawn-pane -k -t \(target) \(quietCommand) && printf %s \(respawnMarker)"
+            )
+            try #require(respawnOutput.contains(respawnMarker))
+
+            let detachMarker = "__VVTERM_DEV223_DETACHED__"
+            let detachOutput = try await client.execute(
+                "\(RemoteTerminalBootstrap.shellPathExport()); tmux detach-client -s =\(sessionName) && printf %s \(detachMarker)"
+            )
+            try #require(detachOutput.contains(detachMarker))
+            await client.closeShell(created.id)
+
+            let reattachCommand = RemoteTmuxManager.shared.attachExistingCommand(
+                sessionName: sessionName,
+                ownership: .managed,
+                lifecycleMarkerToken: UUID().uuidString
+            )
+            let reattached = try await client.startShell(
+                cols: 80,
+                rows: 24,
+                startupCommand: reattachCommand
+            )
+            try #require(reattached.transport == .mosh)
+
+            await cleanupTmuxSession(named: sessionName, using: client)
+            await client.closeShell(reattached.id)
+            await client.disconnect()
+        } catch {
+            await cleanupTmuxSession(named: sessionName, using: client)
+            await client.disconnect()
+            throw error
+        }
+    }
+
     @Test
     func cancellingAtEachStartupBoundaryStopsStartupAndAllowsFreshConnection() async throws {
         guard let configuration = try Configuration.fromEnvironment() else { return }
@@ -482,6 +566,28 @@ struct SSHStartupIntegrationTests {
             }
             group.cancelAll()
         }
+    }
+
+    private func awaitTmuxSession(
+        named sessionName: String,
+        using client: SSHClient
+    ) async throws {
+        let existsMarker = "__VVTERM_DEV223_TMUX_EXISTS__"
+        let probe = "\(RemoteTerminalBootstrap.shellPathExport()); tmux has-session -t =\(sessionName) 2>/dev/null && printf %s \(existsMarker)"
+        for _ in 0..<100 {
+            let output = try? await client.execute(probe, timeout: .seconds(1))
+            if output?.contains(existsMarker) == true {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw SSHError.timeout
+    }
+
+    private func cleanupTmuxSession(named sessionName: String, using client: SSHClient) async {
+        _ = try? await client.execute(
+            "\(RemoteTerminalBootstrap.shellPathExport()); tmux kill-session -t =\(sessionName) 2>/dev/null"
+        )
     }
 
     private func milliseconds(_ duration: Duration) -> Int {

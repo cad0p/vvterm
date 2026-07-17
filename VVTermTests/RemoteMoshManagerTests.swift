@@ -145,6 +145,38 @@ struct RemoteMoshManagerTests {
     }
 
     @Test
+    func managedTmuxBootstrapKeepsNestedQuotingOutOfLoginShell() throws {
+        let startCommand = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_dev223",
+            workingDirectory: "~",
+            lifecycleMarkerToken: "dev223-marker"
+        )
+        let command = RemoteMoshManager.shared.bootstrapCommand(
+            terminalType: .xtermGhostty,
+            startCommand: startCommand
+        )
+        let prefix = "printf %s "
+        let suffix = " | base64 -d | /bin/sh"
+
+        #expect(command.hasPrefix(prefix))
+        #expect(command.hasSuffix(suffix))
+        #expect(!command.contains("'"))
+        #expect(!command.contains("\""))
+        #expect(!command.contains("\\"))
+        #expect(!command.contains("\n"))
+
+        let encodedStart = command.index(command.startIndex, offsetBy: prefix.count)
+        let encodedEnd = command.index(command.endIndex, offsetBy: -suffix.count)
+        let encodedBody = String(command[encodedStart..<encodedEnd])
+        let decodedData = try #require(Data(base64Encoded: encodedBody))
+        let decodedBody = try #require(String(data: decodedData, encoding: .utf8))
+
+        #expect(decodedBody.hasPrefix("exec /bin/sh -lc "))
+        #expect(decodedBody.contains("mosh-server new"))
+        #expect(decodedBody.contains("vvterm_dev223"))
+    }
+
+    @Test
     func localeBootstrapErrorMessageIsSpecific() {
         let error = RemoteMoshManager.shared.mapInvalidConnectLine(
             output: "mosh-server needs a UTF-8 native locale to run."

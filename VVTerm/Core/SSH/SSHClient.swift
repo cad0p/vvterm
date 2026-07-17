@@ -904,7 +904,9 @@ actor SSHClient {
                 pendingOps = try await SSHClient.runWithTimeout(startupTimeout) {
                     try await candidateSession.start()
                     try await candidateSession.enqueue(.resize(cols: Int32(cols), rows: Int32(rows)))
-                    return try await SSHClient.waitForMoshHostData(from: candidateSession)
+                    return try await SSHClient.waitForMoshTransportReadiness {
+                        await candidateSession.drainHostOps()
+                    }
                 }
                 moshSession = candidateSession
                 if let udpToken { startupTrace?.end(udpToken, detail: endpointClass) }
@@ -961,7 +963,7 @@ actor SSHClient {
         let streamPair = AsyncStream<Data>.makeStream()
         let continuation = streamPair.continuation
         for op in prepared.pendingOps {
-            if case .hostBytes(let bytes) = op {
+            if let bytes = MoshStartupReadiness.visibleTerminalBytes(from: op) {
                 startupTrace?.recordOnce(.firstTerminalByte, detail: "mosh")
                 continuation.yield(bytes)
             }
@@ -975,14 +977,11 @@ actor SSHClient {
             var totalBytes = 0
             for await hostOp in prepared.hostOpStream {
                 guard !Task.isCancelled else { break }
-                switch hostOp {
-                case .hostBytes(let bytes):
+                if let bytes = MoshStartupReadiness.visibleTerminalBytes(from: hostOp) {
                     trace?.recordOnce(.firstTerminalByte, detail: "mosh")
                     totalBytes += bytes.count
                     moshLogger.debug("Mosh host bytes: \(bytes.count)B (total: \(totalBytes))")
                     continuation.yield(bytes)
-                case .echoAck, .resize:
-                    break
                 }
             }
             moshLogger.info("Mosh stream ended, total bytes delivered: \(totalBytes)")
@@ -1004,23 +1003,17 @@ actor SSHClient {
         )
     }
 
-    private nonisolated static func waitForMoshHostData(
-        from session: MoshClientSession
+    nonisolated static func waitForMoshTransportReadiness(
+        pollInterval: Duration = .milliseconds(20),
+        draining drainHostOps: @escaping @Sendable () async -> [MoshHostOp]
     ) async throws -> [MoshHostOp] {
-        var pendingOps: [MoshHostOp] = []
         while true {
             try Task.checkCancellation()
-            let drained = await session.drainHostOps()
-            var receivedData = false
-            for op in drained {
-                guard case .hostBytes(let bytes) = op else { continue }
-                pendingOps.append(op)
-                receivedData = receivedData || !bytes.isEmpty
+            let drained = await drainHostOps()
+            if MoshStartupReadiness.isTransportEstablished(by: drained) {
+                return drained
             }
-            if receivedData {
-                return pendingOps
-            }
-            try await Task.sleep(for: .milliseconds(20))
+            try await Task.sleep(for: pollInterval)
         }
     }
 
