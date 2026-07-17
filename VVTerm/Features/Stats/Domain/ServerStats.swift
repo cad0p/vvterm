@@ -60,12 +60,56 @@ struct CPUCoreSample: Identifiable {
     var id: String { identifier }
 }
 
-struct VolumeInfo: Identifiable {
+struct VolumeInfo: Identifiable, Equatable, Sendable {
+    let identity: VolumeIdentity
     let mountPoint: String
+    let source: String
+    let fileSystem: String
+    let stableIdentifier: String?
+    let kind: VolumeKind
     let used: UInt64
     let total: UInt64
 
-    var id: String { mountPoint }
+    var id: VolumeIdentity { identity }
+
+    init(
+        identity: VolumeIdentity? = nil,
+        platform: VolumeIdentity.Platform = .unknown,
+        mountPoint: String,
+        source: String = "",
+        fileSystem: String = "",
+        stableIdentifier: String? = nil,
+        kind: VolumeKind? = nil,
+        used: UInt64,
+        total: UInt64
+    ) {
+        self.mountPoint = mountPoint
+        self.source = source
+        self.fileSystem = fileSystem
+        self.stableIdentifier = stableIdentifier
+        self.kind = kind ?? VolumeKind.classify(
+            source: source,
+            mountPoint: mountPoint,
+            fileSystem: fileSystem
+        )
+        self.used = used
+        self.total = total
+        self.identity = identity ?? VolumeIdentity(
+            platform: platform,
+            stableIdentifier: stableIdentifier,
+            source: source,
+            mountPoint: mountPoint,
+            fileSystem: fileSystem
+        )
+    }
+
+    var normalizationKey: String {
+        switch identity {
+        case .stable(let platform, _, let mountPoint),
+             .fallback(let platform, _, let mountPoint, _):
+            return "\(platform.rawValue)|\(VolumeIdentity.normalizedMountPoint(mountPoint, platform: platform))"
+        }
+    }
 
     var percent: Double {
         guard total > 0 else { return 0 }

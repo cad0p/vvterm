@@ -107,7 +107,7 @@ struct FreeBSDStatsCollector: PlatformStatsCollector {
         stats.cpuSteal = 0
 
         // Volumes
-        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -m 2>/dev/null | grep -E '^/dev' | head -10")
+        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -mT 2>/dev/null | grep -E '^/dev'")
         stats.volumes = parseDf(dfOutput)
 
         stats.timestamp = Date()
@@ -226,23 +226,36 @@ struct FreeBSDStatsCollector: PlatformStatsCollector {
         return (user, system, idle)
     }
 
-    private func parseDf(_ output: String) -> [VolumeInfo] {
+    func parseDf(_ output: String) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
 
         for line in output.components(separatedBy: .newlines) {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-            guard parts.count >= 6 else { continue }
+            let includesFileSystem = parts.count >= 7 && UInt64(parts[1]) == nil
+            let totalIndex = includesFileSystem ? 2 : 1
+            let usedIndex = includesFileSystem ? 3 : 2
+            let mountIndex = includesFileSystem ? 6 : 5
+            guard parts.indices.contains(totalIndex),
+                  parts.indices.contains(usedIndex),
+                  parts.indices.contains(mountIndex) else { continue }
 
-            let totalMB = UInt64(parts[1]) ?? 0
-            let usedMB = UInt64(parts[2]) ?? 0
-            let mountPoint = parts[5]
+            let totalMB = UInt64(parts[totalIndex]) ?? 0
+            let usedMB = UInt64(parts[usedIndex]) ?? 0
+            let mountPoint = parts[mountIndex...].joined(separator: " ")
 
             if totalMB < 100 { continue }
 
+            let totalResult = totalMB.multipliedReportingOverflow(by: 1_048_576)
+            let usedResult = usedMB.multipliedReportingOverflow(by: 1_048_576)
+            guard !totalResult.overflow, !usedResult.overflow else { continue }
+
             volumes.append(VolumeInfo(
+                platform: .freebsd,
                 mountPoint: mountPoint,
-                used: usedMB * 1024 * 1024,
-                total: totalMB * 1024 * 1024
+                source: parts[0],
+                fileSystem: includesFileSystem ? parts[1] : "",
+                used: usedResult.partialValue,
+                total: totalResult.partialValue
             ))
         }
 

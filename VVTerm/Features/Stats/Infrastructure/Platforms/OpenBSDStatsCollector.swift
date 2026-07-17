@@ -108,8 +108,9 @@ struct OpenBSDStatsCollector: PlatformStatsCollector {
         }
 
         // Volumes
-        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -k 2>/dev/null | grep -E '^/dev' | head -10")
-        stats.volumes = parseDf(dfOutput)
+        let volumeMetadata = await volumeMetadata(client: client, context: context)
+        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -k 2>/dev/null | grep -E '^/dev'")
+        stats.volumes = parseDf(dfOutput, metadataBySource: volumeMetadata)
 
         stats.timestamp = Date()
         return stats
@@ -223,7 +224,10 @@ struct OpenBSDStatsCollector: PlatformStatsCollector {
         return processes
     }
 
-    private func parseDf(_ output: String) -> [VolumeInfo] {
+    func parseDf(
+        _ output: String,
+        metadataBySource: [String: VolumeCollectionMetadata] = [:]
+    ) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
 
         for line in output.components(separatedBy: .newlines) {
@@ -233,17 +237,35 @@ struct OpenBSDStatsCollector: PlatformStatsCollector {
 
             let totalKB = UInt64(parts[1]) ?? 0
             let usedKB = UInt64(parts[2]) ?? 0
-            let mountPoint = parts[5]
+            let mountPoint = parts[5...].joined(separator: " ")
 
             if totalKB < 100 * 1024 { continue } // Skip volumes < 100MB
 
+            let totalResult = totalKB.multipliedReportingOverflow(by: 1_024)
+            let usedResult = usedKB.multipliedReportingOverflow(by: 1_024)
+            guard !totalResult.overflow, !usedResult.overflow else { continue }
+
             volumes.append(VolumeInfo(
+                platform: .openbsd,
                 mountPoint: mountPoint,
-                used: usedKB * 1024,
-                total: totalKB * 1024
+                source: parts[0],
+                fileSystem: metadataBySource[parts[0]]?.fileSystem ?? "",
+                used: usedResult.partialValue,
+                total: totalResult.partialValue
             ))
         }
 
         return volumes
+    }
+
+    private func volumeMetadata(
+        client: SSHClient,
+        context: StatsCollectionContext
+    ) async -> [String: VolumeCollectionMetadata] {
+        if context.beginVolumeMetadataRefresh(for: .openbsd),
+           let output = try? await client.execute("LC_ALL=C LANG=C mount 2>/dev/null", timeout: .seconds(4)) {
+            context.updateVolumeMetadata(parseBSDMountVolumeMetadata(output), for: .openbsd)
+        }
+        return context.volumeMetadata(for: .openbsd)
     }
 }

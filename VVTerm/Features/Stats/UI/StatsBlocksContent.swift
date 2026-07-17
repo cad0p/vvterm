@@ -15,6 +15,8 @@ struct StatsAppearancePreviewContent: View {
             dockerCPUHistory: StatsPreviewFixture.dockerCPUHistory,
             dockerMemoryHistory: StatsPreviewFixture.dockerMemoryHistory,
             preferences: preferences,
+            storageVolumes: VolumeVisibilityPolicy.normalized(StatsPreviewFixture.stats.volumes),
+            hiddenStorageVolumeIDs: [],
             backgroundColor: .clear,
             surface: .grouped,
             constrainsWidth: false,
@@ -26,7 +28,11 @@ struct StatsAppearancePreviewContent: View {
             terminateProcess: nil,
             loadProcesses: nil,
             loadDockerStats: nil,
-            performDockerAction: nil
+            performDockerAction: nil,
+            loadStorageHealth: nil,
+            setStorageVolumeVisibility: { _, _ in },
+            setStorageVolumesVisibility: { _, _ in },
+            showOnlyStorageVolumes: { _ in }
         )
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
@@ -87,6 +93,8 @@ struct StatsBlocksContent: View {
     let dockerCPUHistory: [StatsPoint]
     let dockerMemoryHistory: [StatsPoint]
     let preferences: StatsPreferences
+    let storageVolumes: [VolumeInfo]
+    let hiddenStorageVolumeIDs: Set<VolumeIdentity>
     let backgroundColor: Color
     let surface: StatsVisualStyle.Surface
     let constrainsWidth: Bool
@@ -99,6 +107,10 @@ struct StatsBlocksContent: View {
     let loadProcesses: (() async throws -> [ProcessInfo])?
     let loadDockerStats: (() async throws -> DockerStats)?
     let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+    let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
+    let setStorageVolumeVisibility: (VolumeInfo, Bool) -> Void
+    let setStorageVolumesVisibility: ([VolumeInfo], Bool) -> Void
+    let showOnlyStorageVolumes: ([VolumeInfo]) -> Void
 
     static func pageBackground(
         for preferencesStyle: StatsPreferences.Style,
@@ -139,7 +151,14 @@ struct StatsBlocksContent: View {
                 terminateProcess: terminateProcess,
                 loadProcesses: loadProcesses,
                 loadDockerStats: loadDockerStats,
-                performDockerAction: performDockerAction
+                performDockerAction: performDockerAction,
+                loadStorageHealth: loadStorageHealth,
+                storageVolumes: storageVolumes,
+                visibleStorageVolumes: visibleStorageVolumes,
+                hiddenStorageVolumeIDs: hiddenStorageVolumeIDs,
+                setStorageVolumeVisibility: setStorageVolumeVisibility,
+                setStorageVolumesVisibility: setStorageVolumesVisibility,
+                showOnlyStorageVolumes: showOnlyStorageVolumes
             )
             .padding(usesPagePadding ? 16 : 0)
             .drawingGroup()
@@ -312,8 +331,14 @@ struct StatsBlocksContent: View {
             )
         case .storage:
             StorageCard(
-                volumes: stats.volumes,
-                style: style
+                volumes: storageVolumes,
+                visibleVolumes: visibleStorageVolumes,
+                hiddenVolumeIDs: hiddenStorageVolumeIDs,
+                style: style,
+                loadStorageHealth: loadStorageHealth,
+                setVolumeVisibility: setStorageVolumeVisibility,
+                setVolumesVisibility: setStorageVolumesVisibility,
+                showOnlyVolumes: showOnlyStorageVolumes
             )
         case .processes:
             ProcessesCard(
@@ -341,5 +366,12 @@ struct StatsBlocksContent: View {
 
     private var shouldShowGPU: Bool {
         !stats.hardware.gpus.isEmpty || !stats.gpuSamples.isEmpty
+    }
+
+    private var visibleStorageVolumes: [VolumeInfo] {
+        StorageVolumePresentationPolicy.visibleVolumes(
+            from: storageVolumes,
+            hiddenVolumeIDs: hiddenStorageVolumeIDs
+        )
     }
 }

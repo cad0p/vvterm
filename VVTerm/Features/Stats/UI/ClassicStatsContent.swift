@@ -13,6 +13,13 @@ struct ClassicStatsContent: View {
     let loadProcesses: (() async throws -> [ProcessInfo])?
     let loadDockerStats: (() async throws -> DockerStats)?
     let performDockerAction: ((DockerContainerAction, DockerContainer) async throws -> DockerStats)?
+    let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
+    let storageVolumes: [VolumeInfo]
+    let visibleStorageVolumes: [VolumeInfo]
+    let hiddenStorageVolumeIDs: Set<VolumeIdentity>
+    let setStorageVolumeVisibility: (VolumeInfo, Bool) -> Void
+    let setStorageVolumesVisibility: ([VolumeInfo], Bool) -> Void
+    let showOnlyStorageVolumes: ([VolumeInfo]) -> Void
 
     var body: some View {
         LazyVStack(spacing: 16) {
@@ -74,7 +81,16 @@ struct ClassicStatsContent: View {
                 surfaceStyle: surfaceStyle
             )
         case .storage:
-            ClassicVolumesCard(volumes: stats.volumes, surfaceStyle: surfaceStyle)
+            ClassicVolumesCard(
+                volumes: storageVolumes,
+                visibleVolumes: visibleStorageVolumes,
+                hiddenVolumeIDs: hiddenStorageVolumeIDs,
+                surfaceStyle: surfaceStyle,
+                loadStorageHealth: loadStorageHealth,
+                setVolumeVisibility: setStorageVolumeVisibility,
+                setVolumesVisibility: setStorageVolumesVisibility,
+                showOnlyVolumes: showOnlyStorageVolumes
+            )
         case .processes:
             ClassicProcessesCard(
                 processes: stats.topProcesses,
@@ -439,22 +455,75 @@ private struct ClassicNetworkStatsCard: View, Equatable {
 
 private struct ClassicVolumesCard: View {
     let volumes: [VolumeInfo]
+    let visibleVolumes: [VolumeInfo]
+    let hiddenVolumeIDs: Set<VolumeIdentity>
     let surfaceStyle: ClassicStatsCardSurfaceStyle
+    let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
+    let setVolumeVisibility: (VolumeInfo, Bool) -> Void
+    let setVolumesVisibility: ([VolumeInfo], Bool) -> Void
+    let showOnlyVolumes: ([VolumeInfo]) -> Void
+    @State private var showingDetails = false
 
     var body: some View {
-        if !volumes.isEmpty {
+        Button {
+            showingDetails = true
+        } label: {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Volumes")
-                    .font(.headline)
-                    .padding(.horizontal)
+                HStack(spacing: 8) {
+                    Text("Volumes")
+                        .font(.headline)
 
-                ForEach(volumes) { volume in
-                    ClassicVolumeRow(volume: volume)
+                    Spacer(minLength: 8)
+
+                    if !volumes.isEmpty {
+                        Text(volumeCountTitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal)
+
+                if visibleVolumes.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: volumes.isEmpty ? "internaldrive" : "eye.slash")
+                            .foregroundStyle(.secondary)
+                        Text(volumes.isEmpty ? String(localized: "No volumes reported") : String(localized: "All volumes hidden"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                } else {
+                    ForEach(visibleVolumes) { volume in
+                        ClassicVolumeRow(volume: volume)
+                    }
                 }
             }
             .padding(.vertical)
             .classicStatsCardSurface(surfaceStyle)
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("vvterm.stats.storage.card")
+        .statsDetailPresentation(isPresented: $showingDetails, size: StatsPresentationSize.large) {
+            StorageDetailsSheet(
+                volumes: volumes,
+                hiddenVolumeIDs: hiddenVolumeIDs,
+                loadStorageHealth: loadStorageHealth,
+                setVolumeVisibility: setVolumeVisibility,
+                setVolumesVisibility: setVolumesVisibility,
+                showOnlyVolumes: showOnlyVolumes
+            )
+        }
+    }
+
+    private var volumeCountTitle: String {
+        if visibleVolumes.count == 1 { return String(localized: "1 volume") }
+        return String(format: String(localized: "%lld volumes"), Int64(visibleVolumes.count))
     }
 }
 

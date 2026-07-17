@@ -166,6 +166,46 @@ final class ServerStatsCollector: ObservableObject {
         return dockerStats
     }
 
+    /// Loads storage health only when the user opens a volume's detail view.
+    /// The selected volume must still belong to the latest Stats snapshot so a
+    /// stale sheet cannot probe an unrelated raw locator after a mount changes.
+    func loadStorageHealth(for volume: VolumeInfo) async throws -> StorageHealthResult {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+        guard let currentVolume = VolumeVisibilityPolicy.normalized(stats.volumes)
+            .first(where: { $0.identity == volume.identity }) else {
+            return .unavailable(.unmapped)
+        }
+
+        let platform: RemotePlatform
+        let collector: PlatformStatsCollector
+        if remotePlatform == .unknown {
+            platform = await client.remotePlatform()
+            guard platform != .unknown else { return .unavailable(.unsupported) }
+            let detectedCollector = platform.createCollector()
+            remotePlatform = platform
+            platformCollector = detectedCollector
+            collector = detectedCollector
+        } else {
+            platform = remotePlatform
+            guard let platformCollector else { return .unavailable(.unsupported) }
+            collector = platformCollector
+        }
+
+        let resolution = try await StorageHealthTargetResolver.resolve(
+            client: client,
+            platform: platform,
+            volume: currentVolume
+        )
+        switch resolution {
+        case .target(let target):
+            return try await collector.collectStorageHealth(client: client, target: target)
+        case .unavailable(let reason):
+            return .unavailable(reason)
+        }
+    }
+
     func performDockerAction(_ action: DockerContainerAction, on container: DockerContainer) async throws -> DockerStats {
         guard let client = sshClient else {
             throw ProcessControlError.notConnected

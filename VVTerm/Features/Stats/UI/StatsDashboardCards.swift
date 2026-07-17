@@ -484,43 +484,70 @@ struct NetworkCard: View {
 
 struct StorageCard: View {
     let volumes: [VolumeInfo]
+    let visibleVolumes: [VolumeInfo]
+    let hiddenVolumeIDs: Set<VolumeIdentity>
     let style: StatsVisualStyle
+    let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
+    let setVolumeVisibility: (VolumeInfo, Bool) -> Void
+    let setVolumesVisibility: ([VolumeInfo], Bool) -> Void
+    let showOnlyVolumes: ([VolumeInfo]) -> Void
+    @State private var showingDetails = false
 
     var body: some View {
-        AppleCard(style: style) {
-            VStack(alignment: .leading, spacing: 18) {
-                CardHeader(
-                    icon: "internaldrive",
-                    title: String(localized: "Storage"),
-                    titleColor: .orange,
-                    trailing: volumeCountTitle,
-                    style: style
-                )
-
-                if volumes.isEmpty {
-                    EmptyCardState(
+        Button {
+            showingDetails = true
+        } label: {
+            AppleCard(style: style) {
+                VStack(alignment: .leading, spacing: 18) {
+                    CardHeader(
                         icon: "internaldrive",
-                        title: String(localized: "No Data"),
-                        message: String(localized: "No volumes reported"),
-                        color: .orange,
+                        title: String(localized: "Storage"),
+                        titleColor: .orange,
+                        trailing: volumeCountTitle,
+                        showsChevron: true,
                         style: style
                     )
-                } else {
-                    VStack(spacing: 14) {
-                        ForEach(volumes.prefix(style.volumeLimit)) { volume in
-                            VolumeCardRow(volume: volume, style: style)
+
+                    if visibleVolumes.isEmpty {
+                        EmptyCardState(
+                            icon: volumes.isEmpty ? "internaldrive" : "eye.slash",
+                            title: volumes.isEmpty ? String(localized: "No Data") : String(localized: "All Hidden"),
+                            message: volumes.isEmpty ? String(localized: "No volumes reported") : String(localized: "Open Storage to restore volumes"),
+                            color: .orange,
+                            style: style
+                        )
+                    } else {
+                        VStack(spacing: 14) {
+                            ForEach(StorageVolumePresentationPolicy.cardVolumes(
+                                from: visibleVolumes,
+                                limit: style.volumeLimit
+                            )) { volume in
+                                VolumeCardRow(volume: volume, style: style)
+                            }
                         }
                     }
                 }
+                .padding(style.cardPadding)
             }
-            .padding(style.cardPadding)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("vvterm.stats.storage.card")
+        .statsDetailPresentation(isPresented: $showingDetails, size: StatsPresentationSize.large) {
+            StorageDetailsSheet(
+                volumes: volumes,
+                hiddenVolumeIDs: hiddenVolumeIDs,
+                loadStorageHealth: loadStorageHealth,
+                setVolumeVisibility: setVolumeVisibility,
+                setVolumesVisibility: setVolumesVisibility,
+                showOnlyVolumes: showOnlyVolumes
+            )
         }
     }
 
     private var volumeCountTitle: String {
         if volumes.isEmpty { return "" }
-        if volumes.count == 1 { return String(localized: "1 volume") }
-        return String(format: String(localized: "%lld volumes"), Int64(volumes.count))
+        if visibleVolumes.count == 1 { return String(localized: "1 volume") }
+        return String(format: String(localized: "%lld volumes"), Int64(visibleVolumes.count))
     }
 }
 

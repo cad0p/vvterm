@@ -98,6 +98,10 @@ struct VVTermApp: App {
     private var usesNoticePresentationUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-harness")
     }
+
+    private var usesStatsStorageUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-stats-storage-harness")
+    }
     #endif
 
     #if os(iOS)
@@ -106,6 +110,9 @@ struct VVTermApp: App {
         #if DEBUG
         if usesNoticePresentationUITestHarness {
             NoticePresentationUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesStatsStorageUITestHarness {
+            StatsStorageUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesTerminalScreenAwakeUITestHarness {
             TerminalScreenAwakeUITestHarness()

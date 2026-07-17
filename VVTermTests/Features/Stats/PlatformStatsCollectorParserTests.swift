@@ -35,6 +35,28 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
         ))
     }
 
+    func testVolumeMetadataCacheClaimsRefreshWindowAndResets() {
+        let context = StatsCollectionContext()
+        let start = Date(timeIntervalSince1970: 100)
+        let metadata = VolumeCollectionMetadata(stableIdentifier: "disk-id", fileSystem: "ext4")
+
+        XCTAssertTrue(context.beginVolumeMetadataRefresh(for: .linux, now: start))
+        XCTAssertFalse(context.beginVolumeMetadataRefresh(
+            for: .linux,
+            now: start.addingTimeInterval(10)
+        ))
+        context.updateVolumeMetadata(["/dev/sda1": metadata], for: .linux)
+        XCTAssertEqual(context.volumeMetadata(for: .linux)["/dev/sda1"], metadata)
+
+        context.reset()
+
+        XCTAssertTrue(context.volumeMetadata(for: .linux).isEmpty)
+        XCTAssertTrue(context.beginVolumeMetadataRefresh(
+            for: .linux,
+            now: start.addingTimeInterval(10)
+        ))
+    }
+
     func testUnixProcessParserUsesResidentBytesAndIntervalCPU() {
         let output = """
           1124 root 0:12.50 87.4 262144 python server.py
@@ -183,6 +205,67 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
         XCTAssertEqual(parsed.samples[1].usagePercent, 50, accuracy: 0.001)
     }
 
+    func testDarwinVolumeParserPreservesDiskutilIdentityForSyntheticRoot() {
+        let diskutil = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>AllDisksAndPartitions</key>
+          <array>
+            <dict>
+              <key>DeviceIdentifier</key><string>disk3s5</string>
+              <key>VolumeUUID</key><string>01234567-89AB-CDEF-0123-456789ABCDEF</string>
+              <key>Content</key><string>Apple_APFS</string>
+            </dict>
+          </array>
+        </dict>
+        </plist>
+        """
+        let collector = DarwinStatsCollector()
+        let metadata = collector.parseDiskutilVolumeMetadata(diskutil)
+        let volumes = collector.parseDf(
+            "/dev/disk3s5 1000 400 600 40% 100 200 33% /System/Volumes/Data",
+            metadataBySource: metadata
+        )
+
+        XCTAssertEqual(volumes.count, 1)
+        XCTAssertEqual(volumes[0].mountPoint, "/")
+        XCTAssertEqual(volumes[0].source, "/dev/disk3s5")
+        XCTAssertEqual(volumes[0].fileSystem, "Apple_APFS")
+        XCTAssertEqual(
+            volumes[0].identity,
+            .stable(
+                platform: .darwin,
+                fileSystemID: "01234567-89ab-cdef-0123-456789abcdef",
+                mountPoint: "/"
+            )
+        )
+    }
+
+    func testDarwinDiskutilInfoAcceptsAPFSVolumeGroupIdentity() {
+        let diskutilInfo = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <plist version="1.0">
+        <dict>
+          <key>DeviceIdentifier</key><string>disk3s1s1</string>
+          <key>APFSVolumeGroupID</key><string>AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE</string>
+          <key>FilesystemType</key><string>apfs</string>
+        </dict>
+        </plist>
+        """
+
+        let metadata = DarwinStatsCollector().parseDiskutilVolumeMetadata(diskutilInfo)
+
+        XCTAssertEqual(
+            metadata["/dev/disk3s1s1"],
+            VolumeCollectionMetadata(
+                stableIdentifier: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                fileSystem: "apfs"
+            )
+        )
+    }
+
     func testLinuxDfParserKeepsFirstDataRowAndOverlayRoot() {
         let output = """
         Filesystem     1M-blocks  Used Available Use% Mounted on
@@ -195,6 +278,99 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
         XCTAssertEqual(volumes.count, 2)
         XCTAssertEqual(volumes[0].mountPoint, "/")
         XCTAssertEqual(volumes[0].used, 70_000 * 1_048_576)
+    }
+
+    func testLinuxDfParserRejectsCapacityBeyondUInt64WithoutTrapping() {
+        let output = """
+        Filesystem Type Size Used Avail Use% Mounted on
+        /dev/sda1 ext4 16384P 1P 16383P 1% /too-large
+        """
+
+        XCTAssertTrue(LinuxStatsCollector().parseDfVolumes(output).isEmpty)
+    }
+
+    func testLinuxVolumeParserRetainsTypeAndLSBLKStableIdentity() {
+        let lsblk = """
+        {
+          "blockdevices": [
+            {
+              "name": "/dev/sda",
+              "uuid": null,
+              "fstype": null,
+              "children": [
+                {"name": "/dev/sda1", "uuid": "DATA-1234", "fstype": "ext4"}
+              ]
+            }
+          ]
+        }
+        """
+        let df = """
+        Filesystem     Type     1M-blocks  Used Available Use% Mounted on
+        overlay        overlay      100000 70000     30000  70% /
+        /dev/sda1      ext4         200000 50000    150000  25% /data
+        """
+        let collector = LinuxStatsCollector()
+        let metadata = collector.parseLSBLKVolumeMetadata(lsblk)
+        let volumes = collector.parseDfVolumes(df, metadataBySource: metadata)
+
+        XCTAssertEqual(volumes.count, 2)
+        XCTAssertEqual(volumes[0].source, "overlay")
+        XCTAssertEqual(volumes[0].fileSystem, "overlay")
+        XCTAssertEqual(volumes[0].kind, .container)
+        XCTAssertEqual(volumes[1].source, "/dev/sda1")
+        XCTAssertEqual(volumes[1].fileSystem, "ext4")
+        XCTAssertEqual(
+            volumes[1].identity,
+            .stable(platform: .linux, fileSystemID: "data-1234", mountPoint: "/data")
+        )
+    }
+
+    func testBSDVolumeParsersRetainSourcePlatformAndDoNotCapRows() {
+        let freeBSDRows = (0..<12).map { index in
+            "/dev/ada0p\(index) ufs 200 50 150 25% /data/\(index)"
+        }.joined(separator: "\n")
+        let mountMetadata = parseBSDMountVolumeMetadata("""
+        /dev/sd0a on / type ffs (local)
+        /dev/ada0p0 on /data/0 (ufs, local, soft-updates)
+        /dev/dk0 on /srv (ffs, local)
+        """)
+        let freeBSD = FreeBSDStatsCollector().parseDf(freeBSDRows)
+        let openBSD = OpenBSDStatsCollector().parseDf(
+            "/dev/sd0a 204800 51200 153600 25% /",
+            metadataBySource: mountMetadata
+        )
+        let netBSD = NetBSDStatsCollector().parseDf(
+            "/dev/dk0 204800 51200 153600 25% /srv",
+            metadataBySource: mountMetadata
+        )
+
+        XCTAssertEqual(freeBSD.count, 12)
+        XCTAssertEqual(freeBSD[0].source, "/dev/ada0p0")
+        XCTAssertEqual(freeBSD[0].fileSystem, "ufs")
+        XCTAssertEqual(mountMetadata["/dev/ada0p0"]?.fileSystem, "ufs")
+        XCTAssertEqual(
+            freeBSD[0].identity,
+            .fallback(
+                platform: .freebsd,
+                source: "/dev/ada0p0",
+                mountPoint: "/data/0",
+                fileSystem: "ufs"
+            )
+        )
+        XCTAssertEqual(openBSD.first?.source, "/dev/sd0a")
+        XCTAssertEqual(openBSD.first?.fileSystem, "ffs")
+        XCTAssertEqual(netBSD.first?.source, "/dev/dk0")
+        XCTAssertEqual(netBSD.first?.fileSystem, "ffs")
+        if case .some(.fallback(let platform, _, _, _)) = openBSD.first?.identity {
+            XCTAssertEqual(platform, .openbsd)
+        } else {
+            XCTFail("Expected OpenBSD fallback volume identity")
+        }
+        if case .some(.fallback(let platform, _, _, _)) = netBSD.first?.identity {
+            XCTAssertEqual(platform, .netbsd)
+        } else {
+            XCTFail("Expected NetBSD fallback volume identity")
+        }
     }
 
     func testLinuxProcStatCoreParserCalculatesPerCorePercentages() {
@@ -418,6 +594,30 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
         XCTAssertEqual(volumes.count, 2)
         XCTAssertEqual(volumes[0].mountPoint, "C:\\")
         XCTAssertEqual(volumes[0].used, 9_663_676_416)
+    }
+
+    func testWindowsVolumeParserUsesNativeUniqueIDAndFileSystem() {
+        let collector = WindowsStatsCollector()
+        let metadata = collector.parseWindowsVolumeMetadata(
+            "C|NTFS|\\\\?\\Volume{01234567-89AB-CDEF-0123-456789ABCDEF}\\"
+        )
+        let volumes = collector.parseVolumes(
+            "C|9663676416|10737418240",
+            metadataByMountPoint: metadata
+        )
+
+        XCTAssertEqual(volumes.count, 1)
+        XCTAssertEqual(volumes[0].mountPoint, "C:\\")
+        XCTAssertEqual(volumes[0].source, "C:\\")
+        XCTAssertEqual(volumes[0].fileSystem, "NTFS")
+        XCTAssertEqual(
+            volumes[0].identity,
+            .stable(
+                platform: .windows,
+                fileSystemID: "\\\\?\\volume{01234567-89ab-cdef-0123-456789abcdef}\\",
+                mountPoint: "C:\\"
+            )
+        )
     }
 
     func testWindowsNetstatParserReadsBytesLine() {

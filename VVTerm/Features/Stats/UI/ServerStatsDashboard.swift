@@ -7,12 +7,15 @@ struct ServerStatsDashboard: View {
     var sharedClientProvider: () -> SSHClient?
     @ObservedObject var statsCollector: ServerStatsCollector
     let preferences: StatsPreferences
+    @ObservedObject var volumeVisibilityStore: ServerVolumeVisibilityStore
     let isDockerUnlocked: Bool
     let showAppearanceSettings: () -> Void
     let showDockerUpgrade: () -> Void
 
     var body: some View {
         let style = StatsVisualStyle(preferencesStyle: preferences.style)
+        let storageVolumes = VolumeVisibilityPolicy.normalized(statsCollector.stats.volumes)
+        let hiddenStorageVolumeIDs = volumeVisibilityStore.hiddenVolumeIDs(for: server.id)
 
         ZStack {
             ScrollView {
@@ -27,6 +30,8 @@ struct ServerStatsDashboard: View {
                     dockerCPUHistory: statsCollector.dockerCPUHistory,
                     dockerMemoryHistory: statsCollector.dockerMemoryHistory,
                     preferences: preferences,
+                    storageVolumes: storageVolumes,
+                    hiddenStorageVolumeIDs: hiddenStorageVolumeIDs,
                     backgroundColor: backgroundColor,
                     surface: .dashboard,
                     constrainsWidth: true,
@@ -46,6 +51,22 @@ struct ServerStatsDashboard: View {
                     },
                     performDockerAction: { action, container in
                         try await statsCollector.performDockerAction(action, on: container)
+                    },
+                    loadStorageHealth: { volume in
+                        try await statsCollector.loadStorageHealth(for: volume)
+                    },
+                    setStorageVolumeVisibility: { volume, isVisible in
+                        volumeVisibilityStore.setVolume(volume, isVisible: isVisible, for: server.id)
+                    },
+                    setStorageVolumesVisibility: { volumes, areVisible in
+                        volumeVisibilityStore.setVolumes(volumes, areVisible: areVisible, for: server.id)
+                    },
+                    showOnlyStorageVolumes: { selectedVolumes in
+                        volumeVisibilityStore.showOnly(
+                            selectedVolumes,
+                            among: storageVolumes,
+                            for: server.id
+                        )
                     }
                 )
             }

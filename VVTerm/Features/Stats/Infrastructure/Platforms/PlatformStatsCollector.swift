@@ -23,6 +23,48 @@ protocol PlatformStatsCollector: Sendable {
     /// Collect a fuller process list for detail sheets.
     /// Periodic collectors may keep their process list capped for SSH/UI performance.
     func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo]
+
+    /// Loads health for one already-resolved physical device on demand.
+    /// Missing tools and unsupported devices are returned as capability states;
+    /// only transport failures and cancellation are thrown.
+    func collectStorageHealth(
+        client: SSHClient,
+        target: StorageHealthProbeTarget
+    ) async throws -> StorageHealthResult
+}
+
+struct VolumeCollectionMetadata: Equatable, Sendable {
+    let stableIdentifier: String?
+    let fileSystem: String
+}
+
+func parseBSDMountVolumeMetadata(_ output: String) -> [String: VolumeCollectionMetadata] {
+    var metadata: [String: VolumeCollectionMetadata] = [:]
+    for line in output.components(separatedBy: .newlines) {
+        guard let onRange = line.range(of: " on ") else { continue }
+
+        let source = line[..<onRange.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let mountedDescription = line[onRange.upperBound...]
+        let fileSystem: String
+        if let typeRange = mountedDescription.range(of: " type ") {
+            fileSystem = mountedDescription[typeRange.upperBound...]
+                .prefix { !$0.isWhitespace && $0 != "(" }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let optionsStart = mountedDescription.range(of: " (") {
+            fileSystem = mountedDescription[optionsStart.upperBound...]
+                .prefix { $0 != "," && $0 != ")" && !$0.isWhitespace }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            continue
+        }
+        guard !source.isEmpty, !fileSystem.isEmpty else { continue }
+        metadata[source] = VolumeCollectionMetadata(
+            stableIdentifier: nil,
+            fileSystem: fileSystem
+        )
+    }
+    return metadata
 }
 
 extension PlatformStatsCollector {
@@ -46,6 +88,13 @@ extension PlatformStatsCollector {
     func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
         []
     }
+
+    func collectStorageHealth(
+        client: SSHClient,
+        target: StorageHealthProbeTarget
+    ) async throws -> StorageHealthResult {
+        try await StorageHealthProbe.collect(client: client, target: target)
+    }
 }
 
 // MARK: - Stats Collection Context
@@ -65,6 +114,8 @@ final class StatsCollectionContext: @unchecked Sendable {
     var lastGPUSamples: [GPUSample] = []
     var lastDockerCollectionTimestamp: Date?
     var lastDockerStats = DockerStats()
+    private var lastVolumeMetadataRefreshByPlatform: [VolumeIdentity.Platform: Date] = [:]
+    private var volumeMetadataByPlatform: [VolumeIdentity.Platform: [String: VolumeCollectionMetadata]] = [:]
 
     private let lock = NSLock()
 
@@ -89,6 +140,8 @@ final class StatsCollectionContext: @unchecked Sendable {
             lastGPUSamples = []
             lastDockerCollectionTimestamp = nil
             lastDockerStats = DockerStats()
+            lastVolumeMetadataRefreshByPlatform = [:]
+            volumeMetadataByPlatform = [:]
         }
     }
 
@@ -228,6 +281,39 @@ final class StatsCollectionContext: @unchecked Sendable {
     func getDockerStats() -> DockerStats {
         withLock {
             lastDockerStats
+        }
+    }
+
+    /// Claims a metadata refresh window before the caller suspends for SSH work.
+    /// This keeps the shared unchecked-Sendable context from launching duplicate
+    /// platform inventory probes if collection entry points overlap.
+    func beginVolumeMetadataRefresh(
+        for platform: VolumeIdentity.Platform,
+        now: Date = Date(),
+        minimumInterval: TimeInterval = 60
+    ) -> Bool {
+        withLock {
+            if let lastRefresh = lastVolumeMetadataRefreshByPlatform[platform],
+               now.timeIntervalSince(lastRefresh) < minimumInterval {
+                return false
+            }
+            lastVolumeMetadataRefreshByPlatform[platform] = now
+            return true
+        }
+    }
+
+    func updateVolumeMetadata(
+        _ metadata: [String: VolumeCollectionMetadata],
+        for platform: VolumeIdentity.Platform
+    ) {
+        withLock {
+            volumeMetadataByPlatform[platform] = metadata
+        }
+    }
+
+    func volumeMetadata(for platform: VolumeIdentity.Platform) -> [String: VolumeCollectionMetadata] {
+        withLock {
+            volumeMetadataByPlatform[platform] ?? [:]
         }
     }
 }

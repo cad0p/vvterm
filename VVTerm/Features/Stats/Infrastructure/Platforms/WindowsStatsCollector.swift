@@ -263,13 +263,14 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         }
         stats.topProcesses = context.getPeriodicProcesses()
 
+        let volumeMetadata = await volumeMetadata(client: client, context: context)
         if preferCMD {
             if let volumeOutput = try? await executeCMD(
-                "wmic logicaldisk where \"DriveType=3\" get Caption,FreeSpace,Size /value",
+                "wmic logicaldisk where \"DriveType=3\" get Caption,FileSystem,FreeSpace,Size,VolumeSerialNumber /value",
                 using: client,
                 timeout: volumesTimeout
             ) {
-                stats.volumes = parseWMICVolumes(volumeOutput)
+                stats.volumes = parseWMICVolumes(volumeOutput, metadataByMountPoint: volumeMetadata)
             }
         } else if let volumeOutput = try? await executePowerShell(
             using: client,
@@ -277,7 +278,7 @@ struct WindowsStatsCollector: PlatformStatsCollector {
             timeout: volumesTimeout,
             probeName: "volumes"
         ) {
-            stats.volumes = parseVolumes(volumeOutput)
+            stats.volumes = parseVolumes(volumeOutput, metadataByMountPoint: volumeMetadata)
         }
 
         stats.gpuSamples = await collectGPUSamplesIfNeeded(client: client, context: context)
@@ -646,7 +647,10 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return processes
     }
 
-    func parseVolumes(_ output: String) -> [VolumeInfo] {
+    func parseVolumes(
+        _ output: String,
+        metadataByMountPoint: [String: VolumeCollectionMetadata] = [:]
+    ) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
 
         for line in output.components(separatedBy: .newlines) {
@@ -656,14 +660,19 @@ struct WindowsStatsCollector: PlatformStatsCollector {
             let parts = trimmed.components(separatedBy: "|")
             guard parts.count >= 3 else { continue }
 
-            let mountPoint = parts[0] + ":\\"
+            let mountPoint = normalizedWindowsMountPoint(parts[0])
             let used = UInt64(parts[1]) ?? 0
             let total = UInt64(parts[2]) ?? 0
+            let metadata = metadataByMountPoint[mountPoint]
 
             if total < 100 * 1024 * 1024 { continue } // Skip volumes < 100MB
 
             volumes.append(VolumeInfo(
+                platform: .windows,
                 mountPoint: mountPoint,
+                source: mountPoint,
+                fileSystem: metadata?.fileSystem ?? "",
+                stableIdentifier: metadata?.stableIdentifier,
                 used: used,
                 total: total
             ))
@@ -672,7 +681,10 @@ struct WindowsStatsCollector: PlatformStatsCollector {
         return volumes
     }
 
-    func parseWMICVolumes(_ output: String) -> [VolumeInfo] {
+    func parseWMICVolumes(
+        _ output: String,
+        metadataByMountPoint: [String: VolumeCollectionMetadata] = [:]
+    ) -> [VolumeInfo] {
         let entries = parseWMICEntries(output)
         return entries.compactMap { entry in
             guard
@@ -687,12 +699,74 @@ struct WindowsStatsCollector: PlatformStatsCollector {
                 return nil
             }
 
+            let mountPoint = normalizedWindowsMountPoint(caption)
+            let metadata = metadataByMountPoint[mountPoint]
+            let fileSystem = metadata?.fileSystem ?? entry["FileSystem"] ?? ""
+            let stableIdentifier = metadata?.stableIdentifier ?? entry["VolumeSerialNumber"]
             return VolumeInfo(
-                mountPoint: caption.hasSuffix("\\") ? caption : "\(caption)\\",
+                platform: .windows,
+                mountPoint: mountPoint,
+                source: mountPoint,
+                fileSystem: fileSystem,
+                stableIdentifier: stableIdentifier,
                 used: total >= free ? total - free : 0,
                 total: total
             )
         }
+    }
+
+    func parseWindowsVolumeMetadata(_ output: String) -> [String: VolumeCollectionMetadata] {
+        var metadata: [String: VolumeCollectionMetadata] = [:]
+        for line in output.components(separatedBy: .newlines) {
+            let fields = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: "|")
+            guard fields.count >= 3 else { continue }
+
+            let mountPoint = normalizedWindowsMountPoint(fields[0])
+            guard mountPoint.count >= 3 else { continue }
+            let fileSystem = fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let identifier = fields[2...]
+                .joined(separator: "|")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            metadata[mountPoint] = VolumeCollectionMetadata(
+                stableIdentifier: identifier.isEmpty ? nil : identifier,
+                fileSystem: fileSystem
+            )
+        }
+        return metadata
+    }
+
+    private func volumeMetadata(
+        client: SSHClient,
+        context: StatsCollectionContext
+    ) async -> [String: VolumeCollectionMetadata] {
+        if context.beginVolumeMetadataRefresh(for: .windows),
+           let output = try? await executePowerShell(
+               using: client,
+               script: """
+               Get-Volume | Where-Object {$_.DriveLetter} | ForEach-Object {
+                 Write-Output ('{0}|{1}|{2}' -f ([string]$_.DriveLetter), ([string]$_.FileSystem), ([string]$_.UniqueId))
+               }
+               """,
+               timeout: volumesTimeout,
+               probeName: "volume_metadata"
+           ) {
+            context.updateVolumeMetadata(parseWindowsVolumeMetadata(output), for: .windows)
+        }
+        return context.volumeMetadata(for: .windows)
+    }
+
+    private func normalizedWindowsMountPoint(_ rawValue: String) -> String {
+        var drive = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "\\")
+            .uppercased()
+        while drive.hasSuffix("\\") {
+            drive.removeLast()
+        }
+        if !drive.hasSuffix(":") {
+            drive += ":"
+        }
+        return "\(drive)\\"
     }
 
     func parseWMICProcesses(

@@ -254,11 +254,17 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             }
         }
 
-        // Volumes (separate command for reliability)
+        // Volumes (separate command for reliability). Stable filesystem metadata
+        // changes much less often than capacity, so keep it out of the 2-second path.
+        let volumeMetadata = await volumeMetadata(client: client, context: context)
         let dfOutput = try await client.execute(
-            RemoteTerminalBootstrap.wrapPOSIXShellCommand("LC_ALL=C LANG=C df -BM -P -x tmpfs -x devtmpfs -x squashfs 2>/dev/null")
+            RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+                "LC_ALL=C LANG=C; volume_df=$(df -BM -P -T -x tmpfs -x devtmpfs -x squashfs 2>/dev/null); "
+                    + "if [ -n \"$volume_df\" ]; then printf '%s\\n' \"$volume_df\"; "
+                    + "else df -BM -P -x tmpfs -x devtmpfs -x squashfs 2>/dev/null; fi"
+            )
         )
-        stats.volumes = parseDfVolumes(dfOutput)
+        stats.volumes = parseDfVolumes(dfOutput, metadataBySource: volumeMetadata)
 
         // Process CPU is calculated from /proc deltas so it reflects this sampling
         // interval and is normalized to total machine capacity on every platform.
@@ -886,33 +892,100 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         return found ? (totalRx, totalTx) : nil
     }
 
-    func parseDfVolumes(_ output: String) -> [VolumeInfo] {
+    func parseDfVolumes(
+        _ output: String,
+        metadataBySource: [String: VolumeCollectionMetadata] = [:]
+    ) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
         let lines = output.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         let defaultUnit = lines.first.flatMap(dfUnitMultiplier)
         let volumeLines = defaultUnit == nil ? lines : Array(lines.dropFirst())
+        let headerFields = lines.first?
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty } ?? []
+        let includesFileSystem = headerFields.contains { $0.caseInsensitiveCompare("Type") == .orderedSame }
 
         for line in volumeLines {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-            guard parts.count >= 6 else { continue }
+            let totalIndex = includesFileSystem ? 2 : 1
+            let usedIndex = includesFileSystem ? 3 : 2
+            let mountIndex = includesFileSystem ? 6 : 5
+            guard parts.indices.contains(totalIndex),
+                  parts.indices.contains(usedIndex),
+                  parts.indices.contains(mountIndex) else { continue }
 
-            let mountPoint = parts[5...].joined(separator: " ")
+            let source = parts[0]
+            let metadata = metadataBySource[source]
+            let fileSystem = includesFileSystem ? parts[1] : (metadata?.fileSystem ?? "")
+            let mountPoint = parts[mountIndex...].joined(separator: " ")
             guard
-                let totalBytes = parseDfByteCount(parts[1], defaultUnit: defaultUnit),
-                let usedBytes = parseDfByteCount(parts[2], defaultUnit: defaultUnit)
+                let totalBytes = parseDfByteCount(parts[totalIndex], defaultUnit: defaultUnit),
+                let usedBytes = parseDfByteCount(parts[usedIndex], defaultUnit: defaultUnit)
             else { continue }
             if totalBytes < 100 * bytesPerMiB { continue }
 
             volumes.append(VolumeInfo(
+                platform: .linux,
                 mountPoint: mountPoint,
+                source: source,
+                fileSystem: fileSystem,
+                stableIdentifier: metadata?.stableIdentifier,
                 used: usedBytes,
                 total: totalBytes
             ))
         }
 
         return volumes
+    }
+
+    func parseLSBLKVolumeMetadata(_ output: String) -> [String: VolumeCollectionMetadata] {
+        guard let data = output.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let devices = root["blockdevices"] as? [[String: Any]] else {
+            return [:]
+        }
+
+        var metadata: [String: VolumeCollectionMetadata] = [:]
+        func visit(_ device: [String: Any]) {
+            if let source = device["name"] as? String {
+                let stableIdentifier = (device["uuid"] as? String).flatMap { value in
+                    let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return value.isEmpty ? nil : value
+                }
+                let fileSystem = (device["fstype"] as? String) ?? ""
+                metadata[source] = VolumeCollectionMetadata(
+                    stableIdentifier: stableIdentifier,
+                    fileSystem: fileSystem
+                )
+            }
+
+            for child in device["children"] as? [[String: Any]] ?? [] {
+                visit(child)
+            }
+        }
+
+        for device in devices {
+            visit(device)
+        }
+        return metadata
+    }
+
+    private func volumeMetadata(
+        client: SSHClient,
+        context: StatsCollectionContext
+    ) async -> [String: VolumeCollectionMetadata] {
+        if context.beginVolumeMetadataRefresh(for: .linux),
+           let output = try? await client.execute(
+               RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+                   "LC_ALL=C LANG=C lsblk -J -p -o NAME,UUID,FSTYPE 2>/dev/null"
+               ),
+               timeout: .seconds(5)
+           ) {
+            context.updateVolumeMetadata(parseLSBLKVolumeMetadata(output), for: .linux)
+        }
+        return context.volumeMetadata(for: .linux)
     }
 
     func parsePs(_ output: String) -> [ProcessInfo] {
@@ -1073,8 +1146,9 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         }
 
         let bytes = value * multiplier
-        guard bytes.isFinite, bytes <= Double(UInt64.max) else { return nil }
-        return UInt64(bytes.rounded())
+        guard bytes.isFinite,
+              let result = UInt64(exactly: bytes.rounded()) else { return nil }
+        return result
     }
 
     private func multiplyBytes(_ value: UInt64, by multiplier: UInt64) -> UInt64? {

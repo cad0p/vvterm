@@ -12,6 +12,7 @@ struct ServerStatsView: View {
     var sharedClientProvider: () -> SSHClient? = { nil }
 
     @StateObject private var preferences = PreferencesStore.shared
+    @StateObject private var volumeVisibilityStore = ServerVolumeVisibilityStore.shared
     @StateObject private var storeManager = StoreManager.shared
     @State private var statsCollector: ServerStatsCollector
     @State private var isShowingAppearanceSettings = false
@@ -42,6 +43,7 @@ struct ServerStatsView: View {
             sharedClientProvider: sharedClientProvider,
             statsCollector: statsCollector,
             preferences: currentPreferences,
+            volumeVisibilityStore: volumeVisibilityStore,
             isDockerUnlocked: storeManager.isPro
         ) {
             isShowingAppearanceSettings = true

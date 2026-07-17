@@ -255,7 +255,12 @@ struct DarwinStatsCollector: PlatformStatsCollector {
 
         // Volumes
         let dfOutput = try await client.execute("LC_ALL=C LANG=C df -m 2>/dev/null | grep -E '^/dev'")
-        stats.volumes = parseDf(dfOutput)
+        let volumeMetadata = await volumeMetadata(
+            client: client,
+            context: context,
+            sources: dfSources(dfOutput)
+        )
+        stats.volumes = parseDf(dfOutput, metadataBySource: volumeMetadata)
 
         stats.timestamp = Date()
         return stats
@@ -548,7 +553,10 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         return (user, system, idle)
     }
 
-    private func parseDf(_ output: String) -> [VolumeInfo] {
+    func parseDf(
+        _ output: String,
+        metadataBySource: [String: VolumeCollectionMetadata] = [:]
+    ) -> [VolumeInfo] {
         var volumes: [VolumeInfo] = []
 
         var rawVolumes: [VolumeInfo] = []
@@ -560,20 +568,34 @@ struct DarwinStatsCollector: PlatformStatsCollector {
 
             let totalMB = UInt64(parts[1]) ?? 0
             let usedMB = UInt64(parts[2]) ?? 0
+            let source = parts[0]
             let mountPoint = parts[8...].joined(separator: " ")
+            let metadata = metadataBySource[source]
 
             if totalMB < 100 { continue }
 
+            guard let total = bytesFromMiB(totalMB),
+                  let used = bytesFromMiB(usedMB) else { continue }
+
             rawVolumes.append(VolumeInfo(
+                platform: .darwin,
                 mountPoint: mountPoint,
-                used: usedMB * 1024 * 1024,
-                total: totalMB * 1024 * 1024
+                source: source,
+                fileSystem: metadata?.fileSystem ?? "",
+                stableIdentifier: metadata?.stableIdentifier,
+                used: used,
+                total: total
             ))
         }
 
         if let dataVolume = rawVolumes.first(where: { $0.mountPoint == "/System/Volumes/Data" }) {
             volumes.append(VolumeInfo(
+                platform: .darwin,
                 mountPoint: "/",
+                source: dataVolume.source,
+                fileSystem: dataVolume.fileSystem,
+                stableIdentifier: dataVolume.stableIdentifier,
+                kind: dataVolume.kind,
                 used: dataVolume.used,
                 total: dataVolume.total
             ))
@@ -590,6 +612,92 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         }
 
         return volumes
+    }
+
+    func parseDiskutilVolumeMetadata(_ output: String) -> [String: VolumeCollectionMetadata] {
+        guard let data = output.data(using: .utf8),
+              let propertyList = try? PropertyListSerialization.propertyList(from: data, format: nil) else {
+            return [:]
+        }
+
+        var metadata: [String: VolumeCollectionMetadata] = [:]
+        func visit(_ value: Any) {
+            if let dictionary = value as? [String: Any] {
+                if let deviceIdentifier = dictionary["DeviceIdentifier"] as? String {
+                    let stableIdentifier = ["VolumeUUID", "APFSVolumeUUID", "APFSVolumeGroupID", "DiskUUID"]
+                        .compactMap { dictionary[$0] as? String }
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .first { !$0.isEmpty }
+                    let fileSystem = (dictionary["FilesystemType"] as? String)
+                        ?? (dictionary["Content"] as? String)
+                        ?? ""
+                    metadata["/dev/\(deviceIdentifier)"] = VolumeCollectionMetadata(
+                        stableIdentifier: stableIdentifier,
+                        fileSystem: fileSystem
+                    )
+                }
+
+                for nested in dictionary.values {
+                    visit(nested)
+                }
+            } else if let array = value as? [Any] {
+                for nested in array {
+                    visit(nested)
+                }
+            }
+        }
+
+        visit(propertyList)
+        return metadata
+    }
+
+    private func volumeMetadata(
+        client: SSHClient,
+        context: StatsCollectionContext,
+        sources: [String]
+    ) async -> [String: VolumeCollectionMetadata] {
+        guard context.beginVolumeMetadataRefresh(for: .darwin) else {
+            return context.volumeMetadata(for: .darwin)
+        }
+
+        var metadata = context.volumeMetadata(for: .darwin)
+        if let output = try? await client.execute(
+            "LC_ALL=C LANG=C /usr/sbin/diskutil list -plist 2>/dev/null",
+            timeout: .seconds(6)
+        ) {
+            metadata.merge(parseDiskutilVolumeMetadata(output)) { _, fresh in fresh }
+        }
+
+        for source in sources where metadata[source]?.stableIdentifier == nil {
+            guard isSafeDarwinDevicePath(source),
+                  let output = try? await client.execute(
+                      "LC_ALL=C LANG=C /usr/sbin/diskutil info -plist \"\(source)\" 2>/dev/null",
+                      timeout: .seconds(4)
+                  ) else { continue }
+            metadata.merge(parseDiskutilVolumeMetadata(output)) { _, fresh in fresh }
+        }
+
+        context.updateVolumeMetadata(metadata, for: .darwin)
+        return context.volumeMetadata(for: .darwin)
+    }
+
+    private func dfSources(_ output: String) -> [String] {
+        var seen = Set<String>()
+        return output.components(separatedBy: .newlines).compactMap { line in
+            guard let source = line.components(separatedBy: .whitespaces)
+                .first(where: { !$0.isEmpty }),
+                  seen.insert(source).inserted else { return nil }
+            return source
+        }
+    }
+
+    private func isSafeDarwinDevicePath(_ source: String) -> Bool {
+        source.range(of: #"^/dev/[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil
+    }
+
+    private func bytesFromMiB(_ value: UInt64) -> UInt64? {
+        let result = value.multipliedReportingOverflow(by: 1_048_576)
+        return result.overflow ? nil : result.partialValue
     }
 
     private func isDarwinSystemVolume(_ mountPoint: String) -> Bool {
