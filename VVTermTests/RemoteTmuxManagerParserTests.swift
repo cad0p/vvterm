@@ -287,7 +287,7 @@ struct RemoteTmuxManagerParserTests {
             lifecycleMarkerToken: "marker-token"
         )
 
-        #expect(command.contains("new-session -A -s"))
+        #expect(command.contains("new-session -d -s"))
         #expect(command.contains("has-session -t '=vvterm_managed'"))
         #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .detached)))
         #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
@@ -320,7 +320,7 @@ struct RemoteTmuxManagerParserTests {
         )
 
         #expect(command.contains("attach-session"))
-        #expect(command.contains("set-option -wq -t 'vvterm_managed:' scroll-on-clear off"))
+        #expect(command.contains("set-option -wq -t \"$vvtermWindow\" scroll-on-clear 'off'"))
         #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
         #expect(!command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .creationFailed)))
         #expect(!command.contains("new-session"))
@@ -328,21 +328,21 @@ struct RemoteTmuxManagerParserTests {
     }
 
     @Test
-    func installAndAttachScriptIncludesSessionAndConfig() {
+    func installAndAttachScriptIncludesScopedManagedConfiguration() {
         let script = RemoteTmuxManager.shared.installAndAttachScript(
             sessionName: "vvterm_demo",
             workingDirectory: "/tmp/work dir",
             terminalType: .xtermGhostty
         )
-        #expect(script.contains("~/.vvterm/tmux.conf"))
-        #expect(script.contains("new-session -A -s"))
+        #expect(script.contains("new-session -d -s"))
         #expect(script.contains("vvterm_demo"))
         #expect(script.contains("/tmp/work dir"))
-        #expect(script.contains("set -g default-terminal"))
-        #expect(script.contains("xterm-ghostty"))
-        #expect(script.contains("set -gq allow-set-title on"))
-        #expect(!script.contains("%if"))
-        #expect(!script.contains("#{version}"))
+        #expect(script.contains("set-option -q -t"))
+        #expect(script.contains("status off"))
+        #expect(script.contains("RGB,hyperlinks"))
+        #expect(script.contains("tmux -u"))
+        #expect(!script.contains("~/.vvterm/tmux.conf"))
+        #expect(!script.contains("set -g"))
     }
 
     @Test
@@ -355,27 +355,10 @@ struct RemoteTmuxManagerParserTests {
         )
 
         #expect(script.contains("apt-get install -y tmux"))
-        #expect(script.contains("~/.vvterm/tmux.conf"))
         #expect(!script.contains("new-session"))
         #expect(!script.contains("attach-session"))
         #expect(!script.contains("exec tmux"))
-    }
-
-    @Test
-    func unixConfigWriteExecutesThroughSh() {
-        let command = RemoteTmuxManager.shared.configWriteExecutionCommand(
-            terminalType: .xtermGhostty,
-            backend: .unixTmux
-        )
-
-        #expect(command.hasPrefix("sh -lc "))
-        #expect(command.contains("mkdir -p ~/.vvterm"))
-        #expect(command.contains("> ~/.vvterm/tmux.conf"))
-        #expect(command.contains("set -g default-terminal"))
-        #expect(command.contains("xterm-ghostty"))
-        #expect(command.contains("set -gq allow-set-title on"))
-        #expect(!command.contains("%if"))
-        #expect(!command.contains("#{version}"))
+        #expect(!script.contains("~/.vvterm/tmux.conf"))
     }
 
     @Test
@@ -392,18 +375,67 @@ struct RemoteTmuxManagerParserTests {
             sessionName: "shared",
             ownership: .external
         )
-        let generatedConfig = RemoteTmuxManager.shared.configWriteExecutionCommand(
-            terminalType: .xtermGhostty,
-            backend: .unixTmux
-        )
 
-        let scopedOption = "set-option -wq -t 'vvterm_managed:' scroll-on-clear off"
+        let scopedOption = "set-option -wq -t \"$vvtermWindow\" scroll-on-clear 'off'"
         #expect(create.contains(scopedOption))
         #expect(reattach.contains(scopedOption))
-        #expect(reattach.contains("source-file ~/.vvterm/tmux.conf"))
-        #expect(reattach.contains("tmux -u -f ~/.vvterm/tmux.conf attach-session"))
         #expect(!external.contains("scroll-on-clear"))
-        #expect(!generatedConfig.contains("scroll-on-clear"))
+        #expect(!reattach.contains("source-file"))
+        #expect(!reattach.contains("~/.vvterm/tmux.conf"))
+    }
+
+    @Test
+    func managedUnixSessionConfigurationIsScopedToItsSession() {
+        let create = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_managed",
+            workingDirectory: "/tmp"
+        )
+        let reattach = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "vvterm_managed",
+            ownership: .managed
+        )
+        let external = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "shared",
+            ownership: .external
+        )
+
+        for command in [create, reattach] {
+            #expect(command.contains("set-option -q -t '=vvterm_managed:' status off"))
+            #expect(command.contains("set-option -q -t '=vvterm_managed:' history-limit 10000"))
+            #expect(command.contains("set-option -q -t '=vvterm_managed:' mouse on"))
+            #expect(command.contains("set-environment -t '=vvterm_managed' TERM_PROGRAM 'vvterm'"))
+            #expect(command.contains("-F '#{window_id} #{window_linked}'"))
+            #expect(command.contains("[ \"$vvtermLinked\" = 0 ] || continue"))
+            #expect(command.contains("set-hook -t '=vvterm_managed:' 'after-new-window[1000]'"))
+            #expect(command.contains("#{==:#{window_linked},0}"))
+            #expect(!command.contains("source-file"))
+            #expect(!command.contains("-f ~/.vvterm/tmux.conf"))
+            #expect(!command.contains("set -g"))
+            #expect(!command.contains("bind -n"))
+        }
+
+        #expect(!external.contains("set-option"))
+        #expect(!external.contains("set-environment"))
+        #expect(!external.contains("source-file"))
+        #expect(!external.contains("~/.vvterm/tmux.conf"))
+    }
+
+    @Test
+    func managedUnixCreationBootstrapsLegacyTmuxBeforeStartingTerminalShell() {
+        let command = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_managed",
+            workingDirectory: "/tmp"
+        )
+
+        #expect(command.contains("tmux -T RGB,hyperlinks -V"))
+        #expect(command.contains("tmux -u -T RGB,hyperlinks attach-session"))
+        #expect(command.contains("else exec tmux -u attach-session"))
+        #expect(command.components(separatedBy: "new-session -d -s").count == 2)
+        #expect(!command.contains("-e 'COLORTERM=truecolor'"))
+        #expect(command.contains("__vvterm_bootstrap__"))
+        #expect(command.contains("new-window -d -t '=vvterm_managed:'"))
+        #expect(command.contains("kill-window -t '=vvterm_managed:__vvterm_bootstrap__'"))
+        #expect(command.contains("move-window -r -t '=vvterm_managed:'"))
     }
 
     @Test
@@ -451,8 +483,8 @@ struct RemoteTmuxManagerParserTests {
             backend: backend
         )
 
-        #expect(command.contains("source-file $vvtermConfig"))
-        #expect(command.contains("-u -f $vvtermConfig attach-session"))
+        #expect(command.contains("source-file -t $vvtermSession $vvtermConfig"))
+        #expect(command.contains("-u attach-session"))
     }
 
     @Test @MainActor
@@ -470,7 +502,8 @@ struct RemoteTmuxManagerParserTests {
         )
 
         #expect(ownership == .managed)
-        #expect(command.contains("set-option -wq -t '\(sessionName):' scroll-on-clear off"))
+        #expect(command.contains("set-option -wq -t \"$vvtermWindow\" scroll-on-clear 'off'"))
+        #expect(command.contains("set-hook -t '=\(sessionName):' 'after-new-window[1000]'"))
     }
 
     @Test @MainActor

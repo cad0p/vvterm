@@ -13,14 +13,20 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         let root = temporaryDirectory
             .appendingPathComponent("vvterm-dev218-\(UUID().uuidString)", isDirectory: true)
         let home = root.appendingPathComponent("home", isDirectory: true)
+        let managedConfigDirectory = home.appendingPathComponent(".vvterm", isDirectory: true)
+        let managedConfig = managedConfigDirectory.appendingPathComponent("tmux.conf")
         let fixtureConfig = root.appendingPathComponent("fixture.conf")
         // tmux's default socket suffix exceeds the Unix socket limit inside XCTest's
         // long sandbox path, so the fixture uses a short explicit socket.
         let socket = temporaryDirectory.appendingPathComponent(
             "v218-\(UUID().uuidString.prefix(4))"
         )
-        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: managedConfigDirectory,
+            withIntermediateDirectories: true
+        )
         try Data("set -g remain-on-exit on\n".utf8).write(to: fixtureConfig)
+        try Data("set -g status off\n".utf8).write(to: managedConfig)
         defer {
             try? FileManager.default.removeItem(at: socket)
             try? FileManager.default.removeItem(at: root)
@@ -88,11 +94,6 @@ struct RemoteTmuxManagerLocalIntegrationTests {
             environment: environment
         )
 
-        let configWrite = RemoteTmuxManager.shared.configWriteExecutionCommand(
-            terminalType: .xtermGhostty,
-            backend: .unixTmux
-        )
-        try requireSuccess(run("/bin/sh", ["-c", configWrite], environment: environment))
         let options = [
             "status",
             "status-right",
@@ -150,6 +151,320 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         )
         #expect(after == before)
         #expect(extendedKeysAfter == extendedKeysBefore)
+    }
+
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/tmux")))
+    func managedCreationAndReattachScopeConfigurationToManagedSession() throws {
+        let installedTmux = "/opt/homebrew/bin/tmux"
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+        let root = temporaryDirectory
+            .appendingPathComponent("vvterm-dev220-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let configDirectory = home.appendingPathComponent(".vvterm", isDirectory: true)
+        let config = configDirectory.appendingPathComponent("tmux.conf")
+        let fixtureConfig = root.appendingPathComponent("fixture.conf")
+        let socket = temporaryDirectory.appendingPathComponent(
+            "v220-\(UUID().uuidString.prefix(4))"
+        )
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        try Data("set -g remain-on-exit on\n".utf8).write(to: fixtureConfig)
+        try Data(
+            """
+            set -g status off
+            set -g history-limit 10000
+            set -g mouse on
+            set -g set-titles on
+            set -g set-titles-string "#{pane_title}"
+            set -g default-terminal "xterm-ghostty"
+            set -g mode-style "fg=black,bg=green"
+            set-environment -g TERM_PROGRAM "vvterm"
+            bind -n WheelUpPane if -F '#{alternate_on}' 'send-keys -M' 'copy-mode -eH'
+            """.utf8
+        ).write(to: config)
+        defer {
+            try? FileManager.default.removeItem(at: socket)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        environment.removeValue(forKey: "TMUX")
+
+        let externalSession = "external"
+        let managedSession = "vvterm_managed"
+        defer {
+            _ = try? runTmux(
+                installedTmux,
+                socket: socket,
+                arguments: ["kill-server"],
+                environment: environment
+            )
+        }
+
+        try requireSuccess(runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: [
+                "-f", fixtureConfig.path,
+                "new-session", "-d",
+                "-s", externalSession
+            ],
+            environment: environment
+        ))
+        let customOptions = [
+            "status": "on",
+            "history-limit": "100000",
+            "mouse": "off",
+            "set-titles": "off",
+            "set-titles-string": "EXTERNAL #{session_name}",
+            "base-index": "3",
+            "default-terminal": "tmux-256color",
+            "mode-style": "fg=yellow,bg=blue"
+        ]
+        for (option, value) in customOptions {
+            try setGlobalOption(
+                option,
+                to: value,
+                tmux: installedTmux,
+                socket: socket,
+                environment: environment
+            )
+        }
+        try requireSuccess(runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: ["set-environment", "-g", "TERM_PROGRAM", "external-terminal"],
+            environment: environment
+        ))
+        try requireSuccess(runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: ["bind-key", "-n", "WheelUpPane", "send-keys", "-M"],
+            environment: environment
+        ))
+
+        let beforeOptions = try globalOptions(
+            Array(customOptions.keys),
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let beforeEnvironment = try globalEnvironment(
+            "TERM_PROGRAM",
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let beforeBinding = try rootBinding(
+            "WheelUpPane",
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+
+        let managedCreate = RemoteTmuxManager.shared.attachCommand(
+            sessionName: managedSession,
+            workingDirectory: "/tmp",
+            lifecycleMarkerToken: "create"
+        )
+        let legacySocketScopedCreate = """
+        tmux() {
+          for vvtermArgument in "$@"; do
+            if [ "$vvtermArgument" = "-e" ] || [ "$vvtermArgument" = "-T" ]; then
+              return 1
+            fi
+          done
+          \(installedTmux) -S '\(socket.path)' "$@"
+        }
+        \(managedCreate)
+        """
+        _ = try run("/bin/sh", ["-c", legacySocketScopedCreate], environment: environment)
+
+        let managedWindowOptions = [
+            "allow-passthrough",
+            "allow-set-title",
+            "mode-style",
+            "scroll-on-clear"
+        ]
+        let initialWindowTarget = try tmuxFormatValue(
+            "window_id",
+            target: managedSession,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let initialWindowOptions = try windowOptions(
+            managedWindowOptions,
+            target: initialWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let externalWindowTarget = try tmuxFormatValue(
+            "window_id",
+            target: externalSession,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let externalWindowOptions = try windowOptions(
+            managedWindowOptions,
+            target: externalWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let externalHistoryLimit = try tmuxFormatValue(
+            "history_limit",
+            target: externalWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        try requireSuccess(runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: [
+                "link-window", "-d",
+                "-s", "\(externalSession):",
+                "-t", "\(managedSession):"
+            ],
+            environment: environment
+        ))
+        try requireSuccess(runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: ["select-window", "-t", "\(managedSession):\(externalWindowTarget)"],
+            environment: environment
+        ))
+
+        let managedReattach = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: managedSession,
+            ownership: .managed,
+            lifecycleMarkerToken: "reattach"
+        )
+        let socketScopedReattach = """
+        tmux() {
+          \(installedTmux) -S '\(socket.path)' "$@"
+        }
+        \(managedReattach)
+        """
+        _ = try run("/bin/sh", ["-c", socketScopedReattach], environment: environment)
+        #expect(try windowOptions(
+            managedWindowOptions,
+            target: externalWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        ) == externalWindowOptions)
+        #expect(try tmuxFormatValue(
+            "history_limit",
+            target: externalWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        ) == externalHistoryLimit)
+
+        let newWindow = try runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: [
+                "new-window", "-d", "-P",
+                "-F", "#{window_id}",
+                "-t", "\(managedSession):",
+                "sleep 86400"
+            ],
+            environment: environment
+        )
+        try requireSuccess(newWindow)
+        let newWindowTarget = newWindow.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(!newWindowTarget.isEmpty)
+        #expect(try windowOptions(
+            managedWindowOptions,
+            target: newWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        ) == initialWindowOptions)
+        let externalStatus = try tmuxFormatValue(
+            "status",
+            target: externalSession,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let managedStatus = try tmuxFormatValue(
+            "status",
+            target: newWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let managedMouse = try tmuxFormatValue(
+            "mouse",
+            target: newWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let managedHistoryLimit = try tmuxFormatValue(
+            "history_limit",
+            target: newWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let initialWindowIndex = try tmuxFormatValue(
+            "window_index",
+            target: initialWindowTarget,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let managedColorTerm = try sessionEnvironment(
+            "COLORTERM",
+            session: managedSession,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let managedWindows = try runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: ["list-windows", "-t", managedSession, "-F", "#{window_name}"],
+            environment: environment
+        )
+        try requireSuccess(managedWindows)
+
+        let afterOptions = try globalOptions(
+            Array(customOptions.keys),
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let afterEnvironment = try globalEnvironment(
+            "TERM_PROGRAM",
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let afterBinding = try rootBinding(
+            "WheelUpPane",
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+
+        #expect(afterOptions == beforeOptions)
+        #expect(afterEnvironment == beforeEnvironment)
+        #expect(afterBinding == beforeBinding)
+        #expect(externalStatus == "on")
+        #expect(managedStatus == "off")
+        #expect(managedMouse == "1")
+        #expect(managedHistoryLimit == "10000")
+        #expect(initialWindowIndex == "3")
+        #expect(managedColorTerm == "COLORTERM=truecolor")
+        #expect(!managedWindows.output.contains("__vvterm_bootstrap__"))
     }
 
     private func setGlobalOption(
@@ -221,6 +536,25 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         })
     }
 
+    private func windowOptions(
+        _ options: [String],
+        target: String,
+        tmux: String,
+        socket: URL,
+        environment: [String: String]
+    ) throws -> [String: String] {
+        try Dictionary(uniqueKeysWithValues: options.map { option in
+            let result = try runTmux(
+                tmux,
+                socket: socket,
+                arguments: ["show-options", "-wv", "-t", target, option],
+                environment: environment
+            )
+            try requireSuccess(result)
+            return (option, result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        })
+    }
+
     private func serverOption(
         _ option: String,
         tmux: String,
@@ -231,6 +565,72 @@ struct RemoteTmuxManagerLocalIntegrationTests {
             tmux,
             socket: socket,
             arguments: ["show-options", "-s", option],
+            environment: environment
+        )
+        try requireSuccess(result)
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func tmuxFormatValue(
+        _ option: String,
+        target: String,
+        tmux: String,
+        socket: URL,
+        environment: [String: String]
+    ) throws -> String {
+        let result = try runTmux(
+            tmux,
+            socket: socket,
+            arguments: ["display-message", "-p", "-t", target, "#{\(option)}"],
+            environment: environment
+        )
+        try requireSuccess(result)
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func globalEnvironment(
+        _ variable: String,
+        tmux: String,
+        socket: URL,
+        environment: [String: String]
+    ) throws -> String {
+        let result = try runTmux(
+            tmux,
+            socket: socket,
+            arguments: ["show-environment", "-g", variable],
+            environment: environment
+        )
+        try requireSuccess(result)
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sessionEnvironment(
+        _ variable: String,
+        session: String,
+        tmux: String,
+        socket: URL,
+        environment: [String: String]
+    ) throws -> String {
+        let result = try runTmux(
+            tmux,
+            socket: socket,
+            arguments: ["show-environment", "-t", session, variable],
+            environment: environment
+        )
+        try requireSuccess(result)
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func rootBinding(
+        _ key: String,
+        tmux: String,
+        socket: URL,
+        environment: [String: String]
+    ) throws -> String {
+        let result = try runTmux(
+            tmux,
+            socket: socket,
+            arguments: ["list-keys", "-T", "root", key],
             environment: environment
         )
         try requireSuccess(result)

@@ -116,8 +116,6 @@ nonisolated enum RemoteTmuxAvailability: Hashable, Sendable {
 actor RemoteTmuxManager {
     static let shared = RemoteTmuxManager()
 
-    private let configDirectory = "~/.vvterm"
-    private let configPath = "~/.vvterm/tmux.conf"
     private let availabilityTimeout: Duration = .seconds(8)
     private let listTimeout: Duration = .seconds(12)
     private let configTimeout: Duration = .seconds(20)
@@ -239,19 +237,9 @@ actor RemoteTmuxManager {
         backend explicitBackend: RemoteTmuxBackend? = nil
     ) async {
         let backend = await resolveBackend(explicitBackend, using: client)
-        guard let backend else { return }
-        let command = configWriteExecutionCommand(terminalType: terminalType, backend: backend)
+        guard let backend, case .windowsPsmux = backend else { return }
+        let command = windowsConfigWriteCommand(terminalType: terminalType, backend: backend)
         _ = try? await client.execute(command, timeout: configTimeout)
-    }
-
-    nonisolated func configWriteExecutionCommand(
-        terminalType: RemoteTerminalType,
-        backend: RemoteTmuxBackend = .unixTmux
-    ) -> String {
-        let configWrite = configWriteCommand(terminalType: terminalType, backend: backend)
-        return backend.isWindows
-            ? configWrite
-            : "sh -lc \(RemoteTerminalBootstrap.shellQuoted(configWrite))"
     }
 
     nonisolated func attachCommand(
@@ -311,7 +299,7 @@ actor RemoteTmuxManager {
         let plainSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
         let exists = RemoteTerminalBootstrap.shellQuoted(existsMarker)
         let missing = RemoteTerminalBootstrap.shellQuoted(missingMarker)
-        let tmuxProbe = tmuxCommand(includeUTF8: false, includeConfig: false)
+        let tmuxProbe = tmuxCommand(includeUTF8: false)
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport()); \
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
@@ -342,12 +330,10 @@ actor RemoteTmuxManager {
             workingDirectory: workingDirectory,
             backend: backend
         )
-        let configWrite = configWriteCommand(terminalType: terminalType, backend: backend)
         let afterInstall = attachAfterInstall ? attach : ":"
 
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
-        \(configWrite);
         if command -v tmux >/dev/null 2>&1; then
           \(afterInstall);
         else
@@ -540,16 +526,22 @@ actor RemoteTmuxManager {
 
         let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
         let plainSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-        let tmuxProbe = tmuxCommand(includeUTF8: false, includeConfig: false)
+        let tmuxProbe = tmuxCommand(includeUTF8: false)
         let usesManagedConfiguration = ownership == .managed
-        let tmuxAttach = tmuxCommand(includeUTF8: true, includeConfig: usesManagedConfiguration)
-        let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
+        let replacesProcess = lifecycleMarkerToken == nil
         let managedConfiguration = usesManagedConfiguration
-            ? "\(tmuxProbe) source-file \(configPath) >/dev/null 2>&1 || true; "
+            ? "\(managedSessionConfigurationCommand(sessionName: sessionName)); \(managedWindowsConfigurationCommand(sessionName: sessionName)); "
             : ""
-        let managedClearBehavior = usesManagedConfiguration
-            ? " \\; \(managedClearBehaviorCommand(sessionName: sessionName))"
-            : ""
+        let exactAttach = tmuxAttachCommand(
+            target: exactSession,
+            replacesProcess: replacesProcess,
+            advertisesManagedFeatures: usesManagedConfiguration
+        )
+        let plainAttach = tmuxAttachCommand(
+            target: plainSession,
+            replacesProcess: replacesProcess,
+            advertisesManagedFeatures: usesManagedConfiguration
+        )
         let creationStatusCapture = reportsCreationFailure && lifecycleMarkerToken != nil
             ? "; vvtermTmuxCreateStatus=$?"
             : ""
@@ -584,9 +576,9 @@ actor RemoteTmuxManager {
         return """
         \(RemoteTerminalBootstrap.shellPathExport()); \
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null; then \
-        \(managedConfiguration)\(processReplacement)\(tmuxAttach) attach-session -t \(exactSession)\(managedClearBehavior); \
+        \(managedConfiguration)\(exactAttach); \
         elif \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-        \(managedConfiguration)\(processReplacement)\(tmuxAttach) attach-session -t \(plainSession)\(managedClearBehavior); \
+        \(managedConfiguration)\(plainAttach); \
         else \(missingCommand)\(creationStatusCapture); fi\(lifecycleReport)
         """
     }
@@ -607,19 +599,117 @@ actor RemoteTmuxManager {
 
         let escapedDir = shellDirectoryArgument(workingDirectory)
         let escapedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-        let tmux = tmuxCommand(includeUTF8: true, includeConfig: true)
-        let processReplacement = lifecycleMarkerToken == nil ? "exec " : ""
-        let clearBehavior = managedClearBehaviorCommand(sessionName: sessionName)
-        return "\(processReplacement)\(tmux) new-session -A -s \(escapedSession) -c \(escapedDir) \\; \(clearBehavior)"
+        let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
+        let sessionWindowTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
+        let bootstrapWindowName = "__vvterm_bootstrap__"
+        let escapedBootstrapWindow = RemoteTerminalBootstrap.shellQuoted(bootstrapWindowName)
+        let bootstrapWindowTarget = RemoteTerminalBootstrap.shellQuoted(
+            "=\(sessionName):\(bootstrapWindowName)"
+        )
+        let tmux = tmuxCommand(includeUTF8: false)
+        let sessionConfiguration = managedSessionConfigurationCommand(sessionName: sessionName)
+        let windowsConfiguration = managedWindowsConfigurationCommand(sessionName: sessionName)
+        let createBootstrap = "\(tmux) new-session -d -s \(escapedSession) -n \(escapedBootstrapWindow) -c \(escapedDir) \(RemoteTerminalBootstrap.shellQuoted("sleep 86400"))"
+        let createTerminalWindow = "\(tmux) new-window -d -t \(sessionWindowTarget) -c \(escapedDir)"
+        let removeBootstrap = "\(tmux) kill-window -t \(bootstrapWindowTarget)"
+        let renumberWindows = "\(tmux) move-window -r -t \(sessionWindowTarget)"
+        let removeFailedSession = "\(tmux) kill-session -t \(exactSession) 2>/dev/null"
+        let attach = tmuxAttachCommand(
+            target: escapedSession,
+            replacesProcess: lifecycleMarkerToken == nil,
+            advertisesManagedFeatures: true
+        )
+        return """
+        if \(createBootstrap) 2>/dev/null; then \
+        if \(sessionConfiguration) && \
+        \(createTerminalWindow) 2>/dev/null && \
+        \(removeBootstrap) 2>/dev/null && \
+        \(renumberWindows) 2>/dev/null && \
+        \(windowsConfiguration); then \(attach); \
+        else \(removeFailedSession); false; fi; \
+        elif \(tmux) has-session -t \(exactSession) 2>/dev/null; then \
+        \(sessionConfiguration); \(windowsConfiguration); \(attach); \
+        else false; fi
+        """
     }
 
-    nonisolated private func managedClearBehaviorCommand(sessionName: String) -> String {
-        // `clear` sends E3 followed by 2J. tmux clears history for E3, but its
-        // default scroll-on-clear behavior puts the visible grid back during
-        // 2J. Keep the override window-scoped so external sessions are intact;
-        // -q safely ignores the option on tmux versions older than 3.3.
-        let target = RemoteTerminalBootstrap.shellQuoted("\(sessionName):")
-        return "set-option -wq -t \(target) scroll-on-clear off"
+    nonisolated private func managedSessionConfigurationCommand(sessionName: String) -> String {
+        let tmux = tmuxCommand(includeUTF8: false)
+        let sessionOptionTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
+        let sessionEnvironmentTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
+        let paneTitle = RemoteTerminalBootstrap.shellQuoted("#{pane_title}")
+
+        var commands = [
+            "\(tmux) set-option -q -t \(sessionOptionTarget) status off",
+            "\(tmux) set-option -q -t \(sessionOptionTarget) history-limit 10000",
+            "\(tmux) set-option -q -t \(sessionOptionTarget) mouse on",
+            "\(tmux) set-option -q -t \(sessionOptionTarget) set-titles on",
+            "\(tmux) set-option -q -t \(sessionOptionTarget) set-titles-string \(paneTitle)"
+        ]
+        commands.append(contentsOf: RemoteTerminalBootstrap.terminalEnvironment().map { variable in
+            let value = RemoteTerminalBootstrap.shellQuoted(variable.value)
+            return "\(tmux) set-environment -t \(sessionEnvironmentTarget) \(variable.name) \(value)"
+        })
+        return commands.joined(separator: " && ")
+    }
+
+    nonisolated private func managedWindowsConfigurationCommand(sessionName: String) -> String {
+        let tmux = tmuxCommand(includeUTF8: false)
+        let sessionTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
+        let settings = [
+            (name: "allow-passthrough", value: "on"),
+            (name: "allow-set-title", value: "on"),
+            (name: "mode-style", value: tmuxThemeConfiguration().modeStyle),
+            // `clear` sends E3 followed by 2J. Keep this override on each
+            // managed window so the visible grid is not restored into history.
+            (name: "scroll-on-clear", value: "off")
+        ]
+        let existingWindowCommands = settings.map { setting in
+            let value = RemoteTerminalBootstrap.shellQuoted(setting.value)
+            return "\(tmux) set-option -wq -t \"$vvtermWindow\" \(setting.name) \(value)"
+        }.joined(separator: " && ")
+        let futureWindowCommands = settings.map { setting in
+            let value = RemoteTerminalBootstrap.shellQuoted(setting.value)
+            return "set-option -wq \(setting.name) \(value)"
+        }.joined(separator: " ; ")
+        // Window options belong to the window object, so skip linked windows
+        // that may also be visible in a user's external session.
+        let windowListingFormat = RemoteTerminalBootstrap.shellQuoted(
+            "#{window_id} #{window_linked}"
+        )
+        let unlinkedWindowCondition = RemoteTerminalBootstrap.shellQuoted(
+            "#{==:#{window_linked},0}"
+        )
+        let guardedFutureWindowCommands = [
+            "if-shell -F",
+            unlinkedWindowCondition,
+            RemoteTerminalBootstrap.shellQuoted(futureWindowCommands)
+        ].joined(separator: " ")
+        // A stable array index makes reattach idempotent without replacing
+        // other session-local after-new-window hooks.
+        let hookName = RemoteTerminalBootstrap.shellQuoted("after-new-window[1000]")
+        let hookCommand = RemoteTerminalBootstrap.shellQuoted(guardedFutureWindowCommands)
+
+        return """
+        (vvtermWindows="$(\(tmux) list-windows -t \(sessionTarget) -F \(windowListingFormat) 2>/dev/null)" || exit 1; \
+        printf '%s\\n' "$vvtermWindows" | while IFS=' ' read -r vvtermWindow vvtermLinked; do \
+        [ "$vvtermLinked" = 0 ] || continue; \(existingWindowCommands) || exit 1; done || exit 1; \
+        \(tmux) set-hook -t \(sessionTarget) \(hookName) \(hookCommand) 2>/dev/null || true)
+        """
+    }
+
+    nonisolated private func tmuxAttachCommand(
+        target: String,
+        replacesProcess: Bool,
+        advertisesManagedFeatures: Bool
+    ) -> String {
+        let processReplacement = replacesProcess ? "exec " : ""
+        let tmux = tmuxCommand(includeUTF8: true)
+        let attach = "\(processReplacement)\(tmux) attach-session -t \(target)"
+        guard advertisesManagedFeatures else { return attach }
+
+        let features = "-T RGB,hyperlinks"
+        return "if tmux \(features) -V >/dev/null 2>&1; then \(processReplacement)\(tmux) \(features) attach-session -t \(target); else \(attach); fi"
     }
 
     nonisolated private func lifecycleMissingSessionCommand(backend: RemoteTmuxBackend) -> String {
@@ -627,15 +717,11 @@ actor RemoteTmuxManager {
     }
 
     nonisolated private func tmuxCommand(
-        includeUTF8: Bool,
-        includeConfig: Bool
+        includeUTF8: Bool
     ) -> String {
         var parts = ["tmux"]
         if includeUTF8 {
             parts.append("-u")
-        }
-        if includeConfig {
-            parts.append("-f \(configPath)")
         }
         return parts.joined(separator: " ")
     }
@@ -768,7 +854,7 @@ actor RemoteTmuxManager {
     nonisolated private func listSessionCommands(backend: RemoteTmuxBackend) -> [String] {
         switch backend {
         case .unixTmux:
-            let tmux = tmuxCommand(includeUTF8: false, includeConfig: false)
+            let tmux = tmuxCommand(includeUTF8: false)
             let bodies = [
                 "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-sessions -F '#{session_name} #{session_attached} #{session_windows}' 2>/dev/null",
                 "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-sessions -F '#{session_name} #{session_attached}' 2>/dev/null",
@@ -934,7 +1020,7 @@ actor RemoteTmuxManager {
         switch backend {
         case .unixTmux:
             let quoted = RemoteTerminalBootstrap.shellQuoted(sessionName)
-            let tmux = tmuxCommand(includeUTF8: false, includeConfig: false)
+            let tmux = tmuxCommand(includeUTF8: false)
             let body = "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) kill-session -t \(quoted) 2>/dev/null || true"
             return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
 
@@ -948,7 +1034,7 @@ actor RemoteTmuxManager {
         switch backend {
         case .unixTmux:
             let quotedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-            let tmux = tmuxCommand(includeUTF8: false, includeConfig: false)
+            let tmux = tmuxCommand(includeUTF8: false)
             let body = "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-panes -t \(quotedSession) -F '#{pane_current_path}' 2>/dev/null | head -n 1"
             return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
 
@@ -1037,8 +1123,8 @@ actor RemoteTmuxManager {
             : ""
         let attachCommand = usesManagedConfiguration
             ? """
-              & $vvtermPsmux -f $vvtermConfig source-file $vvtermConfig 2>$null
-              & $vvtermPsmux -u -f $vvtermConfig attach-session -d -t $vvtermSession
+              & $vvtermPsmux source-file -t $vvtermSession $vvtermConfig 2>$null
+              & $vvtermPsmux -u attach-session -d -t $vvtermSession
               """
             : "& $vvtermPsmux -u attach-session -d -t $vvtermSession"
         let lifecycleReport: String
@@ -1138,30 +1224,12 @@ actor RemoteTmuxManager {
         }
     }
 
-    nonisolated private func configWriteCommand(
-        terminalType: RemoteTerminalType,
-        backend: RemoteTmuxBackend = .unixTmux
-    ) -> String {
-        if backend.isWindows {
-            return windowsConfigWriteCommand(terminalType: terminalType, backend: backend)
-        }
-
-        let lines = configLines(
-            terminalType: terminalType,
-            includeWheelBindings: true,
-            quietAllowSetTitle: true
-        )
-        let quotedLines = lines.map { "\"\(escapeForDoubleQuotes($0))\"" }.joined(separator: " ")
-        return "mkdir -p \(configDirectory); printf '%s\\n' \(quotedLines) > \(configPath)"
-    }
-
-    nonisolated private func configLines(
-        terminalType: RemoteTerminalType,
-        includeWheelBindings: Bool,
-        quietAllowSetTitle: Bool
+    nonisolated private func windowsConfigLines(
+        terminalType: RemoteTerminalType
     ) -> [String] {
-        let themeName = UserDefaults.standard.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "Aizen Dark"
-        let modeStyle = ThemeColorParser.tmuxModeStyle(for: themeName)
+        // psmux runs one server per session. VVTerm loads this global-looking
+        // config only into the explicitly targeted managed-session server.
+        let theme = tmuxThemeConfiguration()
         var lines = [
             "# VVTerm tmux configuration",
             "# Auto-generated by VVTerm - changes will be overwritten",
@@ -1188,7 +1256,7 @@ actor RemoteTmuxManager {
             "",
             "# Publish the active pane title to the outer VVTerm terminal"
         ])
-        lines.append(contentsOf: titlePropagationConfigLines(quietAllowSetTitle: quietAllowSetTitle))
+        lines.append(contentsOf: titlePropagationConfigLines())
         lines.append(contentsOf: [
             "",
             "# Hide status bar",
@@ -1203,25 +1271,23 @@ actor RemoteTmuxManager {
             "# Set default terminal with true color support",
             "set -g default-terminal \"\(terminalType.rawValue)\"",
             "",
-            "# Selection highlighting in copy-mode (from theme: \(themeName))",
-            "set -g mode-style \"\(modeStyle)\""
+            "# Selection highlighting in copy-mode (from theme: \(theme.name))",
+            "set -g mode-style \"\(theme.modeStyle)\""
         ])
 
-        if includeWheelBindings {
-            lines.append(contentsOf: [
-                "",
-                "# Smart mouse scroll: copy-mode at shell, passthrough in TUI apps",
-                "bind -n WheelUpPane if -F '#{||:#{mouse_any_flag},#{alternate_on}}' 'send-keys -M' 'copy-mode -eH; send-keys -M'",
-                "bind -n WheelDownPane if -F '#{||:#{mouse_any_flag},#{alternate_on}}' 'send-keys -M' 'send-keys -M'"
-            ])
-        } else {
-            lines.append(contentsOf: [
-                "",
-                "# Use psmux's native scroll behavior on Windows"
-            ])
-        }
+        lines.append(contentsOf: [
+            "",
+            "# Use psmux's native scroll behavior on Windows"
+        ])
 
         return lines
+    }
+
+    nonisolated private func tmuxThemeConfiguration() -> (name: String, modeStyle: String) {
+        let name = UserDefaults.standard.string(
+            forKey: CloudKitSyncConstants.terminalThemeNameKey
+        ) ?? "Aizen Dark"
+        return (name, ThemeColorParser.tmuxModeStyle(for: name))
     }
 
     nonisolated private func windowsConfigWriteCommand(
@@ -1237,11 +1303,7 @@ actor RemoteTmuxManager {
     nonisolated private func windowsConfigWritePowerShell(
         terminalType: RemoteTerminalType
     ) -> String {
-        let lines = configLines(
-            terminalType: terminalType,
-            includeWheelBindings: false,
-            quietAllowSetTitle: false
-        )
+        let lines = windowsConfigLines(terminalType: terminalType)
         let content = lines.joined(separator: "\n") + "\n"
         return """
         $vvtermConfigDirectory = \(windowsConfigDirectoryPowerShellExpression())
@@ -1252,9 +1314,9 @@ actor RemoteTmuxManager {
         """
     }
 
-    nonisolated private func titlePropagationConfigLines(quietAllowSetTitle: Bool) -> [String] {
+    nonisolated private func titlePropagationConfigLines() -> [String] {
         [
-            quietAllowSetTitle ? "set -gq allow-set-title on" : "set -g allow-set-title on",
+            "set -g allow-set-title on",
             "set -g set-titles on",
             "set -g set-titles-string \"#{pane_title}\""
         ]
@@ -1390,11 +1452,4 @@ actor RemoteTmuxManager {
             .joined(separator: "\n")
     }
 
-    nonisolated private func escapeForDoubleQuotes(_ value: String) -> String {
-        var escaped = value.replacingOccurrences(of: "\\", with: "\\\\")
-        escaped = escaped.replacingOccurrences(of: "\"", with: "\\\"")
-        escaped = escaped.replacingOccurrences(of: "$", with: "\\$")
-        escaped = escaped.replacingOccurrences(of: "`", with: "\\`")
-        return escaped
-    }
 }
