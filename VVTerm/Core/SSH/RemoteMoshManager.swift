@@ -3,6 +3,8 @@ import MoshBootstrap
 import os
 
 actor RemoteMoshManager {
+    typealias CommandExecutor = @Sendable (_ command: String, _ timeout: Duration) async throws -> String
+
     enum PortClass: String, Equatable, Sendable {
         case privileged
         case standardMoshRange
@@ -15,6 +17,8 @@ actor RemoteMoshManager {
     private let availabilityTimeout: Duration = .seconds(8)
     private let bootstrapTimeout: Duration = .seconds(25)
     private let installTimeout: Duration = .seconds(180)
+    static let terminationTimeout: Duration = .seconds(5)
+    static let disconnectCleanupTimeout: Duration = .seconds(7)
 
     private init() {}
 
@@ -38,6 +42,22 @@ actor RemoteMoshManager {
         portRange: ClosedRange<Int> = 60001...61000
     ) async throws -> MoshServerConnectInfo {
         let terminalType = await client.remoteTerminalType()
+        return try await bootstrapConnectInfo(
+            terminalType: terminalType,
+            startCommand: startCommand,
+            portRange: portRange,
+            execute: { command, timeout in
+                try await client.execute(command, timeout: timeout)
+            }
+        )
+    }
+
+    func bootstrapConnectInfo(
+        terminalType: RemoteTerminalType,
+        startCommand: String?,
+        portRange: ClosedRange<Int> = 60001...61000,
+        execute: @escaping CommandExecutor
+    ) async throws -> MoshServerConnectInfo {
         let resolvedStartup = moshChildStartupScript(
             startCommand: startCommand,
             terminalType: terminalType
@@ -52,8 +72,48 @@ actor RemoteMoshManager {
         logger.info(
             "Starting Mosh bootstrap [custom startup: \(startCommand != nil)] [terminal: \(terminalType.rawValue, privacy: .public)]"
         )
-        let output = try await client.execute(command, timeout: bootstrapTimeout)
-        return try parseConnectInfo(from: output)
+        let output = try await execute(command, bootstrapTimeout)
+        do {
+            return try parseConnectInfo(from: output)
+        } catch {
+            let serverPID = detachedServerPID(from: output)
+            await Self.terminateBootstrappedServer(pid: serverPID) { pid in
+                await self.terminateMoshServer(pid: pid, execute: execute)
+            }
+            throw error
+        }
+    }
+
+    nonisolated static func terminateBootstrappedServer(
+        pid: Int32?,
+        terminate: @escaping @Sendable (Int32) async -> Void
+    ) async {
+        guard let pid, pid > 1 else { return }
+        await Task {
+            await terminate(pid)
+        }.value
+    }
+
+    nonisolated static func terminationCommand(pid: Int32) -> String? {
+        guard pid > 1 else { return nil }
+        let body = "kill -TERM \(pid) 2>/dev/null || true"
+        return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+    }
+
+    func terminateMoshServer(
+        pid: Int32,
+        execute: CommandExecutor
+    ) async {
+        guard let command = Self.terminationCommand(pid: pid) else { return }
+
+        do {
+            _ = try await execute(command, Self.terminationTimeout)
+            logger.info("Requested cleanup for remote mosh-server [pid: \(pid, privacy: .public)]")
+        } catch {
+            logger.warning(
+                "Could not clean up remote mosh-server [pid: \(pid, privacy: .public)]: \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     func installMoshServer(using client: SSHClient) async throws {
@@ -70,12 +130,39 @@ actor RemoteMoshManager {
 
     nonisolated func parseConnectInfo(from output: String) throws -> MoshServerConnectInfo {
         do {
-            return try MoshServerOutputParser.parse(output)
+            let parsed = try MoshServerOutputParser.parse(output)
+            return MoshServerConnectInfo(
+                port: parsed.port,
+                key: parsed.key,
+                serverPID: detachedServerPID(from: parsed.rawOutput),
+                rawOutput: parsed.rawOutput
+            )
         } catch let error as MoshBootstrapError {
             throw mapBootstrapError(error, output: output)
         } catch {
             throw SSHError.moshBootstrapFailed(error.localizedDescription)
         }
+    }
+
+    private nonisolated func detachedServerPID(from output: String) -> Int32? {
+        let prefix = "[mosh-server detached,"
+        for rawLine in output.split(whereSeparator: { $0.isNewline }) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix(prefix), line.hasSuffix("]") else { continue }
+
+            let assignment = line.dropFirst(prefix.count).dropLast()
+            let fields = assignment.split(separator: "=", maxSplits: 1).map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            guard fields.count == 2,
+                  fields[0] == "pid",
+                  let pid = Int32(fields[1]),
+                  pid > 1 else {
+                continue
+            }
+            return pid
+        }
+        return nil
     }
 
     nonisolated func mapBootstrapError(_ error: MoshBootstrapError, output: String? = nil) -> SSHError {
@@ -222,5 +309,102 @@ actor RemoteMoshManager {
         let maxLength = 1_500
         guard redacted.count > maxLength else { return redacted }
         return String(redacted.prefix(maxLength)) + "..."
+    }
+}
+
+actor RemoteMoshServerLease {
+    typealias Terminate = @Sendable (Int32) async -> Void
+
+    private enum State {
+        case bootstrapping
+        case cleanupPending
+        case active(Int32?)
+        case cleaning
+        case cleaned
+    }
+
+    private let terminate: Terminate
+    private var state: State = .bootstrapping
+    private var cleanupWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    init(terminate: @escaping Terminate) {
+        self.terminate = terminate
+    }
+
+    func activate(serverPID: Int32?) async {
+        switch state {
+        case .bootstrapping:
+            state = .active(serverPID)
+        case .cleanupPending:
+            await clean(serverPID: serverPID)
+        case .active, .cleaning, .cleaned:
+            break
+        }
+    }
+
+    func bootstrapFailed() {
+        switch state {
+        case .bootstrapping, .cleanupPending:
+            state = .cleaned
+            resumeCleanupWaiters()
+        case .active, .cleaning, .cleaned:
+            break
+        }
+    }
+
+    func cleanup() async {
+        switch state {
+        case .bootstrapping:
+            state = .cleanupPending
+            await waitUntilCleaned()
+        case .cleanupPending, .cleaning:
+            await waitUntilCleaned()
+        case .active(let serverPID):
+            await clean(serverPID: serverPID)
+        case .cleaned:
+            break
+        }
+    }
+
+    #if DEBUG
+    func cleanupIsPendingForTesting() -> Bool {
+        if case .cleanupPending = state { return true }
+        return false
+    }
+    #endif
+
+    private func clean(serverPID: Int32?) async {
+        state = .cleaning
+        await RemoteMoshManager.terminateBootstrappedServer(
+            pid: serverPID,
+            terminate: terminate
+        )
+        state = .cleaned
+        resumeCleanupWaiters()
+    }
+
+    private func waitUntilCleaned() async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if case .cleaned = state {
+                    continuation.resume()
+                } else {
+                    cleanupWaiters[waiterID] = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelCleanupWaiter(waiterID) }
+        }
+    }
+
+    private func cancelCleanupWaiter(_ waiterID: UUID) {
+        cleanupWaiters.removeValue(forKey: waiterID)?.resume()
+    }
+
+    private func resumeCleanupWaiters() {
+        let waiters = Array(cleanupWaiters.values)
+        cleanupWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
     }
 }

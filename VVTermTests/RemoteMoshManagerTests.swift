@@ -9,12 +9,61 @@ struct RemoteMoshManagerTests {
         let key = "ABCDEFGHIJKLMNOPQRSTUV"
         let output = """
         MOSH CONNECT 60001 \(key)
-        mosh-server (mosh 1.4.0) [pid=12345]
+        [mosh-server detached, pid = 12345]
         """
 
         let info = try RemoteMoshManager.shared.parseConnectInfo(from: output)
         #expect(info.port == 60001)
         #expect(info.key == key)
+        #expect(info.serverPID == 12_345)
+    }
+
+    @Test
+    func parseIgnoresUnrelatedPIDTextForCleanup() throws {
+        let key = "ABCDEFGHIJKLMNOPQRSTUV"
+        let output = """
+        shell startup pid = 4242
+        MOSH CONNECT 60001 \(key)
+        """
+
+        let info = try RemoteMoshManager.shared.parseConnectInfo(from: output)
+
+        #expect(info.serverPID == nil)
+    }
+
+    @Test
+    func malformedBootstrapWithDetachedPIDTerminatesServer() async {
+        let key = "ABCDEFGHIJKLMNOPQRSTUV"
+        let executor = MoshTerminationExecutor(results: [
+            .success("""
+            MOSH CONNECT invalid-port \(key)
+            [mosh-server detached, pid = 12345]
+            """),
+            .success("")
+        ])
+
+        do {
+            _ = try await RemoteMoshManager.shared.bootstrapConnectInfo(
+                terminalType: .xterm256Color,
+                startCommand: nil,
+                execute: { command, timeout in
+                    try await executor.execute(command: command, timeout: timeout)
+                }
+            )
+            Issue.record("Expected malformed bootstrap failure")
+        } catch let error as SSHError {
+            guard case .moshBootstrapFailed = error else {
+                Issue.record("Unexpected SSHError: \(error.localizedDescription)")
+                return
+            }
+        } catch {
+            Issue.record("Unexpected error: \(error.localizedDescription)")
+        }
+
+        let invocations = await executor.snapshot()
+        #expect(invocations.count == 2)
+        #expect(invocations[1].command.contains("kill -TERM 12345"))
+        #expect(invocations[1].timeout == .seconds(5))
     }
 
     @Test
@@ -167,5 +216,243 @@ struct RemoteMoshManagerTests {
         #expect(RemoteMoshManager.portClass(60001) == .standardMoshRange)
         #expect(RemoteMoshManager.portClass(22) == .privileged)
         #expect(RemoteMoshManager.portClass(50_000) == .otherUnprivileged)
+    }
+
+    @Test
+    func activatingServerLeaseDoesNotTerminateIt() async {
+        let recorder = MoshCleanupRecorder()
+        let lease = RemoteMoshServerLease(
+            terminate: { pid in await recorder.record(pid: pid) }
+        )
+
+        await lease.activate(serverPID: 12_345)
+
+        #expect(await recorder.snapshot().isEmpty)
+    }
+
+    @Test
+    func activeServerLeaseCleanupTerminatesExactlyOnce() async {
+        let recorder = MoshCleanupRecorder()
+        let lease = RemoteMoshServerLease(
+            terminate: { pid in await recorder.record(pid: pid) }
+        )
+        await lease.activate(serverPID: 12_345)
+
+        async let firstCleanup: Void = lease.cleanup()
+        async let secondCleanup: Void = lease.cleanup()
+        await firstCleanup
+        await secondCleanup
+
+        #expect(await recorder.snapshot() == [
+            MoshCleanupEvent(pid: 12_345, wasCancelled: false)
+        ])
+    }
+
+    @Test
+    func cancelledLeaseCleanupTerminatesFromUncancelledTask() async {
+        let recorder = MoshCleanupRecorder()
+        let lease = RemoteMoshServerLease(
+            terminate: { pid in await recorder.record(pid: pid) }
+        )
+        await lease.activate(serverPID: 12_345)
+        let release = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let task = Task {
+            for await _ in release.stream { break }
+            await lease.cleanup()
+        }
+
+        task.cancel()
+        release.continuation.yield()
+        release.continuation.finish()
+        await task.value
+
+        #expect(await recorder.snapshot() == [
+            MoshCleanupEvent(pid: 12_345, wasCancelled: false)
+        ])
+    }
+
+    @Test
+    func cleanupRequestedDuringBootstrapRunsWhenPIDArrives() async {
+        let recorder = MoshCleanupRecorder()
+        let lease = RemoteMoshServerLease(
+            terminate: { pid in await recorder.record(pid: pid) }
+        )
+        let cleanup = Task { await lease.cleanup() }
+
+        var cleanupIsPending = false
+        for _ in 0..<1_000 {
+            if await lease.cleanupIsPendingForTesting() {
+                cleanupIsPending = true
+                break
+            }
+            await Task.yield()
+        }
+        guard cleanupIsPending else {
+            await lease.bootstrapFailed()
+            await cleanup.value
+            Issue.record("Lease cleanup did not wait for bootstrap resolution")
+            return
+        }
+
+        await lease.activate(serverPID: 12_345)
+        await cleanup.value
+
+        #expect(await recorder.snapshot() == [
+            MoshCleanupEvent(pid: 12_345, wasCancelled: false)
+        ])
+    }
+
+    @Test
+    func cancelledDisconnectCleanupWaitsForPIDBeforeTeardown() async {
+        let recorder = MoshDisconnectCleanupRecorder()
+        let lease = RemoteMoshServerLease(
+            terminate: { pid in await recorder.recordTermination(pid: pid) }
+        )
+        let release = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let cleanup = Task {
+            for await _ in release.stream { break }
+            let callerWasCancelled = Task.isCancelled
+            let cleanupFinished = await SSHClient.cleanupPendingMoshServerLeases([lease])
+            await recorder.recordTeardown()
+            return (callerWasCancelled, cleanupFinished)
+        }
+
+        cleanup.cancel()
+        release.continuation.yield()
+        release.continuation.finish()
+
+        var cleanupIsPending = false
+        for _ in 0..<1_000 {
+            if await lease.cleanupIsPendingForTesting() {
+                cleanupIsPending = true
+                break
+            }
+            await Task.yield()
+        }
+        guard cleanupIsPending else {
+            await lease.bootstrapFailed()
+            _ = await cleanup.value
+            Issue.record("Disconnect cleanup did not wait for bootstrap resolution")
+            return
+        }
+
+        await lease.activate(serverPID: 12_345)
+        let result = await cleanup.value
+
+        #expect(result.0)
+        #expect(result.1)
+        #expect(await recorder.snapshot() == [
+            .termination(pid: 12_345, wasCancelled: false),
+            .teardown
+        ])
+    }
+
+    @Test
+    func missingOrUnsafePIDSkipsTermination() async {
+        let recorder = MoshCleanupRecorder()
+
+        for pid in [nil, Int32.min, -1, 0, 1] as [Int32?] {
+            await RemoteMoshManager.terminateBootstrappedServer(
+                pid: pid,
+                terminate: { value in await recorder.record(pid: value) }
+            )
+        }
+        #expect(await recorder.snapshot().isEmpty)
+    }
+
+    @Test
+    func terminationExecutesBoundedBestEffortCommand() async {
+        let executor = MoshTerminationExecutor(error: MoshCleanupTestError.commandFailed)
+
+        await RemoteMoshManager.shared.terminateMoshServer(
+            pid: 12_345,
+            execute: { command, timeout in
+                try await executor.execute(command: command, timeout: timeout)
+            }
+        )
+
+        let invocations = await executor.snapshot()
+        #expect(invocations.count == 1)
+        #expect(invocations[0].command.contains("kill -TERM 12345"))
+        #expect(invocations[0].timeout == .seconds(5))
+    }
+
+    @Test
+    func terminationCommandRejectsUnsafePIDs() {
+        #expect(RemoteMoshManager.terminationCommand(pid: Int32.min) == nil)
+        #expect(RemoteMoshManager.terminationCommand(pid: -1) == nil)
+        #expect(RemoteMoshManager.terminationCommand(pid: 0) == nil)
+        #expect(RemoteMoshManager.terminationCommand(pid: 1) == nil)
+        #expect(RemoteMoshManager.terminationCommand(pid: 2)?.contains("kill -TERM 2") == true)
+    }
+}
+
+private enum MoshCleanupTestError: Error, Equatable, Sendable {
+    case commandFailed
+}
+
+private struct MoshCleanupEvent: Equatable, Sendable {
+    let pid: Int32
+    let wasCancelled: Bool
+}
+
+private actor MoshCleanupRecorder {
+    private var events: [MoshCleanupEvent] = []
+
+    func record(pid: Int32) {
+        events.append(MoshCleanupEvent(pid: pid, wasCancelled: Task.isCancelled))
+    }
+
+    func snapshot() -> [MoshCleanupEvent] {
+        events
+    }
+}
+
+private enum MoshDisconnectCleanupEvent: Equatable, Sendable {
+    case termination(pid: Int32, wasCancelled: Bool)
+    case teardown
+}
+
+private actor MoshDisconnectCleanupRecorder {
+    private var events: [MoshDisconnectCleanupEvent] = []
+
+    func recordTermination(pid: Int32) {
+        events.append(.termination(pid: pid, wasCancelled: Task.isCancelled))
+    }
+
+    func recordTeardown() {
+        events.append(.teardown)
+    }
+
+    func snapshot() -> [MoshDisconnectCleanupEvent] {
+        events
+    }
+}
+
+private actor MoshTerminationExecutor {
+    struct Invocation: Sendable {
+        let command: String
+        let timeout: Duration
+    }
+
+    private var results: [Result<String, MoshCleanupTestError>]
+    private var invocations: [Invocation] = []
+
+    init(error: MoshCleanupTestError? = nil) {
+        results = error.map { [.failure($0)] } ?? []
+    }
+
+    init(results: [Result<String, MoshCleanupTestError>]) {
+        self.results = results
+    }
+
+    func execute(command: String, timeout: Duration) throws -> String {
+        invocations.append(Invocation(command: command, timeout: timeout))
+        guard !results.isEmpty else { return "" }
+        return try results.removeFirst().get()
+    }
+
+    func snapshot() -> [Invocation] {
+        invocations
     }
 }

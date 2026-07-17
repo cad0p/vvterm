@@ -55,8 +55,25 @@ enum SSHUploadStrategy: Sendable {
 }
 
 actor SSHClient {
+    private struct DisconnectOperation {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     private struct MoshShellRuntime {
         let session: MoshClientSession
+    }
+
+    private struct PreparedMoshShell: Sendable {
+        let session: MoshClientSession
+        let pendingOps: [MoshHostOp]
+        let hostOpStream: AsyncStream<MoshHostOp>
+    }
+
+    private struct PreparedMoshBootstrap: Sendable {
+        let shell: PreparedMoshShell
+        let leaseID: UUID
+        let lease: RemoteMoshServerLease
     }
 
     private var session: SSHSession?
@@ -70,6 +87,8 @@ actor SSHClient {
     private var resolvedRemoteTerminalType: RemoteTerminalType?
     private var startupTrace: SSHStartupTrace?
     private var moshShells: [UUID: MoshShellRuntime] = [:]
+    private var pendingMoshServerLeases: [UUID: RemoteMoshServerLease] = [:]
+    private var disconnectOperation: DisconnectOperation?
     private let cloudflareTransportManager = CloudflareTransportManager()
     private let moshStartupTimeout: Duration = .seconds(8)
     private let connectTimeout: Duration = .seconds(30)
@@ -89,6 +108,9 @@ actor SSHClient {
     // MARK: - Connection
 
     func connect(to server: Server, credentials: ServerCredentials) async throws -> SSHSession {
+        while let disconnectOperation {
+            await disconnectOperation.task.value
+        }
         _isAborted = false
         try Task.checkCancellation()
 
@@ -209,13 +231,17 @@ actor SSHClient {
     }
 
     func disconnect() async {
+        if let disconnectOperation {
+            await disconnectOperation.task.value
+            return
+        }
+
         _isAborted = true
 
+        let pendingMoshServerLeases = Array(self.pendingMoshServerLeases.values)
+        self.pendingMoshServerLeases.removeAll()
         let activeMoshShells = Array(moshShells.values)
         moshShells.removeAll()
-        for runtime in activeMoshShells {
-            await runtime.session.stop()
-        }
 
         keepAliveTask?.cancel()
         keepAliveTask = nil
@@ -231,10 +257,41 @@ actor SSHClient {
         resolvedRemoteEnvironment = nil
         resolvedRemoteTerminalType = nil
         startupTrace = nil
-        await disconnectSSHSession(activeSession)
-        await disconnectCloudflareTransport(reason: "client disconnect")
 
-        logger.info("Disconnected")
+        let operationID = UUID()
+        let disconnectTimeout = self.disconnectTimeout
+        let cloudflareTransportManager = self.cloudflareTransportManager
+        let logger = self.logger
+        let task = Task {
+            let cleanupFinished = await SSHClient.cleanupPendingMoshServerLeases(
+                pendingMoshServerLeases
+            )
+            if !cleanupFinished {
+                logger.warning(
+                    "Pending remote mosh-server cleanup exceeded the disconnect coordination window"
+                )
+            }
+
+            for runtime in activeMoshShells {
+                await runtime.session.stop()
+            }
+
+            await SSHClient.disconnectSSHSession(
+                activeSession,
+                timeout: disconnectTimeout,
+                logger: logger
+            )
+            await SSHClient.disconnectCloudflareTransport(
+                cloudflareTransportManager,
+                reason: "client disconnect",
+                timeout: disconnectTimeout,
+                logger: logger
+            )
+            self.finishDisconnect(operationID: operationID)
+            logger.info("Disconnected")
+        }
+        disconnectOperation = DisconnectOperation(id: operationID, task: task)
+        await task.value
     }
 
     // MARK: - Command Execution
@@ -483,18 +540,21 @@ actor SSHClient {
         }
 
         do {
-            let moshShell = try await startMoshShell(
+            let preparedMosh = try await prepareMoshShell(
+                using: sshSession,
                 cols: cols,
                 rows: rows,
-                startupCommand: startupCommand
+                startupCommand: startupCommand,
+                terminalType: terminalType
             )
             do {
                 try validateShellStartupSession(sshSession)
-                return moshShell
             } catch {
-                await closeShell(moshShell.id)
+                await discardPreparedMoshShell(preparedMosh)
                 throw error
             }
+            pendingMoshServerLeases.removeValue(forKey: preparedMosh.leaseID)
+            return registerMoshShell(preparedMosh.shell)
         } catch {
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
@@ -631,12 +691,48 @@ actor SSHClient {
         }
     }
 
-    private func disconnectSSHSession(_ activeSession: SSHSession?) async {
+    private func finishDisconnect(operationID: UUID) {
+        guard disconnectOperation?.id == operationID else { return }
+        disconnectOperation = nil
+    }
+
+    nonisolated static func cleanupPendingMoshServerLeases(
+        _ leases: [RemoteMoshServerLease]
+    ) async -> Bool {
+        guard !leases.isEmpty else { return true }
+
+        // This task is deliberately unstructured so cancellation of the caller
+        // cannot shorten the cleanup window before the remote PID is known.
+        return await Task {
+            do {
+                try await runWithTimeout(RemoteMoshManager.disconnectCleanupTimeout) {
+                    await withTaskGroup(of: Void.self) { group in
+                        for lease in leases {
+                            group.addTask {
+                                await lease.cleanup()
+                            }
+                        }
+                    }
+                }
+                return true
+            } catch {
+                // The timeout is cooperative. Once termination starts, its own
+                // five-second command bound remains authoritative.
+                return false
+            }
+        }.value
+    }
+
+    private nonisolated static func disconnectSSHSession(
+        _ activeSession: SSHSession?,
+        timeout: Duration,
+        logger: Logger
+    ) async {
         guard let activeSession else { return }
 
-        let abortWatchdog = Task { [disconnectTimeout, logger] in
+        let abortWatchdog = Task {
             do {
-                try await Task.sleep(for: disconnectTimeout)
+                try await Task.sleep(for: timeout)
             } catch {
                 return
             }
@@ -649,9 +745,23 @@ actor SSHClient {
     }
 
     private func disconnectCloudflareTransport(reason: String) async {
+        await SSHClient.disconnectCloudflareTransport(
+            cloudflareTransportManager,
+            reason: reason,
+            timeout: disconnectTimeout,
+            logger: logger
+        )
+    }
+
+    private nonisolated static func disconnectCloudflareTransport(
+        _ manager: CloudflareTransportManager,
+        reason: String,
+        timeout: Duration,
+        logger: Logger
+    ) async {
         do {
-            try await SSHClient.runWithTimeout(disconnectTimeout) { [cloudflareTransportManager] in
-                await cloudflareTransportManager.disconnect()
+            try await SSHClient.runWithTimeout(timeout) {
+                await manager.disconnect()
             }
         } catch {
             logger.warning("Timed out while disconnecting Cloudflare transport (\(reason, privacy: .public))")
@@ -668,32 +778,50 @@ actor SSHClient {
 
     // MARK: - Mosh
 
-    private func startMoshShell(
+    private func prepareMoshShell(
+        using expectedSession: SSHSession,
         cols: Int,
         rows: Int,
-        startupCommand: String?
-    ) async throws -> ShellHandle {
+        startupCommand: String?,
+        terminalType: RemoteTerminalType
+    ) async throws -> PreparedMoshBootstrap {
         let configuredHost = connectedServer?.host ?? ""
-        let peerHost: String?
-        if let sshSession = session {
-            peerHost = await sshSession.remoteEndpointHost()
-        } else {
-            peerHost = nil
-        }
+        let peerHost = await expectedSession.remoteEndpointHost()
+        try validateShellStartupSession(expectedSession)
         let candidateHosts = MoshEndpointCandidatePolicy.hosts(
             configuredHost: configuredHost,
             sshPeerHost: peerHost
         )
         guard !candidateHosts.isEmpty else { throw SSHError.moshInvalidEndpoint }
 
+        let terminateServer: @Sendable (Int32) async -> Void = { pid in
+            await RemoteMoshManager.shared.terminateMoshServer(
+                pid: pid,
+                execute: { command, timeout in
+                    try await SSHClient.runWithTimeout(timeout) {
+                        try await expectedSession.execute(command)
+                    }
+                }
+            )
+        }
+        let leaseID = UUID()
+        let lease = RemoteMoshServerLease(terminate: terminateServer)
+        pendingMoshServerLeases[leaseID] = lease
+
         let bootstrapToken = startupTrace?.begin(.moshBootstrap)
         let connectInfo: MoshServerConnectInfo
         do {
             connectInfo = try await RemoteMoshManager.shared.bootstrapConnectInfo(
-                using: self,
+                terminalType: terminalType,
                 startCommand: startupCommand,
-                portRange: 60001...61000
+                portRange: 60001...61000,
+                execute: { command, timeout in
+                    try await SSHClient.runWithTimeout(timeout) {
+                        try await expectedSession.execute(command)
+                    }
+                }
             )
+            await lease.activate(serverPID: connectInfo.serverPID)
             if let bootstrapToken {
                 startupTrace?.end(
                     bootstrapToken,
@@ -708,8 +836,47 @@ actor SSHClient {
                     detail: fallbackReason(for: error).rawValue
                 )
             }
+            await lease.bootstrapFailed()
+            pendingMoshServerLeases.removeValue(forKey: leaseID)
             throw error
         }
+
+        do {
+            let preparedShell = try await prepareMoshShellStartup(
+                using: expectedSession,
+                configuredHost: configuredHost,
+                candidateHosts: candidateHosts,
+                connectInfo: connectInfo,
+                cols: cols,
+                rows: rows
+            )
+            return PreparedMoshBootstrap(
+                shell: preparedShell,
+                leaseID: leaseID,
+                lease: lease
+            )
+        } catch {
+            await lease.cleanup()
+            pendingMoshServerLeases.removeValue(forKey: leaseID)
+            throw error
+        }
+    }
+
+    private func discardPreparedMoshShell(_ prepared: PreparedMoshBootstrap) async {
+        await prepared.lease.cleanup()
+        await prepared.shell.session.stop()
+        pendingMoshServerLeases.removeValue(forKey: prepared.leaseID)
+    }
+
+    private func prepareMoshShellStartup(
+        using expectedSession: SSHSession,
+        configuredHost: String,
+        candidateHosts: [String],
+        connectInfo: MoshServerConnectInfo,
+        cols: Int,
+        rows: Int
+    ) async throws -> PreparedMoshShell {
+        try validateShellStartupSession(expectedSession)
 
         let startupTimeout = candidateHosts.count > 1 ? Duration.seconds(4) : moshStartupTimeout
         var lastStartupError: Error?
@@ -717,6 +884,7 @@ actor SSHClient {
         var pendingOps: [MoshHostOp] = []
 
         for host in candidateHosts {
+            try validateShellStartupSession(expectedSession)
             let endpointClass = host == configuredHost ? "configured" : "ssh_peer"
             startupTrace?.record(
                 .moshEndpoint,
@@ -770,52 +938,68 @@ actor SSHClient {
             throw SSHError.moshClientSessionFailed("Failed to start Mosh session")
         }
 
-        let shellId = UUID()
-        if !pendingOps.isEmpty {
-            logger.info("Mosh: \(pendingOps.count) pending host ops before stream creation")
+        do {
+            let hostOpStream = await moshSession.hostOpStream()
+            try validateShellStartupSession(expectedSession)
+            return PreparedMoshShell(
+                session: moshSession,
+                pendingOps: pendingOps,
+                hostOpStream: hostOpStream
+            )
+        } catch {
+            await moshSession.stop()
+            throw error
         }
-        let hostOpStream = await moshSession.hostOpStream()
+    }
+
+    private func registerMoshShell(_ prepared: PreparedMoshShell) -> ShellHandle {
+        let shellId = UUID()
+        if !prepared.pendingOps.isEmpty {
+            logger.info("Mosh: \(prepared.pendingOps.count) pending host ops before stream creation")
+        }
+
+        let streamPair = AsyncStream<Data>.makeStream()
+        let continuation = streamPair.continuation
+        for op in prepared.pendingOps {
+            if case .hostBytes(let bytes) = op {
+                startupTrace?.recordOnce(.firstTerminalByte, detail: "mosh")
+                continuation.yield(bytes)
+            }
+        }
+
+        moshShells[shellId] = MoshShellRuntime(session: prepared.session)
+
         let moshLogger = logger
         let trace = startupTrace
-        let stream = AsyncStream<Data> { continuation in
-            // Replay any ops that arrived before the stream was created
-            for op in pendingOps {
-                if case .hostBytes(let bytes) = op {
+        let streamTask = Task { [weak self] in
+            var totalBytes = 0
+            for await hostOp in prepared.hostOpStream {
+                guard !Task.isCancelled else { break }
+                switch hostOp {
+                case .hostBytes(let bytes):
                     trace?.recordOnce(.firstTerminalByte, detail: "mosh")
+                    totalBytes += bytes.count
+                    moshLogger.debug("Mosh host bytes: \(bytes.count)B (total: \(totalBytes))")
                     continuation.yield(bytes)
+                case .echoAck, .resize:
+                    break
                 }
             }
-            let streamTask = Task { [weak self] in
-                var totalBytes = 0
-                for await hostOp in hostOpStream {
-                    guard !Task.isCancelled else { break }
-                    switch hostOp {
-                    case .hostBytes(let bytes):
-                        trace?.recordOnce(.firstTerminalByte, detail: "mosh")
-                        totalBytes += bytes.count
-                        moshLogger.debug("Mosh host bytes: \(bytes.count)B (total: \(totalBytes))")
-                        continuation.yield(bytes)
-                    case .echoAck, .resize:
-                        break
-                    }
-                }
-                moshLogger.info("Mosh stream ended, total bytes delivered: \(totalBytes)")
-                continuation.finish()
-                await self?.closeShell(shellId)
-            }
+            moshLogger.info("Mosh stream ended, total bytes delivered: \(totalBytes)")
+            continuation.finish()
+            await self?.closeShell(shellId)
+        }
 
-            continuation.onTermination = { [weak self] _ in
-                streamTask.cancel()
-                Task { [weak self] in
-                    await self?.closeShell(shellId)
-                }
+        continuation.onTermination = { [weak self] _ in
+            streamTask.cancel()
+            Task { [weak self] in
+                await self?.closeShell(shellId)
             }
         }
 
-        moshShells[shellId] = MoshShellRuntime(session: moshSession)
         return ShellHandle(
             id: shellId,
-            stream: stream,
+            stream: streamPair.stream,
             transport: .mosh
         )
     }

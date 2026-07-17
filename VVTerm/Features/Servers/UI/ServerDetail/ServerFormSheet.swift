@@ -1,4 +1,5 @@
 import SwiftUI
+import MoshBootstrap
 
 enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
     case standard
@@ -1065,10 +1066,21 @@ struct ServerFormSheet: View {
                     credentials: credentials
                 ) { client in
                     if testServer.connectionMode == .mosh {
-                        _ = try await RemoteMoshManager.shared.bootstrapConnectInfo(
+                        let connectInfo = try await RemoteMoshManager.shared.bootstrapConnectInfo(
                             using: client,
                             startCommand: "exec true",
                             portRange: 60001...61000
+                        )
+                        await RemoteMoshManager.terminateBootstrappedServer(
+                            pid: connectInfo.serverPID,
+                            terminate: { pid in
+                                await RemoteMoshManager.shared.terminateMoshServer(
+                                    pid: pid,
+                                    execute: { command, timeout in
+                                        try await client.execute(command, timeout: timeout)
+                                    }
+                                )
+                            }
                         )
                     }
                 }
