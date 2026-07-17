@@ -140,7 +140,6 @@ For every feature:
 - if shared cross-feature primitives are needed, extract them into `Core` instead of creating new app-wide bucket folders
 
 Apple platform UI split pattern:
-- Follow `docs/specs/apple-platform-ui-split-pattern.md` for iOS/macOS UI ownership and migration details.
 - Do not let shared SwiftUI files accumulate large inline `#if os(iOS)` / `#if os(macOS)` branches. If platform layout, lifecycle, modifiers, or state diverge, keep the shared feature shell neutral and move platform presentation into `Type+iOS.swift` and `Type+macOS.swift` files with file-level compile gates.
 - Because VVTerm uses one multiplatform target, platform-specific files must still be guarded with `#if os(...)` unless target membership is explicitly changed; folder names such as `iOS/` or `macOS/` are not enough.
 - Avoid `iOS`, `Mac`, `macOS`, and `MacOS` prefixes in product UI type names. Prefer feature/domain names and put platform ownership in the filename or folder.
@@ -155,6 +154,28 @@ Stats UI ownership:
 - Keep reusable cards, charts, gauges, and meters under `Features/Stats/UI/Components`, and detail sheets/rows under `Features/Stats/UI/Details`.
 - Keep platform sheet chrome and close/search presentation behind `DetailPresentation.swift`, `DetailPresentation+iOS.swift`, and `DetailPresentation+macOS.swift`. Product UI types inside those files should use neutral names such as `StatsDetailShell` or `StatsSearchField`; the filename carries the platform ownership.
 - Small inline platform gates are acceptable only for platform constants or narrow modifiers such as native colors, toolbar placement, or iOS detents. If a platform branch grows into a body/layout/lifecycle variant, split it into a platform file.
+
+Status presentation:
+- Keep blocking states local to the screen that owns them.
+- Use `Core/UI/Notices` for shared non-blocking presentation: one top banner for persistent or degraded state and ID-keyed bottom operations for user-initiated progress or failure.
+- Keep destructive decisions in native alerts and confirmation dialogs.
+- Scope notice hosts to their app or feature surface. Do not add a global toast bus or move feature policy into `Core/UI`.
+
+Remote shell and multiplexer ownership:
+- Resolve the remote platform and shell through `SSHClient.remoteEnvironment()` and build startup or working-directory commands through `RemoteShellProfile` and `RemoteTerminalBootstrap`.
+- UI and session orchestration must not construct POSIX, PowerShell, or `cmd.exe` syntax. Runtime capability fallback must not rewrite persisted transport or tmux preferences.
+- Windows tmux-compatible sessions use the explicit psmux backend and must not use POSIX tmux command construction.
+- Probe `psmux`, then `pmux`, and accept `tmux.exe` only after a psmux-specific compatibility check.
+- Apply VVTerm-generated tmux or psmux configuration only to VVTerm-managed sessions, never external user sessions.
+
+## Product Planning and Repository Documentation
+
+- Keep product ideas, future specifications, roadmap decisions, pricing or packaging strategy, and internal rollout plans in the VVTerm Linear project, not in this repository.
+- Search Linear before creating work. Reuse or update an existing issue when it owns the same scope.
+- Create a Linear issue before a large implementation begins, and keep its decisions, acceptance criteria, and status current as the scope changes.
+- Keep repository documentation limited to current architecture, build, test, security, contribution, protocol, and intentionally public user contracts that must evolve with code.
+- Enforce completed behavior with tests and concise current architecture rules instead of retaining speculative or completed implementation plans.
+- Linear is not a secret manager. Do not store credentials, tokens, private keys, customer data, or production secrets in either Linear or the repository.
 
 ## Refactoring Rules
 
