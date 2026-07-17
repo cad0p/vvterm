@@ -11,6 +11,13 @@ import UIKit
 // MARK: - Server Terminal Route
 
 struct ServerTerminalRoute: View {
+    private enum PresentedRouteSheet: Hashable, Identifiable {
+        case settings
+        case editServer(Server)
+
+        var id: Self { self }
+    }
+
     @ObservedObject var tabManager: TerminalTabManager
     @ObservedObject var serverManager: ServerManager
     @ObservedObject var fileTabs: RemoteFileTabManager
@@ -25,8 +32,7 @@ struct ServerTerminalRoute: View {
 
     @State private var isRouteVisible = false
     @State private var screenAwakeRequestID = UUID()
-    @State private var showingSettings = false
-    @State private var serverToEdit: Server?
+    @State private var presentedRouteSheet: PresentedRouteSheet?
     @State private var showingTabLimitAlert = false
     @State private var showingFileTabLimitAlert = false
     @SceneStorage("vvterm.zenMode.ios") private var isZenModeEnabled = false
@@ -139,21 +145,23 @@ struct ServerTerminalRoute: View {
             .toolbar { navigationToolbar }
             .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
             .limitReachedAlert(.fileTabs, isPresented: $showingFileTabLimitAlert)
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
-                    .modifier(AppearanceModifier())
+            .sheet(item: $presentedRouteSheet, onDismiss: updateTerminalRouteActivation) { sheet in
+                switch sheet {
+                case .settings:
+                    SettingsView()
+                        .modifier(AppearanceModifier())
+                        .adaptiveSoftScrollEdges()
+                case .editServer(let server):
+                    NavigationStack {
+                        ServerFormSheet(
+                            serverManager: serverManager,
+                            workspace: serverManager.workspaces.first { $0.id == server.workspaceId },
+                            server: server,
+                            onSave: { _ in presentedRouteSheet = nil }
+                        )
+                    }
                     .adaptiveSoftScrollEdges()
-            }
-            .sheet(item: $serverToEdit) { server in
-                NavigationStack {
-                    ServerFormSheet(
-                        serverManager: serverManager,
-                        workspace: serverManager.workspaces.first { $0.id == server.workspaceId },
-                        server: server,
-                        onSave: { _ in serverToEdit = nil }
-                    )
                 }
-                .adaptiveSoftScrollEdges()
             }
             .onAppear {
                 isRouteVisible = true
@@ -282,7 +290,7 @@ struct ServerTerminalRoute: View {
 
             Menu {
                 Button {
-                    showingSettings = true
+                    presentRouteSheet(.settings)
                 } label: {
                     Label("Settings", systemImage: "gear")
                 }
@@ -303,7 +311,7 @@ struct ServerTerminalRoute: View {
                     }
 
                     Button {
-                        serverToEdit = server
+                        presentRouteSheet(.editServer(server))
                     } label: {
                         Label("Edit Server", systemImage: "pencil")
                     }
@@ -370,6 +378,10 @@ struct ServerTerminalRoute: View {
         )
     }
 
+    private var keyboardPresentationOwnership: TerminalKeyboardRouteActivationPolicy.PresentationOwnership {
+        presentedRouteSheet == nil ? .terminal : .routeModal
+    }
+
     private var screenAwakeSceneIsInBackground: Bool {
         switch terminalSceneActivation {
         case .foregroundActive, .foregroundInactive:
@@ -421,6 +433,7 @@ struct ServerTerminalRoute: View {
     }
 
     private func updateTerminalRouteActivation() {
+        let presentationOwnership = keyboardPresentationOwnership
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: isRouteVisible,
             terminalSelected: selectedView == ConnectionViewTab.terminal.id,
@@ -428,6 +441,7 @@ struct ServerTerminalRoute: View {
             windowOwnership: focusedTerminal?.window.map {
                 $0.isKeyWindow ? .key : .notKey
             } ?? .unknown,
+            presentationOwnership: presentationOwnership,
             contentObscured: isContentObscured
         )
 
@@ -443,9 +457,15 @@ struct ServerTerminalRoute: View {
 
         guard effect != .preserve else { return }
 
-        if effect == .deactivate, isContentObscured {
-            keyboardCoordinator.deactivateInputImmediately()
-            return
+        if effect == .deactivate {
+            if isContentObscured {
+                keyboardCoordinator.deactivateInputImmediately()
+                return
+            }
+            if presentationOwnership == .routeModal {
+                keyboardCoordinator.deactivateInputImmediately(reason: .routeModal)
+                return
+            }
         }
 
         let activePaneId = effect == .activate ? focusedPaneId : nil
@@ -464,6 +484,11 @@ struct ServerTerminalRoute: View {
         guard !hasNavigationContext else { return }
         isZenModeEnabled = false
         onBack()
+    }
+
+    private func presentRouteSheet(_ sheet: PresentedRouteSheet) {
+        keyboardCoordinator.deactivateInputImmediately(reason: .routeModal)
+        presentedRouteSheet = sheet
     }
 
     private func showKeyboardForFocusedTerminal() {

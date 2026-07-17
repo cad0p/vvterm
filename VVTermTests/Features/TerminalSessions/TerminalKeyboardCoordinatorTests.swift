@@ -678,7 +678,7 @@ struct TerminalKeyboardCoordinatorTests {
 
     @Test
     @MainActor
-    func rebuildCompletionDoesNotReacquireAfterInputOwnershipEnds() async {
+    func routeModalDeactivationPreventsDelayedRebuildFromReacquiringInput() async {
         let paneId = UUID()
         let session = TerminalKeyboardInputSessionSpy()
         session.completesRebuildImmediately = false
@@ -697,12 +697,78 @@ struct TerminalKeyboardCoordinatorTests {
         await drainMainQueue()
         #expect(session.rebuildCount == 1)
 
-        coordinator.deactivateInputImmediately()
+        coordinator.deactivateInputImmediately(reason: .routeModal)
         session.completeNextRebuild()
         await drainMainQueue()
 
         #expect(session.forceSoftwareKeyboardCount == 0)
         #expect(!session.snapshot.isSoftwareInputActive)
+    }
+
+    @Test
+    @MainActor
+    func routeModalDeactivationReleasesInputAndCancelsPresentationVerification() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneInputEligible(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        coordinator.userRequestedHide()
+        await drainMainQueue()
+        session.resetCommands()
+        coordinator.userRequestedShow()
+        await drainMainQueue()
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
+        let forceSoftwareKeyboardCount = session.forceSoftwareKeyboardCount
+
+        coordinator.deactivateInputImmediately(reason: .routeModal)
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        await drainMainQueue()
+
+        #expect(!coordinator.keyboardUITestPresentationVerificationPending)
+        #expect(session.releaseCount == 1)
+        #expect(session.acquireCount == 0)
+        #expect(session.forceSoftwareKeyboardCount == forceSoftwareKeyboardCount)
+        #expect(session.accessorySuppressionRequests.isEmpty)
+        #expect(!session.snapshot.isFirstResponder)
+        #expect(!session.snapshot.isSoftwareInputActive)
+    }
+
+    @Test
+    @MainActor
+    func routeModalRoundTripPreservesUserHiddenKeyboardIntent() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneInputEligible(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+
+        coordinator.userRequestedHide()
+        await drainMainQueue()
+        coordinator.deactivateInputImmediately(reason: .routeModal)
+        session.resetCommands()
+
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        await drainMainQueue()
+
+        #expect(coordinator.isUserHidden)
+        #expect(session.focusWithoutSoftwareKeyboardCount == 1)
+        #expect(session.forceSoftwareKeyboardCount == 0)
+        #expect(session.snapshot.isSoftwareInputActive)
     }
 
     @Test

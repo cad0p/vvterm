@@ -32,6 +32,11 @@ extension GhosttyTerminalView: TerminalKeyboardInputSession {}
 /// user never gets a long-lived bar without a keyboard.
 @MainActor
 final class TerminalKeyboardCoordinator: ObservableObject {
+    enum ImmediateDeactivationReason: String {
+        case contentProtection
+        case routeModal
+    }
+
     enum PresentationRefreshAction: Equatable {
         case none
         case deferUntilVerification
@@ -403,10 +408,12 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         markDirty(reason: "findNavigator")
     }
 
-    /// Privacy and app-lock shields must remove the UIKit input accessory
-    /// before iOS captures protected content. A scheduled reconciliation can
-    /// run too late because the keyboard belongs to a separate system scene.
-    func deactivateInputImmediately() {
+    /// Removes UIKit input ownership before a shield or route modal appears.
+    /// A scheduled reconciliation can run too late because the keyboard
+    /// belongs to a separate system scene.
+    func deactivateInputImmediately(
+        reason: ImmediateDeactivationReason = .contentProtection
+    ) {
         clearSoftwareKeyboardObservation()
         pendingPresentationRequest = .none
         explicitPresentationRecovery = nil
@@ -420,7 +427,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         viewActive = false
         findNavigatorState = .inactive
         cancelPresentationVerify()
-        pendingReason = "contentProtection"
+        pendingReason = reason.rawValue
         syncScheduled = false
         sync()
     }

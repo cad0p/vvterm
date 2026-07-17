@@ -39,6 +39,41 @@ struct TerminalKeyboardRouteActivationPolicyTests {
         )
     }
 
+    @Test(arguments: [false, true])
+    func routeModalReleasesInputAndRestoresPriorKeyboardIntent(userHidKeyboard: Bool) {
+        let effects = [
+            TerminalKeyboardRouteActivationPolicy.effect(
+                routeVisible: true,
+                terminalSelected: true,
+                sceneActivation: .foregroundActive,
+                windowOwnership: .key,
+                presentationOwnership: .routeModal
+            ),
+            TerminalKeyboardRouteActivationPolicy.effect(
+                routeVisible: true,
+                terminalSelected: true,
+                sceneActivation: .foregroundActive,
+                windowOwnership: .key,
+                presentationOwnership: .terminal
+            ),
+        ]
+
+        #expect(effects == [.deactivate, .activate])
+
+        let restoredInputs = TerminalKeyboardCoordinator.StateInputs(
+            viewActive: true,
+            activePaneInputEligible: true,
+            activePaneWindowAttached: true,
+            userHidKeyboard: userHidKeyboard,
+            findNavigatorActive: false
+        )
+        #expect(TerminalKeyboardCoordinator.desiredInputSessionActive(inputs: restoredInputs))
+        #expect(
+            TerminalKeyboardCoordinator.desiredKeyboardVisible(inputs: restoredInputs)
+                == !userHidKeyboard
+        )
+    }
+
     @Test
     func realBackgroundDeactivatesTerminalInput() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(

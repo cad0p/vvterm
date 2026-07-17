@@ -71,6 +71,89 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership() throws {
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        terminal.tap()
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        app.buttons["vvterm.keyboardTest.geometry.docked"].tap()
+        wait(for: diagnostics, labelContaining: "keyboardVisible=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        let settingsSheet = openSettingsSheet(in: app)
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "accessoryAttached=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        closeSettingsSheet(settingsSheet, in: app)
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        terminal.typeText("x")
+        wait(
+            for: diagnostics,
+            labelContaining: "inputHex=78",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        app.buttons["vvterm.keyboardTest.hideViaToolbar"].tap()
+        wait(for: diagnostics, labelContaining: "keyboardVisible=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "accessoryAttached=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        let hiddenIntentSettingsSheet = openSettingsSheet(in: app)
+        wait(for: diagnostics, labelContaining: "softwareInputActive=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        closeSettingsSheet(hiddenIntentSettingsSheet, in: app)
+
+        wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+        assertKeyboardAndAccessoryRemainHidden(in: app)
+    }
+
+    @MainActor
+    func testSettingsSheetDoesNotOverlapRealSoftwareKeyboard() throws {
+        let app = launchKeyboardHarness()
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        app.buttons["vvterm.keyboardTest.showKeyboard"].tap()
+
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        guard app.keyboards.firstMatch.waitForExistence(timeout: 8),
+              waitForLabel(diagnostics, containing: "keyboardVisible=true", timeout: 8),
+              waitForLabel(diagnostics, containing: "accessoryAttached=true", timeout: 5) else {
+            throw XCTSkip(
+                "Simulator suppressed the baseline software keyboard. \(diagnosticsText(in: app))"
+            )
+        }
+        assertKeyboardAndAccessoryVisible(in: app)
+
+        let settingsSheet = openSettingsSheet(in: app)
+        assertKeyboardAndAccessoryHidden(in: app)
+        wait(for: diagnostics, labelContaining: "softwareInputActive=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "imeProxyFirstResponder=false", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        closeSettingsSheet(settingsSheet, in: app)
+        assertKeyboardAndAccessoryVisible(in: app)
+    }
+
+    @MainActor
     func testForegroundReconnectRestoresTerminalTyping() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
@@ -1261,6 +1344,32 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    private func openSettingsSheet(in app: XCUIApplication) -> XCUIElement {
+        let menu = app.buttons["vvterm.keyboardTest.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        menu.tap()
+
+        let settingsItem = app.descendants(matching: .any)["vvterm.keyboardTest.menu.settings"]
+        XCTAssertTrue(settingsItem.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        settingsItem.tap()
+
+        let settingsSheet = app.descendants(matching: .any)["vvterm.keyboardTest.settings.sheet"]
+        XCTAssertTrue(settingsSheet.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        return settingsSheet
+    }
+
+    @MainActor
+    private func closeSettingsSheet(
+        _ settingsSheet: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        let closeButton = app.buttons["vvterm.keyboardTest.settings.close"]
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        closeButton.tap()
+        XCTAssertTrue(settingsSheet.waitForNonExistence(timeout: 5), diagnosticsText(in: app))
+    }
+
+    @MainActor
     private func requestKeyboardFromMenu(in app: XCUIApplication) {
         let menu = app.buttons["vvterm.keyboardTest.menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 5), diagnosticsText(in: app))
@@ -1475,13 +1584,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if element.label.contains(expectedText) {
-                return
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
+        guard !waitForLabel(element, containing: expectedText, timeout: timeout) else { return }
         XCTFail(
             """
             Timed out waiting for \(expectedText).
@@ -1490,6 +1593,21 @@ final class TerminalKeyboardUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    private func waitForLabel(
+        _ element: XCUIElement,
+        containing expectedText: String,
+        timeout: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.label.contains(expectedText) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
     }
 
     private func diagnosticsText(in app: XCUIApplication) -> String {

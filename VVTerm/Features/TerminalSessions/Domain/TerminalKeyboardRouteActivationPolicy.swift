@@ -18,14 +18,23 @@ enum TerminalKeyboardRouteActivationPolicy {
         case notKey
     }
 
+    enum PresentationOwnership: Equatable {
+        case terminal
+        case routeModal
+    }
+
     static func effect(
         routeVisible: Bool,
         terminalSelected: Bool,
         sceneActivation: SceneActivation,
         windowOwnership: WindowOwnership = .unknown,
+        presentationOwnership: PresentationOwnership = .terminal,
         contentObscured: Bool = false
     ) -> Effect {
-        guard routeVisible, terminalSelected, !contentObscured else {
+        guard routeVisible,
+              terminalSelected,
+              presentationOwnership == .terminal,
+              !contentObscured else {
             return .deactivate
         }
         guard windowOwnership != .notKey else {

@@ -59,6 +59,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var terminalView: GhosttyTerminalView?
     @State private var terminalReady = false
     @State private var showsTerminal = true
+    @State private var showingSettings = false
     @State private var simulatesPrivacyShield = false
     @State private var focusRequestID = 0
     @State private var keyboardVisible = false
@@ -184,6 +185,11 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.showKeyboard")
 
                     Menu {
+                        Button("Settings") {
+                            presentSettings()
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.menu.settings")
+
                         Button("Find") {
                             showFindInput()
                         }
@@ -352,6 +358,28 @@ struct TerminalKeyboardUITestHarness: View {
             .padding(8)
         }
         .background(Color.black)
+        .sheet(isPresented: $showingSettings, onDismiss: {
+            applyRouteActivation(.foregroundActive)
+        }) {
+            NavigationStack {
+                List {
+                    Section("Terminal") {
+                        Text("Keyboard settings")
+                    }
+                }
+                .navigationTitle("Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Close") {
+                            showingSettings = false
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.settings.close")
+                    }
+                }
+            }
+            .accessibilityIdentifier("vvterm.keyboardTest.settings.sheet")
+        }
         .task {
             ghosttyApp.startIfNeeded()
         }
@@ -536,6 +564,12 @@ struct TerminalKeyboardUITestHarness: View {
         terminalView?.dismissFindNavigator()
     }
 
+    private func presentSettings() {
+        TerminalTabManager.shared.keyboardCoordinator
+            .deactivateInputImmediately(reason: .routeModal)
+        showingSettings = true
+    }
+
     private func showFindInput() {
         terminalView?.showFindNavigator()
     }
@@ -546,11 +580,14 @@ struct TerminalKeyboardUITestHarness: View {
         contentObscured: Bool = false
     ) {
         let manager = TerminalTabManager.shared
+        let presentationOwnership: TerminalKeyboardRouteActivationPolicy.PresentationOwnership =
+            showingSettings ? .routeModal : .terminal
         switch TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: showsTerminal,
             sceneActivation: sceneActivation,
             windowOwnership: windowOwnership,
+            presentationOwnership: presentationOwnership,
             contentObscured: contentObscured
         ) {
         case .activate:
@@ -561,6 +598,8 @@ struct TerminalKeyboardUITestHarness: View {
         case .deactivate:
             if contentObscured {
                 manager.keyboardCoordinator.deactivateInputImmediately()
+            } else if presentationOwnership == .routeModal {
+                manager.keyboardCoordinator.deactivateInputImmediately(reason: .routeModal)
             } else {
                 manager.keyboardCoordinator.setViewActive(false)
                 manager.keyboardCoordinator.setActivePane(nil)
