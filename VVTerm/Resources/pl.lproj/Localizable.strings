@@ -1594,6 +1594,7 @@
 "Check Again" = "Sprawdź ponownie";
 "Checking storage health" = "Sprawdzanie kondycji pamięci";
 "Clear Selection" = "Wyczyść wybór";
+"Clear the search to see all volumes." = "Wyczyść wyszukiwanie, aby zobaczyć wszystkie woluminy.";
 "Connection" = "Połączenie";
 "Container Mounts" = "Punkty montowania kontenerów";
 "Corrected Read Errors" = "Skorygowane błędy odczytu";
@@ -1613,6 +1614,7 @@
 "Health Data Unavailable" = "Dane o kondycji są niedostępne";
 "Health Not Supported" = "Sprawdzanie kondycji nie jest obsługiwane";
 "Health Tool Not Found" = "Nie znaleziono narzędzia diagnostycznego";
+"Hidden from Stats" = "Ukryty w statystykach";
 "Hide Container Mounts" = "Ukryj punkty montowania kontenerów";
 "Hide Selected" = "Ukryj wybrane";
 "Hide Volume" = "Ukryj wolumin";

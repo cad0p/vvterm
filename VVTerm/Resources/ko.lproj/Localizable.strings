@@ -1591,6 +1591,7 @@
 "Check Again" = "다시 확인";
 "Checking storage health" = "저장 장치 상태 확인 중";
 "Clear Selection" = "선택 해제";
+"Clear the search to see all volumes." = "모든 볼륨을 보려면 검색어를 지우세요.";
 "Connection" = "연결";
 "Container Mounts" = "컨테이너 마운트";
 "Corrected Read Errors" = "수정된 읽기 오류";
@@ -1610,6 +1611,7 @@
 "Health Data Unavailable" = "상태 데이터를 사용할 수 없음";
 "Health Not Supported" = "상태 확인이 지원되지 않음";
 "Health Tool Not Found" = "진단 도구를 찾을 수 없음";
+"Hidden from Stats" = "통계에서 숨김";
 "Hide Container Mounts" = "컨테이너 마운트 숨기기";
 "Hide Selected" = "선택 항목 숨기기";
 "Hide Volume" = "볼륨 숨기기";

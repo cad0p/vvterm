@@ -31,8 +31,7 @@ struct StatsAppearancePreviewContent: View {
             performDockerAction: nil,
             loadStorageHealth: nil,
             setStorageVolumeVisibility: { _, _ in },
-            setStorageVolumesVisibility: { _, _ in },
-            showOnlyStorageVolumes: { _ in }
+            setStorageVolumesVisibility: { _, _ in }
         )
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
@@ -110,7 +109,6 @@ struct StatsBlocksContent: View {
     let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
     let setStorageVolumeVisibility: (VolumeInfo, Bool) -> Void
     let setStorageVolumesVisibility: ([VolumeInfo], Bool) -> Void
-    let showOnlyStorageVolumes: ([VolumeInfo]) -> Void
 
     static func pageBackground(
         for preferencesStyle: StatsPreferences.Style,
@@ -157,8 +155,7 @@ struct StatsBlocksContent: View {
                 visibleStorageVolumes: visibleStorageVolumes,
                 hiddenStorageVolumeIDs: hiddenStorageVolumeIDs,
                 setStorageVolumeVisibility: setStorageVolumeVisibility,
-                setStorageVolumesVisibility: setStorageVolumesVisibility,
-                showOnlyStorageVolumes: showOnlyStorageVolumes
+                setStorageVolumesVisibility: setStorageVolumesVisibility
             )
             .padding(usesPagePadding ? 16 : 0)
             .drawingGroup()
@@ -337,8 +334,7 @@ struct StatsBlocksContent: View {
                 style: style,
                 loadStorageHealth: loadStorageHealth,
                 setVolumeVisibility: setStorageVolumeVisibility,
-                setVolumesVisibility: setStorageVolumesVisibility,
-                showOnlyVolumes: showOnlyStorageVolumes
+                setVolumesVisibility: setStorageVolumesVisibility
             )
         case .processes:
             ProcessesCard(

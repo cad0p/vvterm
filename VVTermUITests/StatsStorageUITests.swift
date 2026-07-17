@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 final class StatsStorageUITests: XCTestCase {
@@ -23,48 +24,83 @@ final class StatsStorageUITests: XCTestCase {
     }
 
     @MainActor
-    func testVolumeVisibilityBulkActionsAndHealthStates() throws {
-        let rootVisibility = app.buttons[volumeIdentifier(
+    func testBrowsingSwipeEditVisibilityAndHealthStates() throws {
+        let rootHealth = app.buttons[volumeIdentifier(
+            "stable|linux|root-uuid|/",
+            suffix: "health"
+        )]
+        let shareHealth = app.buttons[volumeIdentifier(
+            "stable|linux|share-uuid|/mnt/share",
+            suffix: "health"
+        )]
+        let containerHealth = app.buttons[volumeIdentifier(
+            "fallback|linux|overlay|/var/lib/docker/overlay2/example/merged|overlay",
+            suffix: "health"
+        )]
+        XCTAssertTrue(rootHealth.waitForExistence(timeout: 5))
+        XCTAssertTrue(containerHealth.exists)
+        XCTAssertEqual(rootHealth.value as? String, "Visible")
+        XCTAssertEqual(containerHealth.value as? String, "Hidden")
+
+        rootHealth.swipeLeft()
+        let rootSwipeVisibility = app.buttons[volumeIdentifier(
+            "stable|linux|root-uuid|/",
+            suffix: "swipeVisibility"
+        )]
+        XCTAssertTrue(rootSwipeVisibility.waitForExistence(timeout: 3))
+        rootSwipeVisibility.tap()
+        XCTAssertEqual(rootHealth.value as? String, "Hidden")
+
+        rootHealth.swipeLeft()
+        XCTAssertTrue(rootSwipeVisibility.waitForExistence(timeout: 3))
+        rootSwipeVisibility.tap()
+        XCTAssertEqual(rootHealth.value as? String, "Visible")
+
+        let editButton = app.buttons["vvterm.stats.storage.editMode"]
+        XCTAssertTrue(editButton.exists)
+        XCTAssertEqual(editButton.label, "Edit")
+        editButton.tap()
+        XCTAssertEqual(editButton.label, "Done")
+
+        let rootVisibility = app.switches[volumeIdentifier(
             "stable|linux|root-uuid|/",
             suffix: "visibility"
         )]
-        XCTAssertTrue(rootVisibility.waitForExistence(timeout: 5))
-        XCTAssertEqual(rootVisibility.label, "Hide Volume")
+        let containerVisibility = app.switches[volumeIdentifier(
+            "fallback|linux|overlay|/var/lib/docker/overlay2/example/merged|overlay",
+            suffix: "visibility"
+        )]
+        XCTAssertTrue(rootVisibility.waitForExistence(timeout: 3))
+        XCTAssertTrue(containerVisibility.exists)
+        XCTAssertEqual(rootVisibility.value as? String, "Visible")
+        XCTAssertEqual(containerVisibility.value as? String, "Hidden")
 
-        rootVisibility.tap()
-        XCTAssertEqual(rootVisibility.label, "Show Volume")
+        let showContainers = app.buttons["vvterm.stats.storage.showContainers"]
+        XCTAssertTrue(showContainers.waitForExistence(timeout: 3))
+        showContainers.tap()
+        XCTAssertEqual(containerVisibility.value as? String, "Visible")
 
-        openActions()
-        let showAll = app.buttons["Show All Volumes"]
-        XCTAssertTrue(showAll.waitForExistence(timeout: 3))
-        showAll.tap()
-        XCTAssertEqual(rootVisibility.label, "Hide Volume")
+        let hideContainers = app.buttons["vvterm.stats.storage.hideContainers"]
+        XCTAssertTrue(hideContainers.waitForExistence(timeout: 3))
+        hideContainers.tap()
+        XCTAssertEqual(containerVisibility.value as? String, "Hidden")
 
-        app.buttons["vvterm.stats.storage.selectionMode"].tap()
-        app.buttons[volumeIdentifier("stable|linux|root-uuid|/", suffix: "selection")].tap()
-        app.buttons[volumeIdentifier(
-            "stable|linux|share-uuid|/mnt/share",
-            suffix: "selection"
-        )].tap()
-        openActions()
-        let hideSelected = app.buttons["Hide Selected"]
-        XCTAssertTrue(hideSelected.waitForExistence(timeout: 3))
-        hideSelected.tap()
-        XCTAssertEqual(rootVisibility.label, "Show Volume")
+        tapSwitchControl(rootVisibility)
+        tapSwitchControl(containerVisibility)
+        XCTAssertEqual(rootVisibility.value as? String, "Hidden")
+        XCTAssertEqual(containerVisibility.value as? String, "Visible")
 
-        app.buttons["Storage health for /"].tap()
+        editButton.tap()
+        XCTAssertEqual(editButton.label, "Edit")
+        XCTAssertEqual(rootHealth.value as? String, "Hidden")
+        XCTAssertEqual(containerHealth.value as? String, "Visible")
+
+        rootHealth.tap()
         XCTAssertTrue(app.staticTexts["Healthy"].waitForExistence(timeout: 5))
         closePresentedHealth()
 
-        app.buttons["Storage health for /mnt/share"].tap()
+        shareHealth.tap()
         XCTAssertTrue(app.staticTexts["Network Volume"].waitForExistence(timeout: 5))
-    }
-
-    @MainActor
-    private func openActions() {
-        let actions = app.buttons["vvterm.stats.storage.actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 3))
-        actions.tap()
     }
 
     @MainActor
@@ -76,11 +112,13 @@ final class StatsStorageUITests: XCTestCase {
     }
 
     private func volumeIdentifier(_ identity: String, suffix: String) -> String {
-        let token = Data(identity.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        let token = SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
         return "vvterm.stats.storage.volume.\(token).\(suffix)"
+    }
+
+    private func tapSwitchControl(_ element: XCUIElement) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
     }
 }

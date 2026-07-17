@@ -1592,6 +1592,7 @@
 "Check Again" = "もう一度確認";
 "Checking storage health" = "ストレージの健全性を確認中";
 "Clear Selection" = "選択を解除";
+"Clear the search to see all volumes." = "検索をクリアすると、すべてのボリュームが表示されます。";
 "Connection" = "接続";
 "Container Mounts" = "コンテナのマウント";
 "Corrected Read Errors" = "訂正済み読み取りエラー";
@@ -1611,6 +1612,7 @@
 "Health Data Unavailable" = "健全性データを利用できません";
 "Health Not Supported" = "健全性確認に未対応";
 "Health Tool Not Found" = "診断ツールが見つかりません";
+"Hidden from Stats" = "統計では非表示";
 "Hide Container Mounts" = "コンテナのマウントを非表示";
 "Hide Selected" = "選択項目を非表示";
 "Hide Volume" = "ボリュームを非表示";

@@ -1599,6 +1599,7 @@
 "Check Again" = "Перевірити знову";
 "Checking storage health" = "Перевірка стану накопичувача";
 "Clear Selection" = "Очистити вибір";
+"Clear the search to see all volumes." = "Очистіть пошук, щоб побачити всі томи.";
 "Connection" = "Підключення";
 "Container Mounts" = "Точки монтування контейнерів";
 "Corrected Read Errors" = "Виправлені помилки читання";
@@ -1618,6 +1619,7 @@
 "Health Data Unavailable" = "Дані про стан недоступні";
 "Health Not Supported" = "Перевірка стану не підтримується";
 "Health Tool Not Found" = "Засіб діагностики не знайдено";
+"Hidden from Stats" = "Прихований у статистиці";
 "Hide Container Mounts" = "Приховати точки монтування контейнерів";
 "Hide Selected" = "Приховати вибрані";
 "Hide Volume" = "Приховати том";

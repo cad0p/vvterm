@@ -1592,6 +1592,7 @@
 "Check Again" = "ตรวจสอบอีกครั้ง";
 "Checking storage health" = "กำลังตรวจสอบสถานะพื้นที่จัดเก็บ";
 "Clear Selection" = "ล้างรายการที่เลือก";
+"Clear the search to see all volumes." = "ล้างคำค้นหาเพื่อดูโวลุ่มทั้งหมด";
 "Connection" = "การเชื่อมต่อ";
 "Container Mounts" = "จุดเมานท์คอนเทนเนอร์";
 "Corrected Read Errors" = "ข้อผิดพลาดการอ่านที่แก้ไขแล้ว";
@@ -1611,6 +1612,7 @@
 "Health Data Unavailable" = "ไม่มีข้อมูลสถานะ";
 "Health Not Supported" = "ไม่รองรับการตรวจสอบสถานะ";
 "Health Tool Not Found" = "ไม่พบเครื่องมือตรวจสอบ";
+"Hidden from Stats" = "ซ่อนจากสถิติ";
 "Hide Container Mounts" = "ซ่อนจุดเมานท์คอนเทนเนอร์";
 "Hide Selected" = "ซ่อนรายการที่เลือก";
 "Hide Volume" = "ซ่อนโวลุ่ม";

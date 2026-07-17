@@ -150,6 +150,20 @@ enum VolumeVisibilityPolicy {
         normalized(volumes).filter { !hiddenVolumeIDs.contains($0.identity) }
     }
 
+    static func isVisibleByDefault(_ volume: VolumeInfo) -> Bool {
+        volume.mountPoint == "/" || volume.kind != .container
+    }
+
+    static func hiddenVolumeIDs(
+        in volumes: [VolumeInfo],
+        visibilityOverrides: [VolumeIdentity: Bool]
+    ) -> Set<VolumeIdentity> {
+        Set(normalized(volumes).compactMap { volume in
+            let isVisible = visibilityOverrides[volume.identity] ?? isVisibleByDefault(volume)
+            return isVisible ? nil : volume.identity
+        })
+    }
+
     static func containerVolumeIDs(in volumes: [VolumeInfo]) -> Set<VolumeIdentity> {
         Set(normalized(volumes).filter {
             $0.kind == .container && $0.mountPoint != "/"
@@ -169,10 +183,24 @@ enum VolumeVisibilityPolicy {
 
 struct ServerVolumeVisibilityPreferences: Codable, Equatable, Sendable {
     static let defaultsKey = "stats.serverVolumeVisibility.v1"
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
-    private let schemaVersion: Int
-    private(set) var hiddenVolumeIDsByServer: [String: Set<VolumeIdentity>] = [:]
+    private var schemaVersion: Int
+    private(set) var visibilityOverridesByServer: [String: [VolumeIdentity: Bool]] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case hiddenVolumeIDsByServer
+        case visibilityOverridesByServer
+    }
+
+    var requiresSchemaMigration: Bool {
+        schemaVersion < Self.currentSchemaVersion
+    }
+
+    mutating func markSchemaMigrationComplete() {
+        schemaVersion = Self.currentSchemaVersion
+    }
 
     init() {
         schemaVersion = Self.currentSchemaVersion
@@ -181,29 +209,49 @@ struct ServerVolumeVisibilityPreferences: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        guard schemaVersion == Self.currentSchemaVersion else {
+        self.schemaVersion = schemaVersion
+
+        switch schemaVersion {
+        case 1:
+            let hiddenVolumeIDsByServer = try container.decodeIfPresent(
+                [String: Set<VolumeIdentity>].self,
+                forKey: .hiddenVolumeIDsByServer
+            ) ?? [:]
+            visibilityOverridesByServer = hiddenVolumeIDsByServer.mapValues { hiddenVolumeIDs in
+                Dictionary(uniqueKeysWithValues: hiddenVolumeIDs.map { ($0, false) })
+            }
+        case Self.currentSchemaVersion:
+            visibilityOverridesByServer = try container.decodeIfPresent(
+                [String: [VolumeIdentity: Bool]].self,
+                forKey: .visibilityOverridesByServer
+            ) ?? [:]
+        default:
             throw DecodingError.dataCorruptedError(
                 forKey: .schemaVersion,
                 in: container,
                 debugDescription: "Unsupported volume visibility schema \(schemaVersion)"
             )
         }
-        self.schemaVersion = schemaVersion
-        hiddenVolumeIDsByServer = try container.decodeIfPresent(
-            [String: Set<VolumeIdentity>].self,
-            forKey: .hiddenVolumeIDsByServer
-        ) ?? [:]
     }
 
-    func hiddenVolumeIDs(for serverID: UUID) -> Set<VolumeIdentity> {
-        hiddenVolumeIDsByServer[serverID.uuidString] ?? []
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
+        try container.encode(visibilityOverridesByServer, forKey: .visibilityOverridesByServer)
     }
 
-    mutating func setHiddenVolumeIDs(_ identities: Set<VolumeIdentity>, for serverID: UUID) {
-        if identities.isEmpty {
-            hiddenVolumeIDsByServer.removeValue(forKey: serverID.uuidString)
+    func visibilityOverrides(for serverID: UUID) -> [VolumeIdentity: Bool] {
+        visibilityOverridesByServer[serverID.uuidString] ?? [:]
+    }
+
+    mutating func setVisibilityOverrides(
+        _ overrides: [VolumeIdentity: Bool],
+        for serverID: UUID
+    ) {
+        if overrides.isEmpty {
+            visibilityOverridesByServer.removeValue(forKey: serverID.uuidString)
         } else {
-            hiddenVolumeIDsByServer[serverID.uuidString] = identities
+            visibilityOverridesByServer[serverID.uuidString] = overrides
         }
     }
 }

@@ -1593,6 +1593,7 @@
 "Check Again" = "Zkontrolovat znovu";
 "Checking storage health" = "Kontrola stavu úložiště";
 "Clear Selection" = "Zrušit výběr";
+"Clear the search to see all volumes." = "Vymažte hledaný výraz, aby se zobrazily všechny svazky.";
 "Connection" = "Připojení";
 "Container Mounts" = "Připojení kontejnerů";
 "Corrected Read Errors" = "Opravené chyby čtení";
@@ -1612,6 +1613,7 @@
 "Health Data Unavailable" = "Údaje o stavu nejsou dostupné";
 "Health Not Supported" = "Kontrola stavu není podporována";
 "Health Tool Not Found" = "Nástroj pro kontrolu stavu nebyl nalezen";
+"Hidden from Stats" = "Skrytý ve statistikách";
 "Hide Container Mounts" = "Skrýt připojení kontejnerů";
 "Hide Selected" = "Skrýt vybrané";
 "Hide Volume" = "Skrýt svazek";

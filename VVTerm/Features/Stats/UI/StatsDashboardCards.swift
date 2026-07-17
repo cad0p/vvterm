@@ -490,7 +490,6 @@ struct StorageCard: View {
     let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
     let setVolumeVisibility: (VolumeInfo, Bool) -> Void
     let setVolumesVisibility: ([VolumeInfo], Bool) -> Void
-    let showOnlyVolumes: ([VolumeInfo]) -> Void
     @State private var showingDetails = false
 
     var body: some View {
@@ -538,8 +537,7 @@ struct StorageCard: View {
                 hiddenVolumeIDs: hiddenVolumeIDs,
                 loadStorageHealth: loadStorageHealth,
                 setVolumeVisibility: setVolumeVisibility,
-                setVolumesVisibility: setVolumesVisibility,
-                showOnlyVolumes: showOnlyVolumes
+                setVolumesVisibility: setVolumesVisibility
             )
         }
     }

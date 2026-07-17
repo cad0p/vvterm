@@ -1,24 +1,18 @@
 #if os(macOS)
 import SwiftUI
 
-struct StorageDetailsPlatformShell<FilterControl: View, SelectionControl: View, ActionsControl: View, Content: View>: View {
+struct StorageDetailsPlatformShell<Controls: View, Content: View>: View {
     @Binding var searchText: String
-    let filterControl: () -> FilterControl
-    let selectionControl: () -> SelectionControl
-    let actionsControl: () -> ActionsControl
+    let controls: () -> Controls
     let content: () -> Content
 
     init(
         searchText: Binding<String>,
-        @ViewBuilder filterControl: @escaping () -> FilterControl,
-        @ViewBuilder selectionControl: @escaping () -> SelectionControl,
-        @ViewBuilder actionsControl: @escaping () -> ActionsControl,
+        @ViewBuilder controls: @escaping () -> Controls,
         @ViewBuilder content: @escaping () -> Content
     ) {
         _searchText = searchText
-        self.filterControl = filterControl
-        self.selectionControl = selectionControl
-        self.actionsControl = actionsControl
+        self.controls = controls
         self.content = content
     }
 
@@ -28,11 +22,7 @@ struct StorageDetailsPlatformShell<FilterControl: View, SelectionControl: View, 
             systemImage: "internaldrive",
             tint: .orange
         ) {
-            HStack(spacing: 8) {
-                filterControl()
-                selectionControl()
-                actionsControl()
-            }
+            controls()
         } content: {
             VStack(spacing: 0) {
                 StatsSearchField(prompt: String(localized: "Search Volumes"), text: $searchText)

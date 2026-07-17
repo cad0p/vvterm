@@ -1592,6 +1592,7 @@
 "Check Again" = "Проверить снова";
 "Checking storage health" = "Проверка состояния накопителя";
 "Clear Selection" = "Снять выделение";
+"Clear the search to see all volumes." = "Очистите поиск, чтобы увидеть все тома.";
 "Connection" = "Подключение";
 "Container Mounts" = "Точки монтирования контейнеров";
 "Corrected Read Errors" = "Исправленные ошибки чтения";
@@ -1611,6 +1612,7 @@
 "Health Data Unavailable" = "Данные о состоянии недоступны";
 "Health Not Supported" = "Проверка состояния не поддерживается";
 "Health Tool Not Found" = "Средство диагностики не найдено";
+"Hidden from Stats" = "Скрыт в статистике";
 "Hide Container Mounts" = "Скрыть точки монтирования контейнеров";
 "Hide Selected" = "Скрыть выбранные";
 "Hide Volume" = "Скрыть том";

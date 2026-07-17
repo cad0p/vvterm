@@ -1589,6 +1589,7 @@
 "Check Again" = "再次检查";
 "Checking storage health" = "正在检查存储健康状态";
 "Clear Selection" = "清除选择";
+"Clear the search to see all volumes." = "清除搜索内容即可查看所有卷。";
 "Connection" = "连接";
 "Container Mounts" = "容器挂载点";
 "Corrected Read Errors" = "已纠正的读取错误";
@@ -1608,6 +1609,7 @@
 "Health Data Unavailable" = "健康数据不可用";
 "Health Not Supported" = "不支持健康检查";
 "Health Tool Not Found" = "未找到健康检查工具";
+"Hidden from Stats" = "已从统计中隐藏";
 "Hide Container Mounts" = "隐藏容器挂载点";
 "Hide Selected" = "隐藏所选项";
 "Hide Volume" = "隐藏卷";

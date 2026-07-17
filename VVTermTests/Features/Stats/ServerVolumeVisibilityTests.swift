@@ -20,43 +20,66 @@ final class ServerVolumeVisibilityTests: XCTestCase {
         super.tearDown()
     }
 
-    func testVolumesAreVisibleByDefaultAndPreferencesAreIsolatedPerServer() {
+    func testDefaultsHideContainersAndPreferencesAreIsolatedPerServer() {
         let firstServer = UUID()
         let secondServer = UUID()
-        let volume = makeVolume(mountPoint: "/data", stableIdentifier: "data-uuid")
+        let data = makeVolume(mountPoint: "/data", stableIdentifier: "data-uuid")
+        let container = makeVolume(
+            mountPoint: "/var/lib/docker/overlay2/one/merged",
+            source: "overlay",
+            fileSystem: "overlay"
+        )
+        let volumes = [data, container]
         let store = ServerVolumeVisibilityStore(defaults: defaults)
 
         XCTAssertEqual(
-            VolumeVisibilityPolicy.visibleVolumes(
-                from: [volume],
-                hiddenVolumeIDs: store.hiddenVolumeIDs(for: firstServer)
-            ),
-            [volume]
+            store.hiddenVolumeIDs(for: firstServer, volumes: volumes),
+            [container.identity]
         )
+        XCTAssertTrue(store.preferences.visibilityOverrides(for: firstServer).isEmpty)
 
-        store.setVolume(volume, isVisible: false, for: firstServer)
+        store.setVolume(data, isVisible: false, for: firstServer)
 
-        XCTAssertEqual(store.hiddenVolumeIDs(for: firstServer), [volume.identity])
-        XCTAssertTrue(store.hiddenVolumeIDs(for: secondServer).isEmpty)
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: firstServer, volumes: volumes),
+            [data.identity, container.identity]
+        )
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: secondServer, volumes: volumes),
+            [container.identity]
+        )
+        XCTAssertEqual(store.preferences.visibilityOverrides(for: firstServer), [data.identity: false])
+        XCTAssertTrue(store.preferences.visibilityOverrides(for: secondServer).isEmpty)
     }
 
-    func testHiddenVolumeSurvivesRelaunchAndTemporaryDisappearance() {
+    func testExplicitlyShownContainerSurvivesRelaunchAndTemporaryDisappearance() {
         let serverID = UUID()
-        let volume = makeVolume(mountPoint: "/data", stableIdentifier: "data-uuid")
+        let container = makeVolume(
+            mountPoint: "/var/lib/docker/overlay2/one/merged",
+            source: "overlay",
+            fileSystem: "overlay",
+            stableIdentifier: "container-uuid"
+        )
         var store: ServerVolumeVisibilityStore? = ServerVolumeVisibilityStore(defaults: defaults)
-        store?.setVolume(volume, isVisible: false, for: serverID)
+        XCTAssertEqual(
+            store?.hiddenVolumeIDs(for: serverID, volumes: [container]),
+            [container.identity]
+        )
+
+        store?.setVolume(container, isVisible: true, for: serverID)
+        XCTAssertEqual(
+            store?.preferences.visibilityOverrides(for: serverID),
+            [container.identity: true]
+        )
 
         store = ServerVolumeVisibilityStore(defaults: defaults)
 
-        XCTAssertEqual(store?.hiddenVolumeIDs(for: serverID), [volume.identity])
-        XCTAssertTrue(VolumeVisibilityPolicy.visibleVolumes(
-            from: [],
-            hiddenVolumeIDs: store?.hiddenVolumeIDs(for: serverID) ?? []
-        ).isEmpty)
-        XCTAssertTrue(VolumeVisibilityPolicy.visibleVolumes(
-            from: [volume],
-            hiddenVolumeIDs: store?.hiddenVolumeIDs(for: serverID) ?? []
-        ).isEmpty)
+        XCTAssertTrue(store?.hiddenVolumeIDs(for: serverID, volumes: []).isEmpty == true)
+        XCTAssertTrue(store?.hiddenVolumeIDs(for: serverID, volumes: [container]).isEmpty == true)
+        XCTAssertEqual(
+            store?.preferences.visibilityOverrides(for: serverID),
+            [container.identity: true]
+        )
     }
 
     func testReformattedOrReplacedVolumeDoesNotInheritHiddenIdentity() {
@@ -144,9 +167,10 @@ final class ServerVolumeVisibilityTests: XCTestCase {
         )
     }
 
-    func testBulkContainerVisibilityPreservesIndividualOverrides() {
+    func testBulkVisibilityStoresOnlyDeviationsAndPreservesMissingVolumeOverrides() {
         let serverID = UUID()
-        let root = makeVolume(mountPoint: "/", stableIdentifier: "root")
+        let missing = makeVolume(mountPoint: "/offline", stableIdentifier: "offline")
+        let data = makeVolume(mountPoint: "/data", stableIdentifier: "data")
         let firstContainer = makeVolume(
             mountPoint: "/var/lib/docker/overlay2/one/merged",
             source: "overlay",
@@ -157,53 +181,130 @@ final class ServerVolumeVisibilityTests: XCTestCase {
             source: "overlay",
             fileSystem: "overlay"
         )
-        let store = ServerVolumeVisibilityStore(defaults: defaults)
-        store.setVolume(root, isVisible: false, for: serverID)
-
-        store.setVolumes([firstContainer, secondContainer], areVisible: false, for: serverID)
-        XCTAssertEqual(
-            store.hiddenVolumeIDs(for: serverID),
-            [root.identity, firstContainer.identity, secondContainer.identity]
-        )
-
-        store.setVolume(firstContainer, isVisible: true, for: serverID)
-        XCTAssertEqual(
-            store.hiddenVolumeIDs(for: serverID),
-            [root.identity, secondContainer.identity]
-        )
-    }
-
-    func testShowOnlySelectedDoesNotDiscardHiddenPreferencesForMissingVolumes() {
-        let serverID = UUID()
-        let missing = makeVolume(mountPoint: "/offline", stableIdentifier: "offline")
-        let selected = makeVolume(mountPoint: "/", stableIdentifier: "root")
-        let unselected = makeVolume(mountPoint: "/data", stableIdentifier: "data")
+        let currentVolumes = [data, firstContainer, secondContainer]
         let store = ServerVolumeVisibilityStore(defaults: defaults)
         store.setVolume(missing, isVisible: false, for: serverID)
 
-        store.showOnly([selected], among: [selected, unselected], for: serverID)
+        store.setVolumes(currentVolumes, areVisible: true, for: serverID)
+        XCTAssertEqual(
+            store.preferences.visibilityOverrides(for: serverID),
+            [
+                missing.identity: false,
+                firstContainer.identity: true,
+                secondContainer.identity: true
+            ]
+        )
+        XCTAssertTrue(store.hiddenVolumeIDs(for: serverID, volumes: currentVolumes).isEmpty)
 
-        XCTAssertEqual(store.hiddenVolumeIDs(for: serverID), [missing.identity, unselected.identity])
+        store.setVolumes(currentVolumes, areVisible: false, for: serverID)
+        XCTAssertEqual(
+            store.preferences.visibilityOverrides(for: serverID),
+            [missing.identity: false, data.identity: false]
+        )
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: serverID, volumes: currentVolumes),
+            Set(currentVolumes.map(\.identity))
+        )
     }
 
-    func testMalformedPersistedPreferencesMigrateToDefaultVisibility() {
-        defaults.set(Data("not-json".utf8), forKey: ServerVolumeVisibilityPreferences.defaultsKey)
+    func testSchemaOneHiddenIDsMigrateWithoutLosingNonContainerChoice() throws {
+        let serverID = UUID()
+        let data = makeVolume(mountPoint: "/data", stableIdentifier: "data")
+        let container = makeVolume(
+            mountPoint: "/var/lib/docker/overlay2/one/merged",
+            source: "overlay",
+            fileSystem: "overlay",
+            stableIdentifier: "container"
+        )
+        let legacyPreferences = LegacyServerVolumeVisibilityPreferences(
+            hiddenVolumeIDsByServer: [
+                serverID.uuidString: [data.identity, container.identity]
+            ]
+        )
+        defaults.set(
+            try JSONEncoder().encode(legacyPreferences),
+            forKey: ServerVolumeVisibilityPreferences.defaultsKey
+        )
 
         let store = ServerVolumeVisibilityStore(defaults: defaults)
 
-        XCTAssertTrue(store.hiddenVolumeIDs(for: UUID()).isEmpty)
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: serverID, volumes: [data, container]),
+            [data.identity, container.identity]
+        )
+        XCTAssertEqual(
+            store.preferences.visibilityOverrides(for: serverID),
+            [data.identity: false, container.identity: false]
+        )
+        XCTAssertFalse(store.preferences.requiresSchemaMigration)
+
+        let migratedData = try XCTUnwrap(
+            defaults.data(forKey: ServerVolumeVisibilityPreferences.defaultsKey)
+        )
+        let migratedObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: migratedData) as? [String: Any]
+        )
+        XCTAssertEqual(migratedObject["schemaVersion"] as? Int, 2)
+        XCTAssertNil(migratedObject["hiddenVolumeIDsByServer"])
+        XCTAssertNotNil(migratedObject["visibilityOverridesByServer"])
+
+        store.setVolume(container, isVisible: false, for: serverID)
+        XCTAssertEqual(
+            store.preferences.visibilityOverrides(for: serverID),
+            [data.identity: false]
+        )
+    }
+
+    func testMalformedPersistedPreferencesMigrateToDefaultVisibility() {
+        let malformedData = Data("not-json".utf8)
+        defaults.set(malformedData, forKey: ServerVolumeVisibilityPreferences.defaultsKey)
+        let data = makeVolume(mountPoint: "/data")
+        let container = makeVolume(
+            mountPoint: "/var/lib/docker/overlay2/one/merged",
+            source: "overlay",
+            fileSystem: "overlay"
+        )
+
+        let store = ServerVolumeVisibilityStore(defaults: defaults)
+
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: UUID(), volumes: [data, container]),
+            [container.identity]
+        )
+        XCTAssertEqual(
+            defaults.data(forKey: ServerVolumeVisibilityPreferences.defaultsKey),
+            malformedData
+        )
     }
 
     func testUnsupportedFutureSchemaFailsSafeWithoutOverwritingIt() throws {
         let futureData = try JSONSerialization.data(withJSONObject: [
             "schemaVersion": 99,
-            "hiddenVolumeIDsByServer": [:]
+            "visibilityOverridesByServer": [:]
         ])
         defaults.set(futureData, forKey: ServerVolumeVisibilityPreferences.defaultsKey)
+        let data = makeVolume(mountPoint: "/data")
+        let container = makeVolume(
+            mountPoint: "/var/lib/docker/overlay2/one/merged",
+            source: "overlay",
+            fileSystem: "overlay"
+        )
 
         let store = ServerVolumeVisibilityStore(defaults: defaults)
 
-        XCTAssertTrue(store.hiddenVolumeIDs(for: UUID()).isEmpty)
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: UUID(), volumes: [data, container]),
+            [container.identity]
+        )
+
+        let serverID = UUID()
+        store.setVolume(data, isVisible: false, for: serverID)
+
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: serverID, volumes: [data, container]),
+            [data.identity, container.identity]
+        )
+        XCTAssertEqual(store.preferences.visibilityOverrides(for: serverID), [data.identity: false])
         XCTAssertEqual(defaults.data(forKey: ServerVolumeVisibilityPreferences.defaultsKey), futureData)
     }
 
@@ -218,7 +319,8 @@ final class ServerVolumeVisibilityTests: XCTestCase {
         )
     }
 
-    func testContainerBulkSelectionKeepsOverlayRootEligibleForIndividualControlOnly() {
+    func testOverlayRootDefaultsVisibleAndRemainsEligibleForIndividualControl() {
+        let serverID = UUID()
         let root = makeVolume(
             mountPoint: "/",
             source: "overlay",
@@ -229,8 +331,21 @@ final class ServerVolumeVisibilityTests: XCTestCase {
             source: "overlay",
             fileSystem: "overlay"
         )
+        let store = ServerVolumeVisibilityStore(defaults: defaults)
 
         XCTAssertEqual(VolumeVisibilityPolicy.containerVolumeIDs(in: [root, docker]), [docker.identity])
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: serverID, volumes: [root, docker]),
+            [docker.identity]
+        )
+
+        store.setVolume(root, isVisible: false, for: serverID)
+
+        XCTAssertEqual(
+            store.hiddenVolumeIDs(for: serverID, volumes: [root, docker]),
+            [root.identity, docker.identity]
+        )
+        XCTAssertEqual(store.preferences.visibilityOverrides(for: serverID), [root.identity: false])
     }
 
     private func makeVolume(
@@ -249,4 +364,9 @@ final class ServerVolumeVisibilityTests: XCTestCase {
             total: 1_000
         )
     }
+}
+
+private struct LegacyServerVolumeVisibilityPreferences: Encodable {
+    let schemaVersion = 1
+    let hiddenVolumeIDsByServer: [String: Set<VolumeIdentity>]
 }

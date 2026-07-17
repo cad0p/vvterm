@@ -15,7 +15,10 @@ struct ServerStatsDashboard: View {
     var body: some View {
         let style = StatsVisualStyle(preferencesStyle: preferences.style)
         let storageVolumes = VolumeVisibilityPolicy.normalized(statsCollector.stats.volumes)
-        let hiddenStorageVolumeIDs = volumeVisibilityStore.hiddenVolumeIDs(for: server.id)
+        let hiddenStorageVolumeIDs = volumeVisibilityStore.hiddenVolumeIDs(
+            for: server.id,
+            volumes: storageVolumes
+        )
 
         ZStack {
             ScrollView {
@@ -60,13 +63,6 @@ struct ServerStatsDashboard: View {
                     },
                     setStorageVolumesVisibility: { volumes, areVisible in
                         volumeVisibilityStore.setVolumes(volumes, areVisible: areVisible, for: server.id)
-                    },
-                    showOnlyStorageVolumes: { selectedVolumes in
-                        volumeVisibilityStore.showOnly(
-                            selectedVolumes,
-                            among: storageVolumes,
-                            for: server.id
-                        )
                     }
                 )
             }

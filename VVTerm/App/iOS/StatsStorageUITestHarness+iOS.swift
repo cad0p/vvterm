@@ -2,7 +2,7 @@
 import SwiftUI
 
 struct StatsStorageUITestHarness: View {
-    @State private var hiddenVolumeIDs: Set<VolumeIdentity> = []
+    @State private var hiddenVolumeIDs: Set<VolumeIdentity>
 
     private static let volumes = [
         VolumeInfo(
@@ -33,14 +33,17 @@ struct StatsStorageUITestHarness: View {
         )
     ]
 
+    init() {
+        _hiddenVolumeIDs = State(initialValue: [Self.volumes[2].identity])
+    }
+
     var body: some View {
         StorageDetailsSheet(
             volumes: Self.volumes,
             hiddenVolumeIDs: hiddenVolumeIDs,
             loadStorageHealth: loadHealth,
             setVolumeVisibility: setVolumeVisibility,
-            setVolumesVisibility: setVolumesVisibility,
-            showOnlyVolumes: showOnlyVolumes
+            setVolumesVisibility: setVolumesVisibility
         )
     }
 
@@ -80,10 +83,5 @@ struct StatsStorageUITestHarness: View {
         }
     }
 
-    private func showOnlyVolumes(_ volumes: [VolumeInfo]) {
-        let selectedIDs = Set(volumes.map(\.identity))
-        hiddenVolumeIDs.formUnion(Self.volumes.map(\.identity))
-        hiddenVolumeIDs.subtract(selectedIDs)
-    }
 }
 #endif

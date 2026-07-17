@@ -1593,6 +1593,7 @@
 "Check Again" = "Праверыць яшчэ раз";
 "Checking storage health" = "Праверка стану назапашвальніка";
 "Clear Selection" = "Ачысціць выбар";
+"Clear the search to see all volumes." = "Ачысціце пошук, каб убачыць усе тамы.";
 "Connection" = "Падключэнне";
 "Container Mounts" = "Пункты мантавання кантэйнераў";
 "Corrected Read Errors" = "Выпраўленыя памылкі чытання";
@@ -1612,6 +1613,7 @@
 "Health Data Unavailable" = "Даныя пра стан недаступныя";
 "Health Not Supported" = "Праверка стану не падтрымліваецца";
 "Health Tool Not Found" = "Сродак дыягностыкі не знойдзены";
+"Hidden from Stats" = "Схаваны ў статыстыцы";
 "Hide Container Mounts" = "Схаваць пункты мантавання кантэйнераў";
 "Hide Selected" = "Схаваць выбраныя";
 "Hide Volume" = "Схаваць том";

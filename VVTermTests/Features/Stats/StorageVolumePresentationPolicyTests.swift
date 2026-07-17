@@ -25,7 +25,7 @@ final class StorageVolumePresentationPolicyTests: XCTestCase {
         ])
     }
 
-    func testListFiltersKeepCompleteInventoryAvailableForRestoration() {
+    func testListKeepsCompleteInventoryAvailableForDetailsAndRestoration() {
         let root = makeVolume(mountPoint: "/")
         let hidden = makeVolume(mountPoint: "/hidden")
         let container = makeVolume(
@@ -34,43 +34,13 @@ final class StorageVolumePresentationPolicyTests: XCTestCase {
             fileSystem: "overlay"
         )
         let volumes = [root, hidden, container]
-        let hiddenVolumeIDs: Set<VolumeIdentity> = [hidden.identity, container.identity]
 
         XCTAssertEqual(
-            StorageVolumeListPolicy.filteredVolumes(
+            StorageVolumeListPolicy.matchingVolumes(
                 volumes,
-                hiddenVolumeIDs: hiddenVolumeIDs,
-                filter: .all,
                 searchText: ""
             ),
             volumes
-        )
-        XCTAssertEqual(
-            StorageVolumeListPolicy.filteredVolumes(
-                volumes,
-                hiddenVolumeIDs: hiddenVolumeIDs,
-                filter: .visible,
-                searchText: ""
-            ),
-            [root]
-        )
-        XCTAssertEqual(
-            StorageVolumeListPolicy.filteredVolumes(
-                volumes,
-                hiddenVolumeIDs: hiddenVolumeIDs,
-                filter: .hidden,
-                searchText: ""
-            ),
-            [hidden, container]
-        )
-        XCTAssertEqual(
-            StorageVolumeListPolicy.filteredVolumes(
-                volumes,
-                hiddenVolumeIDs: hiddenVolumeIDs,
-                filter: .container,
-                searchText: ""
-            ),
-            [container]
         )
     }
 
@@ -85,20 +55,6 @@ final class StorageVolumePresentationPolicyTests: XCTestCase {
         XCTAssertEqual(filtered(volumes, searchText: "/media"), [media])
     }
 
-    func testSelectedVolumesFollowInventoryOrder() {
-        let root = makeVolume(mountPoint: "/")
-        let data = makeVolume(mountPoint: "/data")
-        let backup = makeVolume(mountPoint: "/backup")
-
-        XCTAssertEqual(
-            StorageVolumeListPolicy.selectedVolumes(
-                in: [root, data, backup],
-                selectedVolumeIDs: [backup.identity, root.identity]
-            ),
-            [root, backup]
-        )
-    }
-
     func testNegativeCardLimitDoesNotProduceAnInvalidPrefix() {
         XCTAssertTrue(
             StorageVolumePresentationPolicy.cardVolumes(
@@ -109,10 +65,8 @@ final class StorageVolumePresentationPolicyTests: XCTestCase {
     }
 
     private func filtered(_ volumes: [VolumeInfo], searchText: String) -> [VolumeInfo] {
-        StorageVolumeListPolicy.filteredVolumes(
+        StorageVolumeListPolicy.matchingVolumes(
             volumes,
-            hiddenVolumeIDs: [],
-            filter: .all,
             searchText: searchText
         )
     }

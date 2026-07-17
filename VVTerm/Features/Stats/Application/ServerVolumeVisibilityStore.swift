@@ -12,57 +12,69 @@ final class ServerVolumeVisibilityStore: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         preferences = Self.load(from: defaults)
+        if preferences.requiresSchemaMigration {
+            preferences.markSchemaMigrationComplete()
+            persist()
+        }
     }
 
-    func hiddenVolumeIDs(for serverID: UUID) -> Set<VolumeIdentity> {
-        preferences.hiddenVolumeIDs(for: serverID)
+    func hiddenVolumeIDs(
+        for serverID: UUID,
+        volumes: [VolumeInfo]
+    ) -> Set<VolumeIdentity> {
+        VolumeVisibilityPolicy.hiddenVolumeIDs(
+            in: volumes,
+            visibilityOverrides: preferences.visibilityOverrides(for: serverID)
+        )
     }
 
     func setVolume(_ volume: VolumeInfo, isVisible: Bool, for serverID: UUID) {
-        var hidden = hiddenVolumeIDs(for: serverID)
-        if isVisible {
-            hidden.remove(volume.identity)
-        } else {
-            hidden.insert(volume.identity)
+        updateVisibilityOverrides(for: [volume], serverID: serverID) { _ in
+            isVisible
         }
-        setHiddenVolumeIDs(hidden, for: serverID)
     }
 
     func setVolumes(_ volumes: [VolumeInfo], areVisible: Bool, for serverID: UUID) {
-        let identities = Set(VolumeVisibilityPolicy.normalized(volumes).map(\.identity))
-        var hidden = hiddenVolumeIDs(for: serverID)
-        if areVisible {
-            hidden.subtract(identities)
-        } else {
-            hidden.formUnion(identities)
+        updateVisibilityOverrides(for: volumes, serverID: serverID) { _ in
+            areVisible
         }
-        setHiddenVolumeIDs(hidden, for: serverID)
     }
 
-    func showOnly(_ volumes: [VolumeInfo], among allVolumes: [VolumeInfo], for serverID: UUID) {
-        let selected = Set(VolumeVisibilityPolicy.normalized(volumes).map(\.identity))
-        let all = Set(VolumeVisibilityPolicy.normalized(allVolumes).map(\.identity))
-        var hidden = hiddenVolumeIDs(for: serverID)
-        hidden.subtract(all)
-        hidden.formUnion(all.subtracting(selected))
-        setHiddenVolumeIDs(hidden, for: serverID)
-    }
+    private func updateVisibilityOverrides(
+        for volumes: [VolumeInfo],
+        serverID: UUID,
+        isVisible: (VolumeInfo) -> Bool
+    ) {
+        var overrides = preferences.visibilityOverrides(for: serverID)
+        for volume in VolumeVisibilityPolicy.normalized(volumes) {
+            let desiredVisibility = isVisible(volume)
+            if desiredVisibility == VolumeVisibilityPolicy.isVisibleByDefault(volume) {
+                overrides.removeValue(forKey: volume.identity)
+            } else {
+                overrides[volume.identity] = desiredVisibility
+            }
+        }
 
-    func restoreAllVolumes(for serverID: UUID) {
-        setHiddenVolumeIDs([], for: serverID)
-    }
-
-    private func setHiddenVolumeIDs(_ identities: Set<VolumeIdentity>, for serverID: UUID) {
         var next = preferences
-        next.setHiddenVolumeIDs(identities, for: serverID)
+        next.setVisibilityOverrides(overrides, for: serverID)
         guard next != preferences else { return }
         preferences = next
         persist()
     }
 
     private func persist() {
+        guard !Self.containsFutureSchema(in: defaults) else { return }
         guard let data = try? JSONEncoder().encode(preferences) else { return }
         defaults.set(data, forKey: ServerVolumeVisibilityPreferences.defaultsKey)
+    }
+
+    private static func containsFutureSchema(in defaults: UserDefaults) -> Bool {
+        guard let data = defaults.data(forKey: ServerVolumeVisibilityPreferences.defaultsKey),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let schemaVersion = object["schemaVersion"] as? NSNumber else {
+            return false
+        }
+        return schemaVersion.intValue > ServerVolumeVisibilityPreferences.currentSchemaVersion
     }
 
     private static func load(from defaults: UserDefaults) -> ServerVolumeVisibilityPreferences {

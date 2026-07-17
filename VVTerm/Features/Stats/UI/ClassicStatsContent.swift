@@ -19,7 +19,6 @@ struct ClassicStatsContent: View {
     let hiddenStorageVolumeIDs: Set<VolumeIdentity>
     let setStorageVolumeVisibility: (VolumeInfo, Bool) -> Void
     let setStorageVolumesVisibility: ([VolumeInfo], Bool) -> Void
-    let showOnlyStorageVolumes: ([VolumeInfo]) -> Void
 
     var body: some View {
         LazyVStack(spacing: 16) {
@@ -88,8 +87,7 @@ struct ClassicStatsContent: View {
                 surfaceStyle: surfaceStyle,
                 loadStorageHealth: loadStorageHealth,
                 setVolumeVisibility: setStorageVolumeVisibility,
-                setVolumesVisibility: setStorageVolumesVisibility,
-                showOnlyVolumes: showOnlyStorageVolumes
+                setVolumesVisibility: setStorageVolumesVisibility
             )
         case .processes:
             ClassicProcessesCard(
@@ -461,7 +459,6 @@ private struct ClassicVolumesCard: View {
     let loadStorageHealth: ((VolumeInfo) async throws -> StorageHealthResult)?
     let setVolumeVisibility: (VolumeInfo, Bool) -> Void
     let setVolumesVisibility: ([VolumeInfo], Bool) -> Void
-    let showOnlyVolumes: ([VolumeInfo]) -> Void
     @State private var showingDetails = false
 
     var body: some View {
@@ -515,8 +512,7 @@ private struct ClassicVolumesCard: View {
                 hiddenVolumeIDs: hiddenVolumeIDs,
                 loadStorageHealth: loadStorageHealth,
                 setVolumeVisibility: setVolumeVisibility,
-                setVolumesVisibility: setVolumesVisibility,
-                showOnlyVolumes: showOnlyVolumes
+                setVolumesVisibility: setVolumesVisibility
             )
         }
     }
