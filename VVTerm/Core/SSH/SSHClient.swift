@@ -1160,6 +1160,46 @@ actor SSHSession {
                     passphrase
                 )
             }
+
+        case .teleportCertificate:
+            // Teleport cert-injection seam (Strategy B session 2).
+            // Feeds a Teleport-issued SSH cert + ed25519 private key to libssh2.
+            // libssh2 accepts a certificate blob in place of the public key for
+            // SSH cert auth; the private key proves ownership of the cert.
+            // See: Goldmine open-source/github/vvterm/2026-07-11-strategy-b-verifications-resolved
+            guard let keyData = config.credentials.privateKey else {
+                logger.error("No private key provided for Teleport cert auth")
+                throw SSHError.authenticationFailed
+            }
+            guard let certData = config.credentials.teleportCertificatePEM else {
+                logger.error("No Teleport certificate provided")
+                throw SSHError.authenticationFailed
+            }
+            logger.info("Attempting Teleport cert auth for user: \(username)")
+
+            authResult = keyData.withUnsafeBytes { rawBuffer -> Int32 in
+                guard let keyBase = rawBuffer.bindMemory(to: CChar.self).baseAddress else {
+                    return LIBSSH2_ERROR_ALLOC
+                }
+                return certData.withUnsafeBytes { certBuffer -> Int32 in
+                    guard let certBase = certBuffer.bindMemory(to: CChar.self).baseAddress else {
+                        return LIBSSH2_ERROR_ALLOC
+                    }
+                    // libssh2_userauth_publickey_frommemory: the `publickey` arg
+                    // accepts a cert blob when authenticating with a certificate.
+                    // Passphrase is nil (Teleport-generated keys are unencrypted).
+                    return libssh2_userauth_publickey_frommemory(
+                        session,
+                        username,
+                        Int(username.utf8.count),
+                        certBase,
+                        Int(certData.count),
+                        keyBase,
+                        Int(keyData.count),
+                        nil
+                    )
+                }
+            }
         }
 
         if authResult != 0 {

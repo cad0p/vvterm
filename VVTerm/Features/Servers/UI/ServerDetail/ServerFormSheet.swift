@@ -97,6 +97,9 @@ struct ServerFormCredentialBuilder {
             if !sshPublicKey.isEmpty {
                 credentials.publicKey = sshPublicKey.data(using: .utf8)
             }
+        case .teleportCertificate:
+            // Teleport cert + key are populated by the Teleport login flow, not this form.
+            break
         }
 
         if transportSelection == .cloudflare, cloudflareAccessMode == .serviceToken {
@@ -388,6 +391,9 @@ struct ServerFormSheet: View {
                         if let phrase = credentials.passphrase {
                             sshPassphrase = phrase
                         }
+                    case .teleportCertificate:
+                        // Teleport certs are not editable via this form.
+                        break
                     }
                 }
                 if let publicKeyData = credentials.publicKey,
@@ -735,6 +741,11 @@ struct ServerFormSheet: View {
                 case .sshKeyWithPassphrase:
                     keyInputView
                     SecureField("Key Passphrase", text: $sshPassphrase, prompt: Text(String(localized: "Optional")))
+
+                case .teleportCertificate:
+                    Text("Sign in to Teleport from the server list to obtain a certificate.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 Text(String(localized: "Uses server-side Tailscale SSH policy. No password or SSH key is required."))
@@ -983,6 +994,9 @@ struct ServerFormSheet: View {
             return !sshKey.isEmpty
         case .sshKeyWithPassphrase:
             return !sshKey.isEmpty && !sshPassphrase.isEmpty
+        case .teleportCertificate:
+            // Teleport cert validity is checked at login time, not in this form.
+            return false
         }
     }
 
@@ -1194,6 +1208,9 @@ struct ServerFormSheet: View {
                             if !sshKey.isEmpty, let keyData = sshKey.data(using: .utf8) {
                                 try KeychainManager.shared.storeSSHKey(for: newServer.id, privateKey: keyData, passphrase: sshPassphrase.isEmpty ? nil : sshPassphrase, publicKey: publicKeyData)
                             }
+                        case .teleportCertificate:
+                            // No credentials to store from this form; Teleport login stores the KeyRing directly.
+                            break
                         }
                     }
 

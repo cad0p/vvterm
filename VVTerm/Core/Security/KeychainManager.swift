@@ -110,6 +110,10 @@ final class KeychainManager {
                 credentials.passphrase = sshData.passphrase
                 credentials.publicKey = sshData.publicKey
             }
+        case .teleportCertificate:
+            // Teleport KeyRing is stored/loaded via TeleportKeyRingStore, not per-server.
+            // The connection layer is responsible for injecting the cert at connect time.
+            break
         }
 
         if server.connectionMode == .cloudflare, server.cloudflareAccessMode == .serviceToken,

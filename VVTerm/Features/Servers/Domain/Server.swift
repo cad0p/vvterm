@@ -205,6 +205,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
     case password
     case sshKey
     case sshKeyWithPassphrase
+    case teleportCertificate
 
     var id: String { rawValue }
 
@@ -213,6 +214,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
         case .password: return String(localized: "Password")
         case .sshKey: return String(localized: "SSH Key")
         case .sshKeyWithPassphrase: return String(localized: "SSH Key + Passphrase")
+        case .teleportCertificate: return String(localized: "Teleport Certificate")
         }
     }
 
@@ -221,6 +223,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
         case .password: return "key.fill"
         case .sshKey: return "lock.doc.fill"
         case .sshKeyWithPassphrase: return "lock.shield.fill"
+        case .teleportCertificate: return "checkmark.seal.fill"
         }
     }
 }
@@ -235,6 +238,11 @@ struct ServerCredentials {
     var passphrase: String?
     var cloudflareClientID: String?
     var cloudflareClientSecret: String?
+
+    /// Teleport-issued SSH certificate (PEM) + matching private key, for cert auth.
+    /// Used only when `authMethod == .teleportCertificate`. The cert is fed to
+    /// libssh2 as the "public key" (libssh2 accepts a cert blob for cert auth).
+    var teleportCertificatePEM: Data?
 
     var sshKey: Data? {
         get { privateKey }
