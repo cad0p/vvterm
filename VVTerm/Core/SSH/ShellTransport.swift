@@ -8,6 +8,7 @@ enum ShellTransport: String, Codable, Hashable, Sendable {
 
 enum MoshFallbackReason: String, Codable, Hashable, Sendable {
     case serverMissing
+    case serverRuntimeBroken
     case bootstrapFailed
     case sessionFailed
     case unsupportedRemoteCapabilities
@@ -19,6 +20,8 @@ enum MoshFallbackReason: String, Codable, Hashable, Sendable {
         switch self {
         case .serverMissing:
             return String(localized: "Using SSH fallback for this session (mosh-server is missing).")
+        case .serverRuntimeBroken:
+            return String(localized: "Using SSH fallback for this session (mosh-server is installed but cannot run).")
         case .unsupportedRemoteCapabilities:
             return String(localized: "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment).")
         case .bootstrapFailed:
@@ -32,6 +35,10 @@ enum MoshFallbackReason: String, Codable, Hashable, Sendable {
         case .sessionFailed:
             return String(localized: "Using SSH fallback for this session.")
         }
+    }
+
+    var shouldOfferServerMaintenance: Bool {
+        self == .serverMissing || self == .serverRuntimeBroken
     }
 }
 

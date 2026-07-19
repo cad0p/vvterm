@@ -1487,6 +1487,11 @@
 "Use tmux to preserve sessions" = "Use tmux to preserve sessions";
 "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment)." = "Using SSH fallback for this session (Mosh is not supported by the resolved remote environment).";
 "Using SSH fallback for this session (mosh-server is missing)." = "Using SSH fallback for this session (mosh-server is missing).";
+"Using SSH fallback for this session (mosh-server is installed but cannot run)." = "Using SSH fallback for this session (mosh-server is installed but cannot run).";
+"mosh-server is installed but cannot run. Repair its package installation on the remote host." = "mosh-server is installed but cannot run. Repair its package installation on the remote host.";
+"Repair mosh-server?" = "Repair mosh-server?";
+"Repair" = "Repair";
+"Mosh is selected, but the installed mosh-server cannot run. Repair its package installation and reconnect?" = "Mosh is selected, but the installed mosh-server cannot run. Repair its package installation and reconnect?";
 "Using SSH fallback for this session." = "Using SSH fallback for this session.";
 "Using SSH fallback for this session (mosh-server could not start correctly)." = "Using SSH fallback for this session (mosh-server could not start correctly).";
 "Using SSH fallback for this session (the Mosh server address was invalid)." = "Using SSH fallback for this session (the Mosh server address was invalid).";

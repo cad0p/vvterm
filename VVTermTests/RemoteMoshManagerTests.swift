@@ -97,6 +97,30 @@ struct RemoteMoshManagerTests {
     }
 
     @Test
+    func brokenDynamicLibraryMapsToRepairableRuntimeErrorWithoutExposingItInFallbackState() {
+        let output = """
+        dyld[86054]: Library not loaded: /opt/homebrew/opt/protobuf/lib/libprotobuf.34.0.0.dylib
+          Referenced from: /opt/homebrew/Cellar/mosh/1.4.0/bin/mosh-server
+        """
+
+        do {
+            _ = try RemoteMoshManager.shared.parseConnectInfo(from: output)
+            Issue.record("Expected broken mosh-server runtime")
+        } catch let error as SSHError {
+            guard case .moshServerRuntimeBroken = error else {
+                Issue.record("Unexpected SSHError: \(error.localizedDescription)")
+                return
+            }
+        } catch {
+            Issue.record("Unexpected error: \(error.localizedDescription)")
+        }
+
+        #expect(MoshFallbackReason.serverRuntimeBroken.shouldOfferServerMaintenance)
+        #expect(!MoshFallbackReason.serverRuntimeBroken.bannerMessage.contains("/opt/homebrew"))
+        #expect(!MoshFallbackReason.bootstrapFailed.shouldOfferServerMaintenance)
+    }
+
+    @Test
     func bootstrapDiagnosticsRedactMoshSessionKeys() {
         let output = "MOSH CONNECT invalid-port ABCDEFGHIJKLMNOPQRSTUV\nother detail"
 
@@ -114,6 +138,9 @@ struct RemoteMoshManagerTests {
         #expect(script.contains("dnf"))
         #expect(script.contains("brew"))
         #expect(script.contains("mosh-server"))
+        #expect(script.contains("mosh-server --version"))
+        #expect(script.contains("brew reinstall mosh"))
+        #expect(script.contains("apt-get install --reinstall"))
     }
 
     @Test

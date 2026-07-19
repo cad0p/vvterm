@@ -595,7 +595,25 @@ struct TerminalPaneView: View {
     private var shouldPromptMoshInstall: Bool {
         guard server.connectionMode == .mosh else { return false }
         guard paneState?.activeTransport == .sshFallback else { return false }
-        return paneState?.moshFallbackReason == .serverMissing
+        return paneState?.moshFallbackReason?.shouldOfferServerMaintenance == true
+    }
+
+    private var moshServerPromptTitle: String {
+        paneState?.moshFallbackReason == .serverRuntimeBroken
+            ? String(localized: "Repair mosh-server?")
+            : String(localized: "Install mosh-server?")
+    }
+
+    private var moshServerPromptAction: String {
+        paneState?.moshFallbackReason == .serverRuntimeBroken
+            ? String(localized: "Repair")
+            : String(localized: "Install")
+    }
+
+    private var moshServerPromptMessage: String {
+        paneState?.moshFallbackReason == .serverRuntimeBroken
+            ? String(localized: "Mosh is selected, but the installed mosh-server cannot run. Repair its package installation and reconnect?")
+            : String(localized: "Mosh is selected for this server, but mosh-server is missing on the host.")
     }
 
     private var shouldShowMoshDurabilityHint: Bool {
@@ -855,15 +873,15 @@ struct TerminalPaneView: View {
         } message: {
             Text("tmux keeps your terminal session alive across app restarts and disconnects.")
         }
-        .alert("Install mosh-server?", isPresented: $showingMoshInstallPrompt) {
-            Button("Install") {
+        .alert(moshServerPromptTitle, isPresented: $showingMoshInstallPrompt) {
+            Button(moshServerPromptAction) {
                 Task {
                     await installMoshServerAndReconnect()
                 }
             }
             Button("Continue with SSH", role: .cancel) {}
         } message: {
-            Text("Mosh is selected for this server, but mosh-server is missing on the host.")
+            Text(moshServerPromptMessage)
         }
         .alert("Replace Trusted Host?", isPresented: $showingRetrustHostConfirmation) {
             Button("Cancel", role: .cancel) { }

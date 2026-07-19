@@ -30,7 +30,7 @@ actor RemoteMoshManager {
 
     func isMoshServerAvailable(using client: SSHClient) async -> Bool {
         let okMarker = "__VVTERM_MOSH_OK__"
-        let body = "\(RemoteTerminalBootstrap.shellPathExport()); if command -v mosh-server >/dev/null 2>&1; then printf '\(okMarker)'; else printf '__VVTERM_MOSH_NO__'; fi"
+        let body = "\(RemoteTerminalBootstrap.shellPathExport()); if command -v mosh-server >/dev/null 2>&1 && mosh-server --version >/dev/null 2>&1; then printf '\(okMarker)'; else printf '__VVTERM_MOSH_NO__'; fi"
         let command = "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
         let output = try? await client.execute(command, timeout: availabilityTimeout)
         return output?.contains(okMarker) == true
@@ -142,7 +142,10 @@ actor RemoteMoshManager {
             if trimmed.isEmpty {
                 throw SSHError.moshBootstrapFailed("mosh-server installation failed")
             }
-            throw SSHError.moshBootstrapFailed(trimmed)
+            if isBrokenServerRuntimeOutput(trimmed) {
+                throw SSHError.moshServerRuntimeBroken
+            }
+            throw SSHError.moshBootstrapFailed(sanitizedBootstrapOutput(trimmed))
         }
     }
 
@@ -205,45 +208,49 @@ actor RemoteMoshManager {
     nonisolated func installScript() -> String {
         """
         \(RemoteTerminalBootstrap.shellPathExport());
-        if command -v mosh-server >/dev/null 2>&1; then printf '\(Self.installSuccessMarker)'; exit 0; fi;
+        vvterm_mosh_server_works() {
+          command -v mosh-server >/dev/null 2>&1 && mosh-server --version >/dev/null 2>&1
+        };
+        if vvterm_mosh_server_works; then printf '\(Self.installSuccessMarker)'; exit 0; fi;
+        if command -v mosh-server >/dev/null 2>&1; then VVTERM_MOSH_REPAIR=1; else VVTERM_MOSH_REPAIR=0; fi;
         if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi;
         OS_NAME="$(uname -s)";
         if [ "$OS_NAME" = "Darwin" ]; then
           if command -v brew >/dev/null 2>&1; then
-            brew install mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then brew reinstall mosh; else brew install mosh; fi;
           elif command -v port >/dev/null 2>&1; then
-            $SUDO port install mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO port upgrade --force mosh; else $SUDO port install mosh; fi;
           else
             echo "No supported package manager found for macOS.";
           fi;
         elif [ "$OS_NAME" = "Linux" ]; then
           if command -v apt-get >/dev/null 2>&1; then
-            $SUDO apt-get update && $SUDO apt-get install -y mosh;
+            $SUDO apt-get update && if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO apt-get install --reinstall -y mosh; else $SUDO apt-get install -y mosh; fi;
           elif command -v dnf >/dev/null 2>&1; then
-            $SUDO dnf install -y mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO dnf reinstall -y mosh; else $SUDO dnf install -y mosh; fi;
           elif command -v yum >/dev/null 2>&1; then
-            $SUDO yum install -y mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO yum reinstall -y mosh; else $SUDO yum install -y mosh; fi;
           elif command -v pacman >/dev/null 2>&1; then
             $SUDO pacman -Sy --noconfirm mosh;
           elif command -v apk >/dev/null 2>&1; then
-            $SUDO apk add mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO apk fix mosh; else $SUDO apk add mosh; fi;
           elif command -v zypper >/dev/null 2>&1; then
-            $SUDO zypper -n install mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO zypper -n install --force mosh; else $SUDO zypper -n install mosh; fi;
           elif command -v xbps-install >/dev/null 2>&1; then
-            $SUDO xbps-install -Sy mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO xbps-install -Sfy mosh; else $SUDO xbps-install -Sy mosh; fi;
           elif command -v opkg >/dev/null 2>&1; then
             $SUDO opkg update && $SUDO opkg install mosh;
           elif command -v emerge >/dev/null 2>&1; then
             $SUDO emerge net-misc/mosh;
           elif command -v pkg >/dev/null 2>&1; then
-            $SUDO pkg install -y mosh;
+            if [ "$VVTERM_MOSH_REPAIR" = 1 ]; then $SUDO pkg install -fy mosh; else $SUDO pkg install -y mosh; fi;
           else
             echo "No supported package manager found for Linux.";
           fi;
         else
           echo "Unsupported OS: $OS_NAME";
         fi;
-        if command -v mosh-server >/dev/null 2>&1; then printf '\(Self.installSuccessMarker)'; else printf '__VVTERM_MOSH_INSTALL_FAILED__'; fi
+        if vvterm_mosh_server_works; then printf '\(Self.installSuccessMarker)'; else printf '__VVTERM_MOSH_INSTALL_FAILED__'; fi
         """
     }
 
@@ -303,7 +310,18 @@ actor RemoteMoshManager {
         guard let output else {
             return .moshBootstrapFailed("Invalid mosh-server response")
         }
+        if isBrokenServerRuntimeOutput(output) {
+            return .moshServerRuntimeBroken
+        }
         return .moshBootstrapFailed(bootstrapMessage(for: output))
+    }
+
+    nonisolated func isBrokenServerRuntimeOutput(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        return (normalized.contains("dyld[") && normalized.contains("library not loaded"))
+            || normalized.contains("error while loading shared libraries")
+            || normalized.contains("symbol lookup error")
+            || normalized.contains("exec format error")
     }
 
     nonisolated func bootstrapMessage(for output: String) -> String {

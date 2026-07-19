@@ -1046,6 +1046,8 @@ actor SSHClient {
         switch sshError {
         case .moshServerMissing:
             return .serverMissing
+        case .moshServerRuntimeBroken:
+            return .serverRuntimeBroken
         case .moshBootstrapFailed:
             return .bootstrapFailed
         case .moshInvalidEndpoint:
@@ -3371,6 +3373,7 @@ enum SSHError: LocalizedError {
     case cloudflareAuthenticationFailed(String)
     case cloudflareTunnelFailed(String)
     case moshServerMissing
+    case moshServerRuntimeBroken
     case moshBootstrapFailed(String)
     case moshSessionFailed(String)
     case moshInvalidEndpoint
@@ -3398,6 +3401,8 @@ enum SSHError: LocalizedError {
             return String(format: String(localized: "Cloudflare tunnel failed: %@"), message)
         case .moshServerMissing:
             return String(localized: "mosh-server is not installed on the remote host")
+        case .moshServerRuntimeBroken:
+            return String(localized: "mosh-server is installed but cannot run. Repair its package installation on the remote host.")
         case .moshBootstrapFailed(let msg):
             return "Mosh bootstrap failed: \(msg)"
         case .moshSessionFailed(let msg):
