@@ -174,6 +174,7 @@ struct iOSServerListView: View {
     @State private var showingSettings = false
     @State private var showingWorkspacePicker = false
     @State private var showingCreateEnvironment = false
+    @State private var showingTeleportLogin = false
     @State private var editingEnvironment: ServerEnvironment?
     @State private var environmentToDelete: ServerEnvironment?
     @State private var searchText = ""
@@ -220,8 +221,17 @@ struct iOSServerListView: View {
             }
 
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    presentAddServer()
+                Menu {
+                    Button {
+                        presentAddServer()
+                    } label: {
+                        Label("Add Server", systemImage: "plus")
+                    }
+                    Button {
+                        showingTeleportLogin = true
+                    } label: {
+                        Label("Sign in to Teleport", systemImage: "checkmark.seal")
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -265,6 +275,16 @@ struct iOSServerListView: View {
             SettingsView()
                 .modifier(AppearanceModifier())
                 .adaptiveSoftScrollEdges()
+        }
+        .sheet(isPresented: $showingTeleportLogin) {
+            NavigationStack {
+                TeleportLoginView { result in
+                    if result != nil {
+                        showingTeleportLogin = false
+                    }
+                }
+            }
+            .adaptiveSoftScrollEdges()
         }
         .sheet(isPresented: $showingWorkspacePicker) {
             NavigationStack {

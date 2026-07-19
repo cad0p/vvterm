@@ -29,5 +29,12 @@
     <array>
         <string>$(AppIdentifierPrefix)app.vivy.VivyTerm</string>
     </array>
+
+    <!-- Associated Domains: Teleport passwordless passkey reuse (Strategy B) -->
+    <!-- Allows ASAuthorizationPlatformPublicKeyCredentialAssertion to claim RP ID teleport.pcad.it -->
+    <key>com.apple.developer.associated-domains</key>
+    <array>
+        <string>webcredentials:teleport.pcad.it</string>
+    </array>
 </dict>
 </plist>
