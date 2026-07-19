@@ -1,12 +1,12 @@
 import Foundation
 
-/// The result of mapping a mounted volume to one physical device.
+/// The result of mapping a mounted volume to its physical storage topology.
 ///
-/// Resolution deliberately rejects ambiguous mappings. Guessing one member of
-/// a RAID, LVM, APFS Fusion, or other multi-device volume could show health for
-/// the wrong hardware.
+/// Resolution deliberately rejects ambiguous leaf mappings. Arrays are
+/// represented explicitly so one member is never mistaken for the whole
+/// volume.
 nonisolated enum StorageHealthTargetResolution: Hashable, Sendable {
-    case target(StorageHealthProbeTarget)
+    case topology(StorageHealthResolvedTopology)
     case unavailable(StorageHealthUnavailableReason)
 }
 
@@ -19,6 +19,8 @@ nonisolated enum StorageHealthTargetResolver {
     static let resolutionBeginMarker = "__VVTERM_STORAGE_RESOLUTION_BEGIN__"
     static let resolutionEndMarker = "__VVTERM_STORAGE_RESOLUTION_END__"
     static let resolutionToolMissingMarker = "__VVTERM_STORAGE_RESOLUTION_TOOL_MISSING__"
+    static let btrfsStatsBeginMarker = "__VVTERM_BTRFS_STATS_BEGIN__"
+    static let btrfsStatsEndMarker = "__VVTERM_BTRFS_STATS_END__"
 
     static func resolve(
         client: SSHClient,
@@ -133,6 +135,37 @@ nonisolated enum StorageHealthTargetResolver {
         volume: VolumeInfo,
         deviceID: StorageDeviceIdentity
     ) async throws -> StorageHealthTargetResolution {
+        switch volume.fileSystem.lowercased() {
+        case "btrfs":
+            return try await resolveLinuxArray(
+                client: client,
+                command: btrfsDiscoveryCommand(mountPoint: volume.mountPoint),
+                parser: { output in
+                    guard let filesystem = markedSection(in: output) else { return nil }
+                    let stats = section(
+                        btrfsStatsBeginMarker,
+                        btrfsStatsEndMarker,
+                        in: output
+                    ) ?? ""
+                    return LinuxStorageTopologyParser.parseBTRFS(
+                        filesystem: filesystem,
+                        deviceStats: stats
+                    )
+                }
+            )
+        case "zfs":
+            return try await resolveLinuxArray(
+                client: client,
+                command: zfsDiscoveryCommand(
+                    source: volume.source,
+                    mountPoint: volume.mountPoint
+                ),
+                parser: LinuxStorageTopologyParser.parseZFSStatus
+            )
+        default:
+            break
+        }
+
         guard let command = linuxResolutionCommand(
             source: volume.source,
             mountPoint: volume.mountPoint
@@ -145,13 +178,173 @@ nonisolated enum StorageHealthTargetResolver {
         return parseLinuxResolution(output, fallbackSource: volume.source, deviceID: deviceID)
     }
 
+    static func btrfsDiscoveryCommand(mountPoint: String) -> String? {
+        guard isSafeLocator(mountPoint) else { return nil }
+        let mountPoint = RemoteTerminalBootstrap.shellQuoted(mountPoint)
+        let script = """
+        export LC_ALL=C LANG=C
+        if command -v btrfs >/dev/null 2>&1; then
+            printf '%s\n' '\(resolutionBeginMarker)'
+            btrfs filesystem show --raw -- \(mountPoint) 2>&1 || true
+            printf '%s\n' '\(resolutionEndMarker)'
+            printf '%s\n' '\(btrfsStatsBeginMarker)'
+            btrfs device stats -- \(mountPoint) 2>&1 || true
+            printf '%s\n' '\(btrfsStatsEndMarker)'
+        else
+            printf '%s\n' '\(resolutionToolMissingMarker)'
+        fi
+        """
+        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+    }
+
+    static func zfsDiscoveryCommand(source: String, mountPoint: String) -> String? {
+        guard isSafeLocator(source), isSafeLocator(mountPoint) else { return nil }
+        let source = RemoteTerminalBootstrap.shellQuoted(source)
+        let mountPoint = RemoteTerminalBootstrap.shellQuoted(mountPoint)
+        let script = """
+        export LC_ALL=C LANG=C
+        vvterm_dataset=\(source)
+        if command -v findmnt >/dev/null 2>&1; then
+            vvterm_candidate=$(findmnt -n -o SOURCE -T \(mountPoint) 2>/dev/null | sed -n '1p')
+            case "$vvterm_candidate" in
+                '') ;;
+                *) vvterm_dataset=$vvterm_candidate ;;
+            esac
+        fi
+        vvterm_pool=${vvterm_dataset%%/*}
+        if command -v zpool >/dev/null 2>&1; then
+            printf '%s\n' '\(resolutionBeginMarker)'
+            zpool status -P "$vvterm_pool" 2>&1 || true
+            printf '%s\n' '\(resolutionEndMarker)'
+        else
+            printf '%s\n' '\(resolutionToolMissingMarker)'
+        fi
+        """
+        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+    }
+
+    static func linuxDeviceResolutionCommand(devicePath: String) -> String? {
+        guard isDevicePath(devicePath) else { return nil }
+        let device = RemoteTerminalBootstrap.shellQuoted(devicePath)
+        let script = """
+        export LC_ALL=C LANG=C
+        if command -v lsblk >/dev/null 2>&1; then
+            printf '%s\n' '\(resolutionBeginMarker)'
+            lsblk -s -J -p -o PATH,TYPE -- \(device) 2>/dev/null || true
+            printf '%s\n' '\(resolutionEndMarker)'
+        else
+            printf '%s\n' '\(resolutionToolMissingMarker)'
+        fi
+        """
+        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+    }
+
+    private static func resolveLinuxArray(
+        client: SSHClient,
+        command: String?,
+        parser: (String) -> LinuxStorageTopologyDiscovery?
+    ) async throws -> StorageHealthTargetResolution {
+        guard let command else { return .unavailable(.unmapped) }
+        let output = try await client.execute(command, timeout: timeout)
+        try Task.checkCancellation()
+        if output.contains(resolutionToolMissingMarker) {
+            return .unavailable(.toolMissing)
+        }
+        guard let discovery = parser(output) else {
+            let normalized = output.lowercased()
+            if normalized.contains("permission denied") || normalized.contains("operation not permitted") {
+                return .unavailable(.permissionDenied)
+            }
+            return .unavailable(.invalidResponse)
+        }
+
+        var resolvedByKind: [StorageHealthProbeTarget.Kind: (
+            ordinal: Int,
+            role: StorageHealthMemberRole,
+            id: StorageDeviceIdentity,
+            findings: [StorageHealthFinding]
+        )] = [:]
+        var unresolved: [(ordinal: Int, member: StorageHealthResolvedMember)] = []
+
+        for (candidateOrdinal, candidate) in discovery.members
+            .prefix(LinuxStorageTopologyParser.maximumMemberCount)
+            .enumerated() {
+            try Task.checkCancellation()
+            let memberID = StorageDeviceIdentity(namespace: "linux", opaqueValue: UUID().uuidString)
+            guard let path = candidate.path else {
+                unresolved.append((candidateOrdinal, .unresolved(
+                    id: memberID,
+                    role: candidate.role,
+                    reason: .unmapped
+                )))
+                continue
+            }
+            guard let mappingCommand = linuxDeviceResolutionCommand(devicePath: path) else {
+                unresolved.append((candidateOrdinal, .unresolved(
+                    id: memberID,
+                    role: candidate.role,
+                    reason: .unmapped
+                )))
+                continue
+            }
+            let mappingOutput = try await client.execute(mappingCommand, timeout: timeout)
+            try Task.checkCancellation()
+            let mapping = parseLinuxResolution(
+                mappingOutput,
+                fallbackSource: path,
+                deviceID: memberID
+            )
+            guard case .topology(let topology) = mapping,
+                  case .target(_, let target, _) = topology.members.first else {
+                let reason: StorageHealthUnavailableReason
+                if case .unavailable(let mappedReason) = mapping { reason = mappedReason } else { reason = .unmapped }
+                unresolved.append((candidateOrdinal, .unresolved(
+                    id: memberID,
+                    role: candidate.role,
+                    reason: reason
+                )))
+                continue
+            }
+            if var existing = resolvedByKind[target.kind] {
+                existing.findings.append(contentsOf: candidate.findings)
+                if existing.role != .data, candidate.role == .data { existing.role = .data }
+                resolvedByKind[target.kind] = existing
+            } else {
+                resolvedByKind[target.kind] = (
+                    candidateOrdinal,
+                    candidate.role,
+                    memberID,
+                    candidate.findings
+                )
+            }
+        }
+
+        let resolved = resolvedByKind.map { kind, value in
+            (ordinal: value.ordinal, member: StorageHealthResolvedMember.target(
+                role: value.role,
+                StorageHealthProbeTarget(deviceID: value.id, kind: kind),
+                findings: value.findings
+            ))
+        }
+        let members = (resolved + unresolved)
+            .sorted { $0.ordinal < $1.ordinal }
+            .map(\.member)
+        guard !members.isEmpty else { return .unavailable(.unmapped) }
+        return .topology(StorageHealthResolvedTopology(
+            kind: discovery.kind,
+            name: discovery.name,
+            findings: discovery.findings,
+            members: members
+        ))
+    }
+
     private static func linuxTarget(
         devicePath: String,
         deviceID: StorageDeviceIdentity
     ) -> StorageHealthTargetResolution {
         guard isDevicePath(devicePath) else { return .unavailable(.unmapped) }
         let name = URL(fileURLWithPath: devicePath).lastPathComponent.lowercased()
-        return .target(StorageHealthProbeTarget(
+        return singleDeviceTopology(StorageHealthProbeTarget(
             deviceID: deviceID,
             kind: .linux(devicePath: devicePath, isEMMC: name.hasPrefix("mmcblk"))
         ))
@@ -287,7 +480,7 @@ nonisolated enum StorageHealthTargetResolver {
         }
 
         guard let wholeDisk else { return .unavailable(.unmapped) }
-        return .target(StorageHealthProbeTarget(
+        return singleDeviceTopology(StorageHealthProbeTarget(
             deviceID: deviceID,
             kind: .darwin(
                 nativeIdentifier: wholeDisk,
@@ -417,7 +610,7 @@ nonisolated enum StorageHealthTargetResolver {
             return .unavailable(.unmapped)
         }
 
-        return .target(StorageHealthProbeTarget(
+        return singleDeviceTopology(StorageHealthProbeTarget(
             deviceID: deviceID,
             kind: .windows(diskNumber: diskNumber)
         ))
@@ -545,7 +738,7 @@ nonisolated enum StorageHealthTargetResolver {
             return .unavailable(.unsupported)
         }
 
-        return .target(StorageHealthProbeTarget(deviceID: deviceID, kind: kind))
+        return singleDeviceTopology(StorageHealthProbeTarget(deviceID: deviceID, kind: kind))
     }
 
     private static func resolveBSD(
@@ -604,6 +797,15 @@ nonisolated enum StorageHealthTargetResolver {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private static func section(_ beginMarker: String, _ endMarker: String, in output: String) -> String? {
+        guard let begin = output.range(of: beginMarker),
+              let end = output.range(of: endMarker, range: begin.upperBound..<output.endIndex) else {
+            return nil
+        }
+        return String(output[begin.upperBound..<end.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func isSafeLocator(_ value: String) -> Bool {
         !value.isEmpty
             && value.utf8.count <= 4_096
@@ -636,6 +838,17 @@ nonisolated enum StorageHealthTargetResolver {
             return UInt32(value)
         }
         return nil
+    }
+
+    private static func singleDeviceTopology(
+        _ target: StorageHealthProbeTarget
+    ) -> StorageHealthTargetResolution {
+        .topology(StorageHealthResolvedTopology(
+            kind: .physicalDevice,
+            name: nil,
+            findings: [],
+            members: [.target(role: .data, target, findings: [])]
+        ))
     }
 }
 

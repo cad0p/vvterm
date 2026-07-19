@@ -30,6 +30,30 @@ final class ServerStatsDomainTests: XCTestCase {
         XCTAssertEqual(volume.percent, 25, accuracy: 0.001)
     }
 
+    func testArrayMemberKeepsTopologyWarningWhenDeviceProbeIsUnavailable() {
+        let member = StorageHealthMemberReport(
+            id: StorageDeviceIdentity(namespace: "test", opaqueValue: "member"),
+            role: .data,
+            ordinal: 1,
+            result: .unavailable(.permissionDenied),
+            findings: [StorageHealthFinding(
+                kind: .deviceErrors(read: 1, write: 0, checksum: 0),
+                severity: .warning,
+                source: .zfs
+            )]
+        )
+        let volume = StorageHealthVolumeReport(
+            topology: .zfs,
+            name: "tank",
+            coverage: .partial,
+            findings: [],
+            members: [member]
+        )
+
+        XCTAssertEqual(member.state, .warning)
+        XCTAssertEqual(volume.state, .warning)
+    }
+
     func testRemotePlatformDetectsWindowsMarkers() {
         XCTAssertEqual(RemotePlatform.detect(from: "MINGW64_NT-10.0"), .windows)
         XCTAssertEqual(RemotePlatform.detect(from: "Windows_NT"), .windows)

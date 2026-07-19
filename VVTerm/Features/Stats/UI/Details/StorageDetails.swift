@@ -141,6 +141,7 @@ struct StorageDetailsSheet: View {
                 volume: volume,
                 isHidden: isHidden(volume)
             )
+            .storageVolumeToggleLabelAlignment()
         }
         .accessibilityIdentifier(volumeAccessibilityIdentifier(volume, suffix: "visibility"))
         .accessibilityValue(isHidden(volume) ? Text("Hidden") : Text("Visible"))

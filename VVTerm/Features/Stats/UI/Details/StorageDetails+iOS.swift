@@ -32,4 +32,8 @@ struct StorageDetailsPlatformShell<Controls: View, Content: View>: View {
         .presentationDetents([.large])
     }
 }
+
+extension View {
+    func storageVolumeToggleLabelAlignment() -> some View { self }
+}
 #endif

@@ -199,8 +199,58 @@ final class ServerStatsCollector: ObservableObject {
             volume: currentVolume
         )
         switch resolution {
-        case .target(let target):
-            return try await collector.collectStorageHealth(client: client, target: target)
+        case .topology(let topology):
+            var members: [StorageHealthMemberReport] = []
+            members.reserveCapacity(topology.members.count)
+            for (ordinal, member) in topology.members.enumerated() {
+                try Task.checkCancellation()
+                let result: StorageDeviceHealthResult
+                let memberFindings: [StorageHealthFinding]
+                switch member {
+                case .target(_, let target, let topologyFindings):
+                    result = try await collector.collectStorageHealth(client: client, target: target)
+                    memberFindings = topologyFindings
+                case .unresolved(_, _, let reason):
+                    result = .unavailable(reason)
+                    memberFindings = []
+                }
+                members.append(StorageHealthMemberReport(
+                    id: member.id,
+                    role: member.role,
+                    ordinal: ordinal + 1,
+                    result: result,
+                    findings: memberFindings
+                ))
+            }
+            if topology.kind == .physicalDevice,
+               members.count == 1,
+               case .unavailable(let reason) = members[0].result {
+                return .unavailable(reason)
+            }
+
+            let hasUnavailableMember = members.contains { member in
+                if case .unavailable = member.result { return true }
+                return false
+            }
+            let coverage: StorageHealthCoverage = topology.coverage == .partial || hasUnavailableMember
+                ? .partial
+                : .complete
+            var findings = topology.findings
+            if coverage == .partial,
+               !findings.contains(where: { $0.kind == .partialCoverage }) {
+                findings.append(StorageHealthFinding(
+                    kind: .partialCoverage,
+                    severity: .information,
+                    source: topology.kind == .zfs ? .zfs : .btrfs
+                ))
+            }
+            return .report(StorageHealthVolumeReport(
+                topology: topology.kind,
+                name: topology.name,
+                coverage: coverage,
+                findings: findings,
+                members: members
+            ))
         case .unavailable(let reason):
             return .unavailable(reason)
         }

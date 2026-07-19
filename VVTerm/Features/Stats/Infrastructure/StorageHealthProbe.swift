@@ -18,7 +18,7 @@ nonisolated enum StorageHealthProbe {
     static func collect(
         client: SSHClient,
         target: StorageHealthProbeTarget
-    ) async throws -> StorageHealthResult {
+    ) async throws -> StorageDeviceHealthResult {
         try Task.checkCancellation()
         switch target.kind {
         case .linux(let devicePath, let isEMMC):
@@ -212,7 +212,7 @@ nonisolated enum StorageHealthProbe {
         target: StorageHealthProbeTarget,
         platform: BSDPlatform,
         devicePath: String
-    ) async throws -> StorageHealthResult {
+    ) async throws -> StorageDeviceHealthResult {
         guard isDevicePath(devicePath) else { return .unavailable(.unmapped) }
         let output = try await client.execute(
             bsdCommand(platform: platform, devicePath: devicePath),
@@ -256,8 +256,8 @@ nonisolated enum StorageHealthProbe {
     private static func parseLinuxOutput(
         _ output: String,
         target: StorageHealthProbeTarget
-    ) -> StorageHealthResult {
-        var results: [StorageHealthResult] = []
+    ) -> StorageDeviceHealthResult {
+        var results: [StorageDeviceHealthResult] = []
         if let smartctl = section(Marker.smartBegin, Marker.smartEnd, in: output) {
             results.append(StorageHealthParser.parseSmartctlJSON(smartctl, deviceID: target.deviceID))
         } else if output.contains(Marker.smartMissing) {
@@ -274,8 +274,8 @@ nonisolated enum StorageHealthProbe {
     private static func parseDarwinOutput(
         _ output: String,
         target: StorageHealthProbeTarget
-    ) -> StorageHealthResult {
-        var results: [StorageHealthResult] = []
+    ) -> StorageDeviceHealthResult {
+        var results: [StorageDeviceHealthResult] = []
         if let native = section(Marker.nativeBegin, Marker.nativeEnd, in: output) {
             results.append(StorageHealthParser.parseDarwinPlist(native, deviceID: target.deviceID))
         } else if output.contains(Marker.nativeMissing) {
@@ -292,8 +292,8 @@ nonisolated enum StorageHealthProbe {
     private static func parseWindowsOutput(
         _ output: String,
         target: StorageHealthProbeTarget
-    ) -> StorageHealthResult {
-        var results: [StorageHealthResult] = []
+    ) -> StorageDeviceHealthResult {
+        var results: [StorageDeviceHealthResult] = []
         if let native = section(Marker.nativeBegin, Marker.nativeEnd, in: output) {
             results.append(StorageHealthParser.parseWindowsNativeJSON(native, deviceID: target.deviceID))
         }
@@ -308,8 +308,8 @@ nonisolated enum StorageHealthProbe {
     private static func parseBSDOutput(
         _ output: String,
         target: StorageHealthProbeTarget
-    ) -> StorageHealthResult {
-        var results: [StorageHealthResult] = []
+    ) -> StorageDeviceHealthResult {
+        var results: [StorageDeviceHealthResult] = []
         if let native = section(Marker.nativeBegin, Marker.nativeEnd, in: output) {
             results.append(StorageHealthParser.parseBSDMetadata(native, deviceID: target.deviceID))
         } else if output.contains(Marker.nativeMissing) {

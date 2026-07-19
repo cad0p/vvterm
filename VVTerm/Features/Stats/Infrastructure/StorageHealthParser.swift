@@ -5,24 +5,66 @@ nonisolated enum StorageHealthParser {
     static func parseSmartctlJSON(
         _ output: String,
         deviceID: StorageDeviceIdentity
-    ) -> StorageHealthResult {
+    ) -> StorageDeviceHealthResult {
         guard let object = jsonDictionary(in: output) else {
             return .unavailable(unavailableReason(for: output))
         }
 
         var state: StorageHealthState = .unknown
         var metrics = StorageHealthMetrics()
+        var findings: [StorageHealthFinding] = []
         var attributes: [StorageHealthAttribute] = []
 
         if let passed = bool(at: ["smart_status", "passed"], in: object) {
             state = passed ? .healthy : .failing
+            if !passed {
+                findings.append(StorageHealthFinding(
+                    kind: .smartOverallFailure,
+                    severity: .critical,
+                    source: .smartctl
+                ))
+            }
         }
 
         let exitStatus = uint64(at: ["smartctl", "exit_status"], in: object) ?? 0
         if exitStatus & 0x08 != 0 {
             state = maxState(state, .failing)
-        } else if exitStatus & 0xF0 != 0 {
-            state = maxState(state, .warning)
+            appendUnique(StorageHealthFinding(
+                kind: .smartOverallFailure,
+                severity: .critical,
+                source: .smartctl
+            ), to: &findings)
+        }
+        if exitStatus & 0x10 != 0 {
+            findings.append(StorageHealthFinding(
+                kind: .smartCurrentPrefailThreshold,
+                severity: .warning,
+                source: .smartctl
+            ))
+        }
+        if exitStatus & 0x20 != 0 {
+            findings.append(StorageHealthFinding(
+                kind: .smartPastThreshold,
+                severity: .information,
+                timing: .historical,
+                source: .smartctl
+            ))
+        }
+        if exitStatus & 0x40 != 0 {
+            findings.append(StorageHealthFinding(
+                kind: .smartErrorLog,
+                severity: .information,
+                timing: .historical,
+                source: .smartctl
+            ))
+        }
+        if exitStatus & 0x80 != 0 {
+            findings.append(StorageHealthFinding(
+                kind: .smartSelfTestLog,
+                severity: .information,
+                timing: .historical,
+                source: .smartctl
+            ))
         }
 
         metrics.temperatureCelsius = finiteDouble(at: ["temperature", "current"], in: object)
@@ -63,15 +105,51 @@ nonisolated enum StorageHealthParser {
             at: ["nvme_smart_health_information_log", "critical_warning"],
             in: object
         ), criticalWarning > 0 {
-            state = maxState(state, .warning)
+            for bit in UInt8(0)..<UInt8(8) where criticalWarning & (1 << bit) != 0 {
+                findings.append(StorageHealthFinding(
+                    kind: .nvmeCriticalWarning(bit: bit),
+                    severity: .warning,
+                    source: .smartctl
+                ))
+            }
         }
 
         parseSCSIMetrics(from: object, into: &metrics)
-        parseATAAttributes(from: object, state: &state, attributes: &attributes)
+        let scsiReadErrors = uint64(
+            at: ["scsi_error_counter_log", "read", "total_uncorrected_errors"],
+            in: object
+        ) ?? 0
+        let scsiWriteErrors = uint64(
+            at: ["scsi_error_counter_log", "write", "total_uncorrected_errors"],
+            in: object
+        ) ?? 0
+        let scsiMediaErrors = uint64(at: ["scsi_grown_defect_list"], in: object) ?? 0
+        if scsiReadErrors > 0 || scsiWriteErrors > 0 || scsiMediaErrors > 0 {
+            findings.append(StorageHealthFinding(
+                kind: .scsiErrorHistory(
+                    read: scsiReadErrors,
+                    write: scsiWriteErrors,
+                    media: scsiMediaErrors
+                ),
+                severity: .information,
+                timing: .historical,
+                source: .smartctl
+            ))
+        }
+        parseATAAttributes(
+            from: object,
+            findings: &findings,
+            attributes: &attributes
+        )
         appendSafeSmartctlMetadata(from: object, to: &attributes)
 
         let messages = smartctlMessages(in: object)
-        if !hasHealthData(state: state, metrics: metrics, attributes: attributes) {
+        if !hasHealthData(
+            state: state,
+            metrics: metrics,
+            findings: findings,
+            attributes: attributes
+        ) {
             if exitStatus & 0x06 != 0 || !messages.isEmpty {
                 return .unavailable(unavailableReason(for: messages.joined(separator: "\n")))
             }
@@ -83,6 +161,7 @@ nonisolated enum StorageHealthParser {
             state: state,
             metrics: metrics,
             sources: [.smartctl],
+            findings: normalizedFindings(findings),
             attributes: normalizedAttributes(attributes)
         ))
     }
@@ -90,7 +169,7 @@ nonisolated enum StorageHealthParser {
     static func parseEMMCExtCSD(
         _ output: String,
         deviceID: StorageDeviceIdentity
-    ) -> StorageHealthResult {
+    ) -> StorageDeviceHealthResult {
         var preEOLRaw: UInt8?
         var lifetimeARaw: UInt8?
         var lifetimeBRaw: UInt8?
@@ -132,18 +211,35 @@ nonisolated enum StorageHealthParser {
 
         var metrics = StorageHealthMetrics()
         metrics.emmc = emmc
+        var findings: [StorageHealthFinding] = []
+        if preEOL == .warning || preEOL == .urgent {
+            findings.append(StorageHealthFinding(
+                kind: .emmcPreEOL(preEOL),
+                severity: preEOL == .urgent ? .critical : .warning,
+                source: .emmc
+            ))
+        }
+        if lifetimeA?.bucket == .exceededMaximumEstimate
+            || lifetimeB?.bucket == .exceededMaximumEstimate {
+            findings.append(StorageHealthFinding(
+                kind: .emmcLifetimeExceeded,
+                severity: .warning,
+                source: .emmc
+            ))
+        }
         return .report(StorageHealthReport(
             deviceID: deviceID,
             state: state,
             metrics: metrics,
-            sources: [.emmc]
+            sources: [.emmc],
+            findings: findings
         ))
     }
 
     static func parseDarwinPlist(
         _ output: String,
         deviceID: StorageDeviceIdentity
-    ) -> StorageHealthResult {
+    ) -> StorageDeviceHealthResult {
         guard let data = plistData(in: output) else {
             return .unavailable(unavailableReason(for: output))
         }
@@ -153,7 +249,7 @@ nonisolated enum StorageHealthParser {
     static func parseDarwinPlist(
         _ data: Data,
         deviceID: StorageDeviceIdentity
-    ) -> StorageHealthResult {
+    ) -> StorageDeviceHealthResult {
         guard
             let propertyList = try? PropertyListSerialization.propertyList(from: data, format: nil),
             let object = propertyList as? [String: Any]
@@ -161,8 +257,10 @@ nonisolated enum StorageHealthParser {
             return .unavailable(.invalidResponse)
         }
 
-        var state = darwinSMARTState(string(object["SMARTStatus"]))
+        let smartStatus = string(object["SMARTStatus"])
+        let state = darwinSMARTState(smartStatus)
         var metrics = StorageHealthMetrics()
+        var findings = sourceHealthFindings(state: state, status: smartStatus, source: .darwinDiskUtility)
         var attributes: [StorageHealthAttribute] = []
 
         appendTextAttribute(key: "device.model", label: "Model", value: string(object["MediaName"]), to: &attributes)
@@ -206,7 +304,12 @@ nonisolated enum StorageHealthParser {
             )
 
             if (metrics.mediaErrorCount ?? 0) > 0 || (metrics.errorLogEntryCount ?? 0) > 0 {
-                state = maxState(state, .warning)
+                findings.append(StorageHealthFinding(
+                    kind: .smartErrorLog,
+                    severity: .information,
+                    timing: .historical,
+                    source: .darwinDiskUtility
+                ))
             }
         }
 
@@ -218,6 +321,7 @@ nonisolated enum StorageHealthParser {
             state: state,
             metrics: metrics,
             sources: [.darwinDiskUtility],
+            findings: normalizedFindings(findings),
             attributes: normalizedAttributes(attributes)
         ))
     }
@@ -225,7 +329,7 @@ nonisolated enum StorageHealthParser {
     static func parseWindowsNativeJSON(
         _ output: String,
         deviceID: StorageDeviceIdentity
-    ) -> StorageHealthResult {
+    ) -> StorageDeviceHealthResult {
         guard let object = jsonDictionary(in: output) else {
             return .unavailable(unavailableReason(for: output))
         }
@@ -233,8 +337,20 @@ nonisolated enum StorageHealthParser {
             return .unavailable(unavailableReason(for: probeError))
         }
 
-        var state = windowsHealthState(string(object["HealthStatus"]))
-        state = maxState(state, windowsHealthState(string(object["PhysicalHealthStatus"])))
+        let diskStatus = string(object["HealthStatus"])
+        let physicalStatus = string(object["PhysicalHealthStatus"])
+        var state = windowsHealthState(diskStatus)
+        state = maxState(state, windowsHealthState(physicalStatus))
+        var findings = sourceHealthFindings(
+            state: windowsHealthState(diskStatus),
+            status: diskStatus,
+            source: .windowsStorage
+        )
+        findings += sourceHealthFindings(
+            state: windowsHealthState(physicalStatus),
+            status: physicalStatus,
+            source: .windowsStorage
+        )
 
         var metrics = StorageHealthMetrics()
         metrics.temperatureCelsius = positiveDouble(object["Temperature"])
@@ -251,7 +367,11 @@ nonisolated enum StorageHealthParser {
         metrics.loadUnloadCycleCount = uint64(object["LoadUnloadCycleCount"])
 
         if (metrics.readErrorsUncorrected ?? 0) > 0 || (metrics.writeErrorsUncorrected ?? 0) > 0 {
-            state = maxState(state, .warning)
+            findings.append(StorageHealthFinding(
+                kind: .sourceReportedHealth("Uncorrected I/O errors"),
+                severity: .warning,
+                source: .windowsStorage
+            ))
         }
 
         var attributes: [StorageHealthAttribute] = []
@@ -282,6 +402,7 @@ nonisolated enum StorageHealthParser {
             state: state,
             metrics: metrics,
             sources: [.windowsStorage],
+            findings: normalizedFindings(findings),
             attributes: normalizedAttributes(attributes)
         ))
     }
@@ -289,7 +410,7 @@ nonisolated enum StorageHealthParser {
     static func parseBSDMetadata(
         _ output: String,
         deviceID: StorageDeviceIdentity
-    ) -> StorageHealthResult {
+    ) -> StorageDeviceHealthResult {
         let allowedKeys: [String: (key: String, label: String, unit: String?)] = [
             "descr": ("device.model", "Model", nil),
             "description": ("device.model", "Model", nil),
@@ -336,7 +457,7 @@ nonisolated enum StorageHealthParser {
         ))
     }
 
-    static func merged(_ results: [StorageHealthResult]) -> StorageHealthResult {
+    static func merged(_ results: [StorageDeviceHealthResult]) -> StorageDeviceHealthResult {
         let reports = results.compactMap { result -> StorageHealthReport? in
             guard case .report(let report) = result else { return nil }
             return report
@@ -346,9 +467,10 @@ nonisolated enum StorageHealthParser {
         }
 
         for report in reports.dropFirst() where report.deviceID == merged.deviceID {
-            merged.state = maxState(merged.state, report.state)
+            merged.sourceState = maxState(merged.sourceState, report.sourceState)
             merged.metrics = mergedMetrics(merged.metrics, report.metrics)
             merged.sources.formUnion(report.sources)
+            merged.findings = normalizedFindings(merged.findings + report.findings)
             merged.attributes = normalizedAttributes(merged.attributes + report.attributes)
         }
         return .report(merged)
@@ -384,7 +506,7 @@ nonisolated enum StorageHealthParser {
 
     private static func parseATAAttributes(
         from object: [String: Any],
-        state: inout StorageHealthState,
+        findings: inout [StorageHealthFinding],
         attributes: inout [StorageHealthAttribute]
     ) {
         guard
@@ -397,15 +519,22 @@ nonisolated enum StorageHealthParser {
             let name = safeDisplayText(string(row["name"]) ?? "SMART Attribute \(id)") ?? "SMART Attribute \(id)"
             let whenFailed = (string(row["when_failed"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !whenFailed.isEmpty && whenFailed != "-" {
-                state = maxState(state, .warning)
+                let historical = whenFailed.lowercased().contains("past")
+                findings.append(StorageHealthFinding(
+                    kind: .ataAttribute(name: humanizedATAName(name)),
+                    severity: historical ? .information : .warning,
+                    timing: historical ? .historical : .current,
+                    source: .smartctl
+                ))
             }
             guard
                 let raw = row["raw"] as? [String: Any],
                 let rawValue = uint64(raw["value"])
             else { continue }
+            guard !isRedundantOrMisleadingATAAttribute(id: id, name: name) else { continue }
             attributes.append(StorageHealthAttribute(
                 key: "smart.ata.\(id)",
-                label: name,
+                label: humanizedATAName(name),
                 value: .integer(rawValue)
             ))
         }
@@ -470,6 +599,7 @@ nonisolated enum StorageHealthParser {
     private static func hasHealthData(
         state: StorageHealthState,
         metrics: StorageHealthMetrics,
+        findings: [StorageHealthFinding] = [],
         attributes: [StorageHealthAttribute]
     ) -> Bool {
         state != .unknown
@@ -490,10 +620,11 @@ nonisolated enum StorageHealthParser {
             || metrics.startStopCycleCount != nil
             || metrics.loadUnloadCycleCount != nil
             || metrics.emmc != nil
+            || !findings.isEmpty
             || !attributes.isEmpty
     }
 
-    private static func preferredUnavailableReason(in results: [StorageHealthResult]) -> StorageHealthUnavailableReason {
+    private static func preferredUnavailableReason(in results: [StorageDeviceHealthResult]) -> StorageHealthUnavailableReason {
         let reasons = results.compactMap { result -> StorageHealthUnavailableReason? in
             guard case .unavailable(let reason) = result else { return nil }
             return reason
@@ -705,6 +836,50 @@ nonisolated enum StorageHealthParser {
     ) {
         guard let value, let safe = safeDisplayText(value), !safe.isEmpty else { return }
         attributes.append(StorageHealthAttribute(key: key, label: label, value: .text(safe)))
+    }
+
+    private static func sourceHealthFindings(
+        state: StorageHealthState,
+        status: String?,
+        source: StorageHealthSource
+    ) -> [StorageHealthFinding] {
+        guard state == .warning || state == .failing else { return [] }
+        return [StorageHealthFinding(
+            kind: .sourceReportedHealth(safeDisplayText(status ?? "") ?? "Reported unhealthy"),
+            severity: state == .failing ? .critical : .warning,
+            source: source
+        )]
+    }
+
+    private static func appendUnique(
+        _ finding: StorageHealthFinding,
+        to findings: inout [StorageHealthFinding]
+    ) {
+        guard !findings.contains(where: { $0.id == finding.id }) else { return }
+        findings.append(finding)
+    }
+
+    private static func normalizedFindings(
+        _ findings: [StorageHealthFinding]
+    ) -> [StorageHealthFinding] {
+        var byID: [String: StorageHealthFinding] = [:]
+        for finding in findings where byID[finding.id] == nil {
+            byID[finding.id] = finding
+        }
+        return byID.values.sorted { $0.id < $1.id }
+    }
+
+    private static func isRedundantOrMisleadingATAAttribute(id: UInt64, name: String) -> Bool {
+        let normalized = name.lowercased().replacingOccurrences(of: "_", with: "")
+        // These vendor-specific raw fields are commonly packed values. Their
+        // normalized counterparts already live in `StorageHealthMetrics`.
+        return id == 190 || id == 194 || normalized.contains("temperature")
+    }
+
+    private static func humanizedATAName(_ name: String) -> String {
+        name.replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func safeDisplayText(_ value: String) -> String? {

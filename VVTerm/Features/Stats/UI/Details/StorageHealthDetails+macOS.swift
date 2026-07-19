@@ -15,6 +15,7 @@ struct StorageHealthDetailsPlatformShell<Content: View>: View {
             tint: .orange
         ) {
             content()
+                .listStyle(.plain)
         }
     }
 }

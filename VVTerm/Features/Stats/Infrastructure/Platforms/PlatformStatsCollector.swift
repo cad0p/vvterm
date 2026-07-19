@@ -30,7 +30,7 @@ protocol PlatformStatsCollector: Sendable {
     func collectStorageHealth(
         client: SSHClient,
         target: StorageHealthProbeTarget
-    ) async throws -> StorageHealthResult
+    ) async throws -> StorageDeviceHealthResult
 }
 
 struct VolumeCollectionMetadata: Equatable, Sendable {
@@ -92,7 +92,7 @@ extension PlatformStatsCollector {
     func collectStorageHealth(
         client: SSHClient,
         target: StorageHealthProbeTarget
-    ) async throws -> StorageHealthResult {
+    ) async throws -> StorageDeviceHealthResult {
         try await StorageHealthProbe.collect(client: client, target: target)
     }
 }

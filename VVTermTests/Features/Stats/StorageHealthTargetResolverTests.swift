@@ -41,10 +41,7 @@ final class StorageHealthTargetResolverTests: XCTestCase {
                 fallbackSource: "/dev/mapper/vg-root",
                 deviceID: deviceID
             ),
-            .target(StorageHealthProbeTarget(
-                deviceID: deviceID,
-                kind: .linux(devicePath: "/dev/mmcblk0", isEMMC: true)
-            ))
+            singleTarget(.linux(devicePath: "/dev/mmcblk0", isEMMC: true))
         )
     }
 
@@ -102,10 +99,7 @@ final class StorageHealthTargetResolverTests: XCTestCase {
                 fallbackSource: "/dev/nvme2n3",
                 deviceID: deviceID
             ),
-            .target(StorageHealthProbeTarget(
-                deviceID: deviceID,
-                kind: .linux(devicePath: "/dev/nvme2n3", isEMMC: false)
-            ))
+            singleTarget(.linux(devicePath: "/dev/nvme2n3", isEMMC: false))
         )
         XCTAssertEqual(
             StorageHealthTargetResolver.parseLinuxResolution(
@@ -132,6 +126,153 @@ final class StorageHealthTargetResolverTests: XCTestCase {
             source: "/dev/sda\nrm -rf /",
             mountPoint: "/"
         ))
+    }
+
+    func testBTRFSMirrorDiscoversEveryMemberAndDeviceErrors() throws {
+        let filesystem = """
+        Label: 'data'  uuid: 1234
+                Total devices 2 FS bytes used 4096
+                devid    1 size 100000 used 50000 path /dev/sda1
+                devid    2 size 100000 used 50000 path /dev/sdb1
+        """
+        let stats = """
+        [/dev/sda1].write_io_errs    0
+        [/dev/sda1].read_io_errs     0
+        [/dev/sdb1].write_io_errs    2
+        [/dev/sdb1].corruption_errs  1
+        """
+
+        let discovery = try XCTUnwrap(
+            LinuxStorageTopologyParser.parseBTRFS(filesystem: filesystem, deviceStats: stats)
+        )
+
+        XCTAssertEqual(discovery.kind, .btrfs)
+        XCTAssertEqual(discovery.name, "data")
+        XCTAssertEqual(discovery.members.map(\.path), ["/dev/sda1", "/dev/sdb1"])
+        XCTAssertTrue(discovery.members[1].findings.contains {
+            $0.kind == .deviceErrors(read: 0, write: 2, checksum: 1)
+        })
+    }
+
+    func testBTRFSSingleAndFourDeviceFixturesPreserveEveryMember() throws {
+        let single = try XCTUnwrap(LinuxStorageTopologyParser.parseBTRFS(
+            filesystem: """
+            Label: none  uuid: single
+                    Total devices 1 FS bytes used 4096
+                    devid    1 size 100000 used 50000 path /dev/sda1
+            """,
+            deviceStats: ""
+        ))
+        let multiDevice = try XCTUnwrap(LinuxStorageTopologyParser.parseBTRFS(
+            filesystem: """
+            Label: 'raid10-data'  uuid: multi
+                    Total devices 4 FS bytes used 4096
+                    devid    1 size 100000 used 50000 path /dev/sda1
+                    devid    2 size 100000 used 50000 path /dev/sdb1
+                    devid    3 size 100000 used 50000 path /dev/sdc1
+                    devid    4 size 100000 used 50000 path /dev/sdd1
+            """,
+            deviceStats: ""
+        ))
+
+        XCTAssertEqual(single.members.map(\.path), ["/dev/sda1"])
+        XCTAssertEqual(
+            multiDevice.members.map(\.path),
+            ["/dev/sda1", "/dev/sdb1", "/dev/sdc1", "/dev/sdd1"]
+        )
+        XCTAssertEqual(multiDevice.name, "raid10-data")
+    }
+
+    func testBTRFSDegradedFixtureKeepsMissingMemberVisible() throws {
+        let filesystem = """
+        Label: none  uuid: 1234
+                Total devices 2 FS bytes used 4096
+                devid    1 size 100000 used 50000 path /dev/sda1
+                devid    2 size 100000 used 50000 path missing
+        *** Some devices missing
+        """
+
+        let discovery = try XCTUnwrap(
+            LinuxStorageTopologyParser.parseBTRFS(filesystem: filesystem, deviceStats: "")
+        )
+
+        XCTAssertEqual(discovery.members.count, 2)
+        XCTAssertNil(discovery.members[1].path)
+        XCTAssertTrue(discovery.findings.contains { $0.kind == .missingMember })
+    }
+
+    func testZFSRAIDZDiscoversRolesPoolStateAndMemberErrors() throws {
+        let status = """
+          pool: tank
+         state: DEGRADED
+        config:
+
+                NAME              STATE     READ WRITE CKSUM
+                tank              DEGRADED     0     0     0
+                  raidz1-0        DEGRADED     0     0     0
+                    /dev/sda      ONLINE       0     0     0
+                    /dev/sdb      DEGRADED     1     0     2
+                    /dev/sdc      ONLINE       0     0     0
+                logs
+                  /dev/nvme0n1    ONLINE       0     0     0
+                cache
+                  /dev/nvme1n1    ONLINE       0     0     0
+                spares
+                  /dev/sdd        AVAIL
+
+        errors: No known data errors
+        """
+
+        let discovery = try XCTUnwrap(LinuxStorageTopologyParser.parseZFSStatus(status))
+
+        XCTAssertEqual(discovery.kind, .zfs)
+        XCTAssertEqual(discovery.name, "tank")
+        XCTAssertEqual(discovery.members.map(\.role), [.data, .data, .data, .log, .cache, .spare])
+        XCTAssertTrue(discovery.findings.contains { $0.kind == .poolState("DEGRADED") })
+        XCTAssertTrue(discovery.members[1].findings.contains {
+            $0.kind == .deviceErrors(read: 1, write: 0, checksum: 2)
+        })
+    }
+
+    func testZFSMirrorDiscoversBothLeavesWithoutTreatingGroupAsDevice() throws {
+        let status = """
+          pool: mirrorpool
+         state: ONLINE
+        config:
+
+                NAME              STATE     READ WRITE CKSUM
+                mirrorpool        ONLINE       0     0     0
+                  mirror-0        ONLINE       0     0     0
+                    /dev/sda      ONLINE       0     0     0
+                    /dev/sdb      ONLINE       0     0     0
+
+        errors: No known data errors
+        """
+
+        let discovery = try XCTUnwrap(LinuxStorageTopologyParser.parseZFSStatus(status))
+
+        XCTAssertEqual(discovery.members.map(\.path), ["/dev/sda", "/dev/sdb"])
+        XCTAssertEqual(discovery.members.map(\.role), [.data, .data])
+        XCTAssertTrue(discovery.findings.isEmpty)
+    }
+
+    func testArrayDiscoveryCommandsAreReadOnlyAndQuoted() throws {
+        let btrfs = try XCTUnwrap(StorageHealthTargetResolver.btrfsDiscoveryCommand(
+            mountPoint: "/mnt/user's mirror"
+        ))
+        let zfs = try XCTUnwrap(StorageHealthTargetResolver.zfsDiscoveryCommand(
+            source: "tank/user's-data",
+            mountPoint: "/tank/user's data"
+        ))
+        let mapping = try XCTUnwrap(StorageHealthTargetResolver.linuxDeviceResolutionCommand(
+            devicePath: "/dev/disk/by-id/user's-disk"
+        ))
+
+        XCTAssertTrue(btrfs.contains("btrfs filesystem show --raw"))
+        XCTAssertTrue(btrfs.contains("btrfs device stats"))
+        XCTAssertTrue(zfs.contains("zpool status -P"))
+        XCTAssertTrue(mapping.contains("lsblk -s -J"))
+        for command in [btrfs, zfs, mapping] { assertReadOnly(command) }
     }
 
     func testDarwinParserTracksAPFSPhysicalStoresWithoutExposingOtherMetadata() throws {
@@ -221,10 +362,7 @@ final class StorageHealthTargetResolverTests: XCTestCase {
                 marked(#"{"DiskNumbers":[7]}"#),
                 deviceID: deviceID
             ),
-            .target(StorageHealthProbeTarget(
-                deviceID: deviceID,
-                kind: .windows(diskNumber: 7)
-            ))
+            singleTarget(.windows(diskNumber: 7))
         )
         XCTAssertEqual(
             StorageHealthTargetResolver.parseWindowsResolution(
@@ -291,10 +429,7 @@ final class StorageHealthTargetResolverTests: XCTestCase {
                 source: "/dev/ada0p2",
                 deviceID: deviceID
             ),
-            .target(StorageHealthProbeTarget(
-                deviceID: deviceID,
-                kind: .freeBSD(devicePath: "/dev/ada0")
-            ))
+            singleTarget(.freeBSD(devicePath: "/dev/ada0"))
         )
         XCTAssertEqual(
             StorageHealthTargetResolver.parseBSDResolution(
@@ -303,10 +438,7 @@ final class StorageHealthTargetResolverTests: XCTestCase {
                 source: "/dev/rsd0a",
                 deviceID: deviceID
             ),
-            .target(StorageHealthProbeTarget(
-                deviceID: deviceID,
-                kind: .openBSD(devicePath: "/dev/sd0c")
-            ))
+            singleTarget(.openBSD(devicePath: "/dev/sd0c"))
         )
         XCTAssertEqual(
             StorageHealthTargetResolver.parseBSDResolution(
@@ -315,10 +447,7 @@ final class StorageHealthTargetResolverTests: XCTestCase {
                 source: "/dev/wd1e",
                 deviceID: deviceID
             ),
-            .target(StorageHealthProbeTarget(
-                deviceID: deviceID,
-                kind: .netBSD(devicePath: "/dev/wd1d")
-            ))
+            singleTarget(.netBSD(devicePath: "/dev/wd1d"))
         )
         XCTAssertEqual(
             StorageHealthTargetResolver.parseBSDResolution(
@@ -354,6 +483,21 @@ final class StorageHealthTargetResolverTests: XCTestCase {
             used: 1,
             total: 2
         )
+    }
+
+    private func singleTarget(
+        _ kind: StorageHealthProbeTarget.Kind
+    ) -> StorageHealthTargetResolution {
+        .topology(StorageHealthResolvedTopology(
+            kind: .physicalDevice,
+            name: nil,
+            findings: [],
+            members: [.target(
+                role: .data,
+                StorageHealthProbeTarget(deviceID: deviceID, kind: kind),
+                findings: []
+            )]
+        ))
     }
 
     private func marked(_ payload: String) -> String {

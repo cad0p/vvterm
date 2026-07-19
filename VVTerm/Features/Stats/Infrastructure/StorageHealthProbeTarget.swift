@@ -13,3 +13,44 @@ nonisolated struct StorageHealthProbeTarget: Hashable, Sendable {
     let deviceID: StorageDeviceIdentity
     let kind: Kind
 }
+
+nonisolated enum StorageHealthResolvedMember: Hashable, Sendable {
+    case target(
+        role: StorageHealthMemberRole,
+        StorageHealthProbeTarget,
+        findings: [StorageHealthFinding]
+    )
+    case unresolved(
+        id: StorageDeviceIdentity,
+        role: StorageHealthMemberRole,
+        reason: StorageHealthUnavailableReason
+    )
+
+    var id: StorageDeviceIdentity {
+        switch self {
+        case .target(_, let target, _): target.deviceID
+        case .unresolved(let id, _, _): id
+        }
+    }
+
+    var role: StorageHealthMemberRole {
+        switch self {
+        case .target(let role, _, _), .unresolved(_, let role, _): role
+        }
+    }
+
+}
+
+nonisolated struct StorageHealthResolvedTopology: Hashable, Sendable {
+    let kind: StorageTopologyKind
+    let name: String?
+    let findings: [StorageHealthFinding]
+    let members: [StorageHealthResolvedMember]
+
+    var coverage: StorageHealthCoverage {
+        members.contains {
+            if case .unresolved = $0 { return true }
+            return false
+        } ? .partial : .complete
+    }
+}

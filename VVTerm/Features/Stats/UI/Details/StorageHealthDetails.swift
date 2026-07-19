@@ -53,7 +53,7 @@ struct StorageHealthDetailsSheet: View {
                 unavailableSection(reason)
 
             case .loaded(.report(let report)):
-                reportSections(report)
+                volumeReportSections(report)
 
             case .failed:
                 Section(String(localized: "Health")) {
@@ -82,10 +82,122 @@ struct StorageHealthDetailsSheet: View {
     }
 
     @ViewBuilder
-    private func reportSections(_ report: StorageHealthReport) -> some View {
+    private func volumeReportSections(_ volumeReport: StorageHealthVolumeReport) -> some View {
+        let findings = displayedFindings(for: volumeReport)
         Section(String(localized: "Health")) {
-            StorageHealthStatusRow(state: report.state)
+            StorageHealthStatusRow(state: volumeReport.state, findings: findings)
 
+            if let firstFinding = findings.first(where: { $0.severity != .information }) ?? findings.first {
+                Text(firstFinding.title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.stats.storage.health.reasonSummary")
+            }
+
+            if volumeReport.topology != .physicalDevice {
+                InfoRow(title: String(localized: "Storage Type"), value: volumeReport.topology.title)
+            }
+            if let name = volumeReport.name, !name.isEmpty {
+                InfoRow(title: String(localized: "Pool or File System"), value: name)
+            }
+            if volumeReport.coverage == .partial {
+                Label(String(localized: "Some storage members could not be checked."), systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("vvterm.stats.storage.health.partialCoverage")
+            }
+        }
+        .accessibilityIdentifier("vvterm.stats.storage.health.report")
+
+        if volumeReport.members.count == 1, let member = volumeReport.members.first {
+            singleMemberSections(member)
+        } else if !volumeReport.members.isEmpty {
+            Section(String(localized: "Storage Members")) {
+                ForEach(volumeReport.members) { member in
+                    NavigationLink {
+                        StorageHealthMemberDetailView(member: member)
+                    } label: {
+                        StorageHealthMemberRow(member: member)
+                    }
+                    .accessibilityIdentifier("vvterm.stats.storage.health.member.\(member.ordinal)")
+                }
+            }
+        }
+
+        Section {
+            retryButton
+        }
+    }
+
+    private func displayedFindings(for volumeReport: StorageHealthVolumeReport) -> [StorageHealthFinding] {
+        var seenIDs: Set<String> = []
+        let findings = volumeReport.findings + volumeReport.members.flatMap { member in
+            let deviceFindings: [StorageHealthFinding]
+            if case .report(let report) = member.result {
+                deviceFindings = report.findings
+            } else {
+                deviceFindings = []
+            }
+            return member.findings + deviceFindings
+        }
+        return findings.filter { seenIDs.insert($0.id).inserted }
+    }
+
+    @ViewBuilder
+    private func singleMemberSections(_ member: StorageHealthMemberReport) -> some View {
+        switch member.result {
+        case .unavailable(let reason):
+            Section(String(localized: "Drive")) {
+                StorageHealthUnavailableRow(
+                    systemImage: reason.systemImage,
+                    title: reason.title,
+                    message: reason.message
+                )
+            }
+        case .report(let report):
+            StorageDeviceHealthSections(report: report, includesStatus: false)
+        }
+    }
+
+    private var retryButton: some View {
+        Button {
+            reloadTrigger.toggle()
+        } label: {
+            Label(String(localized: "Check Again"), systemImage: "arrow.clockwise")
+        }
+        .accessibilityIdentifier("vvterm.stats.storage.health.retry")
+    }
+
+    private func reload() async {
+        loadState = .loading
+        guard let loadHealth else {
+            loadState = .loaded(.unavailable(.unsupported))
+            return
+        }
+
+        do {
+            loadState = .loaded(try await loadHealth(volume))
+        } catch is CancellationError {
+            return
+        } catch {
+            loadState = .failed
+        }
+    }
+
+}
+
+private struct StorageDeviceHealthSections: View {
+    let report: StorageHealthReport
+    let includesStatus: Bool
+
+    var body: some View {
+        if includesStatus {
+            Section(String(localized: "Health")) {
+                StorageHealthStatusRow(state: report.state, findings: report.findings)
+            }
+        }
+
+        Section(String(localized: "Drive")) {
             if let value = report.metrics.temperatureCelsius {
                 InfoRow(title: String(localized: "Temperature"), value: temperatureLabel(value))
             }
@@ -101,23 +213,22 @@ struct StorageHealthDetailsSheet: View {
             if let value = report.metrics.availableSpareThresholdPercent {
                 InfoRow(title: String(localized: "Spare Threshold"), value: percentLabel(value))
             }
-            InfoRow(title: String(localized: "Method"), value: sourceLabel(report.sources))
+            InfoRow(title: String(localized: "Method"), value: sourceLabel)
         }
-        .accessibilityIdentifier("vvterm.stats.storage.health.report")
 
-        if hasUsageMetrics(report.metrics) {
+        if hasUsageMetrics {
             Section(String(localized: "Drive History")) {
-                optionalCounter(String(localized: "Power-On Hours"), report.metrics.powerOnHours)
-                optionalCounter(String(localized: "Power Cycles"), report.metrics.powerCycleCount)
-                optionalCounter(String(localized: "Unsafe Shutdowns"), report.metrics.unsafeShutdownCount)
-                optionalCounter(String(localized: "Media Errors"), report.metrics.mediaErrorCount)
-                optionalCounter(String(localized: "Error Log Entries"), report.metrics.errorLogEntryCount)
-                optionalCounter(String(localized: "Corrected Read Errors"), report.metrics.readErrorsCorrected)
-                optionalCounter(String(localized: "Uncorrected Read Errors"), report.metrics.readErrorsUncorrected)
-                optionalCounter(String(localized: "Corrected Write Errors"), report.metrics.writeErrorsCorrected)
-                optionalCounter(String(localized: "Uncorrected Write Errors"), report.metrics.writeErrorsUncorrected)
-                optionalCounter(String(localized: "Start/Stop Cycles"), report.metrics.startStopCycleCount)
-                optionalCounter(String(localized: "Load/Unload Cycles"), report.metrics.loadUnloadCycleCount)
+                counter(String(localized: "Power-On Hours"), report.metrics.powerOnHours)
+                counter(String(localized: "Power Cycles"), report.metrics.powerCycleCount)
+                counter(String(localized: "Unsafe Shutdowns"), report.metrics.unsafeShutdownCount)
+                counter(String(localized: "Media Errors"), report.metrics.mediaErrorCount)
+                counter(String(localized: "Error Log Entries"), report.metrics.errorLogEntryCount)
+                counter(String(localized: "Corrected Read Errors"), report.metrics.readErrorsCorrected)
+                counter(String(localized: "Uncorrected Read Errors"), report.metrics.readErrorsUncorrected)
+                counter(String(localized: "Corrected Write Errors"), report.metrics.writeErrorsCorrected)
+                counter(String(localized: "Uncorrected Write Errors"), report.metrics.writeErrorsUncorrected)
+                counter(String(localized: "Start/Stop Cycles"), report.metrics.startStopCycleCount)
+                counter(String(localized: "Load/Unload Cycles"), report.metrics.loadUnloadCycleCount)
             }
         }
 
@@ -138,36 +249,24 @@ struct StorageHealthDetailsSheet: View {
         }
 
         if !report.attributes.isEmpty {
-            Section(String(localized: "Device Details")) {
-                ForEach(report.attributes, id: \.key) { attribute in
-                    InfoRow(title: attribute.localizedLabel, value: attribute.formattedValue)
+            Section {
+                DisclosureGroup(String(localized: "Advanced Diagnostics")) {
+                    ForEach(report.attributes, id: \.key) { attribute in
+                        InfoRow(title: attribute.localizedLabel, value: attribute.formattedValue)
+                    }
                 }
             }
         }
-
-        Section {
-            retryButton
-        }
-    }
-
-    private var retryButton: some View {
-        Button {
-            reloadTrigger.toggle()
-        } label: {
-            Label(String(localized: "Check Again"), systemImage: "arrow.clockwise")
-        }
-        .accessibilityIdentifier("vvterm.stats.storage.health.retry")
     }
 
     @ViewBuilder
-    private func optionalCounter(_ title: String, _ value: UInt64?) -> some View {
-        if let value {
-            InfoRow(title: title, value: value.formatted())
-        }
+    private func counter(_ title: String, _ value: UInt64?) -> some View {
+        if let value { InfoRow(title: title, value: value.formatted()) }
     }
 
-    private func hasUsageMetrics(_ metrics: StorageHealthMetrics) -> Bool {
-        metrics.powerOnHours != nil
+    private var hasUsageMetrics: Bool {
+        let metrics = report.metrics
+        return metrics.powerOnHours != nil
             || metrics.powerCycleCount != nil
             || metrics.unsafeShutdownCount != nil
             || metrics.mediaErrorCount != nil
@@ -180,39 +279,33 @@ struct StorageHealthDetailsSheet: View {
             || metrics.loadUnloadCycleCount != nil
     }
 
-    private func reload() async {
-        loadState = .loading
-        guard let loadHealth else {
-            loadState = .loaded(.unavailable(.unsupported))
-            return
-        }
-
-        do {
-            loadState = .loaded(try await loadHealth(volume))
-        } catch is CancellationError {
-            return
-        } catch {
-            loadState = .failed
-        }
+    private var sourceLabel: String {
+        report.sources.sorted { $0.rawValue < $1.rawValue }.map(\.title).joined(separator: " + ")
     }
 
-    private func temperatureLabel(_ value: Double) -> String {
-        String(format: "%.0f °C", value)
-    }
-
-    private func percentLabel(_ value: Double) -> String {
-        String(format: "%.0f%%", value)
-    }
-
-    private func sourceLabel(_ sources: Set<StorageHealthSource>) -> String {
-        sources.sorted { $0.rawValue < $1.rawValue }.map(\.title).joined(separator: " + ")
-    }
+    private func temperatureLabel(_ value: Double) -> String { String(format: "%.0f °C", value) }
+    private func percentLabel(_ value: Double) -> String { String(format: "%.0f%%", value) }
 }
 
 private struct StorageHealthStatusRow: View {
     let state: StorageHealthState
+    let findings: [StorageHealthFinding]
 
     var body: some View {
+        if findings.isEmpty {
+            statusLabel
+                .accessibilityIdentifier("vvterm.stats.storage.health.status")
+        } else {
+            NavigationLink {
+                StorageHealthFindingsView(findings: findings)
+            } label: {
+                statusLabel
+            }
+            .accessibilityIdentifier("vvterm.stats.storage.health.status")
+        }
+    }
+
+    private var statusLabel: some View {
         Label {
             Text(state.title)
                 .font(.headline)
@@ -220,7 +313,94 @@ private struct StorageHealthStatusRow: View {
             Image(systemName: state.systemImage)
                 .foregroundStyle(state.tint)
         }
-        .accessibilityIdentifier("vvterm.stats.storage.health.status")
+    }
+}
+
+private struct StorageHealthFindingsView: View {
+    let findings: [StorageHealthFinding]
+
+    var body: some View {
+        List(findings) { finding in
+            VStack(alignment: .leading, spacing: 4) {
+                Label(finding.title, systemImage: finding.systemImage)
+                    .font(.headline)
+                Text(finding.explanation)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if finding.timing == .historical {
+                    Text(String(localized: "Historical"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 3)
+        }
+        .navigationTitle(Text("Health Findings"))
+        .accessibilityIdentifier("vvterm.stats.storage.health.findings")
+    }
+}
+
+private struct StorageHealthMemberRow: View {
+    let member: StorageHealthMemberReport
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(format: String(localized: "Drive %lld"), Int64(member.ordinal)))
+                Text(member.role.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if member.state == .unknown, case .unavailable = member.result {
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(Text("Unavailable"))
+            } else {
+                Image(systemName: member.state.systemImage)
+                    .foregroundStyle(member.state.tint)
+                    .accessibilityLabel(member.state.title)
+            }
+        }
+    }
+}
+
+private struct StorageHealthMemberDetailView: View {
+    let member: StorageHealthMemberReport
+
+    var body: some View {
+        List {
+            Section(String(localized: "Member")) {
+                InfoRow(title: String(localized: "Role"), value: member.role.title)
+            }
+            Section(String(localized: "Health")) {
+                StorageHealthStatusRow(state: member.state, findings: allFindings)
+            }
+            switch member.result {
+            case .unavailable(let reason):
+                Section(String(localized: "Drive")) {
+                    StorageHealthUnavailableRow(
+                        systemImage: reason.systemImage,
+                        title: reason.title,
+                        message: reason.message
+                    )
+                }
+            case .report(let report):
+                StorageDeviceHealthSections(report: report, includesStatus: false)
+            }
+        }
+        .navigationTitle(String(format: String(localized: "Drive %lld"), Int64(member.ordinal)))
+    }
+
+    private var allFindings: [StorageHealthFinding] {
+        let deviceFindings: [StorageHealthFinding]
+        if case .report(let report) = member.result {
+            deviceFindings = report.findings
+        } else {
+            deviceFindings = []
+        }
+        var seenIDs: Set<String> = []
+        return (member.findings + deviceFindings).filter { seenIDs.insert($0.id).inserted }
     }
 }
 
@@ -352,12 +532,122 @@ private extension StorageHealthSource {
             return String(localized: "SMART")
         case .emmc:
             return String(localized: "eMMC")
+        case .btrfs:
+            return String(localized: "BTRFS")
+        case .zfs:
+            return String(localized: "ZFS")
         case .darwinDiskUtility:
             return String(localized: "Disk Utility")
         case .windowsStorage:
             return String(localized: "Windows Storage")
         case .bsdNative:
             return String(localized: "BSD Storage")
+        }
+    }
+}
+
+private extension StorageTopologyKind {
+    var title: String {
+        switch self {
+        case .physicalDevice: String(localized: "Physical Drive")
+        case .btrfs: String(localized: "BTRFS File System")
+        case .zfs: String(localized: "ZFS Pool")
+        }
+    }
+}
+
+private extension StorageHealthMemberRole {
+    var title: String {
+        switch self {
+        case .data: String(localized: "Data")
+        case .cache: String(localized: "Cache")
+        case .log: String(localized: "Log")
+        case .spare: String(localized: "Spare")
+        case .special: String(localized: "Special")
+        }
+    }
+}
+
+private extension StorageHealthFinding {
+    var systemImage: String {
+        switch severity {
+        case .information: "info.circle"
+        case .warning: "exclamationmark.triangle"
+        case .critical: "xmark.octagon"
+        }
+    }
+
+    var title: String {
+        switch kind {
+        case .sourceReportedHealth(let status):
+            return String(format: String(localized: "Storage reported: %@"), status)
+        case .smartOverallFailure:
+            return String(localized: "SMART reports imminent drive failure")
+        case .smartCurrentPrefailThreshold:
+            return String(localized: "A SMART pre-failure threshold is currently exceeded")
+        case .smartPastThreshold:
+            return String(localized: "A SMART threshold was exceeded in the past")
+        case .smartErrorLog:
+            return String(localized: "SMART error history is available")
+        case .smartSelfTestLog:
+            return String(localized: "A SMART self-test recorded an error")
+        case .nvmeCriticalWarning:
+            return String(localized: "NVMe reports a critical warning")
+        case .ataAttribute(let name):
+            return String(format: String(localized: "%@ needs attention"), name)
+        case .scsiErrorHistory:
+            return String(localized: "SCSI error history is available")
+        case .emmcPreEOL(let status):
+            return String(format: String(localized: "eMMC pre-EOL status is %@"), status.title)
+        case .emmcLifetimeExceeded:
+            return String(localized: "eMMC exceeded its maximum lifetime estimate")
+        case .poolState(let state):
+            return String(format: String(localized: "Storage pool is %@"), state)
+        case .deviceErrors:
+            return String(localized: "Storage member has I/O errors")
+        case .missingMember:
+            return String(localized: "A storage member is missing")
+        case .partialCoverage:
+            return String(localized: "Storage health coverage is partial")
+        }
+    }
+
+    var explanation: String {
+        switch kind {
+        case .smartPastThreshold, .smartErrorLog, .smartSelfTestLog:
+            return String(localized: "This is historical diagnostic information and does not by itself indicate a current failure.")
+        case .nvmeCriticalWarning(let bit):
+            return String(format: String(localized: "The NVMe critical-warning flag %lld is active."), Int64(bit))
+        case .deviceErrors(let read, let write, let checksum):
+            return String(
+                format: String(localized: "Read: %llu, write: %llu, checksum: %llu."),
+                read,
+                write,
+                checksum
+            )
+        case .scsiErrorHistory(let read, let write, let media):
+            return String(
+                format: String(localized: "Uncorrected read: %llu, uncorrected write: %llu, media: %llu."),
+                read,
+                write,
+                media
+            )
+        case .partialCoverage:
+            return String(localized: "At least one member could not be safely mapped or checked. The visible results do not cover the entire array.")
+        case .missingMember:
+            return String(localized: "The file system or pool reports a member that is not currently available.")
+        case .poolState:
+            return String(localized: "The pool manager reported a degraded or unavailable state. Open each member to review device-specific health.")
+        case .smartOverallFailure:
+            return String(localized: "SMART's current overall-health assessment reports that this drive is failing.")
+        case .smartCurrentPrefailThreshold:
+            return String(localized: "A current pre-failure SMART attribute has reached its vendor threshold.")
+        case .ataAttribute:
+            return String(localized: "SMART marked this attribute as currently failing. Review the drive and keep a current backup.")
+        case .emmcPreEOL, .emmcLifetimeExceeded:
+            return String(localized: "The eMMC device reports an active endurance warning.")
+        case .sourceReportedHealth(let status):
+            return String(format: String(localized: "The storage provider reported the current state as %@."), status)
         }
     }
 }

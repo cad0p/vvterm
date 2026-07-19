@@ -34,4 +34,12 @@ struct StorageDetailsPlatformShell<Controls: View, Content: View>: View {
         }
     }
 }
+
+extension View {
+    func storageVolumeToggleLabelAlignment() -> some View {
+        alignmentGuide(.firstTextBaseline) { dimensions in
+            dimensions[VerticalAlignment.center]
+        }
+    }
+}
 #endif

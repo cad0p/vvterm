@@ -72,6 +72,45 @@ final class StorageHealthParserTests: XCTestCase {
         XCTAssertNil(report.metrics.powerOnHours)
         XCTAssertEqual(report.metrics.powerCycleCount, 99)
         XCTAssertEqual(report.metrics.mediaErrorCount, 1)
+        XCTAssertFalse(report.findings.contains {
+            if case .scsiErrorHistory = $0.kind { return true }
+            return false
+        })
+    }
+
+    func testSmartctlExitBitsAreClassifiedIndependently() throws {
+        let cases: [(UInt64, StorageHealthFindingKind, StorageHealthFindingTiming, StorageHealthState)] = [
+            (0x10, .smartCurrentPrefailThreshold, .current, .warning),
+            (0x20, .smartPastThreshold, .historical, .healthy),
+            (0x40, .smartErrorLog, .historical, .healthy),
+            (0x80, .smartSelfTestLog, .historical, .healthy)
+        ]
+
+        for (exitStatus, kind, timing, expectedState) in cases {
+            let output = #"{"smartctl":{"exit_status":\#(exitStatus)},"smart_status":{"passed":true}}"#
+            let report = try report(from: StorageHealthParser.parseSmartctlJSON(output, deviceID: deviceID))
+            let finding = try XCTUnwrap(report.findings.first { $0.kind == kind })
+            XCTAssertEqual(finding.timing, timing)
+            XCTAssertEqual(report.state, expectedState)
+        }
+    }
+
+    func testPackedATATemperatureRawValueIsNotPresentedAsAnotherTemperature() throws {
+        let output = #"""
+        {
+          "smartctl": {"exit_status": 0},
+          "smart_status": {"passed": true},
+          "temperature": {"current": 32},
+          "ata_smart_attributes": {"table": [
+            {"id": 194, "name": "Temperature_Celsius", "when_failed": "-", "raw": {"value": 253403070496}}
+          ]}
+        }
+        """#
+
+        let report = try report(from: StorageHealthParser.parseSmartctlJSON(output, deviceID: deviceID))
+
+        XCTAssertEqual(report.metrics.temperatureCelsius, 32)
+        XCTAssertFalse(report.attributes.contains { $0.key == "smart.ata.194" })
     }
 
     func testSmartctlSCSIParserNormalizesErrorCounters() throws {
@@ -101,6 +140,12 @@ final class StorageHealthParserTests: XCTestCase {
         XCTAssertEqual(report.metrics.mediaErrorCount, 4)
         XCTAssertEqual(report.metrics.readErrorsUncorrected, 1)
         XCTAssertEqual(report.metrics.writeErrorsUncorrected, 2)
+        XCTAssertTrue(report.findings.contains {
+            $0.kind == .scsiErrorHistory(read: 1, write: 2, media: 4)
+                && $0.timing == .historical
+                && $0.severity == .information
+        })
+        XCTAssertEqual(report.state, .healthy)
     }
 
     func testSmartctlPermissionFailureIsCapabilityState() {
@@ -354,11 +399,11 @@ final class StorageHealthParserTests: XCTestCase {
 
     func testCapabilityMirrorsResultState() {
         XCTAssertEqual(
-            StorageHealthResult.unavailable(.networkVolume).capability,
+            StorageDeviceHealthResult.unavailable(.networkVolume).capability,
             .unavailable(.networkVolume)
         )
         XCTAssertEqual(
-            StorageHealthResult.report(StorageHealthReport(
+            StorageDeviceHealthResult.report(StorageHealthReport(
                 deviceID: deviceID,
                 sources: [.smartctl]
             )).capability,
@@ -367,7 +412,7 @@ final class StorageHealthParserTests: XCTestCase {
     }
 
     private func report(
-        from result: StorageHealthResult,
+        from result: StorageDeviceHealthResult,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> StorageHealthReport {

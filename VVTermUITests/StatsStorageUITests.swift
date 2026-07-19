@@ -96,7 +96,26 @@ final class StatsStorageUITests: XCTestCase {
         XCTAssertEqual(containerHealth.value as? String, "Visible")
 
         rootHealth.tap()
-        XCTAssertTrue(app.staticTexts["Healthy"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Needs Attention"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["A SMART pre-failure threshold is currently exceeded"].exists)
+        app.staticTexts["Needs Attention"].tap()
+        XCTAssertTrue(app.navigationBars["Health Findings"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["A current pre-failure SMART attribute has reached its vendor threshold."].exists)
+        app.navigationBars["Health Findings"].buttons["Storage Health"].tap()
+        closePresentedHealth()
+
+        let mirrorHealth = app.buttons[volumeIdentifier(
+            "stable|linux|mirror-uuid|/mnt/mirror",
+            suffix: "health"
+        )]
+        mirrorHealth.tap()
+        XCTAssertTrue(app.staticTexts["Storage Members"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Some storage members could not be checked."].exists)
+        XCTAssertTrue(app.buttons["vvterm.stats.storage.health.member.1"].exists)
+        if !app.buttons["vvterm.stats.storage.health.member.2"].exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(app.buttons["vvterm.stats.storage.health.member.2"].waitForExistence(timeout: 3))
         closePresentedHealth()
 
         shareHealth.tap()

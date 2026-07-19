@@ -25,6 +25,15 @@ struct StatsStorageUITestHarness: View {
         ),
         VolumeInfo(
             platform: .linux,
+            mountPoint: "/mnt/mirror",
+            source: "/dev/sda1",
+            fileSystem: "btrfs",
+            stableIdentifier: "mirror-uuid",
+            used: 300_000_000_000,
+            total: 1_000_000_000_000
+        ),
+        VolumeInfo(
+            platform: .linux,
             mountPoint: "/var/lib/docker/overlay2/example/merged",
             source: "overlay",
             fileSystem: "overlay",
@@ -34,7 +43,7 @@ struct StatsStorageUITestHarness: View {
     ]
 
     init() {
-        _hiddenVolumeIDs = State(initialValue: [Self.volumes[2].identity])
+        _hiddenVolumeIDs = State(initialValue: [Self.volumes[3].identity])
     }
 
     var body: some View {
@@ -55,18 +64,72 @@ struct StatsStorageUITestHarness: View {
         case .container, .virtual:
             return .unavailable(.virtualDevice)
         case .physical, .unknown:
+            if volume.fileSystem.lowercased() == "btrfs" {
+                return mirrorHealthFixture()
+            }
             var metrics = StorageHealthMetrics()
             metrics.temperatureCelsius = 37
             metrics.percentageUsed = 8
             metrics.availableSparePercent = 100
             metrics.powerOnHours = 1_024
-            return .report(StorageHealthReport(
-                deviceID: StorageDeviceIdentity(namespace: "ui-test", opaqueValue: "fixture"),
+            let deviceID = StorageDeviceIdentity(namespace: "ui-test", opaqueValue: "fixture")
+            let device = StorageHealthReport(
+                deviceID: deviceID,
                 state: .healthy,
                 metrics: metrics,
-                sources: [.smartctl]
+                sources: [.smartctl],
+                findings: [StorageHealthFinding(
+                    kind: .smartCurrentPrefailThreshold,
+                    severity: .warning,
+                    source: .smartctl
+                )]
+            )
+            return .report(StorageHealthVolumeReport(
+                topology: .physicalDevice,
+                name: nil,
+                coverage: .complete,
+                findings: [],
+                members: [StorageHealthMemberReport(
+                    id: deviceID,
+                    role: .data,
+                    ordinal: 1,
+                    result: .report(device)
+                )]
             ))
         }
+    }
+
+    private func mirrorHealthFixture() -> StorageHealthResult {
+        let firstID = StorageDeviceIdentity(namespace: "ui-test", opaqueValue: "mirror-1")
+        let secondID = StorageDeviceIdentity(namespace: "ui-test", opaqueValue: "mirror-2")
+        return .report(StorageHealthVolumeReport(
+            topology: .btrfs,
+            name: "data",
+            coverage: .partial,
+            findings: [StorageHealthFinding(
+                kind: .partialCoverage,
+                severity: .information,
+                source: .btrfs
+            )],
+            members: [
+                StorageHealthMemberReport(
+                    id: firstID,
+                    role: .data,
+                    ordinal: 1,
+                    result: .report(StorageHealthReport(
+                        deviceID: firstID,
+                        state: .healthy,
+                        sources: [.smartctl]
+                    ))
+                ),
+                StorageHealthMemberReport(
+                    id: secondID,
+                    role: .data,
+                    ordinal: 2,
+                    result: .unavailable(.permissionDenied)
+                )
+            ]
+        ))
     }
 
     private func setVolumeVisibility(_ volume: VolumeInfo, _ isVisible: Bool) {
