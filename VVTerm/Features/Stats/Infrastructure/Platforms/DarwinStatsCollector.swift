@@ -5,6 +5,24 @@ import Foundation
 /// Stats collector for macOS/Darwin systems using sysctl, vm_stat, etc.
 struct DarwinStatsCollector: PlatformStatsCollector {
     private static let periodicProcessLimit = 24
+    static let statsBatchCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand("""
+        export LC_ALL=C LANG=C
+        sysctl -n vm.loadavg 2>/dev/null || uptime | sed 's/.*load average[s]*: //'; echo '---SEP---'
+        sysctl -n kern.boottime; echo '---SEP---'
+        sysctl -n hw.memsize; echo '---SEP---'
+        vm_stat; echo '---SEP---'
+        netstat -ibn; echo '---SEP---'
+        sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
+        """)
+    static let topCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+        "export LC_ALL=C LANG=C; top -l 1 -n 0 -s 0 2>/dev/null | grep 'CPU usage' || echo 'CPU usage: 0% user, 0% sys, 100% idle'"
+    )
+    static let dfCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+        "export LC_ALL=C LANG=C; df -m 2>/dev/null | grep -E '^/dev'"
+    )
+    static let diskutilListCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+        "export LC_ALL=C LANG=C; /usr/sbin/diskutil list -plist 2>/dev/null"
+    )
     private static let processorLoadScript = """
         if [ -x /usr/bin/ruby ]; then
             /usr/bin/ruby <<'RUBY' && exit 0
@@ -164,16 +182,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         var stats = ServerStats()
 
         // Batch commands for macOS
-        let batchCmd = """
-            LC_ALL=C LANG=C; \
-            sysctl -n vm.loadavg 2>/dev/null || uptime | sed 's/.*load average[s]*: //'; echo '---SEP---'; \
-            sysctl -n kern.boottime; echo '---SEP---'; \
-            sysctl -n hw.memsize; echo '---SEP---'; \
-            vm_stat; echo '---SEP---'; \
-            netstat -ibn; echo '---SEP---'; \
-            sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
-            """
-        let batchOutput = try await client.execute(batchCmd)
+        let batchOutput = try await client.execute(Self.statsBatchCommand)
         let sections = batchOutput.components(separatedBy: "---SEP---")
 
         // Load average (format: { 1.23 4.56 7.89 })
@@ -226,7 +235,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
             : 0
 
         // CPU via top (separate command due to complexity)
-        let topOutput = try await client.execute("LC_ALL=C LANG=C top -l 1 -n 0 -s 0 2>/dev/null | grep 'CPU usage' || echo 'CPU usage: 0% user, 0% sys, 100% idle'")
+        let topOutput = try await client.execute(Self.topCommand)
         let cpu = parseTopCpu(topOutput)
         stats.cpuUser = cpu.user
         stats.cpuSystem = cpu.system
@@ -254,7 +263,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         }
 
         // Volumes
-        let dfOutput = try await client.execute("LC_ALL=C LANG=C df -m 2>/dev/null | grep -E '^/dev'")
+        let dfOutput = try await client.execute(Self.dfCommand)
         let volumeMetadata = await volumeMetadata(
             client: client,
             context: context,
@@ -662,7 +671,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
 
         var metadata = context.volumeMetadata(for: .darwin)
         if let output = try? await client.execute(
-            "LC_ALL=C LANG=C /usr/sbin/diskutil list -plist 2>/dev/null",
+            Self.diskutilListCommand,
             timeout: .seconds(6)
         ) {
             metadata.merge(parseDiskutilVolumeMetadata(output)) { _, fresh in fresh }
@@ -671,7 +680,9 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         for source in sources where metadata[source]?.stableIdentifier == nil {
             guard isSafeDarwinDevicePath(source),
                   let output = try? await client.execute(
-                      "LC_ALL=C LANG=C /usr/sbin/diskutil info -plist \"\(source)\" 2>/dev/null",
+                      RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+                          "export LC_ALL=C LANG=C; /usr/sbin/diskutil info -plist \(RemoteTerminalBootstrap.shellQuoted(source)) 2>/dev/null"
+                      ),
                       timeout: .seconds(4)
                   ) else { continue }
             metadata.merge(parseDiskutilVolumeMetadata(output)) { _, fresh in fresh }

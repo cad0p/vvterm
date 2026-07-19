@@ -2,6 +2,19 @@ import XCTest
 @testable import VVTerm
 
 final class PlatformStatsCollectorParserTests: XCTestCase {
+    func testDarwinPeriodicCommandsRunThroughPOSIXShellInsteadOfLoginFish() {
+        for command in [
+            DarwinStatsCollector.statsBatchCommand,
+            DarwinStatsCollector.topCommand,
+            DarwinStatsCollector.dfCommand,
+            DarwinStatsCollector.diskutilListCommand
+        ] {
+            XCTAssertTrue(command.hasPrefix("/bin/sh -lc "))
+            XCTAssertTrue(command.contains("export LC_ALL=C LANG=C"))
+            XCTAssertFalse(command.hasPrefix("LC_ALL=C LANG=C"))
+        }
+    }
+
     func testProcessCPUPercentagesUseTotalMachineCapacityOverSampleInterval() {
         let context = StatsCollectionContext()
         let start = Date(timeIntervalSince1970: 100)
