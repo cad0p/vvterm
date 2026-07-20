@@ -260,7 +260,20 @@ jobs:
             --output json \
             --wait)"
 
-          build_id="$(echo "$upload_json" | jq -r '.data.id // .data[0].id // empty')"
+          # The asc builds upload response shape has evolved across versions.
+          # Try .data.id (older), then .uploadId (current), then fall back to
+          # querying the builds list for the most recent build of this app
+          # (matches cad0p/litter's find_build_id fallback in release-common.sh).
+          build_id="$(echo "$upload_json" | jq -r '.data.id // .data[0].id // .uploadId // empty')"
+          if [[ -z "$build_id" ]]; then
+            echo "==> Could not extract build_id from upload response; querying builds list as fallback" >&2
+            build_id="$(asc builds list \
+              --app "$IOS_APP_STORE_APP_ID" \
+              --limit 1 \
+              --sort "-uploadedDate" \
+              --output json \
+              | jq -r '.data[0].id // empty')"
+          fi
           if [[ -z "$build_id" ]]; then
             echo "ERROR: could not extract build_id from upload response" >&2
             echo "$upload_json" >&2
