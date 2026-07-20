@@ -675,6 +675,10 @@ struct TerminalKeyboardUITestHarness: View {
             return
         }
 
+        terminalView?.pauseRendering(
+            preservingForegroundKeyboardGrid: keyboardCoordinator.softwareKeyboardEndFrame != nil
+        )
+
         if AppContentProtectionPolicy.shouldPrepareForSceneDeactivation(
             fullAppLockEnabled: appLockManager.fullAppLockEnabled,
             privacyModeEnabled: privacyModeEnabled,
@@ -688,6 +692,7 @@ struct TerminalKeyboardUITestHarness: View {
 
     private func resumeLifecycleHarnessAfterForeground() {
         guard terminalReady else { return }
+        terminalView?.resumeRendering()
         TerminalTabManager.shared.keyboardCoordinator.setActivePane(Self.paneId)
         TerminalTabManager.shared.keyboardCoordinator.setViewActive(true)
         if simulatesKeyboardFrames {

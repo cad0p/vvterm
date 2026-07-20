@@ -398,6 +398,12 @@ struct ServerTerminalRoute: View {
             return
         }
 
+        // Freeze the current grid before UIKit removes the software keyboard
+        // and expands the terminal layout during the app-switch transition.
+        focusedTerminal?.pauseRendering(
+            preservingForegroundKeyboardGrid: keyboardCoordinator.softwareKeyboardEndFrame != nil
+        )
+
         if AppContentProtectionPolicy.shouldPrepareForSceneDeactivation(
             fullAppLockEnabled: appLockManager.fullAppLockEnabled,
             privacyModeEnabled: privacyModeEnabled,

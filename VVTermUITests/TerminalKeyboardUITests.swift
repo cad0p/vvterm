@@ -218,18 +218,28 @@ final class TerminalKeyboardUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
         let baselineInputRebuilds = try requiredDiagnosticMetric("inputRebuilds", in: app)
+        let baselineGridResizes = try requiredDiagnosticMetric("gridResizes", in: app)
 
-        XCUIDevice.shared.press(.home)
-        XCTAssertTrue(
-            waitForBackgroundState(of: app, timeout: 8),
-            "VVTerm did not enter the background. \(diagnosticsText(in: app))"
-        )
+        for _ in 0..<3 {
+            XCUIDevice.shared.press(.home)
+            XCTAssertTrue(
+                waitForBackgroundState(of: app, timeout: 8),
+                "VVTerm did not enter the background. \(diagnosticsText(in: app))"
+            )
 
-        app.activate()
-        XCTAssertTrue(
-            app.wait(for: .runningForeground, timeout: 8),
-            "VVTerm did not return to the foreground. \(diagnosticsText(in: app))"
-        )
+            app.activate()
+            XCTAssertTrue(
+                app.wait(for: .runningForeground, timeout: 8),
+                "VVTerm did not return to the foreground. \(diagnosticsText(in: app))"
+            )
+
+            wait(
+                for: diagnostics,
+                labelContaining: "renderingPaused=false",
+                timeout: 5,
+                diagnostics: diagnosticsText(in: app)
+            )
+        }
 
         wait(
             for: diagnostics,
@@ -259,6 +269,11 @@ final class TerminalKeyboardUITests: XCTestCase {
             try requiredDiagnosticMetric("inputRebuilds", in: app),
             baselineInputRebuilds,
             "Backgrounding rebuilt the terminal input session. \(diagnosticsText(in: app))"
+        )
+        XCTAssertEqual(
+            try requiredDiagnosticMetric("gridResizes", in: app),
+            baselineGridResizes,
+            "App switching sent a transient PTY resize while terminal rendering was paused. \(diagnosticsText(in: app))"
         )
 
         terminal.typeText("x")

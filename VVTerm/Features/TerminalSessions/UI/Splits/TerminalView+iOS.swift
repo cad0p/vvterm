@@ -290,7 +290,6 @@ struct SSHTerminalPaneWrapper: View {
             renderingIsPaused: terminal.isRenderingPaused
         ) == .resume {
             terminal.resumeRendering()
-            terminal.forceRefresh()
         }
         onSceneActivation()
     }
@@ -507,7 +506,6 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
             switch renderingTransition {
             case .resume:
                 terminalView.resumeRendering()
-                terminalView.forceRefresh()
             case .pause:
                 terminalView.pauseRendering()
             case .none:

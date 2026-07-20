@@ -14,6 +14,30 @@ import IOSurface
 import CoreImage
 import GameController
 
+enum TerminalSurfaceGeometryUpdate: Equatable {
+    case apply
+    case preserveCurrentGrid
+}
+
+enum TerminalSurfaceGeometryPolicy {
+    static func update(
+        renderingIsPaused: Bool,
+        preservesForegroundKeyboardGrid: Bool,
+        currentSize: CGSize,
+        proposedSize: CGSize
+    ) -> TerminalSurfaceGeometryUpdate {
+        if renderingIsPaused {
+            return .preserveCurrentGrid
+        }
+        if preservesForegroundKeyboardGrid,
+           abs(proposedSize.width - currentSize.width) < 0.5,
+           proposedSize.height > currentSize.height + 0.5 {
+            return .preserveCurrentGrid
+        }
+        return .apply
+    }
+}
+
 private struct IMEProxySnapshot: Equatable {
     var text: String
     var selectedRange: NSRange
@@ -960,8 +984,10 @@ class GhosttyTerminalView: UIView {
     /// Prevent rendering when the view is offscreen or being torn down.
     private var isShuttingDown = false
     private var isPaused = false
+    private var preservesForegroundKeyboardGrid = false
     #if DEBUG
     private var keyboardUITestSurfaceFocused = false
+    private var keyboardUITestGridResizeCount = 0
     #endif
     private var customIORedrawScheduled = false
     private var keyRepeatTimer: DispatchSourceTimer?
@@ -1405,9 +1431,12 @@ class GhosttyTerminalView: UIView {
         isPaused
     }
 
-    func pauseRendering() {
+    func pauseRendering(preservingForegroundKeyboardGrid: Bool = false) {
         guard !isShuttingDown else { return }
         cancelTrackedHardwareInput()
+        if preservingForegroundKeyboardGrid {
+            preservesForegroundKeyboardGrid = true
+        }
         isPaused = true
 
         if let surface = surface?.unsafeCValue {
@@ -1430,7 +1459,33 @@ class GhosttyTerminalView: UIView {
             setSurfaceFocus(isTerminalTextInputActive && !isFindNavigatorActive)
         }
 
-        sizeDidChange(bounds.size)
+        if preservesForegroundKeyboardGrid {
+            // The software keyboard temporarily leaves the layout while the
+            // app is backgrounded. Keep the last terminal grid until UIKit
+            // restores its final foreground geometry instead of sending an
+            // intermediate full-height PTY resize to an idle Mosh session.
+            redrawPreservingSurfaceSize()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isPaused else { return }
+                self.redrawPreservingSurfaceSize()
+            }
+        } else {
+            sizeDidChange(bounds.size)
+            requestRender()
+        }
+    }
+
+    private func redrawPreservingSurfaceSize() {
+        guard !isShuttingDown, !isPaused else { return }
+        guard let surface = surface?.unsafeCValue else { return }
+        let surfaceSize = renderedSurfaceSize
+        guard surfaceSize.width > 0, surfaceSize.height > 0 else { return }
+
+        updateContentScaleIfNeeded()
+        configureIOSurfaceLayers(size: surfaceSize)
+        ghostty_surface_refresh(surface)
+        ghostty_surface_draw(surface)
+        markIOSurfaceLayersForDisplay()
         requestRender()
     }
 
@@ -1547,6 +1602,16 @@ class GhosttyTerminalView: UIView {
     /// Without proper sublayer configuration, Ghostty's setSurfaceCallback will discard all frames.
     func sizeDidChange(_ size: CGSize) {
         if isShuttingDown { return }
+        let currentSurfaceSize = renderedSurfaceSize
+        guard TerminalSurfaceGeometryPolicy.update(
+            renderingIsPaused: isPaused,
+            preservesForegroundKeyboardGrid: preservesForegroundKeyboardGrid,
+            currentSize: currentSurfaceSize,
+            proposedSize: size
+        ) == .apply else {
+            return
+        }
+        preservesForegroundKeyboardGrid = false
         guard let surface = surface?.unsafeCValue else { return }
         let surfaceSize = keyboardAvoidancePreservedSurfaceSize ?? size
         guard surfaceSize.width > 0 && surfaceSize.height > 0 else { return }
@@ -1613,6 +1678,9 @@ class GhosttyTerminalView: UIView {
         guard cols > 0, rows > 0 else { return }
         guard cols != lastReportedGrid.cols || rows != lastReportedGrid.rows else { return }
         lastReportedGrid = (cols, rows)
+        #if DEBUG
+        keyboardUITestGridResizeCount += 1
+        #endif
         onResize?(cols, rows)
     }
 
@@ -5499,6 +5567,7 @@ extension GhosttyTerminalView {
             "keyboardHeight=\(keyboardHeightText)",
             "gridCols=\(size.map { String($0.columns) } ?? "0")",
             "gridRows=\(size.map { String($0.rows) } ?? "0")",
+            "gridResizes=\(keyboardUITestGridResizeCount)",
             "renderingPaused=\(isRenderingPaused)",
             "surfaceFocused=\(keyboardUITestSurfaceFocused)",
             "sizePreserved=\(keyboardAvoidancePreservedSurfaceSize != nil)",

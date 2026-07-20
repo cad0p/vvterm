@@ -79,5 +79,27 @@ struct AppSceneLifecyclePolicyTests {
             renderingIsPaused: false
         ) == .none)
     }
+
+    @Test
+    func pausedRenderingPreservesTerminalGridAcrossTransientLayoutChanges() {
+        #expect(TerminalSurfaceGeometryPolicy.update(
+            renderingIsPaused: true,
+            preservesForegroundKeyboardGrid: false,
+            currentSize: CGSize(width: 390, height: 420),
+            proposedSize: CGSize(width: 390, height: 780)
+        ) == .preserveCurrentGrid)
+        #expect(TerminalSurfaceGeometryPolicy.update(
+            renderingIsPaused: false,
+            preservesForegroundKeyboardGrid: true,
+            currentSize: CGSize(width: 390, height: 420),
+            proposedSize: CGSize(width: 390, height: 780)
+        ) == .preserveCurrentGrid)
+        #expect(TerminalSurfaceGeometryPolicy.update(
+            renderingIsPaused: false,
+            preservesForegroundKeyboardGrid: true,
+            currentSize: CGSize(width: 390, height: 420),
+            proposedSize: CGSize(width: 390, height: 420)
+        ) == .apply)
+    }
 }
 #endif
