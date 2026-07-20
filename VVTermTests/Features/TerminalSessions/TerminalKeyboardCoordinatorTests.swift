@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import CoreGraphics
 import Foundation
 import Testing
@@ -250,6 +251,24 @@ struct TerminalKeyboardCoordinatorTests {
 
         coordinator.directTouchOnTerminal(isFocusTap: true)
         #expect(coordinator.isUserHidden)
+    }
+
+    @Test
+    @MainActor
+    func repeatedAccessoryDismissRepublishesHiddenState() {
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.userRequestedHide()
+
+        var publicationCount = 0
+        let observation = coordinator.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        coordinator.userRequestedHide()
+
+        #expect(coordinator.isUserHidden)
+        #expect(publicationCount > 0)
+        _ = observation
     }
 
     @Test

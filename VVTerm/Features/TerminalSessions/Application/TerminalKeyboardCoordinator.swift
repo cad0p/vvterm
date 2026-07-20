@@ -486,7 +486,9 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         pendingPresentationRequest = .none
         explicitPresentationRecovery = nil
         cancelPresentationVerify()
-        guard !isUserHidden else { return }
+        // This is an explicit command, not an idempotent state reconciliation.
+        // Republish even when the stored value is already true so a route whose
+        // recovery controls missed an earlier update is forced to render them.
         isUserHidden = true
         markDirty(reason: "userHide")
     }

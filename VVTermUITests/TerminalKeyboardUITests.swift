@@ -53,6 +53,20 @@ final class TerminalKeyboardUITests: XCTestCase {
             "Voice input recovery control did not replace the dismissed accessory. \(diagnosticsText(in: app))"
         )
 
+        // UIKit can deliver another accessory dismissal after our model has
+        // already recorded the hidden state. The explicit action must still
+        // republish that state so both recovery controls remain rendered.
+        harnessHideButton.tap()
+        wait(for: diagnostics, labelContaining: "hideRequests=2", timeout: 3, diagnostics: diagnosticsText(in: app))
+        XCTAssertTrue(
+            floatingKeyboardButton.waitForExistence(timeout: 2),
+            "Keyboard recovery control disappeared after a repeated dismiss. \(diagnosticsText(in: app))"
+        )
+        XCTAssertTrue(
+            floatingVoiceButton.waitForExistence(timeout: 2),
+            "Voice input recovery control disappeared after a repeated dismiss. \(diagnosticsText(in: app))"
+        )
+
         terminal.tap()
         wait(for: diagnostics, labelContaining: "userHidden=true", timeout: 3, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "softwareInputActive=true", timeout: 5, diagnostics: diagnosticsText(in: app))
