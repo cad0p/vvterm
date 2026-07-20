@@ -161,6 +161,10 @@ jobs:
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
           APP_PROVISIONING_PROFILE_SPECIFIER: ${{ env.APP_PROVISIONING_PROFILE_SPECIFIER }}
           LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER: ${{ env.LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER }}
+          IOS_APP_STORE_APP_ID: ${{ secrets.IOS_APP_STORE_APP_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY_PATH: ${{ env.ASC_PRIVATE_KEY_PATH }}
         run: |
           set -euo pipefail
 
@@ -206,6 +210,27 @@ jobs:
           # "iPhone Distribution" name can fail on modern Xcode). The export
           # step re-signs per ExportOptions.plist (signingStyle=manual +
           # provisioningProfiles dict), which is the authoritative path.
+
+          # Resolve the next build number: ASC rejects duplicate version+build
+          # pairs ("bundle version must be higher than the previously uploaded
+          # version"). Query the latest uploaded build for this app and bump.
+          # Mirrors cad0p/litter's resolve_next_build_number in release-common.sh.
+          asc auth login --bypass-keychain --name ci \
+            --key-id "$ASC_KEY_ID" --issuer-id "$ASC_ISSUER_ID" \
+            --private-key "$ASC_PRIVATE_KEY_PATH" --network >/dev/null
+          latest_build="$(asc builds list \
+            --app "$IOS_APP_STORE_APP_ID" \
+            --limit 1 \
+            --sort "-uploadedDate" \
+            --output json \
+            | jq -r '.data[0].attributes.version // "0"')"
+          if [[ "$latest_build" =~ ^[0-9]+$ ]]; then
+            BUILD_NUMBER=$((latest_build + 1))
+          else
+            BUILD_NUMBER="$(date +%Y%m%d%H%M)"
+          fi
+          echo "==> Resolved build number: $BUILD_NUMBER (latest uploaded: $latest_build)"
+
           echo "==> Archiving $SCHEME"
           xcodebuild archive \
             -scheme "$SCHEME" \
@@ -213,6 +238,7 @@ jobs:
             -archivePath "$ARCHIVE_PATH" \
             -destination "generic/platform=iOS" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             APP_CODE_SIGN_STYLE=Manual \
             APP_CODE_SIGN_IDENTITY="Apple Distribution" \
             APP_PROVISIONING_PROFILE_SPECIFIER="$APP_PROVISIONING_PROFILE_SPECIFIER" \
