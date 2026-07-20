@@ -196,16 +196,16 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$APP_BUNDLE_ID string $APP_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$LIVE_ACTIVITY_BUNDLE_ID string $LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
 
-          # Per-target manual-signing overrides. The project ships with
-          # CODE_SIGN_STYLE=Automatic (good for local dev); for CI we force
-          # Manual + "Apple Distribution" (the Xcode 11+ identity name; the
-          # legacy "iPhone Distribution" name can cause "no signing certificate"
-          # errors on modern Xcode). Profile selection during the archive is
-          # resolved by Xcode matching the installed profiles in
-          # ~/Library/MobileDevice/Provisioning Profiles/ against each target's
-          # bundle id + team. The export step re-signs per ExportOptions.plist
-          # (signingStyle=manual + provisioningProfiles dict mapping each
-          # bundle id to its profile name), which is the authoritative path.
+          # Per-target manual-signing overrides (mirrors cad0p/litter's
+          # testflight-upload.sh pattern). The project uses variable
+          # indirection: CODE_SIGN_STYLE="$(APP_CODE_SIGN_STYLE)" etc., so
+          # passing APP_CODE_SIGN_STYLE=Manual here flows into the app target,
+          # and LIVE_ACTIVITY_CODE_SIGN_STYLE=Manual flows into the LiveActivity
+          # extension target. Each target gets its own profile specifier and
+          # the "Apple Distribution" identity (Xcode 11+ name; the legacy
+          # "iPhone Distribution" name can fail on modern Xcode). The export
+          # step re-signs per ExportOptions.plist (signingStyle=manual +
+          # provisioningProfiles dict), which is the authoritative path.
           echo "==> Archiving $SCHEME"
           xcodebuild archive \
             -scheme "$SCHEME" \
@@ -213,8 +213,13 @@ jobs:
             -archivePath "$ARCHIVE_PATH" \
             -destination "generic/platform=iOS" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
+            APP_CODE_SIGN_STYLE=Manual \
+            APP_CODE_SIGN_IDENTITY="Apple Distribution" \
+            APP_PROVISIONING_PROFILE_SPECIFIER="$APP_PROVISIONING_PROFILE_SPECIFIER" \
+            LIVE_ACTIVITY_CODE_SIGN_STYLE=Manual \
+            LIVE_ACTIVITY_CODE_SIGN_IDENTITY="Apple Distribution" \
+            LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER="$LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
 
           echo "==> Exporting IPA (manual signing)"
