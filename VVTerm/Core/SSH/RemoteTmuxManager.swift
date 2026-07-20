@@ -610,7 +610,10 @@ actor RemoteTmuxManager {
         let sessionConfiguration = managedSessionConfigurationCommand(sessionName: sessionName)
         let windowsConfiguration = managedWindowsConfigurationCommand(sessionName: sessionName)
         let createBootstrap = "\(tmux) new-session -d -s \(escapedSession) -n \(escapedBootstrapWindow) -c \(escapedDir) \(RemoteTerminalBootstrap.shellQuoted("sleep 86400"))"
-        let createTerminalWindow = "\(tmux) new-window -d -t \(sessionWindowTarget) -c \(escapedDir)"
+        let loginShell = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+            RemoteTerminalBootstrap.defaultLoginShellCommand()
+        )
+        let createTerminalWindow = "\(tmux) new-window -d -t \(sessionWindowTarget) -c \(escapedDir) \(loginShell)"
         let removeBootstrap = "\(tmux) kill-window -t \(bootstrapWindowTarget)"
         let renumberWindows = "\(tmux) move-window -r -t \(sessionWindowTarget)"
         let removeFailedSession = "\(tmux) kill-session -t \(exactSession) 2>/dev/null"

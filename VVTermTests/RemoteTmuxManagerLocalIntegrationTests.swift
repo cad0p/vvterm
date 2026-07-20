@@ -219,7 +219,8 @@ struct RemoteTmuxManagerLocalIntegrationTests {
             "set-titles-string": "EXTERNAL #{session_name}",
             "base-index": "3",
             "default-terminal": "tmux-256color",
-            "mode-style": "fg=yellow,bg=blue"
+            "mode-style": "fg=yellow,bg=blue",
+            "default-command": "sleep 0.4; exit 42"
         ]
         for (option, value) in customOptions {
             try setGlobalOption(
@@ -289,6 +290,13 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         let initialWindowTarget = try tmuxFormatValue(
             "window_id",
             target: managedSession,
+            tmux: installedTmux,
+            socket: socket,
+            environment: environment
+        )
+        let initialPaneStartCommand = try tmuxFormatValue(
+            "pane_start_command",
+            target: initialWindowTarget,
             tmux: installedTmux,
             socket: socket,
             environment: environment
@@ -465,6 +473,8 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         #expect(initialWindowIndex == "3")
         #expect(managedColorTerm == "COLORTERM=truecolor")
         #expect(!managedWindows.output.contains("__vvterm_bootstrap__"))
+        #expect(initialPaneStartCommand.contains("/bin/sh -lc"))
+        #expect(!initialPaneStartCommand.contains("sleep 0.4"))
     }
 
     private func setGlobalOption(

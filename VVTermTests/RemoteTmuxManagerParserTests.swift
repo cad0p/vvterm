@@ -434,8 +434,16 @@ struct RemoteTmuxManagerParserTests {
         #expect(!command.contains("-e 'COLORTERM=truecolor'"))
         #expect(command.contains("__vvterm_bootstrap__"))
         #expect(command.contains("new-window -d -t '=vvterm_managed:'"))
+        #expect(command.contains("new-window -d -t '=vvterm_managed:' -c \"/tmp\" /bin/sh -lc"))
+        #expect(command.contains("if [ -n \"$SHELL\" ]; then exec \"$SHELL\" -l; fi;"))
         #expect(command.contains("kill-window -t '=vvterm_managed:__vvterm_bootstrap__'"))
         #expect(command.contains("move-window -r -t '=vvterm_managed:'"))
+
+        let createWindowOffset = command.range(of: "new-window -d -t '=vvterm_managed:'")
+            .map { command.distance(from: command.startIndex, to: $0.lowerBound) }
+        let removeBootstrapOffset = command.range(of: "kill-window -t '=vvterm_managed:__vvterm_bootstrap__'")
+            .map { command.distance(from: command.startIndex, to: $0.lowerBound) }
+        #expect((createWindowOffset ?? .max) < (removeBootstrapOffset ?? .min))
     }
 
     @Test
