@@ -12,7 +12,7 @@ actor RemoteMoshManager {
     }
 
     static let shared = RemoteMoshManager()
-    private let logger = Logger(subsystem: "app.vivy.VivyTerm", category: "mosh-bootstrap")
+    private let logger = Logger(subsystem: "it.pcad.vvterm", category: "mosh-bootstrap")
     private static let installSuccessMarker = "__VVTERM_MOSH_INSTALLED__"
     private let availabilityTimeout: Duration = .seconds(8)
     private let bootstrapTimeout: Duration = .seconds(25)

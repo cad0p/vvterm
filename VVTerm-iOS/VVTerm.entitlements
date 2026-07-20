@@ -9,14 +9,14 @@
     <!-- iCloud/CloudKit -->
     <key>com.apple.developer.icloud-container-identifiers</key>
     <array>
-        <string>iCloud.app.vivy.VivyTerm</string>
+        <string>iCloud.it.pcad.vvterm</string>
     </array>
     <key>com.apple.developer.icloud-services</key>
     <array>
         <string>CloudKit</string>
     </array>
     <key>com.apple.developer.ubiquity-kvstore-identifier</key>
-    <string>$(TeamIdentifierPrefix)app.vivy.VivyTerm</string>
+    <string>$(TeamIdentifierPrefix)it.pcad.vvterm</string>
 
     <!-- Network -->
     <key>com.apple.security.network.client</key>
@@ -27,7 +27,7 @@
     <!-- Keychain sharing -->
     <key>keychain-access-groups</key>
     <array>
-        <string>$(AppIdentifierPrefix)app.vivy.VivyTerm</string>
+        <string>$(AppIdentifierPrefix)it.pcad.vvterm</string>
     </array>
 </dict>
 </plist>
