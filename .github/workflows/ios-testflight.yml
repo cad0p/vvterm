@@ -1,0 +1,332 @@
+name: iOS TestFlight Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_group_names:
+        description: "Comma-separated TestFlight beta groups"
+        required: false
+        default: "Internal Testers"
+        type: string
+      wait_for_processing:
+        description: "Wait for ASC processing before finishing"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Validate required secrets
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY_P8_B64: ${{ secrets.ASC_PRIVATE_KEY_P8_B64 }}
+          IOS_APP_STORE_APP_ID: ${{ secrets.IOS_APP_STORE_APP_ID }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_DIST_CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_APP_STORE_PROFILE_B64: ${{ secrets.IOS_APP_STORE_PROFILE_B64 }}
+          IOS_LIVE_ACTIVITY_APP_STORE_PROFILE_B64: ${{ secrets.IOS_LIVE_ACTIVITY_APP_STORE_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+          required=(
+            ASC_KEY_ID
+            ASC_ISSUER_ID
+            ASC_PRIVATE_KEY_P8_B64
+            IOS_APP_STORE_APP_ID
+            IOS_TEAM_ID
+            IOS_DIST_CERT_P12_B64
+            IOS_DIST_CERT_PASSWORD
+            IOS_APP_STORE_PROFILE_B64
+            IOS_LIVE_ACTIVITY_APP_STORE_PROFILE_B64
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required secret: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          brew install jq
+          # asc CLI for App Store Connect uploads (Go binary).
+          HOMEBREW_NO_AUTO_UPDATE=0 brew install asc
+          xcodebuild -version
+          asc --version
+
+      - name: Decode App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY_P8_B64: ${{ secrets.ASC_PRIVATE_KEY_P8_B64 }}
+        run: |
+          set -euo pipefail
+          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          echo "$ASC_PRIVATE_KEY_P8_B64" | base64 --decode > "$ASC_KEY_PATH"
+          chmod 600 "$ASC_KEY_PATH"
+          echo "ASC_PRIVATE_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Install signing certificate and provisioning profiles
+        env:
+          IOS_DIST_CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_APP_STORE_PROFILE_B64: ${{ secrets.IOS_APP_STORE_PROFILE_B64 }}
+          IOS_LIVE_ACTIVITY_APP_STORE_PROFILE_B64: ${{ secrets.IOS_LIVE_ACTIVITY_APP_STORE_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/dist-cert.p12"
+          APP_PROFILE_PATH="$RUNNER_TEMP/app-store.mobileprovision"
+          LIVE_ACTIVITY_PROFILE_PATH="$RUNNER_TEMP/live-activity-app-store.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+          echo "$IOS_DIST_CERT_P12_B64" | base64 --decode > "$CERT_PATH"
+          echo "$IOS_APP_STORE_PROFILE_B64" | base64 --decode > "$APP_PROFILE_PATH"
+          echo "$IOS_LIVE_ACTIVITY_APP_STORE_PROFILE_B64" | base64 --decode > "$LIVE_ACTIVITY_PROFILE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          install_profile() {
+            local profile_path="$1"
+            local env_name="$2"
+            local profile_uuid profile_name
+
+            profile_uuid="$(security cms -D -i "$profile_path" | plutil -extract UUID raw -)"
+            profile_name="$(security cms -D -i "$profile_path" | plutil -extract Name raw -)"
+            cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+            echo "$env_name=$profile_name" >> "$GITHUB_ENV"
+          }
+
+          install_profile "$APP_PROFILE_PATH" "APP_PROVISIONING_PROFILE_SPECIFIER"
+          install_profile "$LIVE_ACTIVITY_PROFILE_PATH" "LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER"
+
+      - name: Resolve release inputs
+        run: |
+          set -euo pipefail
+
+          SCHEME="VVTerm"
+          APP_BUNDLE_ID="it.pcad.vvterm"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            BETA_GROUP_NAMES="${{ inputs.beta_group_names }}"
+            if [[ "${{ inputs.wait_for_processing }}" == "true" ]]; then
+              WAIT_FOR_PROCESSING="1"
+            else
+              WAIT_FOR_PROCESSING="0"
+            fi
+          else
+            BETA_GROUP_NAMES="Internal Testers"
+            WAIT_FOR_PROCESSING="0"
+          fi
+
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "APP_BUNDLE_ID=$APP_BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "BETA_GROUP_NAMES=$BETA_GROUP_NAMES" >> "$GITHUB_ENV"
+          echo "WAIT_FOR_PROCESSING=$WAIT_FOR_PROCESSING" >> "$GITHUB_ENV"
+
+      - name: Build TestFlight IPA
+        env:
+          SCHEME: ${{ env.SCHEME }}
+          APP_BUNDLE_ID: ${{ env.APP_BUNDLE_ID }}
+          LIVE_ACTIVITY_BUNDLE_ID: it.pcad.vvterm.liveactivity
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          APP_PROVISIONING_PROFILE_SPECIFIER: ${{ env.APP_PROVISIONING_PROFILE_SPECIFIER }}
+          LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER: ${{ env.LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER }}
+        run: |
+          set -euo pipefail
+
+          ARCHIVE_PATH="$RUNNER_TEMP/VVTerm.xcarchive"
+          EXPORT_PATH="$RUNNER_TEMP/export"
+          EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
+
+          # ExportOptions.plist — shape reproduced from
+          # cad0p/litter/apps/ios/scripts/testflight-upload.sh (proven working).
+          # method=app-store-connect, manual signing, provisioningProfiles
+          # entries are <string>profile-name</string> (not a dict).
+          cat > "$EXPORT_OPTIONS" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>destination</key>
+              <string>export</string>
+              <key>method</key>
+              <string>app-store-connect</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>manageAppVersionAndBuildNumber</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          /usr/libexec/PlistBuddy -c "Add :teamID string $TEAM_ID" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$APP_BUNDLE_ID string $APP_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$LIVE_ACTIVITY_BUNDLE_ID string $LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
+
+          # Per-target manual-signing overrides. The project ships with
+          # CODE_SIGN_STYLE=Automatic (good for local dev); for CI we force
+          # Manual + "Apple Distribution" (the Xcode 11+ identity name; the
+          # legacy "iPhone Distribution" name can cause "no signing certificate"
+          # errors on modern Xcode). Profile selection during the archive is
+          # resolved by Xcode matching the installed profiles in
+          # ~/Library/MobileDevice/Provisioning Profiles/ against each target's
+          # bundle id + team. The export step re-signs per ExportOptions.plist
+          # (signingStyle=manual + provisioningProfiles dict mapping each
+          # bundle id to its profile name), which is the authoritative path.
+          echo "==> Archiving $SCHEME"
+          xcodebuild archive \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$ARCHIVE_PATH" \
+            -destination "generic/platform=iOS" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            | tee "$RUNNER_TEMP/xcodebuild-archive.log"
+
+          echo "==> Exporting IPA (manual signing)"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS" \
+            | tee "$RUNNER_TEMP/xcodebuild-export.log"
+
+          IPA_PATH="$EXPORT_PATH/VVTerm.ipa"
+          if [[ ! -f "$IPA_PATH" ]]; then
+            echo "ERROR: IPA not found at $IPA_PATH" >&2
+            ls -la "$EXPORT_PATH" >&2
+            exit 1
+          fi
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY_PATH: ${{ env.ASC_PRIVATE_KEY_PATH }}
+          IOS_APP_STORE_APP_ID: ${{ secrets.IOS_APP_STORE_APP_ID }}
+          BETA_GROUP_NAMES: ${{ env.BETA_GROUP_NAMES }}
+          IPA_PATH: ${{ env.IPA_PATH }}
+        run: |
+          set -euo pipefail
+
+          asc auth login --bypass-keychain --name ci \
+            --key-id "$ASC_KEY_ID" --issuer-id "$ASC_ISSUER_ID" \
+            --private-key "$ASC_PRIVATE_KEY_PATH" --network
+
+          # Upload the IPA. --wait blocks until ASC finishes processing,
+          # so the build exists and is queryable by the time we assign groups.
+          echo "==> Uploading $IPA_PATH to App Store Connect"
+          upload_json="$(asc builds upload \
+            --app "$IOS_APP_STORE_APP_ID" \
+            --ipa "$IPA_PATH" \
+            --output json \
+            --wait)"
+
+          build_id="$(echo "$upload_json" | jq -r '.data.id // .data[0].id // empty')"
+          if [[ -z "$build_id" ]]; then
+            echo "ERROR: could not extract build_id from upload response" >&2
+            echo "$upload_json" >&2
+            exit 1
+          fi
+          echo "==> Build uploaded, build_id=$build_id"
+
+          # Export-compliance: if the build is missing the encryption declaration,
+          # assign the most recent declaration on file (litter does this; harmless
+          # if none exists).
+          internal_state="$(asc builds build-beta-detail view --build-id "$build_id" --output json \
+            | jq -r '.data.attributes.internalBuildState // empty')"
+          if [[ "$internal_state" == "MISSING_EXPORT_COMPLIANCE" ]]; then
+            declaration_id="$(asc encryption declarations list --app "$IOS_APP_STORE_APP_ID" --output json \
+              | jq -r '.data | sort_by(.attributes.createdDate // "") | last | .id // empty')"
+            if [[ -n "$declaration_id" ]]; then
+              echo "==> Assigning build $build_id to encryption declaration $declaration_id"
+              asc encryption declarations assign-builds --id "$declaration_id" --build "$build_id" --output json >/dev/null || true
+            fi
+          fi
+
+          # Assign the build to the requested TestFlight beta group(s).
+          # Groups are resolved by name; created if missing (internal groups
+          # don't need Beta App Review).
+          IFS=',' read -ra GROUP_NAMES <<< "$BETA_GROUP_NAMES"
+          group_ids=()
+          for raw in "${GROUP_NAMES[@]}"; do
+            name="$(echo "$raw" | xargs)"
+            [[ -n "$name" ]] || continue
+            gid="$(asc testflight groups list --app "$IOS_APP_STORE_APP_ID" --output json \
+              | jq -r --arg n "$name" '.data[] | select(.attributes.name == $n) | .id' | head -n1)"
+            if [[ -z "$gid" ]]; then
+              echo "==> Creating beta group: $name"
+              gid="$(asc testflight groups create --app "$IOS_APP_STORE_APP_ID" --name "$name" --internal --output json \
+                | jq -r '.data.id // empty')"
+            fi
+            [[ -n "$gid" ]] && group_ids+=("$gid")
+          done
+
+          if [[ ${#group_ids[@]} -gt 0 ]]; then
+            group_csv="$(IFS=,; printf '%s' "${group_ids[*]}")"
+            echo "==> Assigning build $build_id to groups: $BETA_GROUP_NAMES"
+            # Retry for up to ~5 min — the build can take a moment to be
+            # group-assignable after processing completes.
+            deadline="$(( $(date +%s) + 300 ))"
+            assigned=0
+            while [[ "$(date +%s)" -lt "$deadline" ]]; do
+              if asc builds add-groups --build-id "$build_id" --group "$group_csv" --output json >/dev/null 2>&1; then
+                assigned=1
+                break
+              fi
+              sleep 15
+            done
+            if [[ "$assigned" -ne 1 ]]; then
+              echo "WARN: could not assign build to groups within 5 min (build may still be processing); check ASC." >&2
+            fi
+          fi
+
+          echo "==> Validating TestFlight readiness"
+          asc validate testflight --app "$IOS_APP_STORE_APP_ID" --build "$build_id" --strict --output json >/dev/null || \
+            echo "WARN: validate testflight reported issues (non-fatal)."
+
+          echo "==> TestFlight upload complete (build_id=$build_id)"
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs
+          path: |
+            ${{ runner.temp }}/xcodebuild-archive.log
+            ${{ runner.temp }}/xcodebuild-export.log
+          if-no-files-found: ignore

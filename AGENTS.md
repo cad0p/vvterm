@@ -183,7 +183,7 @@ Safe refactor expectation:
 
 ### Data Sync
 - **CloudKit** for server/workspace sync across devices
-- Container: `iCloud.app.vivy.VivyTerm`
+- Container: `iCloud.it.pcad.vvterm`
 - Local fallback via UserDefaults
 
 ### Pro Tier (StoreKit 2)
