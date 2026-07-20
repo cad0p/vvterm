@@ -13,6 +13,11 @@ on:
         required: false
         default: true
         type: boolean
+      force_pro:
+        description: "Force Pro on for all users (fork-owner builds; bypasses StoreKit)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -143,15 +148,22 @@ jobs:
             else
               WAIT_FOR_PROCESSING="0"
             fi
+            if [[ "${{ inputs.force_pro }}" == "true" ]]; then
+              FORCE_PRO="1"
+            else
+              FORCE_PRO="0"
+            fi
           else
             BETA_GROUP_NAMES="Internal Testers"
             WAIT_FOR_PROCESSING="0"
+            FORCE_PRO="0"
           fi
 
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
           echo "APP_BUNDLE_ID=$APP_BUNDLE_ID" >> "$GITHUB_ENV"
           echo "BETA_GROUP_NAMES=$BETA_GROUP_NAMES" >> "$GITHUB_ENV"
           echo "WAIT_FOR_PROCESSING=$WAIT_FOR_PROCESSING" >> "$GITHUB_ENV"
+          echo "FORCE_PRO=$FORCE_PRO" >> "$GITHUB_ENV"
 
       - name: Build TestFlight IPA
         env:
@@ -160,6 +172,7 @@ jobs:
           LIVE_ACTIVITY_BUNDLE_ID: it.pcad.vvterm.liveactivity
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
           APP_PROVISIONING_PROFILE_SPECIFIER: ${{ env.APP_PROVISIONING_PROFILE_SPECIFIER }}
+          FORCE_PRO: ${{ env.FORCE_PRO }}
           LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER: ${{ env.LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER }}
           IOS_APP_STORE_APP_ID: ${{ secrets.IOS_APP_STORE_APP_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -231,6 +244,17 @@ jobs:
           fi
           echo "==> Resolved build number: $BUILD_NUMBER (latest uploaded: $latest_build)"
 
+          # Build the Swift compilation-conditions override for force_pro.
+          # When FORCE_PRO=1, pass SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED
+          # so StoreManager's #if FORCE_PRO_ENABLED block unlocks Pro at compile time.
+          swift_conditions=""
+          if [[ "$FORCE_PRO" == "1" ]]; then
+            swift_conditions=(SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED)
+            echo "==> FORCE_PRO enabled — Pro will be forced on in this build"
+          else
+            swift_conditions=()
+          fi
+
           echo "==> Archiving $SCHEME"
           xcodebuild archive \
             -scheme "$SCHEME" \
@@ -245,6 +269,7 @@ jobs:
             LIVE_ACTIVITY_CODE_SIGN_STYLE=Manual \
             LIVE_ACTIVITY_CODE_SIGN_IDENTITY="Apple Distribution" \
             LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER="$LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" \
+            "${swift_conditions[@]}" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
 
           echo "==> Exporting IPA (manual signing)"
