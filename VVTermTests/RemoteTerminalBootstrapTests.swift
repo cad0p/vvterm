@@ -38,8 +38,8 @@ struct RemoteTerminalBootstrapTests {
         case .shell:
             Issue.record("Expected POSIX login shell bootstrap when no startup command is provided")
         case .exec(let command):
-            #expect(command.hasPrefix("/bin/sh -lc "))
-            #expect(command.contains("exec \"$SHELL\" -l"))
+            #expect(command.hasPrefix("/bin/sh -lc \""))
+            #expect(command.contains("exec \\\"\\$SHELL\\\" -l"))
             #expect(command.contains("TERM_PROGRAM"))
         }
     }
@@ -64,10 +64,20 @@ struct RemoteTerminalBootstrapTests {
         case .shell:
             Issue.record("Expected exec launch when a startup command is provided")
         case .exec(let command):
-            #expect(command.hasPrefix("/bin/sh -lc "))
+            #expect(command.hasPrefix("/bin/sh -lc \""))
             #expect(command.contains("echo hi"))
             #expect(command.contains("TERM_PROGRAM"))
         }
+    }
+
+    @Test
+    func posixWrapperRoundTripsShellMetacharactersForMosh() {
+        let script = #"printf '%s\n' "$HOME" "$(printf 'nested')" '`' '\path'"#
+        let wrapped = RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        let moshScript = RemoteTerminalBootstrap.moshStartupScript(startCommand: wrapped)
+
+        #expect(wrapped.hasPrefix("/bin/sh -lc \""))
+        #expect(moshScript.contains(script))
     }
 
     @Test

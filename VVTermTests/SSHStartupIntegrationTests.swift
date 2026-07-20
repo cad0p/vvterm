@@ -216,6 +216,97 @@ struct SSHStartupIntegrationTests {
         }
     }
 
+    @Test @MainActor
+    func managedTmuxCreateAndReattachStayAliveOnStandardSSH() async throws {
+        guard let configuration = try Configuration.fromEnvironment() else { return }
+        let previousKnownHost = KnownHostsManager.shared.entry(
+            for: configuration.host,
+            port: configuration.port
+        )
+        defer {
+            restoreKnownHost(
+                previousKnownHost,
+                host: configuration.host,
+                port: configuration.port
+            )
+        }
+
+        let client = SSHClient()
+        let (server, credentials) = makeStandardConnection(configuration: configuration)
+        let sessionName = "vvterm_dev239_\(UUID().uuidString.lowercased())"
+
+        do {
+            _ = try await client.connect(to: server, credentials: credentials)
+            let createCommand = RemoteTmuxManager.shared.attachCommand(
+                sessionName: sessionName,
+                workingDirectory: "~",
+                lifecycleMarkerToken: UUID().uuidString
+            )
+            let shell = try await client.startShell(
+                cols: 80,
+                rows: 24,
+                startupCommand: createCommand
+            )
+            try #require(shell.transport == .ssh)
+            try await awaitFirstData(from: shell.stream)
+            try await awaitTmuxSession(named: sessionName, using: client)
+
+            try await Task.sleep(for: .milliseconds(750))
+            let paneMarker = "__VVTERM_DEV239_PANE__"
+            let paneState = try await client.execute(
+                "\(RemoteTerminalBootstrap.shellPathExport()); tmux list-panes -t =\(sessionName): -F '#{pane_dead}:#{pane_current_command}' && printf %s \(paneMarker)"
+            )
+            let createdPaneStates = tmuxPaneStates(in: paneState, before: paneMarker)
+            #expect(!createdPaneStates.isEmpty)
+            #expect(createdPaneStates.allSatisfy { $0.split(separator: ":", maxSplits: 1).first == "0" })
+            #expect(paneState.contains(paneMarker))
+
+            let detachMarker = "__VVTERM_DEV239_DETACHED__"
+            let detachOutput = try await client.execute(
+                "\(RemoteTerminalBootstrap.shellPathExport()); tmux detach-client -s =\(sessionName) && printf %s \(detachMarker)"
+            )
+            try #require(detachOutput.contains(detachMarker))
+            await client.closeShell(shell.id)
+
+            let reattachCommand = RemoteTmuxManager.shared.attachExistingCommand(
+                sessionName: sessionName,
+                ownership: .managed,
+                lifecycleMarkerToken: UUID().uuidString
+            )
+            let reattached = try await client.startShell(
+                cols: 80,
+                rows: 24,
+                startupCommand: reattachCommand
+            )
+            try #require(reattached.transport == .ssh)
+            try await awaitFirstData(from: reattached.stream)
+            try await Task.sleep(for: .milliseconds(750))
+
+            let reattachPaneMarker = "__VVTERM_DEV239_REATTACHED_PANE__"
+            let reattachedPaneState = try await client.execute(
+                "\(RemoteTerminalBootstrap.shellPathExport()); tmux list-panes -t =\(sessionName): -F '#{pane_dead}:#{pane_current_command}' && printf %s \(reattachPaneMarker)"
+            )
+            let reattachedPaneStates = tmuxPaneStates(
+                in: reattachedPaneState,
+                before: reattachPaneMarker
+            )
+            #expect(!reattachedPaneStates.isEmpty)
+            #expect(reattachedPaneStates.allSatisfy { $0.split(separator: ":", maxSplits: 1).first == "0" })
+            #expect(reattachedPaneState.contains(reattachPaneMarker))
+
+            _ = try await client.execute(
+                "\(RemoteTerminalBootstrap.shellPathExport()); tmux detach-client -s =\(sessionName)"
+            )
+            await client.closeShell(reattached.id)
+            await cleanupTmuxSession(named: sessionName, using: client)
+            await client.disconnect()
+        } catch {
+            await cleanupTmuxSession(named: sessionName, using: client)
+            await client.disconnect()
+            throw error
+        }
+    }
+
     @Test
     func cancellingAtEachStartupBoundaryStopsStartupAndAllowsFreshConnection() async throws {
         guard let configuration = try Configuration.fromEnvironment() else { return }
@@ -582,6 +673,14 @@ struct SSHStartupIntegrationTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         throw SSHError.timeout
+    }
+
+    private func tmuxPaneStates(in output: String, before marker: String) -> [String] {
+        let paneOutput = output.components(separatedBy: marker).first ?? output
+        return paneOutput
+            .split(whereSeparator: \Character.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private func cleanupTmuxSession(named sessionName: String, using client: SSHClient) async {

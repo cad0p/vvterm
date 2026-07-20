@@ -113,7 +113,7 @@ enum RemoteTerminalBootstrap {
     }
 
     nonisolated static func wrapPOSIXShellCommand(_ script: String) -> String {
-        "/bin/sh -lc \(shellQuoted(script))"
+        "/bin/sh -lc \(doubleQuotedShellArgument(script))"
     }
 
     nonisolated static func wrapPowerShellCommand(_ script: String, executableName: String) -> String {
@@ -232,8 +232,7 @@ enum RemoteTerminalBootstrap {
             let start = payload.index(after: payload.startIndex)
             let end = payload.index(before: payload.endIndex)
             let quoted = String(payload[start..<end])
-            let unescapedQuotes = quoted.replacingOccurrences(of: "\\\"", with: "\"")
-            return unescapedQuotes.replacingOccurrences(of: "\\\\", with: "\\")
+            return unescapeDoubleQuotedShellArgument(quoted)
         }
 
         return payload
@@ -255,6 +254,55 @@ enum RemoteTerminalBootstrap {
             "/sbin"
         ]
         return paths.joined(separator: ":") + ":$PATH"
+    }
+
+    nonisolated private static func doubleQuotedShellArgument(_ value: String) -> String {
+        // Fish preserves \` inside double quotes, unlike POSIX shells.
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\"'`'\"")
+        return "\"\(escaped)\""
+    }
+
+    nonisolated private static func unescapeDoubleQuotedShellArgument(_ value: String) -> String {
+        var result = ""
+        result.reserveCapacity(value.count)
+        var index = value.startIndex
+
+        while index < value.endIndex {
+            if value[index...].hasPrefix("\"'`'\"") {
+                result.append("`")
+                index = value.index(index, offsetBy: 5)
+                continue
+            }
+
+            let character = value[index]
+            guard character == "\\" else {
+                result.append(character)
+                index = value.index(after: index)
+                continue
+            }
+
+            let nextIndex = value.index(after: index)
+            guard nextIndex < value.endIndex else {
+                result.append(character)
+                break
+            }
+
+            let next = value[nextIndex]
+            switch next {
+            case "\\", "\"", "$":
+                result.append(next)
+                index = value.index(after: nextIndex)
+            default:
+                result.append(character)
+                index = nextIndex
+            }
+        }
+
+        return result
     }
 
     nonisolated private static func powerShellQuoted(_ value: String) -> String {

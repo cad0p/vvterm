@@ -153,9 +153,13 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         #expect(extendedKeysAfter == extendedKeysBefore)
     }
 
-    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/tmux")))
+    @Test(.enabled(if:
+        FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/tmux")
+            && FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/fish")
+    ))
     func managedCreationAndReattachScopeConfigurationToManagedSession() throws {
         let installedTmux = "/opt/homebrew/bin/tmux"
+        let installedFish = "/opt/homebrew/bin/fish"
         let temporaryDirectory = FileManager.default.temporaryDirectory
         let root = temporaryDirectory
             .appendingPathComponent("vvterm-dev220-\(UUID().uuidString)", isDirectory: true)
@@ -279,7 +283,35 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         }
         \(managedCreate)
         """
-        _ = try run("/bin/sh", ["-c", legacySocketScopedCreate], environment: environment)
+        let loginShellCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+            legacySocketScopedCreate
+        )
+        let createResult = try run(
+            installedFish,
+            ["-c", loginShellCommand],
+            environment: environment
+        )
+        try requireSuccess(createResult)
+        Thread.sleep(forTimeInterval: 0.6)
+
+        let sessionProbe = try runTmux(
+            installedTmux,
+            socket: socket,
+            arguments: ["has-session", "-t", "=\(managedSession)"],
+            environment: environment
+        )
+        guard sessionProbe.status == 0 else {
+            throw NSError(
+                domain: "RemoteTmuxManagerLocalIntegrationTests",
+                code: Int(sessionProbe.status),
+                userInfo: [
+                    NSLocalizedDescriptionKey: """
+                    Managed startup output:\n\(createResult.output)
+                    Session probe output:\n\(sessionProbe.output)
+                    """
+                ]
+            )
+        }
 
         let managedWindowOptions = [
             "allow-passthrough",
@@ -475,6 +507,21 @@ struct RemoteTmuxManagerLocalIntegrationTests {
         #expect(!managedWindows.output.contains("__vvterm_bootstrap__"))
         #expect(initialPaneStartCommand.contains("/bin/sh -lc"))
         #expect(!initialPaneStartCommand.contains("sleep 0.4"))
+    }
+
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/fish")))
+    func posixWrapperPreservesLiteralBackticksThroughFish() throws {
+        let expected = "before`literal`after"
+        let script = "printf '%s' \(RemoteTerminalBootstrap.shellQuoted(expected))"
+        let command = RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        let result = try run(
+            "/opt/homebrew/bin/fish",
+            ["-c", command],
+            environment: ProcessInfo.processInfo.environment
+        )
+
+        try requireSuccess(result)
+        #expect(result.output == expected)
     }
 
     private func setGlobalOption(
