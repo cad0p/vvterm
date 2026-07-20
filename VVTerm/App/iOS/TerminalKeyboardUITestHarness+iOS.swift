@@ -17,7 +17,6 @@ struct TerminalKeyboardUITestHarness: View {
         case connected
         case inactive
         case background
-        case reconnecting
     }
 
     private enum SimulatedKeyboardGeometry {
@@ -55,6 +54,7 @@ struct TerminalKeyboardUITestHarness: View {
 
     @EnvironmentObject private var ghosttyApp: Ghostty.App
     @EnvironmentObject private var appLockManager: AppLockManager
+    @ObservedObject private var keyboardCoordinator = TerminalTabManager.shared.keyboardCoordinator
     @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
     @State private var terminalView: GhosttyTerminalView?
     @State private var terminalReady = false
@@ -138,6 +138,24 @@ struct TerminalKeyboardUITestHarness: View {
                     .opacity(0.55)
                     .ignoresSafeArea()
                     .accessibilityIdentifier("vvterm.keyboardTest.privacyShield")
+            }
+
+            if keyboardCoordinator.isUserHidden {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Button("Keyboard") {
+                            requestSoftwareKeyboard()
+                        }
+                        .accessibilityIdentifier("vvterm.terminal.floating.keyboard")
+
+                        Button("Voice input") { }
+                            .accessibilityIdentifier("vvterm.terminal.floating.voiceInput")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.bottom, 12)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -391,7 +409,7 @@ struct TerminalKeyboardUITestHarness: View {
             switch phase {
             case .active:
                 if lifecycleStatus == .background {
-                    restoreLifecycleHarnessAfterForeground()
+                    resumeLifecycleHarnessAfterForeground()
                 } else {
                     lifecycleStatus = .connected
                     applyRouteActivation(.foregroundActive)
@@ -486,6 +504,7 @@ struct TerminalKeyboardUITestHarness: View {
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+            + " userHidden=\(keyboardCoordinator.isUserHidden)"
             + " keyboardShows=\(keyboardShowTransitionCount) keyboardHides=\(keyboardHideTransitionCount)"
             + " accessoryPairingObservation=\(keyboardAccessoryPairingObservation.status)"
             + " orphanAccessoryObserved=\(keyboardAccessoryPairingObservation.observedAccessoryOnly)"
@@ -594,6 +613,7 @@ struct TerminalKeyboardUITestHarness: View {
             manager.keyboardCoordinator.setActivePane(Self.paneId)
             manager.keyboardCoordinator.setViewActive(true)
         case .preserve:
+            manager.keyboardCoordinator.activeTerminalSceneWillDeactivate(for: Self.paneId)
             break
         case .deactivate:
             if contentObscured {
@@ -666,16 +686,17 @@ struct TerminalKeyboardUITestHarness: View {
         }
     }
 
-    private func restoreLifecycleHarnessAfterForeground() {
+    private func resumeLifecycleHarnessAfterForeground() {
         guard terminalReady else { return }
-        lifecycleStatus = .reconnecting
-        TerminalTabManager.shared.updatePaneState(
-            Self.paneId,
-            connectionState: .reconnecting(attempt: 1)
-        )
         TerminalTabManager.shared.keyboardCoordinator.setActivePane(Self.paneId)
         TerminalTabManager.shared.keyboardCoordinator.setViewActive(true)
-        TerminalTabManager.shared.updatePaneState(Self.paneId, connectionState: .connected)
+        if simulatesKeyboardFrames {
+            TerminalTabManager.shared.keyboardCoordinator
+                .keyboardUITestSetSoftwareKeyboardEndFrame(keyboardFrame)
+        }
+        TerminalTabManager.shared.keyboardCoordinator.activeTerminalSceneDidActivate(
+            for: Self.paneId
+        )
         lifecycleStatus = .connected
     }
 

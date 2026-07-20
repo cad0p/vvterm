@@ -80,6 +80,8 @@ struct TerminalPaneState {
     var activeTransport: ShellTransport
     /// Set only when this pane is running over SSH fallback from Mosh.
     var moshFallbackReason: MoshFallbackReason?
+    /// Privacy-safe, non-persisted detail for the active Mosh fallback.
+    var moshFallbackDiagnostics: MoshFallbackDiagnostics?
 
     init(paneId: UUID, tabId: UUID, serverId: UUID) {
         self.paneId = paneId
@@ -95,6 +97,7 @@ struct TerminalPaneState {
         self.seedPaneId = nil
         self.activeTransport = .ssh
         self.moshFallbackReason = nil
+        self.moshFallbackDiagnostics = nil
     }
 
     mutating func markConnectionEstablished() {

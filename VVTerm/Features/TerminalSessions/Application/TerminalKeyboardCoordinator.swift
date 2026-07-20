@@ -16,6 +16,7 @@ protocol TerminalKeyboardInputSession: AnyObject {
     func releaseTerminalInput()
     func releaseTerminalInputForReacquisition(completion: @escaping () -> Void)
     func setTerminalInputAccessorySuppressed(_ suppressed: Bool)
+    func refreshTerminalInputAccessoryAppearance()
 }
 
 extension GhosttyTerminalView: TerminalKeyboardInputSession {}
@@ -126,6 +127,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private var pendingPresentationRequest = PresentationRequest.none
     private var explicitPresentationRecovery: ExplicitPresentationRecovery?
     private var presentationVerifyTask: Task<Void, Never>?
+    /// Scene inactivity is a preservation state. UIKit temporarily moves its
+    /// InputUI scene during app switching, so keyboard-hide notifications in
+    /// that interval must not replace the responder's input views.
+    private var activeTerminalSceneIsForeground = true
     /// Rebuilding a session UIKit refuses to present cannot succeed by
     /// repetition; cap attempts until a keyboard actually shows (which
     /// resets the count).
@@ -369,15 +374,41 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     /// not reset the repair budget or start a responder rebuild loop.
     func activeTerminalSceneDidActivate(for paneId: UUID) {
         guard activePaneId == paneId else { return }
-        requestAutomaticPresentationRefresh()
+        activeTerminalSceneIsForeground = true
+        activeTerminal?.refreshTerminalInputAccessoryAppearance()
         presentationRefreshAttemptCount = 0
+        if let terminal = activeTerminal {
+            let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+            if snapshot.isSoftwareInputActive {
+                if Self.desiredKeyboardVisible(inputs: currentInputs),
+                   !isSoftwareKeyboardVisible {
+                    schedulePresentationVerify(
+                        for: paneId,
+                        terminal: terminal,
+                        retryRequest: .automaticRefresh
+                    )
+                }
+            } else {
+                requestAutomaticPresentationRefresh()
+            }
+        }
         markDirty(reason: "sceneActivated")
+    }
+
+    func activeTerminalSceneWillDeactivate(for paneId: UUID) {
+        guard activePaneId == paneId, activeTerminalSceneIsForeground else { return }
+        activeTerminalSceneIsForeground = false
+        cancelPresentationVerify()
+        if pendingPresentationRequest == .automaticRefresh {
+            pendingPresentationRequest = .none
+        }
+        clearSoftwareKeyboardObservation()
     }
 
     func activeTerminalWindowDidBecomeKey(for paneId: UUID) {
         guard activePaneId == paneId else { return }
-        requestAutomaticPresentationRefresh()
-        markDirty(reason: "windowBecameKey")
+        guard activeTerminalSceneIsForeground else { return }
+        activeTerminalSceneDidActivate(for: paneId)
     }
 
     func setWindowAttached(_ attached: Bool, for paneId: UUID) {
@@ -430,6 +461,25 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         pendingReason = reason.rawValue
         syncScheduled = false
         sync()
+    }
+
+    /// Navigation must not synchronously ask UIKit/InputUI to tear down its
+    /// responder scene. SwiftUI removes the terminal from the window as part
+    /// of the pop; forgetting coordinator ownership first prevents any queued
+    /// reconciliation from calling `resignFirstResponder()` on the Back path.
+    func relinquishRouteOwnershipForNavigation() {
+        pendingPresentationRequest = .none
+        explicitPresentationRecovery = nil
+        activePaneId = nil
+        viewActive = false
+        findNavigatorState = .inactive
+        lastManagedPaneId = nil
+        cancelPresentationVerify()
+        softwareKeyboardEndFrame = nil
+        isSoftwareKeyboardVisible = false
+        pendingReason = "routeNavigation"
+        pendingSyncAfterCurrent = false
+        syncScheduled = false
     }
 
     func userRequestedHide() {
@@ -526,7 +576,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             cancelPresentationVerify()
             presentationRefreshAttemptCount = 0
             activeTerminal?.setTerminalInputAccessorySuppressed(false)
-        } else {
+        } else if activeTerminalSceneIsForeground {
             activeTerminal?.setTerminalInputAccessorySuppressed(true)
         }
         guard isSoftwareKeyboardVisible != visible else { return }

@@ -2143,8 +2143,11 @@ class GhosttyTerminalView: UIView {
         #if DEBUG
         keyboardHideRequestCount += 1
         #endif
-        dismissKeyboardForUser(suppressDirectTouchRefocus: true)
+        // Publish the user's intent while the accessory is still mounted. The
+        // route can then install its Keyboard/Voice recovery controls before
+        // UIKit tears down the input view hierarchy.
         onKeyboardAccessoryHideRequested?()
+        dismissKeyboardForUser(suppressDirectTouchRefocus: true)
     }
 
     func shouldAutoFocusKeyboard(for touches: Set<UITouch>) -> Bool {
@@ -5459,6 +5462,10 @@ extension GhosttyTerminalView {
         return keyboardToolbar
     }
 
+    func refreshTerminalInputAccessoryAppearance() {
+        keyboardToolbar?.refreshAppearance()
+    }
+
     override var inputAccessoryView: UIView? {
         resolvedInputAccessoryView()
     }
@@ -5471,6 +5478,7 @@ extension GhosttyTerminalView {
     func keyboardUITestDiagnostics(keyboardVisible: Bool, keyboardHeight: CGFloat) -> String {
         let snapshot = keyboardCoordinatorDiagnosticSnapshot()
         let accessoryAttached = keyboardToolbar?.window != nil
+        let accessoryAppearance = keyboardToolbar?.diagnosticBackgroundAppearance ?? "missing"
         let keyboardHeightText = String(format: "%.1f", Double(keyboardHeight))
         let size = terminalSize()
         let inputViewMode = keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild
@@ -5495,6 +5503,7 @@ extension GhosttyTerminalView {
             "surfaceFocused=\(keyboardUITestSurfaceFocused)",
             "sizePreserved=\(keyboardAvoidancePreservedSurfaceSize != nil)",
             "accessoryAttached=\(accessoryAttached)",
+            "accessoryAppearance=\(accessoryAppearance)",
             "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
             "accessoryHidden=\(shouldHideKeyboardAccessoryBar)",
             "hardware=\(hasHardwareKeyboardAttached)",
@@ -5851,6 +5860,14 @@ private class TerminalInputAccessoryView: UIInputView {
     private var keyRepeatTimer: DispatchSourceTimer?
     private var repeatingKey: TerminalKey?
 
+    #if DEBUG
+    var diagnosticBackgroundAppearance: String {
+        guard let color = backgroundEffectView?.backgroundColor else { return "missing" }
+        let resolved = color.resolvedColor(with: traitCollection)
+        return isDarkBackgroundColor(resolved) == true ? "dark" : "light"
+    }
+    #endif
+
     init(
         onKey: @escaping (TerminalKey) -> Void,
         onCustomAction: @escaping (TerminalAccessoryCustomAction) -> Void,
@@ -6028,6 +6045,11 @@ private class TerminalInputAccessoryView: UIInputView {
         backgroundEffectView.backgroundColor = backgroundColor
     }
 
+    func refreshAppearance() {
+        updateBackgroundEffect()
+        updateLeadingButtonsState()
+    }
+
     private func updateInterfaceStyle(for backgroundColor: UIColor) {
         if #available(iOS 13.0, *) {
             let resolved = backgroundColor.resolvedColor(with: traitCollection)
@@ -6046,14 +6068,20 @@ private class TerminalInputAccessoryView: UIInputView {
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            let luminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
-            return luminance < 0.55
+            return TerminalAccessoryAppearancePolicy.isDarkBackground(
+                red: red,
+                green: green,
+                blue: blue
+            )
         }
 
         if #available(iOS 13.0, *) {
             let ciColor = CIColor(color: color)
-            let luminance = (0.2126 * ciColor.red) + (0.7152 * ciColor.green) + (0.0722 * ciColor.blue)
-            return luminance < 0.55
+            return TerminalAccessoryAppearancePolicy.isDarkBackground(
+                red: ciColor.red,
+                green: ciColor.green,
+                blue: ciColor.blue
+            )
         }
 
         return nil

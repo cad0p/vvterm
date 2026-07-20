@@ -37,17 +37,14 @@ enum TerminalKeyboardRouteActivationPolicy {
               !contentObscured else {
             return .deactivate
         }
-        guard windowOwnership != .notKey else {
-            return .deactivate
-        }
-
         switch sceneActivation {
         case .foregroundActive:
-            return .activate
-        case .foregroundInactive:
+            return windowOwnership == .notKey ? .deactivate : .activate
+        case .foregroundInactive, .background:
+            // UIKit preserves a native text field's first-responder ownership
+            // while its app is inactive or backgrounded. Keep the terminal's
+            // input session equally stable and let the system move InputUI.
             return .preserve
-        case .background:
-            return .deactivate
         }
     }
 }

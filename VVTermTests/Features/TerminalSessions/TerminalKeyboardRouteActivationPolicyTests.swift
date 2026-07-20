@@ -75,14 +75,14 @@ struct TerminalKeyboardRouteActivationPolicyTests {
     }
 
     @Test
-    func realBackgroundDeactivatesTerminalInput() {
+    func realBackgroundPreservesNativeInputOwnership() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: true,
             sceneActivation: .background
         )
 
-        #expect(effect == .deactivate)
+        #expect(effect == .preserve)
     }
 
     @Test
@@ -109,7 +109,7 @@ struct TerminalKeyboardRouteActivationPolicyTests {
     }
 
     @Test
-    func crossAppFocusTransferDeactivatesTerminalInput() {
+    func crossAppFocusTransferPreservesNativeInputOwnership() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: true,
@@ -117,7 +117,7 @@ struct TerminalKeyboardRouteActivationPolicyTests {
             windowOwnership: .notKey
         )
 
-        #expect(effect == .deactivate)
+        #expect(effect == .preserve)
     }
 
     @Test

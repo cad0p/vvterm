@@ -118,7 +118,6 @@ struct ServerTerminalRoute: View {
             && selectedView == ConnectionViewTab.terminal.id
             && focusedPaneId != nil
             && keyboardCoordinator.isUserHidden
-            && focusedTerminal?.isHardwareKeyboardAttached != true
             && !isFocusedTerminalFindNavigatorVisible
             && !isFocusedTerminalVoiceRecording
     }
@@ -170,6 +169,7 @@ struct ServerTerminalRoute: View {
             }
             .onDisappear {
                 isRouteVisible = false
+                tabManager.invalidateReconnectPreparations(for: route.serverId)
                 keyboardCoordinator.setViewActive(false)
                 keyboardCoordinator.setActivePane(nil)
                 screenAwakeCoordinator.update(isRequested: false, for: screenAwakeRequestID)
@@ -245,7 +245,7 @@ struct ServerTerminalRoute: View {
             )
         } else {
             TerminalEmptyStateView(server: nil) {
-                onBack()
+                leaveRoute()
             }
         }
     }
@@ -254,7 +254,7 @@ struct ServerTerminalRoute: View {
     private var navigationToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
             Button {
-                onBack()
+                leaveRoute()
             } label: {
                 Image(systemName: "chevron.left")
             }
@@ -405,6 +405,9 @@ struct ServerTerminalRoute: View {
         ) {
             keyboardCoordinator.deactivateInputImmediately()
         } else {
+            if let focusedPaneId {
+                keyboardCoordinator.activeTerminalSceneWillDeactivate(for: focusedPaneId)
+            }
             updateTerminalRouteActivation()
         }
     }
@@ -455,7 +458,12 @@ struct ServerTerminalRoute: View {
             for: screenAwakeRequestID
         )
 
-        guard effect != .preserve else { return }
+        if effect == .preserve {
+            if let focusedPaneId {
+                keyboardCoordinator.activeTerminalSceneWillDeactivate(for: focusedPaneId)
+            }
+            return
+        }
 
         if effect == .deactivate {
             if isContentObscured {
@@ -483,6 +491,12 @@ struct ServerTerminalRoute: View {
     private func dismissIfContextEnded() {
         guard !hasNavigationContext else { return }
         isZenModeEnabled = false
+        leaveRoute()
+    }
+
+    private func leaveRoute() {
+        tabManager.invalidateReconnectPreparations(for: route.serverId)
+        keyboardCoordinator.relinquishRouteOwnershipForNavigation()
         onBack()
     }
 
@@ -551,6 +565,7 @@ struct ServerTerminalRoute: View {
             title: "Keyboard",
             systemImage: "keyboard",
             accessibilityLabel: "Show Keyboard",
+            accessibilityIdentifier: "vvterm.terminal.floating.keyboard",
             showsTitle: showsTitle,
             action: showKeyboardForFocusedTerminal
         )
@@ -562,6 +577,7 @@ struct ServerTerminalRoute: View {
             title: "Voice input",
             systemImage: "mic.fill",
             accessibilityLabel: "Voice input",
+            accessibilityIdentifier: "vvterm.terminal.floating.voiceInput",
             showsTitle: showsTitle,
             action: startVoiceInputForFocusedTerminal
         )
@@ -573,6 +589,7 @@ struct ServerTerminalRoute: View {
             title: "Enter",
             systemImage: "arrow.turn.down.left",
             accessibilityLabel: "Enter",
+            accessibilityIdentifier: "vvterm.terminal.floating.return",
             showsTitle: false,
             isPrimary: true,
             action: sendReturnForFocusedTerminal
@@ -584,6 +601,7 @@ struct ServerTerminalRoute: View {
         title: LocalizedStringKey,
         systemImage: String,
         accessibilityLabel: LocalizedStringKey,
+        accessibilityIdentifier: String,
         showsTitle: Bool,
         isPrimary: Bool = false,
         action: @escaping () -> Void
@@ -602,6 +620,7 @@ struct ServerTerminalRoute: View {
             .padding(.horizontal, showsTitle ? 2 : 0)
         }
         .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityIdentifier(accessibilityIdentifier)
         .modifier(
             FloatingTerminalControlButtonStyle(
                 isPrimary: isPrimary,

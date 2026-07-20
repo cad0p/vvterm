@@ -2,7 +2,7 @@
 import UIKit
 
 enum AppSceneLifecyclePolicy {
-    static func shouldSuspendTerminals(
+    static func shouldHandleBackgroundTransition(
         connectedSceneStates: [UIScene.ActivationState]
     ) -> Bool {
         !connectedSceneStates.contains { state in
@@ -49,7 +49,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc
     private func sceneDidBecomeActive(_ notification: Notification) {
         guard notificationBelongsToConnectedApplicationScene(notification) else { return }
-        TerminalTabManager.shared.noteForegroundActivation()
 
         guard SyncSettings.isEnabled else { return }
 
@@ -94,22 +93,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         let sceneStates = UIApplication.shared.connectedScenes.map(\.activationState)
         handleSceneDidEnterBackground(
             connectedSceneStates: sceneStates,
-            lock: { AppLockManager.shared.lockIfNeededForBackground() },
-            suspendTerminals: { TerminalTabManager.shared.beginBackgroundSuspension() }
+            lock: { AppLockManager.shared.lockIfNeededForBackground() }
         )
     }
 
     func handleSceneDidEnterBackground(
         connectedSceneStates: [UIScene.ActivationState],
-        lock: () -> Void,
-        suspendTerminals: () -> Void
+        lock: () -> Void
     ) {
-        guard AppSceneLifecyclePolicy.shouldSuspendTerminals(
+        guard AppSceneLifecyclePolicy.shouldHandleBackgroundTransition(
             connectedSceneStates: connectedSceneStates
         ) else { return }
 
         lock()
-        suspendTerminals()
     }
 
     private func notificationBelongsToConnectedApplicationScene(

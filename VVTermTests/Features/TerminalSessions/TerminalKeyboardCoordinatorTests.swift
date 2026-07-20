@@ -19,6 +19,7 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
     private(set) var releaseCount = 0
     private(set) var rebuildCount = 0
     private(set) var accessorySuppressionRequests: [Bool] = []
+    private(set) var accessoryAppearanceRefreshCount = 0
     var acquireResults: [Bool] = []
     var acquireObservedStates: [Bool] = []
     var forceSoftwareKeyboardResults: [Bool] = []
@@ -79,6 +80,10 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
         accessorySuppressionRequests.append(suppressed)
     }
 
+    func refreshTerminalInputAccessoryAppearance() {
+        accessoryAppearanceRefreshCount += 1
+    }
+
     func resetCommands() {
         acquireCount = 0
         forceSoftwareKeyboardCount = 0
@@ -86,6 +91,7 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
         releaseCount = 0
         rebuildCount = 0
         accessorySuppressionRequests.removeAll()
+        accessoryAppearanceRefreshCount = 0
     }
 
     func completeNextRebuild() {
@@ -303,7 +309,7 @@ struct TerminalKeyboardCoordinatorTests {
 
     @Test
     @MainActor
-    func onlyActiveTerminalSceneActivationRequestsPresentationRepair() async {
+    func onlyActiveTerminalSceneActivationRequestsDeferredPresentationRepair() async {
         let paneId = UUID()
         let session = TerminalKeyboardInputSessionSpy()
         let coordinator = TerminalKeyboardCoordinator()
@@ -326,12 +332,65 @@ struct TerminalKeyboardCoordinatorTests {
 
         #expect(session.rebuildCount == 0)
         #expect(session.acquireCount == 0)
+        #expect(session.accessoryAppearanceRefreshCount == 0)
 
         coordinator.activeTerminalSceneDidActivate(for: paneId)
         await drainMainQueue()
 
+        #expect(session.rebuildCount == 0)
+        #expect(session.acquireCount == 0)
+        #expect(session.accessoryAppearanceRefreshCount == 1)
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
+
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        await drainMainQueue()
+
         #expect(session.rebuildCount == 1)
         #expect(session.acquireCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func appSwitchPreservesPairedInputViewsUntilUIKitRestoresTheKeyboard() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneInputEligible(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
+            CGRect(x: 0, y: 700, width: 1_024, height: 300)
+        )
+        session.resetCommands()
+
+        coordinator.activeTerminalSceneWillDeactivate(for: paneId)
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(nil)
+        await drainMainQueue()
+
+        #expect(session.accessorySuppressionRequests.isEmpty)
+        #expect(session.releaseCount == 0)
+        #expect(session.rebuildCount == 0)
+
+        coordinator.activeTerminalSceneDidActivate(for: paneId)
+        await drainMainQueue()
+
+        #expect(session.releaseCount == 0)
+        #expect(session.rebuildCount == 0)
+
+        coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
+            CGRect(x: 0, y: 700, width: 1_024, height: 300)
+        )
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        await drainMainQueue()
+
+        #expect(session.releaseCount == 0)
+        #expect(session.rebuildCount == 0)
+        #expect(session.accessorySuppressionRequests == [false])
     }
 
     @Test
@@ -736,7 +795,7 @@ struct TerminalKeyboardCoordinatorTests {
         #expect(session.releaseCount == 1)
         #expect(session.acquireCount == 0)
         #expect(session.forceSoftwareKeyboardCount == forceSoftwareKeyboardCount)
-        #expect(session.accessorySuppressionRequests.isEmpty)
+        #expect(session.accessorySuppressionRequests == [true])
         #expect(!session.snapshot.isFirstResponder)
         #expect(!session.snapshot.isSoftwareInputActive)
     }
@@ -1378,6 +1437,29 @@ struct TerminalKeyboardCoordinatorTests {
 
         #expect(coordinator.softwareKeyboardEndFrame == nil)
         #expect(!coordinator.isSoftwareKeyboardVisible)
+    }
+
+    @Test
+    @MainActor
+    func routeNavigationRelinquishesOwnershipWithoutSynchronousInputTeardown() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneInputEligible(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+        session.resetCommands()
+
+        coordinator.relinquishRouteOwnershipForNavigation()
+        await drainMainQueue()
+
+        #expect(session.releaseCount == 0)
+        #expect(session.rebuildCount == 0)
     }
 
     @Test

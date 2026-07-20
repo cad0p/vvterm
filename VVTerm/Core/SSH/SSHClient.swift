@@ -30,22 +30,25 @@ enum LibSSH2Runtime {
 
 // MARK: - SSH Client using libssh2
 
-struct ShellHandle {
+nonisolated struct ShellHandle: Sendable {
     let id: UUID
     let stream: AsyncStream<Data>
     let transport: ShellTransport
     let fallbackReason: MoshFallbackReason?
+    let fallbackDiagnostics: MoshFallbackDiagnostics?
 
     init(
         id: UUID,
         stream: AsyncStream<Data>,
         transport: ShellTransport = .ssh,
-        fallbackReason: MoshFallbackReason? = nil
+        fallbackReason: MoshFallbackReason? = nil,
+        fallbackDiagnostics: MoshFallbackDiagnostics? = nil
     ) {
         self.id = id
         self.stream = stream
         self.transport = transport
         self.fallbackReason = fallbackReason
+        self.fallbackDiagnostics = fallbackDiagnostics
     }
 }
 
@@ -535,7 +538,11 @@ actor SSHClient {
                 id: fallbackShell.id,
                 stream: fallbackShell.stream,
                 transport: .sshFallback,
-                fallbackReason: .unsupportedRemoteCapabilities
+                fallbackReason: .unsupportedRemoteCapabilities,
+                fallbackDiagnostics: MoshFallbackDiagnostics.make(
+                    reason: .unsupportedRemoteCapabilities,
+                    events: startupTrace?.snapshot() ?? []
+                )
             )
         }
 
@@ -583,7 +590,11 @@ actor SSHClient {
                     id: fallbackShell.id,
                     stream: fallbackShell.stream,
                     transport: .sshFallback,
-                    fallbackReason: fallbackReason
+                    fallbackReason: fallbackReason,
+                    fallbackDiagnostics: MoshFallbackDiagnostics.make(
+                        reason: fallbackReason,
+                        events: startupTrace?.snapshot() ?? []
+                    )
                 )
             } catch {
                 if error is CancellationError || Task.isCancelled {
@@ -3385,6 +3396,33 @@ enum SSHError: LocalizedError {
     case hostKeyVerificationFailed
     case socketError(String)
     case unknown(String)
+
+    var allowsAutomaticReconnectRetry: Bool {
+        switch self {
+        case .notConnected,
+             .connectionFailed,
+             .cloudflareTunnelFailed,
+             .moshSessionFailed,
+             .moshUDPTimeout,
+             .moshClientSessionFailed,
+             .timeout,
+             .channelOpenFailed,
+             .shellRequestFailed,
+             .socketError:
+            return true
+        case .authenticationFailed,
+             .tailscaleAuthenticationNotAccepted,
+             .cloudflareConfigurationRequired,
+             .cloudflareAuthenticationFailed,
+             .moshServerMissing,
+             .moshServerRuntimeBroken,
+             .moshBootstrapFailed,
+             .moshInvalidEndpoint,
+             .hostKeyVerificationFailed,
+             .unknown:
+            return false
+        }
+    }
 
     var errorDescription: String? {
         switch self {

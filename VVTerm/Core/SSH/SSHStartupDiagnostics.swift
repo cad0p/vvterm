@@ -38,6 +38,7 @@ nonisolated final class SSHStartupTrace: Sendable {
     private let eventHandler: (@Sendable (Event) -> Void)?
     private let startedAt = ContinuousClock.now
     private let completedStages = OSAllocatedUnfairLock(initialState: Set<SSHStartupStage>())
+    private let events = OSAllocatedUnfairLock(initialState: [Event]())
 
     init(
         logger: Logger,
@@ -90,10 +91,15 @@ nonisolated final class SSHStartupTrace: Sendable {
             outcome: outcome,
             detail: detail
         )
+        events.withLock { $0.append(event) }
         logger.info(
             "startup stage=\(stage.rawValue, privacy: .public) stageMs=\(stageMilliseconds) totalMs=\(totalMilliseconds) outcome=\(outcome, privacy: .public) detail=\(detail, privacy: .public)"
         )
         eventHandler?(event)
+    }
+
+    func snapshot() -> [Event] {
+        events.withLock { $0 }
     }
 
     private static func milliseconds(_ duration: Duration) -> Int {

@@ -118,6 +118,61 @@ final class ServerNavigationUITests: XCTestCase {
     }
 
     @MainActor
+    func testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness() throws {
+        let app = launchNavigationHarness()
+        let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
+        wait(for: diagnostics, containing: "setup=ready", app: app)
+
+        let activeRow = app.descendants(matching: .any)
+            .matching(
+                identifier: "vvterm.serverList.activeConnection.D3A03FD5-453E-43AC-8BB5-838E5D5D1990"
+            )
+            .firstMatch
+        let list = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.serverList.list")
+            .firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        scrollToVisible(activeRow, in: list, app: app)
+        tapVisible(activeRow)
+        wait(for: diagnostics, containing: "state=connected", timeout: 45, app: app)
+
+        let terminal = productionTerminal(in: app)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
+        terminal.tap()
+        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8), diagnosticText(in: app))
+
+        let terminalId = try XCTUnwrap(diagnosticValue("terminalId", in: diagnostics))
+        let shellId = try XCTUnwrap(diagnosticValue("shellId", in: diagnostics))
+
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 8))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+
+        wait(for: diagnostics, containing: "state=connected", timeout: 10, app: app)
+        XCTAssertEqual(diagnosticValue("terminalId", in: diagnostics), terminalId)
+        XCTAssertEqual(diagnosticValue("shellId", in: diagnostics), shellId)
+        XCTAssertFalse(
+            app.staticTexts["Reconnecting…"].exists,
+            "Backgrounding unnecessarily disconnected the live terminal. \(diagnosticText(in: app))"
+        )
+        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForExistence(timeout: 8),
+            "The native software keyboard session was not preserved. \(diagnosticText(in: app))"
+        )
+
+        popTerminal(in: app)
+        XCTAssertEqual(app.state, .runningForeground)
+
+        XCUIDevice.shared.press(.home)
+        _ = app.wait(for: .runningBackground, timeout: 8)
+    }
+
+    @MainActor
     private func launchNavigationHarness() -> XCUIApplication {
         let app = XCUIApplication()
         app.terminate()

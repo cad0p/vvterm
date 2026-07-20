@@ -91,7 +91,12 @@ enum TerminalConnectionPresentationPolicy {
             return true
         }
 
-        return connectionState == .disconnected && automaticReconnectAllowed
+        switch connectionState {
+        case .disconnected, .failed:
+            return automaticReconnectAllowed
+        case .idle, .connecting, .reconnecting, .connected:
+            return false
+        }
     }
 }
 
@@ -136,14 +141,24 @@ enum TerminalAutoReconnectPolicy {
         networkReadiness: NetworkMonitor.Readiness,
         automaticReconnectAllowed: Bool,
         reconnectInFlight: Bool,
+        hasEstablishedConnection: Bool,
         connectionState: ConnectionState
     ) -> Bool {
-        sceneIsActive
+        let isRecoverableState: Bool
+        switch connectionState {
+        case .disconnected, .failed:
+            isRecoverableState = true
+        case .idle, .connecting, .reconnecting, .connected:
+            isRecoverableState = false
+        }
+
+        return sceneIsActive
             && applicationIsActive
             && networkReadiness == .ready
             && automaticReconnectAllowed
             && !reconnectInFlight
-            && connectionState == .disconnected
+            && hasEstablishedConnection
+            && isRecoverableState
     }
 }
 

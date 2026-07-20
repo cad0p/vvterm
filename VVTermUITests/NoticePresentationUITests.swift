@@ -84,6 +84,47 @@ final class NoticePresentationUITests: XCTestCase {
     }
 
     @MainActor
+    func testDiagnosticBannerExpandsCopiesScrollsAndDismisses() throws {
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-notice-diagnostics"]
+        )
+        let details = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.details")
+            .firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 10))
+        details.tap()
+
+        let detailText = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.detailText")
+            .firstMatch
+        let copy = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.copyDiagnostics")
+            .firstMatch
+        XCTAssertTrue(detailText.waitForExistence(timeout: 5))
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        detailText.swipeUp()
+        copy.tap()
+        XCTAssertEqual(copy.label, "Copied")
+
+        let close = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.detailClose")
+            .firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+
+        let dismiss = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.dismiss")
+            .firstMatch
+        let banner = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.banner")
+            .firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        XCTAssertTrue(dismiss.exists)
+        dismiss.tap()
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 5))
+    }
+
+    @MainActor
     private func launchNoticeHarness(additionalArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [

@@ -6,7 +6,7 @@ final class TerminalReconnectUITests: XCTestCase {
     }
 
     @MainActor
-    func testProductionSSHForegroundReconnectRestoresTyping() throws {
+    func testProductionSSHBackgroundPreservesSessionKeyboardAndTyping() throws {
         let app = XCUIApplication()
         app.terminate()
         app.launchArguments = [
@@ -18,11 +18,14 @@ final class TerminalReconnectUITests: XCTestCase {
             "-iCloudSyncEnabled", "NO",
             "-sshAutoReconnect", "YES",
             "-terminalTmuxEnabledDefault", "NO",
+            "-terminalUsePerAppearanceTheme", "NO",
+            "-terminalThemeName", "Aizen Dark",
             "-security.privacyModeEnabled", "NO",
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO",
         ]
         app.launch()
+        defer { app.terminate() }
 
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         if !diagnostics.waitForExistence(timeout: 5),
@@ -55,7 +58,7 @@ final class TerminalReconnectUITests: XCTestCase {
             XCTFail("Missing terminal identity. \(diagnosticText(in: app))")
             return
         }
-        guard var shellId = diagnosticValue("shellId", in: diagnostics), shellId != "none" else {
+        guard let shellId = diagnosticValue("shellId", in: diagnostics), shellId != "none" else {
             XCTFail("Missing initial SSH shell identity. \(diagnosticText(in: app))")
             return
         }
@@ -93,14 +96,11 @@ final class TerminalReconnectUITests: XCTestCase {
                 app: app
             )
             wait(for: diagnostics, containing: "shell=true", timeout: 8, app: app)
-            guard let reconnectedShellId = waitForChangedDiagnosticValue(
-                "shellId",
-                previousValue: shellId,
-                in: diagnostics,
-                timeout: 8,
-                app: app
-            ) else { return }
-            shellId = reconnectedShellId
+            XCTAssertEqual(
+                diagnosticValue("shellId", in: diagnostics),
+                shellId,
+                "Backgrounding replaced a live SSH shell. \(diagnosticText(in: app))"
+            )
             wait(for: diagnostics, containing: "windowAttached=true", timeout: 8, app: app)
             wait(for: diagnostics, containing: "renderingPaused=false", timeout: 8, app: app)
             wait(for: diagnostics, containing: "surfaceFocused=true", timeout: 8, app: app)
@@ -113,7 +113,7 @@ final class TerminalReconnectUITests: XCTestCase {
             XCTAssertEqual(
                 diagnosticIntegerValue("inputRebuilds", in: diagnostics),
                 initialInputRebuilds,
-                "Normal foreground reconnect rebuilt the terminal input session. \(diagnosticText(in: app))"
+                "Backgrounding rebuilt the terminal input session. \(diagnosticText(in: app))"
             )
 
             let key = app.keys["x"]
@@ -127,15 +127,40 @@ final class TerminalReconnectUITests: XCTestCase {
             )
         }
 
-        // Let the production background path disconnect the final shell and
-        // end its Live Activity. Otherwise ActivityKit can prelaunch VVTerm
-        // while the next XCUITest installation is still supplying arguments.
+    }
+
+    @MainActor
+    func testProductionSSHBackgroundPreservesDarkAccessoryAppearance() throws {
+        let (app, diagnostics) = launchProductionSSHTestHarness(themeName: "Aizen Dark")
+        defer { app.terminate() }
+
+        let terminal = productionTerminal(in: app)
+        terminal.tap()
+        assertKeyboardAndAccessoryVisible(diagnostics: diagnostics, app: app)
+        wait(for: diagnostics, containing: "accessoryAppearance=dark", timeout: 5, app: app)
+
+        guard let initialShellId = diagnosticValue("shellId", in: diagnostics) else {
+            XCTFail("Missing initial SSH shell identity. \(diagnosticText(in: app))")
+            return
+        }
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(
-            waitForBackgroundState(of: app, timeout: 8),
-            "VVTerm did not enter the background during cleanup. \(diagnosticText(in: app))"
-        )
+        XCTAssertTrue(waitForBackgroundState(of: app, timeout: 8))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        wait(
+            for: diagnostics,
+            containing: "setup=ready state=connected",
+            timeout: 30,
+            app: app
+        )
+        XCTAssertEqual(
+            diagnosticValue("shellId", in: diagnostics),
+            initialShellId,
+            "Backgrounding replaced the live SSH shell. \(diagnosticText(in: app))"
+        )
+        assertKeyboardAndAccessoryVisible(diagnostics: diagnostics, app: app)
+        wait(for: diagnostics, containing: "accessoryAppearance=dark", timeout: 5, app: app)
     }
 
     @MainActor
@@ -281,7 +306,8 @@ final class TerminalReconnectUITests: XCTestCase {
 
     @MainActor
     private func launchProductionSSHTestHarness(
-        exposesKeyboardLossControl: Bool = false
+        exposesKeyboardLossControl: Bool = false,
+        themeName: String? = nil
     ) -> (XCUIApplication, XCUIElement) {
         let app = XCUIApplication()
         app.terminate()
@@ -298,6 +324,12 @@ final class TerminalReconnectUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO",
         ]
+        if let themeName {
+            app.launchArguments += [
+                "-terminalUsePerAppearanceTheme", "NO",
+                "-terminalThemeName", themeName,
+            ]
+        }
         if exposesKeyboardLossControl {
             app.launchArguments += [
                 "--vvterm-ui-test-unexpected-keyboard-loss-control",

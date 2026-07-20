@@ -41,6 +41,29 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
+    func automaticReconnectHidesTransientFailedActionSheetBetweenRetryBatches() {
+        let presentation = resolve(
+            connectionState: .failed("Connection timed out"),
+            hasEstablishedConnection: true,
+            automaticReconnectAllowed: true,
+            terminalExists: true,
+            isReady: true
+        )
+
+        #expect(presentation == .hidden)
+    }
+
+    @Test
+    func onlyTransientSSHFailuresAllowAutomaticRetry() {
+        #expect(SSHError.timeout.allowsAutomaticReconnectRetry)
+        #expect(SSHError.socketError("reset").allowsAutomaticReconnectRetry)
+        #expect(SSHError.moshUDPTimeout.allowsAutomaticReconnectRetry)
+        #expect(!SSHError.authenticationFailed.allowsAutomaticReconnectRetry)
+        #expect(!SSHError.hostKeyVerificationFailed.allowsAutomaticReconnectRetry)
+        #expect(!SSHError.moshServerMissing.allowsAutomaticReconnectRetry)
+    }
+
+    @Test
     func intentionalTmuxDetachShowsDisconnectedStateInsteadOfReconnectBanner() {
         let presentation = resolve(
             connectionState: .disconnected,
@@ -137,6 +160,7 @@ struct TerminalConnectionStatusPresentationTests {
             networkReadiness: .ready,
             automaticReconnectAllowed: true,
             reconnectInFlight: false,
+            hasEstablishedConnection: true,
             connectionState: .disconnected
         )
 
@@ -151,10 +175,41 @@ struct TerminalConnectionStatusPresentationTests {
             networkReadiness: .ready,
             automaticReconnectAllowed: true,
             reconnectInFlight: false,
+            hasEstablishedConnection: true,
             connectionState: .disconnected
         )
 
         #expect(shouldReconnect)
+    }
+
+    @Test
+    func establishedSessionRetriesAfterReconnectBatchFails() {
+        let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: true,
+            applicationIsActive: true,
+            networkReadiness: .ready,
+            automaticReconnectAllowed: true,
+            reconnectInFlight: false,
+            hasEstablishedConnection: true,
+            connectionState: .failed("Network path was not ready")
+        )
+
+        #expect(shouldReconnect)
+    }
+
+    @Test
+    func initialConnectionFailureDoesNotEnterAutomaticRetryLoop() {
+        let shouldReconnect = TerminalAutoReconnectPolicy.shouldAttempt(
+            sceneIsActive: true,
+            applicationIsActive: true,
+            networkReadiness: .ready,
+            automaticReconnectAllowed: true,
+            reconnectInFlight: false,
+            hasEstablishedConnection: false,
+            connectionState: .failed("Authentication failed")
+        )
+
+        #expect(!shouldReconnect)
     }
 
     @Test
@@ -165,6 +220,7 @@ struct TerminalConnectionStatusPresentationTests {
             networkReadiness: .ready,
             automaticReconnectAllowed: true,
             reconnectInFlight: true,
+            hasEstablishedConnection: true,
             connectionState: .disconnected
         )
 
@@ -179,6 +235,7 @@ struct TerminalConnectionStatusPresentationTests {
             networkReadiness: readiness,
             automaticReconnectAllowed: true,
             reconnectInFlight: false,
+            hasEstablishedConnection: true,
             connectionState: .disconnected
         )
 

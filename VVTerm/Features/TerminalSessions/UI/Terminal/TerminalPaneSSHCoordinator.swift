@@ -174,7 +174,8 @@ final class TerminalPaneSSHCoordinator {
                         for: paneId,
                         serverId: server.id,
                         transport: shell.transport,
-                        fallbackReason: shell.fallbackReason
+                        fallbackReason: shell.fallbackReason,
+                        fallbackDiagnostics: shell.fallbackDiagnostics
                     ) else {
                         return false
                     }
@@ -230,7 +231,7 @@ final class TerminalPaneSSHCoordinator {
                     if let data = errorMsg.data(using: .utf8) {
                         terminal.feedData(data)
                     }
-                    TerminalTabManager.shared.updatePaneState(paneId, connectionState: .failed(error.localizedDescription))
+                    TerminalTabManager.shared.handleConnectionFailure(for: paneId, error: error)
                 }
             )
         }

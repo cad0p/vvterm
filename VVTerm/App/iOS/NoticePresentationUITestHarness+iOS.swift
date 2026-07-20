@@ -18,6 +18,10 @@ struct NoticePresentationUITestHarness: View {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-operation-stack")
     }
 
+    private var showsDiagnosticDetailScenario: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-diagnostics")
+    }
+
     private var showsConnectionSheetHandoffScenario: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-connection-sheet-handoff")
     }
@@ -30,6 +34,8 @@ struct NoticePresentationUITestHarness: View {
     var body: some View {
         if showsFilesPreviewScenario {
             NoticeFilesPreviewHarness()
+        } else if showsDiagnosticDetailScenario {
+            NoticeDiagnosticDetailHarness()
         } else if showsConnectingScenario {
             NoticeConnectingHarness()
         } else if showsReconnectBannerScenario {
@@ -43,6 +49,32 @@ struct NoticePresentationUITestHarness: View {
         } else {
             NoticeConnectionFailureHarness()
         }
+    }
+}
+
+private struct NoticeDiagnosticDetailHarness: View {
+    @State private var isVisible = true
+
+    private var diagnosticNotice: NoticeItem? {
+        guard isVisible else { return nil }
+        return NoticeItem(
+            id: "notice-mosh-diagnostic-preview",
+            lane: .topBanner,
+            level: .warning,
+            leading: .icon("arrow.trianglehead.2.clockwise"),
+            message: "Using SSH fallback for this session (the Mosh UDP connection timed out).",
+            detail: (0..<24).map { index in
+                "stage_\(index)=privacy-safe diagnostic detail for a long localized layout"
+            }.joined(separator: "\n"),
+            dismissAction: { isVisible = false }
+        )
+    }
+
+    var body: some View {
+        NoticeHost(topBanner: diagnosticNotice) {
+            terminalBackdrop { EmptyView() }
+        }
+        .preferredColorScheme(.dark)
     }
 }
 

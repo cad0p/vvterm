@@ -5,51 +5,49 @@ import UIKit
 
 struct AppSceneLifecyclePolicyTests {
     @Test
-    func fullyBackgroundedScenesSuspendTerminals() {
-        #expect(AppSceneLifecyclePolicy.shouldSuspendTerminals(
+    func fullyBackgroundedScenesHandleBackgroundTransition() {
+        #expect(AppSceneLifecyclePolicy.shouldHandleBackgroundTransition(
             connectedSceneStates: [.background, .unattached]
         ))
     }
 
     @Test
     func activeSceneKeepsTerminalsConnected() {
-        #expect(!AppSceneLifecyclePolicy.shouldSuspendTerminals(
+        #expect(!AppSceneLifecyclePolicy.shouldHandleBackgroundTransition(
             connectedSceneStates: [.background, .foregroundActive]
         ))
     }
 
     @Test
     func inactiveSceneKeepsTerminalsConnectedForSystemOverlays() {
-        #expect(!AppSceneLifecyclePolicy.shouldSuspendTerminals(
+        #expect(!AppSceneLifecyclePolicy.shouldHandleBackgroundTransition(
             connectedSceneStates: [.foregroundInactive]
         ))
     }
 
     @Test
     @MainActor
-    func lastBackgroundedSceneLocksAndSuspendsTerminals() {
+    func lastBackgroundedSceneLocksWithoutDisconnectingTerminals() {
         let delegate = AppDelegate()
         var actions: [String] = []
 
         delegate.handleSceneDidEnterBackground(
             connectedSceneStates: [.background, .unattached],
-            lock: { actions.append("lock") },
-            suspendTerminals: { actions.append("suspend") }
+            lock: { actions.append("lock") }
         )
 
-        #expect(actions == ["lock", "suspend"])
+        #expect(actions == ["lock"])
     }
 
     @Test
     @MainActor
-    func anotherForegroundScenePreventsGlobalLockAndSuspension() {
+    func anotherForegroundScenePreventsGlobalBackgroundHandling() {
         let delegate = AppDelegate()
         var actions: [String] = []
 
         delegate.handleSceneDidEnterBackground(
             connectedSceneStates: [.background, .foregroundInactive],
-            lock: { actions.append("lock") },
-            suspendTerminals: { actions.append("suspend") }
+            lock: { actions.append("lock") }
         )
 
         #expect(actions.isEmpty)
