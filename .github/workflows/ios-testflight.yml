@@ -196,15 +196,13 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$APP_BUNDLE_ID string $APP_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$LIVE_ACTIVITY_BUNDLE_ID string $LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
 
-          echo "==> Archiving $SCHEME"
-          xcodebuild archive \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -archivePath "$ARCHIVE_PATH" \
-            -destination "generic/platform=iOS" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="iPhone Distribution" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            APP_CODE_SIGN_STYLE=Manual \
+            APP_CODE_SIGN_IDENTITY="Apple Distribution" \
+            APP_PROVISIONING_PROFILE_SPECIFIER="$APP_PROVISIONING_PROFILE_SPECIFIER" \
+            LIVE_ACTIVITY_CODE_SIGN_STYLE=Manual \
+            LIVE_ACTIVITY_CODE_SIGN_IDENTITY="Apple Distribution" \
+            LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER="$LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
 
           echo "==> Exporting IPA (manual signing)"
