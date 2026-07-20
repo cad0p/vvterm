@@ -213,7 +213,6 @@ jobs:
             -archivePath "$ARCHIVE_PATH" \
             -destination "generic/platform=iOS" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
             APP_CODE_SIGN_STYLE=Manual \
             APP_CODE_SIGN_IDENTITY="Apple Distribution" \
             APP_PROVISIONING_PROFILE_SPECIFIER="$APP_PROVISIONING_PROFILE_SPECIFIER" \
