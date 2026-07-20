@@ -45,6 +45,15 @@ final class StoreManager: ObservableObject {
 
     private init() {
         updateListenerTask = listenForTransactions()
+        #if FORCE_PRO_ENABLED
+        // Fork-owner build flag: permanently unlock Pro for personal TestFlight
+        // builds without requiring StoreKit products. Set via the workflow's
+        // force_pro input → SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED.
+        // Default builds (and upstream) leave this off — StoreKit behaves normally.
+        isPro = true
+        isLifetime = true
+        logger.info("FORCE_PRO_ENABLED build — Pro forced on, StoreKit entitlements bypassed")
+        #endif
         Task {
             await loadProducts()
             await checkEntitlements()
@@ -160,6 +169,12 @@ final class StoreManager: ObservableObject {
 
     func checkEntitlements() async {
         refreshReviewModeState()
+        #if FORCE_PRO_ENABLED
+        // Pro is forced on at init for fork-owner builds; don't let the
+        // (empty) StoreKit entitlements query override it back to false.
+        applyEntitlements(hasAccess: true, hasLifetime: true, status: nil)
+        return
+        #endif
         var hasAccess = false
         var hasLifetime = false
 
