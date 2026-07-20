@@ -1071,17 +1071,8 @@ struct TerminalPaneView: View {
 
     private func scheduleAutomaticReconnectAfterFailure() {
         guard automaticReconnectRetryTask == nil else { return }
-        #if os(iOS)
-        let applicationIsActive = UIApplication.shared.applicationState == .active
-        #else
-        let applicationIsActive = NSApplication.shared.isActive
-        #endif
-        guard TerminalAutoReconnectPolicy.shouldAttempt(
-            sceneIsActive: foregroundSceneIsActive,
-            applicationIsActive: applicationIsActive,
-            networkReadiness: networkMonitor.readiness,
+        guard TerminalAutoReconnectPolicy.shouldScheduleRetry(
             automaticReconnectAllowed: automaticReconnectAllowed,
-            reconnectInFlight: reconnectInFlight,
             hasEstablishedConnection: paneState?.hasEstablishedConnection == true,
             connectionState: connectionState
         ) else { return }
@@ -1091,6 +1082,7 @@ struct TerminalPaneView: View {
             guard !Task.isCancelled else { return }
             automaticReconnectRetryTask = nil
             attemptAutoReconnectIfNeeded()
+            scheduleAutomaticReconnectAfterFailure()
         }
     }
 

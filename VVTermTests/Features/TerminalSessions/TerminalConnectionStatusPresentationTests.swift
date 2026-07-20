@@ -64,6 +64,20 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
+    func failedEstablishedSessionKeepsRetryScheduledWhileForegroundConditionsChange() {
+        #expect(TerminalAutoReconnectPolicy.shouldScheduleRetry(
+            automaticReconnectAllowed: true,
+            hasEstablishedConnection: true,
+            connectionState: .failed("Temporary transport failure")
+        ))
+        #expect(!TerminalAutoReconnectPolicy.shouldScheduleRetry(
+            automaticReconnectAllowed: false,
+            hasEstablishedConnection: true,
+            connectionState: .failed("Authentication failed")
+        ))
+    }
+
+    @Test
     func intentionalTmuxDetachShowsDisconnectedStateInsteadOfReconnectBanner() {
         let presentation = resolve(
             connectionState: .disconnected,

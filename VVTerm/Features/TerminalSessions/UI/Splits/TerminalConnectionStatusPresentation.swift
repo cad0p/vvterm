@@ -135,6 +135,18 @@ enum TerminalSceneActivityPolicy {
 }
 
 enum TerminalAutoReconnectPolicy {
+    static func shouldScheduleRetry(
+        automaticReconnectAllowed: Bool,
+        hasEstablishedConnection: Bool,
+        connectionState: ConnectionState
+    ) -> Bool {
+        guard automaticReconnectAllowed, hasEstablishedConnection else { return false }
+        if case .failed = connectionState {
+            return true
+        }
+        return false
+    }
+
     static func shouldAttempt(
         sceneIsActive: Bool,
         applicationIsActive: Bool,

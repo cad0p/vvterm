@@ -1013,6 +1013,34 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func unclassifiedReconnectFailurePreservesAutomaticRetryEligibility() async {
+        await withCleanManager { manager in
+            struct UnclassifiedReconnectError: LocalizedError {
+                var errorDescription: String? { "Temporary transport failure" }
+            }
+
+            let tab = TerminalTab(serverId: UUID(), title: "Unclassified retry")
+            installTab(tab, in: manager, connectionState: .connected)
+
+            manager.handleShellEnd(for: tab.rootPaneId, reason: .transportEnded)
+            manager.updatePaneState(
+                tab.rootPaneId,
+                connectionState: .reconnecting(attempt: 1)
+            )
+            manager.handleConnectionFailure(
+                for: tab.rootPaneId,
+                error: UnclassifiedReconnectError()
+            )
+
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason == .transportEnded)
+            guard case .failed = manager.paneStates[tab.rootPaneId]?.connectionState else {
+                Issue.record("Expected a failed retry state")
+                return
+            }
+        }
+    }
+
+    @Test
     func userActionFailureStopsAutomaticRetry() async {
         await withCleanManager { manager in
             let tab = TerminalTab(serverId: UUID(), title: "Manual recovery")

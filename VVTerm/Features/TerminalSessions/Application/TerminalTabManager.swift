@@ -1067,8 +1067,10 @@ final class TerminalTabManager: ObservableObject {
     }
 
     func handleConnectionFailure(for paneId: UUID, error: Error) {
-        let allowsAutomaticRetry = (error as? SSHError)?.allowsAutomaticReconnectRetry == true
-        if !allowsAutomaticRetry, paneStates[paneId]?.disconnectReason != nil {
+        let requiresUserAction = (error as? SSHError).map {
+            !$0.allowsAutomaticReconnectRetry
+        } ?? false
+        if requiresUserAction, paneStates[paneId]?.disconnectReason != nil {
             paneStates[paneId]?.disconnectReason = nil
             schedulePersist()
         }
