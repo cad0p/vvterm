@@ -23,17 +23,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 
 	"github.com/fxamacker/cbor/v2"
-
-	// NOTE: these imports resolve against the vendored Teleport source at
-	// ~/open-source/github/cad0p/teleport (pinned v18.9.1). The regenerate.sh
-	// script sets up the module path so these resolve. See that script for
-	// the replace directive.
-	"github.com/gravitational/teleport/lib/auth/webauthntypes"
-	"github.com/gravitational/teleport/lib/darwin"
 )
 
 // Test vector — MUST match FixtureTests.swift exactly.
@@ -75,10 +69,10 @@ func run() error {
 	}
 	fmt.Printf("wrote pub_key_raw.bin (%d bytes)\n", len(pubKeyRaw))
 
-	// Parse via darwin.ECDSAPublicKeyFromRaw (the same parser api.go uses)
-	// to confirm our pubKeyRaw is well-formed.
-	if _, err := darwin.ECDSAPublicKeyFromRaw(pubKeyRaw); err != nil {
-		return fmt.Errorf("darwin.ECDSAPublicKeyFromRaw: %w", err)
+	// Parse via ecdsaPublicKeyFromRaw (inlined copy of Teleport's
+	// lib/darwin.ECDSAPublicKeyFromRaw) to confirm our pubKeyRaw is well-formed.
+	if _, err := ecdsaPublicKeyFromRaw(pubKeyRaw); err != nil {
+		return fmt.Errorf("ecdsaPublicKeyFromRaw: %w", err)
 	}
 
 	// Build the COSE EC2 public key CBOR, mirroring api.go:284-307.
@@ -268,11 +262,6 @@ func run() error {
 	fmt.Println("  signature_create.der        (deterministic ECDSA DER sig)")
 	fmt.Println("  attestation_object_create.cbor (full attObj, matches api.go:297)")
 
-	// Verify the webauthntypes import compiles (it's imported above; if
-	// the build fails here, the replace directive in regenerate.sh is
-	// wrong).
-	_ = webauthntypes.CredentialAssertion{}
-
 	return nil
 }
 
@@ -286,4 +275,29 @@ func min(a, b int) int {
 func writeBinary(dir, name string, data []byte) error {
 	path := filepath.Join(dir, name)
 	return os.WriteFile(path, data, 0o644)
+}
+
+// ecdsaPublicKeyFromRaw is an inlined copy of Teleport's
+// lib/darwin.ECDSAPublicKeyFromRaw (teleport v18.9.1, AGPL-3.0). It parses the
+// ANSI X9.63 representation (0x04 || X || Y) produced by
+// SecKeyCopyExternalRepresentation. Inlined here to avoid pulling the entire
+// teleport module into the fixture generator's dep graph.
+func ecdsaPublicKeyFromRaw(pubKeyRaw []byte) (*ecdsa.PublicKey, error) {
+	switch l := len(pubKeyRaw); {
+	case l < 3:
+		return nil, fmt.Errorf("public key representation too small (%v bytes)", l)
+	case l%2 != 1:
+		return nil, fmt.Errorf("public key representation has unexpected length (%v bytes)", l)
+	case pubKeyRaw[0] != 0x04:
+		return nil, fmt.Errorf("public key representation starts with unexpected byte (%#x vs 0x4)", pubKeyRaw[0])
+	}
+	pubKeyRaw = pubKeyRaw[1:] // skip 0x4
+	l := len(pubKeyRaw) / 2
+	x := pubKeyRaw[:l]
+	y := pubKeyRaw[l:]
+	return &ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     (&big.Int{}).SetBytes(x),
+		Y:     (&big.Int{}).SetBytes(y),
+	}, nil
 }
