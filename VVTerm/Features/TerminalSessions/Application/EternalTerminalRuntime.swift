@@ -145,7 +145,8 @@ final class EternalTerminalRuntime {
         session = ETTerminalSession(
             host: server.host,
             port: UInt16(exactly: server.eternalTerminalPort) ?? 2022,
-            bootstrapExecutor: executor
+            bootstrapExecutor: executor,
+            bootstrapOptions: SSHETBootstrapExecutor.bootstrapOptions
         )
     }
 

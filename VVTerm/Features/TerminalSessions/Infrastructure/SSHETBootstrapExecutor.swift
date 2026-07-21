@@ -3,6 +3,10 @@ import Foundation
 
 /// Runs swift-et's SSH bootstrap and auxiliary remote operations through VVTerm's SSH stack.
 actor SSHETBootstrapExecutor: ETBootstrapExecutor {
+    nonisolated static var bootstrapOptions: ETBootstrapOptions {
+        ETBootstrapOptions(etterminalPath: "etterminal --logtostdout")
+    }
+
     private let client: SSHClient
     private let connection: Connection?
     private let startupPlanProvider: (@Sendable (SSHClient) async throws -> TerminalShellStartupPlan)?
@@ -35,7 +39,7 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
     }
 
     func run(command: String) async throws -> String {
-        let command = Self.commandCapturingCombinedOutput(command)
+        let command = Self.remoteBootstrapCommand(command)
         guard let connection else {
             return try await client.execute(command, timeout: .seconds(20))
         }
@@ -57,10 +61,18 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
         }
     }
 
-    /// ETBootstrap parses credentials written by etterminal's logging stream.
-    /// SSHClient intentionally returns stdout only, so merge stderr for this command.
-    nonisolated static func commandCapturingCombinedOutput(_ command: String) -> String {
-        "(\(command)) 2>&1"
+    /// Use a known POSIX shell even when the account's login shell is fish, and
+    /// make common package-manager locations available to non-interactive SSH.
+    nonisolated static func remoteBootstrapCommand(_ command: String) -> String {
+        let script = """
+        \(RemoteTerminalBootstrap.shellPathExport());
+        if ! command -v etterminal >/dev/null 2>&1; then
+          printf 'etterminal was not found in the remote PATH';
+          exit 127;
+        fi;
+        \(command)
+        """
+        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
     }
 
     func withConnectedClient<Result: Sendable>(

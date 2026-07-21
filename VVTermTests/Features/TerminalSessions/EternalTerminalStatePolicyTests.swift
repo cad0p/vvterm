@@ -51,10 +51,21 @@ struct EternalTerminalStatePolicyTests {
     }
 
     @Test
-    func bootstrapCommandCapturesETTerminalLoggingOutput() {
+    func bootstrapCommandUsesKnownPOSIXShellAndExpandedPath() {
+        let command = SSHETBootstrapExecutor.remoteBootstrapCommand("start-et")
+
+        #expect(command.hasPrefix("/bin/sh -lc"))
+        #expect(command.contains("export PATH="))
+        #expect(command.contains("command -v etterminal"))
+        #expect(command.contains("start-et"))
+        #expect(!command.contains("(start-et) 2>&1"))
+    }
+
+    @Test
+    func bootstrapRequestsETTerminalDiagnosticsOnStandardOutput() {
         #expect(
-            SSHETBootstrapExecutor.commandCapturingCombinedOutput("start-et")
-                == "(start-et) 2>&1"
+            SSHETBootstrapExecutor.bootstrapOptions.etterminalPath
+                == "etterminal --logtostdout"
         )
     }
 

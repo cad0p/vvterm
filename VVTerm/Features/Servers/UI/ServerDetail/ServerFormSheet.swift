@@ -1118,7 +1118,8 @@ struct ServerFormSheet: View {
                             port: UInt16(exactly: testServer.eternalTerminalPort) ?? 2022,
                             bootstrapExecutor: SSHETBootstrapExecutor(
                                 connectedClient: client
-                            )
+                            ),
+                            bootstrapOptions: SSHETBootstrapExecutor.bootstrapOptions
                         )
                         do {
                             try await session.connect()
