@@ -359,14 +359,13 @@ func runSpike(args: CLIArgs) throws {
     // ── Step 2: create key + build attestation ─────────────────────────
     print("[2/7] signer.createKey() + WebAuthn.register(...)")
     let (credentialID, publicKeyRaw) = try signer.createKey()
-    let credentialIDString = credentialID.base64URLEncodedString()
-    print("  credentialID: \(credentialIDString)")
+    print("  credentialID: \(credentialID.base64URLEncodedString())")
     print("  pubkey raw:   \(publicKeyRaw.count) bytes (0x04 || X || Y)")
     let ccr = try WebAuthn.register(
         origin: origin,
         rpID: rpID,
         challenge: serverChallenge,
-        credentialID: credentialIDString,
+        credentialID: credentialID,
         publicKeyRaw: publicKeyRaw,
         signer: signer
     )
@@ -430,7 +429,7 @@ func runSpike(args: CLIArgs) throws {
         origin: origin,
         rpID: loginRpID,
         challenge: loginChallenge,
-        credentialID: credentialIDString,
+        credentialID: credentialID,
         userHandle: userHandle,
         signer: signer
     )
