@@ -1,31 +1,24 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Regenerate the Swift-test fixtures from Teleport's lib/auth/touchid/api.go.
+# Regenerate the Swift-test fixtures.
 #
-# Requires Go (any recent version) and the Teleport source tree checked out
-# at $TELEPORT_SRC (default: ~/open-source/github/cad0p/teleport, pinned v18.9.1).
+# The fixture generator (fixtures/generate/main.go) is self-contained: it
+# inlines the one Teleport function it needed (ecdsaPublicKeyFromRaw, a
+# 45-line stdlib-only copy of lib/darwin.ECDSAPublicKeyFromRaw) so it doesn't
+# pull the entire teleport module (which requires Go >= 1.25.11 and has a
+# complex nested api module). The generator depends only on fxamacker/cbor
+# (the same CBOR lib Teleport uses) + the Go stdlib.
+#
+# Requires: Go 1.21+ (any recent version).
 #
 # Usage:
-#   ./regenerate.sh                    # uses default TELEPORT_SRC
-#   TELEPORT_SRC=/path/to/teleport ./regenerate.sh
-#
-# This script creates a temporary Go module that imports the vendored
-# Teleport packages via a `replace` directive, so the fixture generator
-# resolves `github.com/gravitational/teleport/lib/...` against the local
-# checkout.
+#   ./regenerate.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TELEPORT_SRC="${TELEPORT_SRC:-$HOME/open-source/github/cad0p/teleport}"
-
-if [[ ! -d "$TELEPORT_SRC" ]]; then
-    echo "ERROR: TELEPORT_SRC not found: $TELEPORT_SRC" >&2
-    echo "Clone teleport at v18.9.1 or set TELEPORT_SRC=/path/to/teleport" >&2
-    exit 1
-fi
 
 if ! command -v go >/dev/null 2>&1; then
     echo "ERROR: go not installed. Install from https://go.dev/dl/" >&2
@@ -37,19 +30,17 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 cd "$WORKDIR"
 
-# Minimal go.mod that imports fxamacker/cbor (the same lib Teleport uses) and
-# replaces the teleport module with the local checkout.
+# Minimal go.mod that imports only fxamacker/cbor + stdlib. The generator
+# inlines the one Teleport function it needed (ecdsaPublicKeyFromRaw, a 45-line
+# stdlib-only parser) to avoid pulling the entire teleport module into the dep
+# graph — teleport v18.9.1 requires Go >= 1.25.11 and its nested api module has
+# complex resolution. By inlining, the fixture generator is self-contained.
 cat > go.mod <<EOF
 module sep-webauthn-fixture-gen
 
 go 1.21
 
-require (
-    github.com/fxamacker/cbor/v2 v2.5.0
-    github.com/gravitational/teleport v0.0.0
-)
-
-replace github.com/gravitational/teleport => $TELEPORT_SRC
+require github.com/fxamacker/cbor/v2 v2.5.0
 EOF
 
 # Copy the fixture generator into the work module.
