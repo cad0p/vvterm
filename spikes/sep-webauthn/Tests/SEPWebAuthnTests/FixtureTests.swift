@@ -197,23 +197,25 @@ final class FixtureTests: XCTestCase {
         XCTAssertEqual(pubKeyRaw.count, 65)
         XCTAssertEqual(pubKeyRaw[0], 0x04)
 
-        // Build a create-ceremony attestation, sign the digest.
+        // Build a create-ceremony attestation, sign the message.
         let pubKeyCBOR = try coseEC2PublicKeyCBOR(publicKeyRaw: pubKeyRaw)
         let attData = try makeAttestationData(
             ceremony: .create, origin: Self.origin, rpID: Self.rpID,
             challenge: Self.challenge,
             cred: CredentialData(id: credID, pubKeyCBOR: pubKeyCBOR)
         )
-        let sig = try signer.sign(digest: attData.digest, credentialID: credID)
+        let sig = try signer.sign(message: attData.message, credentialID: credID)
         XCTAssertGreaterThanOrEqual(sig.count, 8, "DER ECDSA sig should be ≥8 bytes")
         XCTAssertLessThanOrEqual(sig.count, 72, "DER ECDSA sig should be ≤72 bytes")
 
-        // Verify with CryptoKit using the same public key.
+        // Verify with CryptoKit: the server computes sha256(message) and
+        // verifies. CryptoKit's isValidSignature(sig, for: SHA256.hash(data:))
+        // does the same single hash.
         let p256Key = try P256.Signing.PublicKey(x963Representation: pubKeyRaw)
         let derSig = try P256.Signing.ECDSASignature(derRepresentation: sig)
-        let digest = SHA256.hash(data: attData.digest)
+        let messageDigest = SHA256.hash(data: attData.message)
         XCTAssertTrue(
-            p256Key.isValidSignature(derSig, for: digest),
+            p256Key.isValidSignature(derSig, for: messageDigest),
             "SoftwareSigner signature failed to verify against its public key"
         )
     }

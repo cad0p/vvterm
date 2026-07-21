@@ -121,9 +121,17 @@ public struct AttestationData {
     /// for registration responses.
     public let rawAuthData: Data
 
-    /// SHA-256(rawAuthData || sha256(ccdJSON)). This is what gets signed by
-    /// the SEP/software key (after being hashed again by the SEP — see
-    /// SecureEnclaveSigner.sign for the double-hash note).
+    /// The concatenation rawAuthData || sha256(ccdJSON) — i.e.
+    /// `authData || clientDataHash` in WebAuthn terms. This is the message
+    /// the server hashes and verifies against. Signers that hash internally
+    /// (e.g. CryptoKit's `signature(for: Data)` or SEP's
+    /// `.ecdsaSignatureMessageX962SHA256`) sign this directly.
+    public let message: Data
+
+    /// SHA-256(message) = SHA-256(rawAuthData || sha256(ccdJSON)). This is
+    /// the PRE-HASHED digest that signers using a *Digest* variant sign
+    /// directly without re-hashing (e.g. SEP's
+    /// `.ecdsaSignatureDigestX962SHA256`, matching authenticate.m:58).
     public let digest: Data
 }
 
@@ -197,15 +205,21 @@ public func makeAttestationData(
         authData.append(cred.pubKeyCBOR)
     }
 
-    // digest = sha256(authData || sha256(ccdJSON))
-    var dataToSign = Data()
-    dataToSign.append(authData)
-    dataToSign.append(ccdHash)
-    let digest = Data(SHA256.hash(data: dataToSign))
+    // The WebAuthn message = authData || clientDataHash, where
+    // clientDataHash = sha256(ccdJSON). The server computes the same and
+    // verifies the signature over sha256(message). Signers that hash
+    // internally (CryptoKit signature(for: Data), SEP Message variant) sign
+    // `message` directly; signers that take a pre-hashed digest (SEP Digest
+    // variant) sign `digest = sha256(message)`.
+    var message = Data()
+    message.append(authData)
+    message.append(ccdHash)
+    let digest = Data(SHA256.hash(data: message))
 
     return AttestationData(
         ccdJSON: ccdJSON,
         rawAuthData: authData,
+        message: message,
         digest: digest
     )
 }
