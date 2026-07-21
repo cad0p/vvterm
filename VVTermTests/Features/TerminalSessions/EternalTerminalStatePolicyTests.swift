@@ -91,8 +91,10 @@ struct EternalTerminalStatePolicyTests {
             port: 2022
         )
 
-        #expect(message.contains("etterminal is installed"))
-        #expect(message.contains("Start or restart the et service"))
+        #expect(message.contains("server daemon is not running or uses a different socket"))
+        #expect(message.contains("sudo systemctl enable --now et"))
+        #expect(message.contains("brew services start et"))
+        #expect(message.contains("same server FIFO"))
         #expect(!message.contains("Stack Trace"))
     }
 }
