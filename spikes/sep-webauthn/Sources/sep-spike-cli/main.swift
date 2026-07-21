@@ -466,9 +466,13 @@ func runSpike(args: CLIArgs) throws {
         // JSON keys MUST match lib/client/weblogin.go AuthenticateSSHUserRequest.
         // `webauthn_challenge_response` is snake_case (not camelCase).
         // `ttl` is time.Duration → nanoseconds (Int64).
-        // `ssh_pub_key` is in UserPublicKeys (embedded).
+        // `ssh_pub_key` is UserPublicKeys.SSHPubKey which is `[]byte` in Go —
+        // Go's encoding/json base64-encodes []byte on marshal and base64-
+        // decodes on unmarshal. So the JSON wire value must be base64(
+        // authorized_keys_string). Swift's JSONEncoder encodes `Data` as
+        // base64, matching Go's []byte behavior.
         let webauthnChallengeResponse: CredentialAssertionResponse
-        let sshPubKey: String
+        let sshPubKey: Data  // base64-encoded by JSONEncoder, matching Go []byte
         let ttl: Int64  // nanoseconds — see AuthenticateSSHUserRequest.TTL
         enum CodingKeys: String, CodingKey {
             case webauthnChallengeResponse = "webauthn_challenge_response"
@@ -478,7 +482,7 @@ func runSpike(args: CLIArgs) throws {
     }
     let finishReq = LoginFinishReq(
         webauthnChallengeResponse: assertionResp,
-        sshPubKey: sshPubKey,
+        sshPubKey: Data(sshPubKey.utf8),  // authorized_keys string as bytes → base64-encoded by JSONEncoder
         ttl: Int64(args.ttl) * 1_000_000_000  // seconds → ns
     )
     let (rc7Status, rc7Body, rc7) = try client.postJSONEncodable(
