@@ -1,5 +1,6 @@
 import ETBootstrap
 import ETSession
+import Foundation
 import Testing
 @testable import VVTerm
 
@@ -96,5 +97,24 @@ struct EternalTerminalStatePolicyTests {
         #expect(message.contains("brew services start et"))
         #expect(message.contains("same server FIFO"))
         #expect(!message.contains("Stack Trace"))
+    }
+
+    @Test
+    func tmuxStartupUsesAShortSelfDeletingRemoteScript() throws {
+        let token = try #require(UUID(uuidString: "45B943D4-58C7-4BC9-B089-A9F0ED25C2D3"))
+        let command = String(repeating: "tmux set-option -g mouse on; ", count: 100)
+        let remotePath = EternalTerminalStartupCommand.remoteScriptPath(token: token)
+        let script = EternalTerminalStartupCommand.script(
+            command: command,
+            remotePath: remotePath
+        )
+        let invocation = EternalTerminalStartupCommand.invocation(remotePath: remotePath)
+
+        #expect(remotePath == "/tmp/vvterm-et-start-45b943d4-58c7-4bc9-b089-a9f0ed25c2d3.sh")
+        #expect(script.hasPrefix("rm -f -- '\(remotePath)'\n"))
+        #expect(script.hasSuffix(command))
+        #expect(invocation == "/bin/sh '\(remotePath)'")
+        #expect(!invocation.contains(command))
+        #expect(invocation.count < 100)
     }
 }

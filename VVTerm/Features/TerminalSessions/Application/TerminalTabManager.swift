@@ -1571,6 +1571,28 @@ final class TerminalTabManager: ObservableObject {
                 }
             }
         )
+        if let command = plan.command, plan.tmuxLifecycle != nil {
+            try Task.checkCancellation()
+            guard isCurrentEternalTerminalRuntime(token: runtimeToken, for: paneId) else {
+                throw CancellationError()
+            }
+
+            let remotePath = EternalTerminalStartupCommand.remoteScriptPath(token: runtimeToken)
+            let script = EternalTerminalStartupCommand.script(
+                command: command,
+                remotePath: remotePath
+            )
+            try await client.upload(
+                Data(script.utf8),
+                to: remotePath,
+                permissions: 0o700
+            )
+            return TerminalShellStartupPlan(
+                command: EternalTerminalStartupCommand.invocation(remotePath: remotePath),
+                tmuxLifecycle: plan.tmuxLifecycle
+            )
+        }
+
         guard plan.command == nil,
               let workingDirectory = paneWorkingDirectory(for: paneId),
               !workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

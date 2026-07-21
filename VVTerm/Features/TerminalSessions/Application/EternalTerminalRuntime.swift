@@ -104,6 +104,23 @@ nonisolated enum EternalTerminalErrorPresentation {
     }
 }
 
+nonisolated enum EternalTerminalStartupCommand {
+    static func remoteScriptPath(token: UUID) -> String {
+        "/tmp/vvterm-et-start-\(token.uuidString.lowercased()).sh"
+    }
+
+    static func script(command: String, remotePath: String) -> String {
+        """
+        rm -f -- \(RemoteTerminalBootstrap.shellQuoted(remotePath))
+        \(command)
+        """
+    }
+
+    static func invocation(remotePath: String) -> String {
+        "/bin/sh \(RemoteTerminalBootstrap.shellQuoted(remotePath))"
+    }
+}
+
 @MainActor
 final class EternalTerminalRuntime {
     let paneId: UUID
