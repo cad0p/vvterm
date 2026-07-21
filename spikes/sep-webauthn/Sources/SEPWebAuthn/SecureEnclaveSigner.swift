@@ -9,11 +9,15 @@
 //  will use in production; the attestation produced is byte-identical in
 //  shape to what `tsh mfa add --type TOUCHID` produces on Mac.
 //
-//  Access control uses `.privateKeyUsage` ONLY — no `.biometryAny`. The
-//  headless runner has no Touch ID sensor, so a biometry-gated key would
-//  block forever on `SecKeyCreateSignature`. Part C (production smoke test)
-//  adds `.biometryAny` on a real iPhone; that's out of scope for this spike
-//  and orthogonal to the wire-format question Part B answers.
+//  Access control flags are selected by the `biometry` initializer argument:
+//    - biometry=false (default): `.privateKeyUsage` only. Used by CI (Part B)
+//      — the headless runner has no Touch ID sensor, so a biometry-gated key
+//      would block forever on `SecKeyCreateSignature`.
+//    - biometry=true: `.privateKeyUsage` + `.biometryAny`. Used by session
+//      1.6b (Part C) — run on a real Mac with Touch ID or an iPhone with
+//      Face ID. `SecKeyCreateSignature` then blocks until the user presents
+//      biometry. The wire format is unchanged; only the access-control flags
+//      differ. This is the production gating mode (session 2.2 Phase 2/3).
 
 import Foundation
 import Security
@@ -28,18 +32,36 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
     private var keys: [Data: SecKey] = [:]
     private let queue = DispatchQueue(label: "sep-webauthn.sep-signer")
 
-    public init() {}
+    /// When true, keys are created with `.biometryAny` access control in
+    /// addition to `.privateKeyUsage`. `SecKeyCreateSignature` then blocks
+    /// until the user presents Touch ID / Face ID. Used by session 1.6b
+    /// (Part C) on a real device; NOT for the headless CI runner.
+    private let biometry: Bool
+
+    public init(biometry: Bool = false) {
+        self.biometry = biometry
+    }
 
     public func createKey() throws -> (credentialID: Data, publicKeyRaw: Data) {
         let credentialID = newCredentialID()
 
-        // Mirrors register.m:34-61.
-        // .privateKeyUsage only — see file header.
+        // Mirrors register.m:34-61. Access-control flags:
+        //   - default (CI):    .privateKeyUsage only
+        //   - biometry (1.6b): .privateKeyUsage | .biometryAny
+        // The wire format is identical in both cases; biometry only changes
+        // the key's usage policy (gating SecKeyCreateSignature on a biometric
+        // prompt). See session 1.6 prompt, test 1.6b.
+        let flags: SecAccessControlCreateFlags
+        if biometry {
+            flags = [.privateKeyUsage, .biometryAny]
+        } else {
+            flags = .privateKeyUsage
+        }
         var accessError: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
             kCFAllocatorDefault,
             kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            .privateKeyUsage,
+            flags,
             &accessError
         ) else {
             let msg = (accessError?.takeRetainedValue() as Error?)?.localizedDescription
@@ -55,12 +77,18 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
             kSecAttrKeySizeInBits as String:     256,
             kSecAttrTokenID as String:           kSecAttrTokenIDSecureEnclave,
             kSecPrivateKeyAttrs as String: [
-                kSecAttrIsPermanent as String:       true,
+                // kSecAttrIsPermanent:false — keep the key in-memory only,
+                // NOT persisted to the keychain. A persistent SEP key
+                // (kSecAttrIsPermanent:true, like Teleport's register.m uses)
+                // requires the binary to be signed with a keychain-access-groups
+                // entitlement; a `swift build` debug CLI is ad-hoc signed and
+                // gets errSecMissingEntitlement (-34018) on key creation.
+                // The spike is single-process and caches the SecKey in
+                // `self.keys[credentialID]`, so transient is sufficient.
+                // Production (session 2.2) will use kSecAttrIsPermanent:true
+                // with a proper app signature.
+                kSecAttrIsPermanent as String:       false,
                 kSecAttrAccessControl as String:     access,
-                // label/tag disambiguate keys in the keychain; not strictly
-                // needed for the spike (we hold the SecKey in-memory), but
-                // included for parity with register.m.
-                kSecAttrApplicationLabel as String:  credentialID,
             ] as [String: Any],
         ]
 
