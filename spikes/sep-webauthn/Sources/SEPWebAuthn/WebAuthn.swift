@@ -159,10 +159,10 @@ public enum WebAuthn {
             )
         )
 
-        // Sign the digest with the SAME credential ID bytes the signer used
-        // as its lookup key when createKey() stored the private key.
+        // Sign the message (authData || clientDataHash). Each signer hashes
+        // it exactly once before signing — see WebAuthnSigner.sign.
         let sig = try signer.sign(
-            digest: attData.digest,
+            message: attData.message,
             credentialID: credentialID
         )
 
@@ -260,7 +260,7 @@ public enum WebAuthn {
         )
 
         let sig = try signer.sign(
-            digest: attData.digest,
+            message: attData.message,
             credentialID: credentialID
         )
 

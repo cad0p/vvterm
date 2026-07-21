@@ -30,14 +30,18 @@ public final class SoftwareSigner: WebAuthnSigner {
         return (id, raw)
     }
 
-    public func sign(digest: Data, credentialID: Data) throws -> Data {
+    public func sign(message: Data, credentialID: Data) throws -> Data {
         let key: P256.Signing.PrivateKey? = queue.sync { keys[credentialID] }
         guard let key else { throw SignerError.keyNotFound }
-        // CryptoKit's ECDSA signing returns DER-encoded ASN.1
-        // SEQUENCE { r INTEGER, s INTEGER }. This matches what
-        // SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256, ...)
-        // returns on Apple platforms — see SecureEnclaveSigner.sign.
-        let signature = try key.signature(for: SHA256.hash(data: digest))
+        // CryptoKit's signature(for: Data) hashes the input with SHA-256
+        // internally, producing a signature over sha256(message). The
+        // server computes the same sha256(authData || clientDataHash) and
+        // verifies — single hash, no double-hashing.
+        //
+        // Returns DER-encoded ASN.1 SEQUENCE { r INTEGER, s INTEGER } —
+        // matching what SecKeyCreateSignature returns (see
+        // SecureEnclaveSigner.sign).
+        let signature = try key.signature(for: message)
         return signature.derRepresentation
     }
 }

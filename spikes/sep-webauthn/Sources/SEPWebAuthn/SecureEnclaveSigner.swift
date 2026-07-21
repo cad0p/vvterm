@@ -17,6 +17,7 @@
 
 import Foundation
 import Security
+import CryptoKit
 
 public final class SecureEnclaveSigner: WebAuthnSigner {
     public let label = "sep"
@@ -93,26 +94,28 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
         return (credentialID, publicKeyData as Data)
     }
 
-    public func sign(digest: Data, credentialID: Data) throws -> Data {
+    public func sign(message: Data, credentialID: Data) throws -> Data {
         let key: SecKey? = queue.sync { keys[credentialID] }
         guard let key else { throw SignerError.keyNotFound }
 
-        // .ecdsaSignatureMessageX962SHA256 takes the *message* (pre-hash) and
-        // internally hashes it with SHA-256. api.go pre-hashes
-        // (authData || clientDataHash) with SHA-256 and passes the *digest*
-        // to native.Authenticate, which calls SecKeyCreateSignature with
-        // .ecdsaSignatureMessageX962SHA256 — i.e. the digest gets hashed
-        // AGAIN by the SEP. **This double-hash is a load-bearing detail**
-        // and is reproduced exactly here to match the Go path byte-for-byte.
+        // Mirror authenticate.m:55-59 — pre-hash the message with SHA-256,
+        // then sign the DIGEST with kSecKeyAlgorithmECDSASignatureDigestX962SHA256
+        // (the *Digest* variant, NOT *Message*). The *Digest* variant signs
+        // the pre-computed hash directly without re-hashing.
         //
-        // (If the spike is later rewritten to pass the *message* instead of
-        // the digest, the Go path would also have to change — and vice versa.
-        // The fixture byte-comparison in FixtureTests.swift catches any
-        // divergence.)
+        // api.go:445 computes digest = sha256(authData || sha256(clientDataJSON))
+        // and passes it to native.Authenticate → authenticate.m which calls
+        // SecKeyCreateSignature with the Digest variant. The server
+        // (go-webauthn EC2PublicKeyData.Verify) computes the same single
+        // hash and verifies.
+        //
+        // Using the *Message* variant would double-hash and break verification
+        // (this was the run #29838845521 bug — 'Unable to verify signature').
+        let digest = Data(SHA256.hash(data: message))
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(
             key,
-            .ecdsaSignatureMessageX962SHA256,
+            .ecdsaSignatureDigestX962SHA256,
             digest as CFData,
             &error
         ) else {
