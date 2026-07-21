@@ -101,7 +101,7 @@ enum TerminalTeardownIntent: CaseIterable, Sendable {
         }
     }
 
-    var deletesEternalTerminalCredentials: Bool {
+    var deletesResumableSessionState: Bool {
         self != .applicationTermination
     }
 }

@@ -11,6 +11,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import MoshCore
 import os.log
 
 #if os(macOS)
@@ -84,6 +85,7 @@ final class TerminalTabManager: ObservableObject {
     private var shellRegistry = SSHShellRegistry(staleThreshold: 120)
     private var eternalTerminalRuntimes: [UUID: EternalTerminalRuntime] = [:]
     private var eternalTerminalResumeStore: any EternalTerminalResumeStoring = EternalTerminalResumeStore.shared
+    private var moshResumeStore: any MoshResumeStoring = MoshResumeStore.shared
     private var connectionCleanupsInFlight: [UUID: ConnectionCleanup] = [:]
     private var reconnectPreparationsInFlight: [UUID: ReconnectPreparationToken] = [:]
     /// Server IDs with an in-flight tab-open request to avoid queued duplicates.
@@ -394,7 +396,7 @@ final class TerminalTabManager: ObservableObject {
         logger.info("Preserved terminal tabs while releasing application runtime state")
         return Task { [weak self] in
             guard let self else { return }
-            await self.prepareEternalTerminalSessionsForApplicationBackground()
+            await self.prepareResumableSessionsForApplicationBackground()
             for paneId in paneIds {
                 await self.unregisterSSHClient(for: paneId)
                 await self.unregisterEternalTerminalRuntime(for: paneId)
@@ -981,6 +983,134 @@ final class TerminalTabManager: ObservableObject {
         eternalTerminalResumeStore.hasCheckpoint(for: paneId)
     }
 
+    func hasMoshCheckpoint(for paneId: UUID) -> Bool {
+        moshResumeStore.hasSnapshot(for: paneId)
+    }
+
+    func restoreMoshShell(
+        for paneId: UUID,
+        using client: SSHClient,
+        cols: Int,
+        rows: Int
+    ) async -> ShellHandle? {
+        let snapshot: MoshSnapshot
+        do {
+            guard let stored = try moshResumeStore.snapshot(for: paneId) else {
+                return nil
+            }
+            snapshot = stored
+        } catch {
+            discardMoshSnapshotIfNeeded(after: error, paneId: paneId)
+            logger.warning(
+                "Unable to load Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+
+        do {
+            return try await client.restoreMoshShell(
+                from: snapshot,
+                cols: cols,
+                rows: rows
+            )
+        } catch {
+            discardMoshSnapshotIfNeeded(after: error, paneId: paneId)
+            logger.warning(
+                "Unable to restore Mosh session; falling back to bootstrap: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func persistMoshSnapshot(
+        for paneId: UUID,
+        client: SSHClient,
+        shellId: UUID
+    ) async {
+        do {
+            guard let snapshot = try await client.moshSnapshot(for: shellId) else {
+                return
+            }
+            try moshResumeStore.save(snapshot, for: paneId)
+        } catch {
+            logger.warning(
+                "Unable to save Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func prepareResumableSessionsForApplicationBackground() async {
+        await prepareEternalTerminalSessionsForApplicationBackground()
+
+        let moshRoutes: [(paneId: UUID, client: SSHClient, shellId: UUID)] = paneStates.compactMap { paneId, state in
+            guard state.activeTransport == .mosh,
+                  let client = shellRegistry.client(for: paneId),
+                  let shellId = shellRegistry.shellId(for: paneId) else {
+                return nil
+            }
+            return (paneId: paneId, client: client, shellId: shellId)
+        }
+        for (paneId, client, shellId) in moshRoutes {
+            do {
+                guard let snapshot = try await client
+                    .prepareMoshShellForApplicationBackground(shellId) else {
+                    continue
+                }
+                try moshResumeStore.save(snapshot, for: paneId)
+            } catch {
+                logger.warning(
+                    "Unable to prepare Mosh session for background: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    func resumeResumableSessionsFromApplicationBackground() async {
+        await resumeEternalTerminalSessionsFromApplicationBackground()
+
+        let moshRoutes: [(paneId: UUID, client: SSHClient, shellId: UUID)] = paneStates.compactMap { paneId, state in
+            guard state.activeTransport == .mosh,
+                  let client = shellRegistry.client(for: paneId),
+                  let shellId = shellRegistry.shellId(for: paneId) else {
+                return nil
+            }
+            return (paneId: paneId, client: client, shellId: shellId)
+        }
+        for (paneId, client, shellId) in moshRoutes {
+            do {
+                try await client.resumeMoshShellFromApplicationBackground(shellId)
+                await persistMoshSnapshot(
+                    for: paneId,
+                    client: client,
+                    shellId: shellId
+                )
+            } catch {
+                logger.warning(
+                    "Unable to resume Mosh session from background: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private func discardMoshSnapshotIfNeeded(after error: Error, paneId: UUID) {
+        let shouldDiscard: Bool
+        if let storeError = error as? MoshResumeStoreError {
+            shouldDiscard = storeError.shouldDeleteStoredState
+        } else if let sessionError = error as? MoshSessionError {
+            shouldDiscard = MoshResumePolicy.shouldDiscardSnapshot(after: sessionError)
+        } else {
+            shouldDiscard = false
+        }
+        guard shouldDiscard else { return }
+        do {
+            try moshResumeStore.deleteSnapshot(for: paneId)
+        } catch {
+            logger.error(
+                "Unable to delete invalid Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
     /// Returns a unique ownership token only for the first caller while no live shell exists.
     func beginShellStart(
         for paneId: UUID,
@@ -1135,11 +1265,16 @@ final class TerminalTabManager: ObservableObject {
         runtimeTitleByPane.removeValue(forKey: paneId)
         titleOverrideByPane.removeValue(forKey: paneId)
 
-        if intent.deletesEternalTerminalCredentials {
+        if intent.deletesResumableSessionState {
             do {
                 try eternalTerminalResumeStore.deleteResumeState(for: paneId)
             } catch {
                 logger.error("Failed to delete ET resume credentials: \(error.localizedDescription, privacy: .public)")
+            }
+            do {
+                try moshResumeStore.deleteSnapshot(for: paneId)
+            } catch {
+                logger.error("Failed to delete Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -2292,6 +2427,10 @@ extension TerminalTabManager {
         eternalTerminalResumeStore = store
     }
 
+    func setMoshResumeStoreForTesting(_ store: any MoshResumeStoring) {
+        moshResumeStore = store
+    }
+
     func persistAndRestoreSnapshotForTesting() {
         persistTask?.cancel()
         persistTask = nil
@@ -2354,6 +2493,7 @@ extension TerminalTabManager {
         tabOpensInFlight.removeAll()
         tmuxCleanupServers.removeAll()
         eternalTerminalResumeStore = EternalTerminalResumeStore.shared
+        moshResumeStore = MoshResumeStore.shared
         isRestoring = false
 
         UserDefaults.standard.removeObject(forKey: persistenceKey)

@@ -1215,7 +1215,7 @@ struct TerminalTeardownIntentTests {
         for intent in TerminalTeardownIntent.allCases {
             let preservesReconnectableState = intent == .applicationTermination
             #expect(intent.removesPersistedDescriptor != preservesReconnectableState)
-            #expect(intent.deletesEternalTerminalCredentials != preservesReconnectableState)
+            #expect(intent.deletesResumableSessionState != preservesReconnectableState)
         }
     }
 

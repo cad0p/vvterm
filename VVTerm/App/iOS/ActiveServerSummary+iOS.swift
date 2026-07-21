@@ -19,7 +19,8 @@ enum ActiveConnectionPresentationStatus: Equatable {
         connectionMode: SSHConnectionMode?,
         hasResumeCheckpoint: Bool
     ) {
-        if connectionMode == .eternalTerminal, hasResumeCheckpoint {
+        if (connectionMode == .eternalTerminal || connectionMode == .mosh),
+           hasResumeCheckpoint {
             switch connectionState {
             case .disconnected, .idle:
                 self = .resumable
@@ -95,10 +96,18 @@ struct ActiveServerSummary: Identifiable {
                     ?? tab.map { tabManager.displayTitle(for: $0) }
                     ?? String(localized: "Server"),
                 status: state.map {
+                    let hasResumeCheckpoint = switch configuredServer?.connectionMode {
+                    case .eternalTerminal:
+                        tabManager.hasEternalTerminalCheckpoint(for: $0.paneId)
+                    case .mosh:
+                        tabManager.hasMoshCheckpoint(for: $0.paneId)
+                    case .standard, .tailscale, .cloudflare, .none:
+                        false
+                    }
                     return ActiveConnectionPresentationStatus(
                         connectionState: $0.connectionState,
                         connectionMode: configuredServer?.connectionMode,
-                        hasResumeCheckpoint: tabManager.hasEternalTerminalCheckpoint(for: $0.paneId)
+                        hasResumeCheckpoint: hasResumeCheckpoint
                     )
                 } ?? .disconnected,
                 tmuxStatus: state?.tmuxStatus ?? .off,

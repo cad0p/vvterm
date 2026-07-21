@@ -55,7 +55,7 @@ struct AppSceneLifecyclePolicyTests {
 
     @Test
     @MainActor
-    func lastDeactivatingScenePreparesETRecoveryBeforeBackground() {
+    func lastDeactivatingScenePreparesResumableTransportsBeforeBackground() {
         let delegate = AppDelegate()
         var actions: [String] = []
 
@@ -69,7 +69,7 @@ struct AppSceneLifecyclePolicyTests {
 
     @Test
     @MainActor
-    func anotherForegroundScenePreventsGlobalETPreparation() {
+    func anotherForegroundScenePreventsGlobalResumableTransportPreparation() {
         let delegate = AppDelegate()
         var actions: [String] = []
 

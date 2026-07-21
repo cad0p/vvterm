@@ -36,6 +36,13 @@ struct EternalTerminalStatePolicyTests {
                 hasResumeCheckpoint: true
             ) == .disconnected
         )
+        #expect(
+            ActiveConnectionPresentationStatus(
+                connectionState: .disconnected,
+                connectionMode: .mosh,
+                hasResumeCheckpoint: true
+            ) == .resumable
+        )
     }
 
     #endif

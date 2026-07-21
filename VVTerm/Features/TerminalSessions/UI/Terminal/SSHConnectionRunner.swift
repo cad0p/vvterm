@@ -11,6 +11,7 @@ enum SSHConnectionRunner {
         shouldContinueConnection: @MainActor @escaping () -> Bool,
         onAttempt: @MainActor @escaping (_ attempt: Int) -> Void,
         startupPlan: @MainActor @escaping () async throws -> TerminalShellStartupPlan,
+        restoreMoshShell: @MainActor @escaping (_ cols: Int, _ rows: Int) async -> ShellHandle?,
         registerShell: @MainActor @escaping (_ shell: ShellHandle) async -> Bool,
         onBeforeShellStart: @MainActor @escaping (_ cols: Int, _ rows: Int) async -> Void,
         onTitleChange: @MainActor @escaping (_ title: String) -> Void,
@@ -32,25 +33,34 @@ enum SSHConnectionRunner {
                 logger.info(
                     "Connecting to \(server.host, privacy: .private(mask: .hash))... (attempt \(attempt))"
                 )
-                _ = try await sshClient.connect(to: server, credentials: credentials)
-                guard !Task.isCancelled else { return }
-                guard shouldContinueConnection() else { return }
-
                 let size = terminal.terminalSize()
                 let cols = Int(size?.columns ?? 80)
                 let rows = Int(size?.rows ?? 24)
 
                 await onBeforeShellStart(cols, rows)
-                let startup = try await startupPlan()
-                guard !Task.isCancelled else { return }
-                guard shouldContinueConnection() else { return }
-                let shell = try await sshClient.startShell(
-                    cols: cols,
-                    rows: rows,
-                    startupCommand: startup.command
-                )
+                let shell: ShellHandle
+                let startup: TerminalShellStartupPlan?
+                if let restored = await restoreMoshShell(cols, rows) {
+                    shell = restored
+                    startup = nil
+                    logger.info("Restored existing Mosh protocol session")
+                } else {
+                    _ = try await sshClient.connect(to: server, credentials: credentials)
+                    guard !Task.isCancelled else { return }
+                    guard shouldContinueConnection() else { return }
 
-                guard !Task.isCancelled else {
+                    let freshStartup = try await startupPlan()
+                    guard !Task.isCancelled else { return }
+                    guard shouldContinueConnection() else { return }
+                    shell = try await sshClient.startShell(
+                        cols: cols,
+                        rows: rows,
+                        startupCommand: freshStartup.command
+                    )
+                    startup = freshStartup
+                }
+
+                guard !Task.isCancelled, shouldContinueConnection() else {
                     await sshClient.closeShell(shell.id)
                     return
                 }
@@ -59,7 +69,7 @@ enum SSHConnectionRunner {
                 }
 
                 guard !Task.isCancelled else { return }
-                var lifecycleParser = startup.tmuxLifecycle.map {
+                var lifecycleParser = startup?.tmuxLifecycle.map {
                     TmuxLifecycleStreamParser(markerToken: $0.markerToken)
                 }
                 var lastLifecycleEvent: TmuxLifecycleEvent?
@@ -95,7 +105,7 @@ enum SSHConnectionRunner {
                 }
 
                 var sessionExists: Bool?
-                if lastLifecycleEvent == nil, let lifecycle = startup.tmuxLifecycle {
+                if lastLifecycleEvent == nil, let lifecycle = startup?.tmuxLifecycle {
                     do {
                         let output = try await sshClient.execute(
                             lifecycle.presenceProbe.command,
@@ -109,7 +119,7 @@ enum SSHConnectionRunner {
                     }
                 }
                 let endReason = TerminalShellEndReason.resolve(
-                    tmuxLifecycle: startup.tmuxLifecycle,
+                    tmuxLifecycle: startup?.tmuxLifecycle,
                     markerEvent: lastLifecycleEvent,
                     sessionExists: sessionExists
                 )

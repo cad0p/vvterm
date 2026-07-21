@@ -36,20 +36,28 @@ nonisolated struct ShellHandle: Sendable {
     let transport: ShellTransport
     let fallbackReason: MoshFallbackReason?
     let fallbackDiagnostics: MoshFallbackDiagnostics?
+    let origin: ShellStartOrigin
 
     init(
         id: UUID,
         stream: AsyncStream<Data>,
         transport: ShellTransport = .ssh,
         fallbackReason: MoshFallbackReason? = nil,
-        fallbackDiagnostics: MoshFallbackDiagnostics? = nil
+        fallbackDiagnostics: MoshFallbackDiagnostics? = nil,
+        origin: ShellStartOrigin = .fresh
     ) {
         self.id = id
         self.stream = stream
         self.transport = transport
         self.fallbackReason = fallbackReason
         self.fallbackDiagnostics = fallbackDiagnostics
+        self.origin = origin
     }
+}
+
+nonisolated enum ShellStartOrigin: Equatable, Sendable {
+    case fresh
+    case restored
 }
 
 enum SSHUploadStrategy: Sendable {
@@ -690,6 +698,23 @@ actor SSHClient {
         await session.closeShell(shellId)
     }
 
+    func prepareMoshShellForApplicationBackground(
+        _ shellId: UUID
+    ) async throws -> MoshSnapshot? {
+        guard let runtime = moshShells[shellId] else { return nil }
+        return try await runtime.session.prepareForApplicationBackground()
+    }
+
+    func resumeMoshShellFromApplicationBackground(_ shellId: UUID) async throws {
+        guard let runtime = moshShells[shellId] else { return }
+        try await runtime.session.resumeFromApplicationBackground()
+    }
+
+    func moshSnapshot(for shellId: UUID) async throws -> MoshSnapshot? {
+        guard let runtime = moshShells[shellId] else { return nil }
+        return try await runtime.session.makeSnapshot()
+    }
+
     // MARK: - Keep Alive
 
     private func startKeepAlive(interval: TimeInterval = 30) {
@@ -788,6 +813,34 @@ actor SSHClient {
     }
 
     // MARK: - Mosh
+
+    func restoreMoshShell(
+        from snapshot: MoshSnapshot,
+        cols: Int,
+        rows: Int
+    ) async throws -> ShellHandle {
+        guard !_isAborted else { throw SSHError.notConnected }
+
+        let restoredSession = try await MoshClientSession.restore(from: snapshot)
+        do {
+            try await restoredSession.start()
+            try await restoredSession.enqueue(
+                .resize(cols: Int32(cols), rows: Int32(rows))
+            )
+            let hostOpStream = await restoredSession.hostOpStream()
+            return registerMoshShell(
+                PreparedMoshShell(
+                    session: restoredSession,
+                    pendingOps: [],
+                    hostOpStream: hostOpStream
+                ),
+                origin: .restored
+            )
+        } catch {
+            await restoredSession.stop()
+            throw error
+        }
+    }
 
     private func prepareMoshShell(
         using expectedSession: SSHSession,
@@ -965,7 +1018,10 @@ actor SSHClient {
         }
     }
 
-    private func registerMoshShell(_ prepared: PreparedMoshShell) -> ShellHandle {
+    private func registerMoshShell(
+        _ prepared: PreparedMoshShell,
+        origin: ShellStartOrigin = .fresh
+    ) -> ShellHandle {
         let shellId = UUID()
         if !prepared.pendingOps.isEmpty {
             logger.info("Mosh: \(prepared.pendingOps.count) pending host ops before stream creation")
@@ -1010,7 +1066,8 @@ actor SSHClient {
         return ShellHandle(
             id: shellId,
             stream: streamPair.stream,
-            transport: .mosh
+            transport: .mosh,
+            origin: origin
         )
     }
 

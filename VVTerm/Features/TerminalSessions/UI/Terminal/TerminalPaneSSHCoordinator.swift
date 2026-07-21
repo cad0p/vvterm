@@ -166,6 +166,15 @@ final class TerminalPaneSSHCoordinator {
                         startToken: startToken
                     )
                 },
+                restoreMoshShell: { cols, rows in
+                    guard server.connectionMode == .mosh else { return nil }
+                    return await TerminalTabManager.shared.restoreMoshShell(
+                        for: paneId,
+                        using: sshClient,
+                        cols: cols,
+                        rows: rows
+                    )
+                },
                 registerShell: { shell in
                     guard await TerminalTabManager.shared.registerSSHClient(
                         sshClient,
@@ -181,7 +190,20 @@ final class TerminalPaneSSHCoordinator {
                     }
                     TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
                     self.shellId = shell.id
-                    await self.applyWorkingDirectoryIfNeeded(paneId: paneId, shellId: shell.id, sshClient: sshClient)
+                    if shell.origin == .fresh {
+                        await self.applyWorkingDirectoryIfNeeded(
+                            paneId: paneId,
+                            shellId: shell.id,
+                            sshClient: sshClient
+                        )
+                    }
+                    if shell.transport == .mosh {
+                        await TerminalTabManager.shared.persistMoshSnapshot(
+                            for: paneId,
+                            client: sshClient,
+                            shellId: shell.id
+                        )
+                    }
                     return true
                 },
                 onBeforeShellStart: { cols, rows in

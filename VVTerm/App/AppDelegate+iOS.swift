@@ -21,7 +21,7 @@ enum AppSceneLifecyclePolicy {
 class AppDelegate: NSObject, UIApplicationDelegate {
     private var lastForegroundSyncAt: Date = .distantPast
     private let foregroundSyncMinimumInterval: TimeInterval = 20
-    private var eternalTerminalLifecycleTask: Task<Void, Never>?
+    private var resumableTerminalLifecycleTask: Task<Void, Never>?
 
     func application(
         _ application: UIApplication,
@@ -57,7 +57,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func sceneDidBecomeActive(_ notification: Notification) {
         guard notificationBelongsToConnectedApplicationScene(notification) else { return }
 
-        queueEternalTerminalResume()
+        queueResumableTerminalResume()
 
         guard SyncSettings.isEnabled else { return }
 
@@ -104,7 +104,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             scene === notifyingScene ? nil : scene.activationState
         }
         handleSceneWillDeactivate(connectedOtherSceneStates: otherSceneStates) {
-            queueEternalTerminalBackgroundPreparation()
+            queueResumableTerminalBackgroundPreparation()
         }
     }
 
@@ -130,8 +130,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             connectedSceneStates: sceneStates
         ) else { return }
 
-        let taskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "Save ET Session")
-        queueEternalTerminalBackgroundPreparation {
+        let taskIdentifier = UIApplication.shared.beginBackgroundTask(
+            withName: "Save Resumable Terminal Sessions"
+        )
+        queueResumableTerminalBackgroundPreparation {
             if taskIdentifier != .invalid {
                 UIApplication.shared.endBackgroundTask(taskIdentifier)
             }
@@ -156,22 +158,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return UIApplication.shared.connectedScenes.contains { $0 === notifyingScene }
     }
 
-    private func queueEternalTerminalBackgroundPreparation(
+    private func queueResumableTerminalBackgroundPreparation(
         completion: @escaping @MainActor () -> Void = {}
     ) {
-        let previousTask = eternalTerminalLifecycleTask
-        eternalTerminalLifecycleTask = Task { @MainActor in
+        let previousTask = resumableTerminalLifecycleTask
+        resumableTerminalLifecycleTask = Task { @MainActor in
             await previousTask?.value
-            await TerminalTabManager.shared.prepareEternalTerminalSessionsForApplicationBackground()
+            await TerminalTabManager.shared.prepareResumableSessionsForApplicationBackground()
             completion()
         }
     }
 
-    private func queueEternalTerminalResume() {
-        let previousTask = eternalTerminalLifecycleTask
-        eternalTerminalLifecycleTask = Task { @MainActor in
+    private func queueResumableTerminalResume() {
+        let previousTask = resumableTerminalLifecycleTask
+        resumableTerminalLifecycleTask = Task { @MainActor in
             await previousTask?.value
-            await TerminalTabManager.shared.resumeEternalTerminalSessionsFromApplicationBackground()
+            await TerminalTabManager.shared.resumeResumableSessionsFromApplicationBackground()
         }
     }
 }
