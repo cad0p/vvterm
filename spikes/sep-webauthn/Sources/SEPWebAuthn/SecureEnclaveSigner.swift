@@ -46,7 +46,8 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
             throw SignerError.keyCreationFailed(
                 "SecAccessControlCreateWithFlags failed: \(msg)")
         }
-        defer { CFRelease(access) }
+        // access is a CFTypeRef that's ARC-managed in Swift — no CFRelease
+        // needed (and CFRelease is explicitly unavailable from Swift).
 
         let attributes: [String: Any] = [
             kSecAttrKeyType as String:           kSecAttrKeyTypeECSECPrimeRandom,
