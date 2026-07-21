@@ -378,7 +378,7 @@ struct ServerListScreen: View {
         ActiveServerSummary.makeAll(
             tabManager: tabManager,
             fileTabs: fileTabs,
-            serverName: { server(for: $0)?.name },
+            server: { server(for: $0) },
             viewTabConfig: viewTabConfig
         )
     }

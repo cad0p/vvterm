@@ -95,6 +95,14 @@ struct TerminalReconnectUITestHarness: View {
                     .padding(.trailing, 8)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if usesColdRelaunchHarness {
+                    Text(coldRelaunchDiagnostics)
+                        .font(.caption2.monospaced())
+                        .accessibilityIdentifier("vvterm.coldRelaunchTest.diagnostics")
+                        .padding(6)
+                }
+            }
             .task {
                 await prepareFixture()
             }
@@ -149,6 +157,30 @@ struct TerminalReconnectUITestHarness: View {
         Foundation.ProcessInfo.processInfo.arguments.contains(
             "--vvterm-ui-test-server-navigation"
         )
+    }
+
+    private var usesColdRelaunchHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-cold-relaunch"
+        )
+    }
+
+    private var seedsColdRelaunchHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-seed-cold-relaunch"
+        )
+    }
+
+    private var coldRelaunchDiagnostics: String {
+        guard let serverId = activeServer?.id else { return "setup=preparing" }
+        let tabs = tabManager.tabs(for: serverId)
+        let paneCount = tabs.reduce(0) { $0 + $1.paneCount }
+        let selected = tabManager.selectedTabByServer[serverId]?.uuidString ?? "none"
+        let focused = tabManager.selectedTab(for: serverId)?.focusedPaneId.uuidString ?? "none"
+        let disconnected = tabs.flatMap(\.allPaneIds).filter {
+            tabManager.paneStates[$0]?.connectionState == .disconnected
+        }.count
+        return "setup=ready tabs=\(tabs.count) panes=\(paneCount) selected=\(selected) focused=\(focused) disconnected=\(disconnected)"
     }
 
     private var focusedTerminal: GhosttyTerminalView? {
@@ -216,9 +248,13 @@ struct TerminalReconnectUITestHarness: View {
                 tmuxEnabledOverride: false
             )
 
-            await tabManager.resetForTesting()
+            if !usesColdRelaunchHarness || seedsColdRelaunchHarness {
+                await tabManager.resetForTesting()
+            }
             KnownHostsManager.shared.remove(host: Self.sshHost, port: Self.sshPort)
-            try KeychainManager.shared.deleteCredentials(for: server.id)
+            if !usesColdRelaunchHarness || seedsColdRelaunchHarness {
+                try KeychainManager.shared.deleteCredentials(for: server.id)
+            }
             try KeychainManager.shared.storeSSHKey(
                 for: server.id,
                 privateKey: privateKey,
@@ -236,8 +272,26 @@ struct TerminalReconnectUITestHarness: View {
                 serverManager.servers = [server]
             }
 
-            let tab = try await tabManager.openTab(for: server)
-            tabManager.selectedTabByServer[server.id] = tab.id
+            if usesColdRelaunchHarness {
+                StoreManager.shared.isPro = true
+            }
+            if !usesColdRelaunchHarness || seedsColdRelaunchHarness {
+                let firstTab = try await tabManager.openTab(for: server)
+                if usesColdRelaunchHarness {
+                    guard tabManager.splitHorizontal(
+                        tab: firstTab,
+                        paneId: firstTab.rootPaneId
+                    ) != nil else {
+                        throw VVTermError.connectionFailed("Unable to seed split layout")
+                    }
+                    let secondTab = try await tabManager.openTab(for: server)
+                    tabManager.selectedTabByServer[server.id] = secondTab.id
+                } else {
+                    tabManager.selectedTabByServer[server.id] = firstTab.id
+                }
+            } else if tabManager.tabs(for: server.id).isEmpty {
+                throw VVTermError.connectionFailed("Cold relaunch snapshot was not restored")
+            }
             tabManager.selectedViewByServer[server.id] = ConnectionViewTab.terminal.id
             fixtureState = .ready(server)
         } catch {

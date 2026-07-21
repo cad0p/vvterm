@@ -82,6 +82,9 @@ struct TerminalPaneState {
     var moshFallbackReason: MoshFallbackReason?
     /// Privacy-safe, non-persisted detail for the active Mosh fallback.
     var moshFallbackDiagnostics: MoshFallbackDiagnostics?
+    /// Minimal non-secret context needed to recognize tmux lifecycle markers
+    /// when an existing ET session is resumed after process relaunch.
+    var eternalTerminalTmuxResumeContext: EternalTerminalTmuxResumeContext?
 
     init(paneId: UUID, tabId: UUID, serverId: UUID) {
         self.paneId = paneId
@@ -98,6 +101,7 @@ struct TerminalPaneState {
         self.activeTransport = .ssh
         self.moshFallbackReason = nil
         self.moshFallbackDiagnostics = nil
+        self.eternalTerminalTmuxResumeContext = nil
     }
 
     mutating func markConnectionEstablished() {

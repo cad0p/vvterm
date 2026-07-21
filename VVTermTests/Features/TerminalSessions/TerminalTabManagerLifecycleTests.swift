@@ -1193,16 +1193,37 @@ struct TerminalTabManagerLifecycleTests {
 
     #if os(iOS)
     @Test
-    func applicationTerminationDisconnectsTabsAndCompletesActivityCleanup() async {
+    func applicationTerminationPreservesTabsAndCompletesActivityCleanup() async {
         await withCleanManager { manager in
             let tab = TerminalTab(serverId: UUID(), title: "Termination")
             installTab(tab, in: manager, connectionState: .connected)
 
             #expect(AppDelegate().handleApplicationWillTerminate())
 
-            #expect(manager.tabs(for: tab.serverId).isEmpty)
-            #expect(manager.paneStates.isEmpty)
+            #expect(manager.tabs(for: tab.serverId).map(\.id) == [tab.id])
+            #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .disconnected)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason == .transportEnded)
+            #expect(manager.connectedServerIds.isEmpty)
         }
     }
     #endif
+}
+
+struct TerminalTeardownIntentTests {
+    @Test
+    func onlyApplicationTerminationPreservesReconnectableDescriptorsAndETCredentials() {
+        for intent in TerminalTeardownIntent.allCases {
+            let preservesReconnectableState = intent == .applicationTermination
+            #expect(intent.removesPersistedDescriptor != preservesReconnectableState)
+            #expect(intent.deletesEternalTerminalCredentials != preservesReconnectableState)
+        }
+    }
+
+    @Test
+    func onlyExplicitUserActionsTerminateManagedTmux() {
+        #expect(TerminalTeardownIntent.explicitClose.terminatesManagedTmux)
+        #expect(TerminalTeardownIntent.explicitServerDisconnect.terminatesManagedTmux)
+        #expect(!TerminalTeardownIntent.remoteSessionEnded.terminatesManagedTmux)
+        #expect(!TerminalTeardownIntent.applicationTermination.terminatesManagedTmux)
+    }
 }

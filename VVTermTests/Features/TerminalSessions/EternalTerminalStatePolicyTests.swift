@@ -5,6 +5,41 @@ import Testing
 @testable import VVTerm
 
 struct EternalTerminalStatePolicyTests {
+    #if os(iOS)
+    @Test
+    func restoredETCheckpointIsPresentedAsReadyToResumeNotDisconnected() {
+        #expect(
+            ActiveConnectionPresentationStatus(
+                connectionState: .disconnected,
+                connectionMode: .eternalTerminal,
+                hasResumeCheckpoint: true
+            ) == .resumable
+        )
+        #expect(
+            ActiveConnectionPresentationStatus(
+                connectionState: .disconnected,
+                connectionMode: .eternalTerminal,
+                hasResumeCheckpoint: false
+            ) == .disconnected
+        )
+        #expect(
+            ActiveConnectionPresentationStatus(
+                connectionState: .connected,
+                connectionMode: .eternalTerminal,
+                hasResumeCheckpoint: true
+            ) == .connected
+        )
+        #expect(
+            ActiveConnectionPresentationStatus(
+                connectionState: .disconnected,
+                connectionMode: .standard,
+                hasResumeCheckpoint: true
+            ) == .disconnected
+        )
+    }
+
+    #endif
+
     @Test
     func recoverableTransportStatesRemainInReconnectPresentation() {
         #expect(

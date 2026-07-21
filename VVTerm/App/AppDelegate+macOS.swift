@@ -65,9 +65,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        let cleanupTask = TerminalTabManager.shared.beginApplicationTermination()
         let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            TerminalTabManager.shared.disconnectAll()
+        Task.detached {
+            await cleanupTask.value
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 2)

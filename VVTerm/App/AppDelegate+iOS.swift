@@ -21,6 +21,7 @@ enum AppSceneLifecyclePolicy {
 class AppDelegate: NSObject, UIApplicationDelegate {
     private var lastForegroundSyncAt: Date = .distantPast
     private let foregroundSyncMinimumInterval: TimeInterval = 20
+    private var eternalTerminalLifecycleTask: Task<Void, Never>?
 
     func application(
         _ application: UIApplication,
@@ -38,6 +39,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(sceneWillDeactivate(_:)),
+            name: UIScene.willDeactivateNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(sceneDidEnterBackground(_:)),
             name: UIScene.didEnterBackgroundNotification,
             object: nil
@@ -49,6 +56,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc
     private func sceneDidBecomeActive(_ notification: Notification) {
         guard notificationBelongsToConnectedApplicationScene(notification) else { return }
+
+        queueEternalTerminalResume()
 
         guard SyncSettings.isEnabled else { return }
 
@@ -83,8 +92,30 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
     @discardableResult
     func handleApplicationWillTerminate() -> Bool {
-        TerminalTabManager.shared.disconnectAll()
+        TerminalTabManager.shared.beginApplicationTermination()
         return LiveActivityManager.shared.endForApplicationTermination()
+    }
+
+    @objc
+    private func sceneWillDeactivate(_ notification: Notification) {
+        guard let notifyingScene = notification.object as? UIScene,
+              notificationBelongsToConnectedApplicationScene(notification) else { return }
+        let otherSceneStates = UIApplication.shared.connectedScenes.compactMap { scene in
+            scene === notifyingScene ? nil : scene.activationState
+        }
+        handleSceneWillDeactivate(connectedOtherSceneStates: otherSceneStates) {
+            queueEternalTerminalBackgroundPreparation()
+        }
+    }
+
+    func handleSceneWillDeactivate(
+        connectedOtherSceneStates: [UIScene.ActivationState],
+        prepare: () -> Void
+    ) {
+        guard AppSceneLifecyclePolicy.shouldHandleBackgroundTransition(
+            connectedSceneStates: connectedOtherSceneStates
+        ) else { return }
+        prepare()
     }
 
     @objc
@@ -95,6 +126,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             connectedSceneStates: sceneStates,
             lock: { AppLockManager.shared.lockIfNeededForBackground() }
         )
+        guard AppSceneLifecyclePolicy.shouldHandleBackgroundTransition(
+            connectedSceneStates: sceneStates
+        ) else { return }
+
+        let taskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "Save ET Session")
+        queueEternalTerminalBackgroundPreparation {
+            if taskIdentifier != .invalid {
+                UIApplication.shared.endBackgroundTask(taskIdentifier)
+            }
+        }
     }
 
     func handleSceneDidEnterBackground(
@@ -113,6 +154,25 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         guard let notifyingScene = notification.object as? UIScene else { return false }
         return UIApplication.shared.connectedScenes.contains { $0 === notifyingScene }
+    }
+
+    private func queueEternalTerminalBackgroundPreparation(
+        completion: @escaping @MainActor () -> Void = {}
+    ) {
+        let previousTask = eternalTerminalLifecycleTask
+        eternalTerminalLifecycleTask = Task { @MainActor in
+            await previousTask?.value
+            await TerminalTabManager.shared.prepareEternalTerminalSessionsForApplicationBackground()
+            completion()
+        }
+    }
+
+    private func queueEternalTerminalResume() {
+        let previousTask = eternalTerminalLifecycleTask
+        eternalTerminalLifecycleTask = Task { @MainActor in
+            await previousTask?.value
+            await TerminalTabManager.shared.resumeEternalTerminalSessionsFromApplicationBackground()
+        }
     }
 }
 #endif

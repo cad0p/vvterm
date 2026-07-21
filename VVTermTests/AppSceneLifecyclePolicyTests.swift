@@ -54,6 +54,34 @@ struct AppSceneLifecyclePolicyTests {
     }
 
     @Test
+    @MainActor
+    func lastDeactivatingScenePreparesETRecoveryBeforeBackground() {
+        let delegate = AppDelegate()
+        var actions: [String] = []
+
+        delegate.handleSceneWillDeactivate(
+            connectedOtherSceneStates: [],
+            prepare: { actions.append("prepare") }
+        )
+
+        #expect(actions == ["prepare"])
+    }
+
+    @Test
+    @MainActor
+    func anotherForegroundScenePreventsGlobalETPreparation() {
+        let delegate = AppDelegate()
+        var actions: [String] = []
+
+        delegate.handleSceneWillDeactivate(
+            connectedOtherSceneStates: [.foregroundActive],
+            prepare: { actions.append("prepare") }
+        )
+
+        #expect(actions.isEmpty)
+    }
+
+    @Test
     func pausedTerminalResumesFromCurrentSceneFactsWithoutPhaseEdge() {
         #expect(TerminalRenderingPolicy.transition(
             terminalIsActive: true,

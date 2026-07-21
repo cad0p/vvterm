@@ -150,7 +150,7 @@ struct ServerListRow: View {
 
 struct ActiveConnectionListRow: View {
     let title: String
-    let status: ConnectionState
+    let status: ActiveConnectionPresentationStatus
     let tmuxStatus: TmuxStatus
     let tabCount: Int
     let onOpen: () -> Void
@@ -172,7 +172,7 @@ struct ActiveConnectionListRow: View {
                         .font(.body)
                         .foregroundStyle(.primary)
 
-                    Text(status.statusString)
+                    Text(status.label)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -211,9 +211,9 @@ struct ActiveConnectionListRow: View {
         switch status {
         case .connected: return .green
         case .connecting, .reconnecting: return .orange
+        case .resumable: return .blue
         case .disconnected: return .gray
         case .failed: return .red
-        case .idle: return .gray
         }
     }
 

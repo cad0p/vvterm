@@ -6,6 +6,11 @@ struct TmuxShellLifecycleContext: Hashable, Sendable {
     let presenceProbe: TmuxSessionPresenceProbe
 }
 
+struct EternalTerminalTmuxResumeContext: Codable, Hashable, Sendable {
+    let ownership: TmuxSessionOwnership
+    let markerToken: String
+}
+
 struct TmuxSessionPresenceProbe: Hashable, Sendable {
     let command: String
     let existsMarker: String
@@ -77,7 +82,26 @@ enum TerminalDisconnectReason: String, Codable, Hashable, Sendable {
     }
 }
 
-enum ManagedTmuxCleanupDisposition {
-    case terminate
-    case alreadyTerminated
+enum TerminalTeardownIntent: CaseIterable, Sendable {
+    case explicitClose
+    case explicitServerDisconnect
+    case remoteSessionEnded
+    case applicationTermination
+
+    var removesPersistedDescriptor: Bool {
+        self != .applicationTermination
+    }
+
+    var terminatesManagedTmux: Bool {
+        switch self {
+        case .explicitClose, .explicitServerDisconnect:
+            true
+        case .remoteSessionEnded, .applicationTermination:
+            false
+        }
+    }
+
+    var deletesEternalTerminalCredentials: Bool {
+        self != .applicationTermination
+    }
 }

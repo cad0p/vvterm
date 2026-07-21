@@ -6,11 +6,63 @@
 import Foundation
 
 #if os(iOS)
+enum ActiveConnectionPresentationStatus: Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case reconnecting(attempt: Int)
+    case resumable
+    case failed(String)
+
+    init(
+        connectionState: ConnectionState,
+        connectionMode: SSHConnectionMode?,
+        hasResumeCheckpoint: Bool
+    ) {
+        if connectionMode == .eternalTerminal, hasResumeCheckpoint {
+            switch connectionState {
+            case .disconnected, .idle:
+                self = .resumable
+                return
+            case .connecting, .connected, .reconnecting, .failed:
+                break
+            }
+        }
+        self = switch connectionState {
+        case .disconnected, .idle: .disconnected
+        case .connecting: .connecting
+        case .connected: .connected
+        case .reconnecting(let attempt): .reconnecting(attempt: attempt)
+        case .failed(let message): .failed(message)
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .disconnected:
+            String(localized: "Disconnected")
+        case .connecting:
+            String(localized: "Connecting...")
+        case .connected:
+            String(localized: "Connected")
+        case .reconnecting(let attempt):
+            String(
+                format: String(localized: "Reconnecting (%lld)..."),
+                Int64(attempt)
+            )
+        case .resumable:
+            String(localized: "Ready to resume")
+        case .failed(let message):
+            String(format: String(localized: "Failed: %@"), message)
+        }
+    }
+}
+
 struct ActiveServerSummary: Identifiable {
     let id: UUID
     let terminalTab: TerminalTab?
     let title: String
-    let status: ConnectionState
+    let status: ActiveConnectionPresentationStatus
     let tmuxStatus: TmuxStatus
     let tabCount: Int
     let targetViewId: String
@@ -18,7 +70,7 @@ struct ActiveServerSummary: Identifiable {
     static func makeAll(
         tabManager: TerminalTabManager,
         fileTabs: RemoteFileTabManager,
-        serverName: (UUID) -> String?,
+        server: (UUID) -> Server?,
         viewTabConfig: ViewTabConfigurationManager
     ) -> [ActiveServerSummary] {
         let serverIds = Set(tabManager.tabsByServer.keys).union(fileTabs.tabsByServer.keys)
@@ -34,14 +86,21 @@ struct ActiveServerSummary: Identifiable {
                 selectedTabByServer: tabManager.selectedTabByServer
             )
             let state = representativePaneState(in: terminalTabs, tabManager: tabManager)
+            let configuredServer = server(serverId)
 
             return ActiveServerSummary(
                 id: serverId,
                 terminalTab: tab,
-                title: serverName(serverId)
+                title: configuredServer?.name
                     ?? tab.map { tabManager.displayTitle(for: $0) }
                     ?? String(localized: "Server"),
-                status: state.map { normalizedConnectionState(for: $0, tabManager: tabManager) } ?? .disconnected,
+                status: state.map {
+                    return ActiveConnectionPresentationStatus(
+                        connectionState: $0.connectionState,
+                        connectionMode: configuredServer?.connectionMode,
+                        hasResumeCheckpoint: tabManager.hasEternalTerminalCheckpoint(for: $0.paneId)
+                    )
+                } ?? .disconnected,
                 tmuxStatus: state?.tmuxStatus ?? .off,
                 tabCount: terminalTabs.count + remoteFileTabs.count,
                 targetViewId: targetViewId(
@@ -79,20 +138,8 @@ struct ActiveServerSummary: Identifiable {
             .flatMap { orderedPaneIds(for: $0) }
             .compactMap { tabManager.paneStates[$0] }
             .min { lhs, rhs in
-                stateSortRank(normalizedConnectionState(for: lhs, tabManager: tabManager))
-                    < stateSortRank(normalizedConnectionState(for: rhs, tabManager: tabManager))
+                stateSortRank(lhs.connectionState) < stateSortRank(rhs.connectionState)
             }
-    }
-
-    private static func normalizedConnectionState(
-        for state: TerminalPaneState,
-        tabManager: TerminalTabManager
-    ) -> ConnectionState {
-        if case .connected = state.connectionState,
-           tabManager.shellId(for: state.paneId) == nil {
-            return .disconnected
-        }
-        return state.connectionState
     }
 
     private static func stateSortRank(_ state: ConnectionState) -> Int {

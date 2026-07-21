@@ -1124,7 +1124,7 @@
 			repositoryURL = "https://github.com/wiedymi/swift-et";
 			requirement = {
 				kind = exactVersion;
-				version = 0.1.2;
+				version = 0.1.5;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

@@ -83,6 +83,7 @@ final class TerminalTabManager: ObservableObject {
     private var terminalViews: [UUID: GhosttyTerminalView] = [:]
     private var shellRegistry = SSHShellRegistry(staleThreshold: 120)
     private var eternalTerminalRuntimes: [UUID: EternalTerminalRuntime] = [:]
+    private var eternalTerminalResumeStore: any EternalTerminalResumeStoring = EternalTerminalResumeStore.shared
     private var connectionCleanupsInFlight: [UUID: ConnectionCleanup] = [:]
     private var reconnectPreparationsInFlight: [UUID: ReconnectPreparationToken] = [:]
     /// Server IDs with an in-flight tab-open request to avoid queued duplicates.
@@ -280,12 +281,12 @@ final class TerminalTabManager: ObservableObject {
 
     /// Close a tab
     func closeTab(_ tab: TerminalTab) {
-        closeTab(tab, managedTmuxCleanup: .terminate)
+        closeTab(tab, intent: .explicitClose)
     }
 
     private func closeTab(
         _ tab: TerminalTab,
-        managedTmuxCleanup: ManagedTmuxCleanupDisposition
+        intent: TerminalTeardownIntent
     ) {
         guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
             logger.warning("closeTab: tab not found \(tab.id.uuidString, privacy: .public)")
@@ -294,7 +295,7 @@ final class TerminalTabManager: ObservableObject {
 
         // Clean up all panes in this tab
         for paneId in currentTab.allPaneIds {
-            cleanupPane(paneId, managedTmuxCleanup: managedTmuxCleanup)
+            cleanupPane(paneId, intent: intent)
         }
 
         // Remove from tabs
@@ -331,15 +332,22 @@ final class TerminalTabManager: ObservableObject {
 
     /// Close all tabs for a server
     func closeAllTabs(for serverId: UUID) {
+        closeAllTabs(for: serverId, intent: .explicitClose)
+    }
+
+    private func closeAllTabs(
+        for serverId: UUID,
+        intent: TerminalTeardownIntent
+    ) {
         let serverTabs = tabs(for: serverId)
         for tab in serverTabs {
-            closeTab(tab)
+            closeTab(tab, intent: intent)
         }
     }
 
     /// Disconnect all terminal tabs for a specific server.
     func disconnectServer(_ serverId: UUID) {
-        closeAllTabs(for: serverId)
+        closeAllTabs(for: serverId, intent: .explicitServerDisconnect)
         tabsByServer.removeValue(forKey: serverId)
         selectedTabByServer.removeValue(forKey: serverId)
         selectedViewByServer.removeValue(forKey: serverId)
@@ -357,6 +365,41 @@ final class TerminalTabManager: ObservableObject {
         connectedServerIds.removeAll()
         persistSnapshot()
         logger.info("Disconnected all terminal tabs")
+    }
+
+    /// Flushes reconnectable state and releases local runtime resources without
+    /// deleting tabs or terminating remote resumable sessions.
+    @discardableResult
+    func beginApplicationTermination() -> Task<Void, Never> {
+        persistTask?.cancel()
+        persistTask = nil
+        persistSnapshot()
+
+        let paneIds = Set(paneStates.keys)
+            .union(shellRegistry.startsInFlight.keys)
+            .union(eternalTerminalRuntimes.keys)
+
+        reconnectPreparationsInFlight.removeAll()
+        tabOpensInFlight.removeAll()
+        for paneId in paneIds {
+            unregisterTerminal(for: paneId)
+            if paneStates[paneId] != nil {
+                paneStates[paneId]?.disconnectReason = .transportEnded
+                paneStates[paneId]?.connectionState = .disconnected
+            }
+        }
+        connectedServerIds.removeAll()
+        runtimeTitleByPane.removeAll()
+
+        logger.info("Preserved terminal tabs while releasing application runtime state")
+        return Task { [weak self] in
+            guard let self else { return }
+            await self.prepareEternalTerminalSessionsForApplicationBackground()
+            for paneId in paneIds {
+                await self.unregisterSSHClient(for: paneId)
+                await self.unregisterEternalTerminalRuntime(for: paneId)
+            }
+        }
     }
 
     func beginReconnectPreparation(for paneId: UUID) -> ReconnectPreparationToken? {
@@ -489,13 +532,13 @@ final class TerminalTabManager: ObservableObject {
 
     /// Close a pane within a tab
     func closePane(tab: TerminalTab, paneId: UUID) {
-        closePane(tab: tab, paneId: paneId, managedTmuxCleanup: .terminate)
+        closePane(tab: tab, paneId: paneId, intent: .explicitClose)
     }
 
     private func closePane(
         tab: TerminalTab,
         paneId: UUID,
-        managedTmuxCleanup: ManagedTmuxCleanupDisposition
+        intent: TerminalTeardownIntent
     ) {
         // Get current tab from manager (passed tab might be stale)
         guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
@@ -516,7 +559,7 @@ final class TerminalTabManager: ObservableObject {
 
         // If this is the only pane, close the tab
         if currentTab.paneCount <= 1 {
-            closeTab(currentTab, managedTmuxCleanup: managedTmuxCleanup)
+            closeTab(currentTab, intent: intent)
             return
         }
 
@@ -546,7 +589,7 @@ final class TerminalTabManager: ObservableObject {
         updateTab(updatedTab)
 
         // Now clean up the pane (after layout is updated)
-        cleanupPane(paneId, managedTmuxCleanup: managedTmuxCleanup)
+        cleanupPane(paneId, intent: intent)
         refreshConnectedServerState(for: tab.serverId)
         logger.info("Closed pane \(paneId)")
     }
@@ -852,7 +895,8 @@ final class TerminalTabManager: ObservableObject {
         let runtime = EternalTerminalRuntime(
             paneId: paneId,
             server: server,
-            credentials: credentials
+            credentials: credentials,
+            resumeStore: eternalTerminalResumeStore
         )
         eternalTerminalRuntimes[paneId] = runtime
         markEternalTerminalTransport(for: paneId)
@@ -886,6 +930,21 @@ final class TerminalTabManager: ObservableObject {
         )
     }
 
+    func eternalTerminalTmuxResumeContext(
+        for paneId: UUID
+    ) -> EternalTerminalTmuxResumeContext? {
+        paneStates[paneId]?.eternalTerminalTmuxResumeContext
+    }
+
+    func setEternalTerminalTmuxResumeContext(
+        _ context: EternalTerminalTmuxResumeContext?,
+        for paneId: UUID
+    ) {
+        guard paneStates[paneId]?.eternalTerminalTmuxResumeContext != context else { return }
+        paneStates[paneId]?.eternalTerminalTmuxResumeContext = context
+        schedulePersist()
+    }
+
     func unregisterEternalTerminalRuntime(
         for paneId: UUID,
         killingManagedTmuxSessionNamed tmuxSessionName: String? = nil
@@ -902,6 +961,24 @@ final class TerminalTabManager: ObservableObject {
 
     func notifyEternalTerminalNetworkPathChanged(for paneId: UUID) {
         eternalTerminalRuntimes[paneId]?.notifyNetworkPathChanged()
+    }
+
+    func prepareEternalTerminalSessionsForApplicationBackground() async {
+        let runtimes = Array(eternalTerminalRuntimes.values)
+        for runtime in runtimes {
+            await runtime.prepareForApplicationBackground()
+        }
+    }
+
+    func resumeEternalTerminalSessionsFromApplicationBackground() async {
+        let runtimes = Array(eternalTerminalRuntimes.values)
+        for runtime in runtimes {
+            await runtime.resumeFromApplicationBackground()
+        }
+    }
+
+    func hasEternalTerminalCheckpoint(for paneId: UUID) -> Bool {
+        eternalTerminalResumeStore.hasCheckpoint(for: paneId)
     }
 
     /// Returns a unique ownership token only for the first caller while no live shell exists.
@@ -1037,16 +1114,16 @@ final class TerminalTabManager: ObservableObject {
     /// Clean up a pane (terminal + SSH)
     private func cleanupPane(
         _ paneId: UUID,
-        managedTmuxCleanup: ManagedTmuxCleanupDisposition = .terminate
+        intent: TerminalTeardownIntent = .explicitClose
     ) {
-        let tmuxSessionToKill: String?
-        switch managedTmuxCleanup {
-        case .terminate:
-            tmuxSessionToKill = paneTmuxStatus(for: paneId)
-                .flatMap { managedTmuxSessionNameToKill(for: paneId, status: $0) }
-        case .alreadyTerminated:
-            tmuxSessionToKill = nil
+        guard intent.removesPersistedDescriptor else {
+            assertionFailure("Application termination must preserve the pane descriptor")
+            return
         }
+        let tmuxSessionToKill = intent.terminatesManagedTmux
+            ? paneTmuxStatus(for: paneId)
+                .flatMap { managedTmuxSessionNameToKill(for: paneId, status: $0) }
+            : nil
 
         clearTmuxRuntimeState(for: paneId)
         reconnectPreparationsInFlight.removeValue(forKey: paneId)
@@ -1057,6 +1134,14 @@ final class TerminalTabManager: ObservableObject {
         paneStates.removeValue(forKey: paneId)
         runtimeTitleByPane.removeValue(forKey: paneId)
         titleOverrideByPane.removeValue(forKey: paneId)
+
+        if intent.deletesEternalTerminalCredentials {
+            do {
+                try eternalTerminalResumeStore.deleteResumeState(for: paneId)
+            } catch {
+                logger.error("Failed to delete ET resume credentials: \(error.localizedDescription, privacy: .public)")
+            }
+        }
 
         Task.detached { [weak self] in
             await self?.unregisterSSHClient(
@@ -1186,7 +1271,7 @@ final class TerminalTabManager: ObservableObject {
             guard let tab = tabs(for: paneState.serverId).first(where: { $0.id == paneState.tabId }) else {
                 return
             }
-            closePane(tab: tab, paneId: paneId, managedTmuxCleanup: .alreadyTerminated)
+            closePane(tab: tab, paneId: paneId, intent: .remoteSessionEnded)
             return
 
         case .tmuxDetached(let ownership):
@@ -2013,6 +2098,7 @@ final class TerminalTabManager: ObservableObject {
                     }
                     paneState.presentationOverrides = snapshotsByTabId[tab.id]?.panePresentationOverrides?[paneId] ?? .empty
                     paneState.disconnectReason = snapshotsByTabId[tab.id]?.paneDisconnectReasons?[paneId]
+                    paneState.eternalTerminalTmuxResumeContext = snapshotsByTabId[tab.id]?.eternalTerminalTmuxResumeContexts?[paneId]
                     restoredPaneStates[paneId] = paneState
                 }
             }
@@ -2115,6 +2201,7 @@ private struct TerminalTabsSnapshot: Codable {
         let rootPaneId: UUID
         let panePresentationOverrides: [UUID: TerminalPresentationOverrides]?
         let paneDisconnectReasons: [UUID: TerminalDisconnectReason]?
+        let eternalTerminalTmuxResumeContexts: [UUID: EternalTerminalTmuxResumeContext]?
         let tmuxAttachments: [UUID: TmuxAttachmentSnapshot]?
 
         init(
@@ -2146,6 +2233,15 @@ private struct TerminalTabsSnapshot: Codable {
                 }
             )
             self.paneDisconnectReasons = disconnectReasons.isEmpty ? nil : disconnectReasons
+            let resumeContexts: [UUID: EternalTerminalTmuxResumeContext] = Dictionary(
+                uniqueKeysWithValues: tab.allPaneIds.compactMap { paneId in
+                    guard let context = paneStates[paneId]?.eternalTerminalTmuxResumeContext else {
+                        return nil
+                    }
+                    return (paneId, context)
+                }
+            )
+            self.eternalTerminalTmuxResumeContexts = resumeContexts.isEmpty ? nil : resumeContexts
             let attachments: [UUID: TmuxAttachmentSnapshot] = Dictionary(
                 uniqueKeysWithValues: tab.allPaneIds.compactMap { paneId in
                     guard let sessionName = tmuxResolver.sessionNames[paneId],
@@ -2190,12 +2286,22 @@ private struct TerminalTabsSnapshot: Codable {
 
 #if DEBUG
 extension TerminalTabManager {
+    func setEternalTerminalResumeStoreForTesting(
+        _ store: any EternalTerminalResumeStoring
+    ) {
+        eternalTerminalResumeStore = store
+    }
+
     func persistAndRestoreSnapshotForTesting() {
         persistTask?.cancel()
         persistTask = nil
         persistSnapshot()
         tmuxResolver.clearAllAttachmentState()
         restoreSnapshot()
+    }
+
+    func snapshotDataForTesting() throws -> Data {
+        try JSONEncoder().encode(makeSnapshot())
     }
 
     /// Resets manager state for deterministic integration tests.
@@ -2222,6 +2328,7 @@ extension TerminalTabManager {
         }
 
         let terminals = Array(terminalViews.values)
+        let eternalRuntimes = Array(eternalTerminalRuntimes.values)
         isRestoring = true
         tabsByServer = [:]
         selectedTabByServer = [:]
@@ -2240,11 +2347,13 @@ extension TerminalTabManager {
         tmuxAttachPrompt = nil
         terminalRegistryVersion = 0
         terminalViews.removeAll()
+        eternalTerminalRuntimes.removeAll()
         shellRegistry.removeAll()
         connectionCleanupsInFlight.removeAll()
         reconnectPreparationsInFlight.removeAll()
         tabOpensInFlight.removeAll()
         tmuxCleanupServers.removeAll()
+        eternalTerminalResumeStore = EternalTerminalResumeStore.shared
         isRestoring = false
 
         UserDefaults.standard.removeObject(forKey: persistenceKey)
@@ -2253,6 +2362,9 @@ extension TerminalTabManager {
         }
         for client in uniqueClients.values {
             await client.disconnect()
+        }
+        for runtime in eternalRuntimes {
+            await runtime.close()
         }
     }
 }
