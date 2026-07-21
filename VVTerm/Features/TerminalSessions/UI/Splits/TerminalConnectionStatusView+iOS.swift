@@ -3,32 +3,130 @@ import SwiftUI
 
 struct TerminalConnectionStatusView: View {
     let presentation: TerminalConnectionStatusPresentation
+    let connectionAttemptID: UUID
     let surfaceStyle: NoticeSurfaceStyle
     let isActive: Bool
     let onRetry: () -> Void
     let onTrustNewHostKey: () -> Void
 
+    @State private var dismissedIdentity: TerminalConnectionStatusPresentationIdentity?
+
     var body: some View {
-        Color.clear
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(false)
-            .sheet(isPresented: isPresented) {
-                sheetContent
-                    .presentationDetents([.height(sheetHeight)])
-                    .presentationDragIndicator(.hidden)
-                    .interactiveDismissDisabled()
+        ZStack(alignment: .top) {
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+                .sheet(isPresented: isPresented) {
+                    NavigationStack {
+                        sheetContent
+                            .toolbar {
+                                ToolbarItem(placement: .confirmationAction) {
+                                    Button(action: dismissCurrentPresentation) {
+                                        Image(systemName: "xmark")
+                                    }
+                                    .accessibilityLabel(String(localized: "Close"))
+                                    .accessibilityIdentifier("vvterm.connectionStatus.close")
+                                }
+                            }
+                    }
+                    .presentationDetents([.height(sheetHeight), .large])
+                    .presentationDragIndicator(
+                        presentation.allowsInteractiveDismissal ? .visible : .hidden
+                    )
+                    .interactiveDismissDisabled(!presentation.allowsInteractiveDismissal)
+                }
+
+            if let dismissedStatusNotice {
+                NoticeBannerView(item: dismissedStatusNotice, surfaceStyle: surfaceStyle)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
+        }
+        .onChange(of: currentIdentity) { identity in
+            dismissedIdentity = TerminalConnectionStatusDismissalPolicy
+                .retainedDismissedIdentity(
+                    currentIdentity: identity,
+                    dismissedIdentity: dismissedIdentity
+                )
+        }
+        .animation(.easeInOut(duration: 0.2), value: dismissedStatusNotice?.id)
     }
 
     private var isPresented: Binding<Bool> {
         Binding(
             get: {
-                guard isActive else { return false }
-                if case .hidden = presentation { return false }
-                return true
+                TerminalConnectionStatusDismissalPolicy.shouldPresent(
+                    identity: currentIdentity,
+                    dismissedIdentity: dismissedIdentity,
+                    isActive: isActive
+                )
             },
-            set: { _ in }
+            set: { presented in
+                if !presented {
+                    dismissCurrentPresentation()
+                }
+            }
         )
+    }
+
+    private var currentIdentity: TerminalConnectionStatusPresentationIdentity? {
+        TerminalConnectionStatusDismissalPolicy.identity(
+            for: presentation,
+            connectionAttemptID: connectionAttemptID
+        )
+    }
+
+    private func dismissCurrentPresentation() {
+        dismissedIdentity = currentIdentity
+    }
+
+    private var dismissedStatusNotice: NoticeItem? {
+        guard isActive, currentIdentity == dismissedIdentity else { return nil }
+
+        switch presentation {
+        case .hidden:
+            return nil
+        case .connecting(let serverName):
+            return NoticeItem(
+                id: "connection-status-connecting",
+                lane: .topBanner,
+                level: .info,
+                leading: .activity,
+                message: String(
+                    format: String(localized: "Connecting to %@..."),
+                    serverName
+                )
+            )
+        case .disconnected(let message):
+            return NoticeItem(
+                id: "connection-status-disconnected",
+                lane: .topBanner,
+                level: .warning,
+                leading: .icon("bolt.slash.fill"),
+                title: String(localized: "Disconnected"),
+                message: message ?? String(localized: "The terminal is not connected."),
+                action: NoticeAction(
+                    id: "reconnect",
+                    title: String(localized: "Reconnect"),
+                    handler: onRetry
+                )
+            )
+        case .failed(let message, _):
+            return NoticeItem(
+                id: "connection-status-failed",
+                lane: .topBanner,
+                level: .error,
+                leading: .icon("exclamationmark.triangle.fill"),
+                title: String(localized: "Connection Failed"),
+                message: message,
+                action: NoticeAction(
+                    id: "retry",
+                    title: String(localized: "Retry"),
+                    handler: onRetry
+                )
+            )
+        }
     }
 
     @ViewBuilder
@@ -102,10 +200,14 @@ struct TerminalConnectionStatusView: View {
                     .foregroundStyle(.primary)
 
                 if let message, !message.isEmpty {
-                    Text(message)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ScrollView {
+                        Text(message)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .frame(maxHeight: 132)
                 }
             }
             .multilineTextAlignment(.center)
@@ -164,11 +266,11 @@ struct TerminalConnectionStatusView: View {
         case .hidden:
             return 1
         case .connecting:
-            return 170
+            return 220
         case .disconnected(let message):
-            return message == nil ? 248 : 280
+            return message == nil ? 310 : 360
         case .failed(_, let allowsHostKeyReplacement):
-            return allowsHostKeyReplacement ? 360 : 300
+            return allowsHostKeyReplacement ? 500 : 420
         }
     }
 }

@@ -398,6 +398,103 @@ struct TerminalConnectionStatusPresentationTests {
         )
     }
 
+    @Test
+    func dismissedStatusIdentityDoesNotImmediatelyPresentAgain() throws {
+        let attemptID = UUID()
+        let identity = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .failed(message: "Connection timed out", allowsHostKeyReplacement: false),
+            connectionAttemptID: attemptID
+        ))
+
+        #expect(!TerminalConnectionStatusDismissalPolicy.shouldPresent(
+            identity: identity,
+            dismissedIdentity: identity,
+            isActive: true
+        ))
+    }
+
+    @Test
+    func dismissingStatusDoesNotChangeItsConnectionPresentation() throws {
+        let presentation = TerminalConnectionStatusPresentation.disconnected(
+            message: "The remote session ended."
+        )
+        let identity = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: presentation,
+            connectionAttemptID: UUID()
+        ))
+
+        #expect(identity.presentation == presentation)
+    }
+
+    @Test
+    func changedStatusPresentsAfterPreviousIdentityWasDismissed() throws {
+        let attemptID = UUID()
+        let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .failed(message: "Timed out", allowsHostKeyReplacement: false),
+            connectionAttemptID: attemptID
+        ))
+        let changed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .disconnected(message: "The remote session ended."),
+            connectionAttemptID: attemptID
+        ))
+
+        #expect(TerminalConnectionStatusDismissalPolicy.shouldPresent(
+            identity: changed,
+            dismissedIdentity: dismissed,
+            isActive: true
+        ))
+    }
+
+    @Test
+    func newAttemptPresentsEvenWhenFailureTextIsUnchanged() throws {
+        let presentation = TerminalConnectionStatusPresentation.failed(
+            message: "Connection timed out",
+            allowsHostKeyReplacement: false
+        )
+        let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: presentation,
+            connectionAttemptID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        ))
+        let nextAttempt = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: presentation,
+            connectionAttemptID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        ))
+
+        #expect(TerminalConnectionStatusDismissalPolicy.shouldPresent(
+            identity: nextAttempt,
+            dismissedIdentity: dismissed,
+            isActive: true
+        ))
+    }
+
+    @Test
+    func hiddenOrChangedStatusClearsTheRetainedDismissal() throws {
+        let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .failed(message: "Connection timed out", allowsHostKeyReplacement: false),
+            connectionAttemptID: UUID()
+        ))
+
+        #expect(TerminalConnectionStatusDismissalPolicy.retainedDismissedIdentity(
+            currentIdentity: nil,
+            dismissedIdentity: dismissed
+        ) == nil)
+    }
+
+    @Test
+    func onlyRecoverableStatusSheetsSupportSwipeDismissal() {
+        #expect(!TerminalConnectionStatusPresentation.hidden.allowsInteractiveDismissal)
+        #expect(!TerminalConnectionStatusPresentation.connecting(
+            serverName: "Production"
+        ).allowsInteractiveDismissal)
+        #expect(TerminalConnectionStatusPresentation.disconnected(
+            message: nil
+        ).allowsInteractiveDismissal)
+        #expect(TerminalConnectionStatusPresentation.failed(
+            message: "Authentication failed",
+            allowsHostKeyReplacement: false
+        ).allowsInteractiveDismissal)
+    }
+
     private func resolve(
         credentialLoadErrorMessage: String? = nil,
         connectionState: ConnectionState,

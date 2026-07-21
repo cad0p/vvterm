@@ -781,6 +781,7 @@ struct TerminalPaneView: View {
 
                 TerminalConnectionStatusView(
                     presentation: connectionStatusPresentation,
+                    connectionAttemptID: connectWatchdogToken,
                     surfaceStyle: noticeSurfaceStyle,
                     isActive: shouldFocus,
                     onRetry: retryConnection,
@@ -1009,6 +1010,7 @@ struct TerminalPaneView: View {
         guard !requiresReadyNetwork || networkMonitor.readiness == .ready else { return }
         guard !reconnectPreparation.isRunning else { return }
         guard !connectionState.isConnecting else { return }
+        connectWatchdogToken = UUID()
         credentialLoadErrorMessage = nil
         operationNotice = nil
         if credentials == nil {

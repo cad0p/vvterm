@@ -10,21 +10,109 @@ final class NoticePresentationUITests: XCTestCase {
         let app = launchNoticeHarness()
         let title = app.staticTexts["Connection Failed"]
         let retry = app.buttons["Retry"]
+        let close = app.buttons["vvterm.connectionStatus.close"]
 
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(title.frame.minY, app.frame.midY)
         XCTAssertLessThanOrEqual(retry.frame.maxY, app.frame.maxY)
         XCTAssertGreaterThan(retry.frame.width, app.frame.width * 0.75)
     }
 
     @MainActor
+    func testConnectionFailureCloseExposesNavigationWithoutRetrying() throws {
+        let app = launchNoticeHarness()
+        let title = app.staticTexts["Connection Failed"]
+        let close = app.buttons["vvterm.connectionStatus.close"]
+
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5))
+
+        let back = app.buttons["vvterm.noticeTest.back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["vvterm.noticeTest.serverList"]
+                .waitForExistence(timeout: 5)
+        )
+    }
+
+    @MainActor
+    func testDismissedFailureDoesNotImmediatelyReopen() throws {
+        let app = launchNoticeHarness()
+        let title = app.staticTexts["Connection Failed"]
+        let close = app.buttons["vvterm.connectionStatus.close"]
+
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertFalse(close.exists)
+        XCTAssertTrue(app.buttons["Retry"].exists)
+    }
+
+    @MainActor
+    func testRetryFromDismissedBannerCanPresentANewFailure() throws {
+        let app = launchNoticeHarness()
+        let title = app.staticTexts["Connection Failed"]
+        let close = app.buttons["vvterm.connectionStatus.close"]
+
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+
+        let retry = app.buttons["Retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        retry.tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+    }
+
+    @MainActor
+    func testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect() throws {
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-notice-disconnected"]
+        )
+        let title = app.staticTexts["Disconnected"]
+        let close = app.buttons["vvterm.connectionStatus.close"]
+
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
+        close.swipeDown()
+
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["vvterm.noticeTest.back"].exists)
+    }
+
+    @MainActor
+    func testHostKeyFailureRetainsCloseAndTrustActions() throws {
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-notice-host-key"]
+        )
+
+        XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["vvterm.connectionStatus.close"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Trust New Host Key"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testInitialConnectionUsesBottomSheet() throws {
         let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-connecting"])
         let title = app.staticTexts["Connecting to production..."]
+        let close = app.buttons["vvterm.connectionStatus.close"]
 
         XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(title.frame.minY, app.frame.midY)
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(title.exists)
     }
 
     @MainActor

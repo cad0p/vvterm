@@ -3,6 +3,7 @@ import SwiftUI
 
 struct TerminalConnectionStatusView: View {
     let presentation: TerminalConnectionStatusPresentation
+    let connectionAttemptID: UUID
     let surfaceStyle: NoticeSurfaceStyle
     let isActive: Bool
     let onRetry: () -> Void

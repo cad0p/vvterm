@@ -13,7 +13,7 @@ extension TerminalDisconnectReason {
     }
 }
 
-enum TerminalConnectionStatusPresentation: Equatable {
+enum TerminalConnectionStatusPresentation: Hashable {
     case hidden
     case connecting(serverName: String)
     case disconnected(message: String?)
@@ -66,6 +66,50 @@ enum TerminalConnectionStatusPresentation: Equatable {
             )
         case .connected, .idle:
             return !isReady && !terminalExists ? .connecting(serverName: serverName) : .hidden
+        }
+    }
+}
+
+struct TerminalConnectionStatusPresentationIdentity: Hashable {
+    let presentation: TerminalConnectionStatusPresentation
+    let connectionAttemptID: UUID
+}
+
+enum TerminalConnectionStatusDismissalPolicy {
+    static func identity(
+        for presentation: TerminalConnectionStatusPresentation,
+        connectionAttemptID: UUID
+    ) -> TerminalConnectionStatusPresentationIdentity? {
+        guard presentation != .hidden else { return nil }
+        return TerminalConnectionStatusPresentationIdentity(
+            presentation: presentation,
+            connectionAttemptID: connectionAttemptID
+        )
+    }
+
+    static func shouldPresent(
+        identity: TerminalConnectionStatusPresentationIdentity?,
+        dismissedIdentity: TerminalConnectionStatusPresentationIdentity?,
+        isActive: Bool
+    ) -> Bool {
+        isActive && identity != nil && identity != dismissedIdentity
+    }
+
+    static func retainedDismissedIdentity(
+        currentIdentity: TerminalConnectionStatusPresentationIdentity?,
+        dismissedIdentity: TerminalConnectionStatusPresentationIdentity?
+    ) -> TerminalConnectionStatusPresentationIdentity? {
+        currentIdentity == dismissedIdentity ? dismissedIdentity : nil
+    }
+}
+
+extension TerminalConnectionStatusPresentation {
+    var allowsInteractiveDismissal: Bool {
+        switch self {
+        case .disconnected, .failed:
+            return true
+        case .hidden, .connecting:
+            return false
         }
     }
 }

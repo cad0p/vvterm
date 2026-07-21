@@ -2,6 +2,17 @@
 import SwiftUI
 
 struct NoticePresentationUITestHarness: View {
+    private var connectionStatusScenario: NoticeConnectionStatusHarness.Scenario {
+        let arguments = Foundation.ProcessInfo.processInfo.arguments
+        if arguments.contains("--vvterm-ui-test-notice-disconnected") {
+            return .disconnected
+        }
+        if arguments.contains("--vvterm-ui-test-notice-host-key") {
+            return .hostKeyFailure
+        }
+        return .failure
+    }
+
     private var showsFilesPreviewScenario: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-files-preview")
     }
@@ -47,7 +58,7 @@ struct NoticePresentationUITestHarness: View {
         } else if showsInactiveConnectionSheetScenario {
             InactiveConnectionSheetHarness()
         } else {
-            NoticeConnectionFailureHarness()
+            NoticeConnectionStatusHarness(scenario: connectionStatusScenario)
         }
     }
 }
@@ -79,11 +90,14 @@ private struct NoticeDiagnosticDetailHarness: View {
 }
 
 private struct InactiveConnectionSheetHarness: View {
+    private let connectionAttemptID = UUID()
+
     var body: some View {
         terminalBackdrop {
             ZStack {
                 TerminalConnectionStatusView(
                     presentation: .connecting(serverName: "inactive split"),
+                    connectionAttemptID: connectionAttemptID,
                     surfaceStyle: terminalSurfaceStyle,
                     isActive: false,
                     onRetry: {},
@@ -92,6 +106,7 @@ private struct InactiveConnectionSheetHarness: View {
 
                 TerminalConnectionStatusView(
                     presentation: .hidden,
+                    connectionAttemptID: connectionAttemptID,
                     surfaceStyle: terminalSurfaceStyle,
                     isActive: true,
                     onRetry: {},
@@ -108,6 +123,7 @@ private struct ConnectionSheetHandoffHarness: View {
     @State private var tmuxPrompt: TmuxAttachPrompt?
 
     private let paneId = UUID()
+    private let connectionAttemptID = UUID()
 
     var body: some View {
         terminalBackdrop {
@@ -115,6 +131,7 @@ private struct ConnectionSheetHandoffHarness: View {
                 presentation: tmuxPrompt == nil
                     ? .connecting(serverName: "production")
                     : .hidden,
+                connectionAttemptID: connectionAttemptID,
                 surfaceStyle: terminalSurfaceStyle,
                 isActive: true,
                 onRetry: {},
@@ -182,10 +199,13 @@ private struct NoticeOperationStackHarness: View {
 }
 
 private struct NoticeConnectingHarness: View {
+    private let connectionAttemptID = UUID()
+
     var body: some View {
         terminalBackdrop {
             TerminalConnectionStatusView(
                 presentation: .connecting(serverName: "production"),
+                connectionAttemptID: connectionAttemptID,
                 surfaceStyle: terminalSurfaceStyle,
                 isActive: true,
                 onRetry: {},
@@ -243,38 +263,85 @@ private func terminalBackdrop<Overlay: View>(
     }
 }
 
-private struct NoticeConnectionFailureHarness: View {
-    var body: some View {
-        ZStack {
-            Color(red: 0.035, green: 0.045, blue: 0.055)
-                .ignoresSafeArea()
+private struct NoticeConnectionStatusHarness: View {
+    enum Scenario {
+        case failure
+        case disconnected
+        case hostKeyFailure
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("$ ssh production")
-                Text("Connecting to production...")
-                Text("Connection timed out.")
-            }
-            .font(.system(.body, design: .monospaced))
-            .foregroundStyle(Color.white.opacity(0.5))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(24)
-
-            TerminalConnectionStatusView(
-                presentation: .failed(
+        var presentation: TerminalConnectionStatusPresentation {
+            switch self {
+            case .failure:
+                return .failed(
                     message: "Connection timed out. Please retry.",
                     allowsHostKeyReplacement: false
-                ),
-                surfaceStyle: .terminal(
-                    backgroundColor: Color(red: 0.035, green: 0.045, blue: 0.055),
-                    foregroundColor: .white
-                ),
-                isActive: true,
-                onRetry: {},
-                onTrustNewHostKey: {}
-            )
+                )
+            case .disconnected:
+                return .disconnected(message: "The remote session ended.")
+            case .hostKeyFailure:
+                return .failed(
+                    message: "Host key verification failed.",
+                    allowsHostKeyReplacement: true
+                )
+            }
         }
-        .accessibilityIdentifier("vvterm.noticeTest.connectionFailure")
+    }
+
+    let scenario: Scenario
+
+    @State private var path = ["terminal"]
+    @State private var presentation: TerminalConnectionStatusPresentation
+    @State private var connectionAttemptID = UUID()
+
+    init(scenario: Scenario) {
+        self.scenario = scenario
+        _presentation = State(initialValue: scenario.presentation)
+    }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            Text("Server List")
+                .accessibilityIdentifier("vvterm.noticeTest.serverList")
+                .navigationTitle("Servers")
+                .navigationDestination(for: String.self) { _ in
+                    terminalBackdrop {
+                        TerminalConnectionStatusView(
+                            presentation: presentation,
+                            connectionAttemptID: connectionAttemptID,
+                            surfaceStyle: terminalSurfaceStyle,
+                            isActive: true,
+                            onRetry: retry,
+                            onTrustNewHostKey: {}
+                        )
+                    }
+                    .navigationTitle("Terminal")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .navigationBarBackButtonHidden(true)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button {
+                                path.removeLast()
+                            } label: {
+                                Label("Back", systemImage: "chevron.left")
+                            }
+                            .accessibilityIdentifier("vvterm.noticeTest.back")
+                        }
+                    }
+                }
+        }
+        .accessibilityIdentifier("vvterm.noticeTest.connectionStatus")
         .preferredColorScheme(.dark)
+    }
+
+    private func retry() {
+        connectionAttemptID = UUID()
+        presentation = .connecting(serverName: "production")
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            presentation = scenario.presentation
+        }
     }
 }
 
