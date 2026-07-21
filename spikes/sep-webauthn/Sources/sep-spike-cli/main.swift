@@ -32,6 +32,7 @@ struct CLIArgs {
     let ttl: Int           // seconds
     let deviceName: String
     let insecure: Bool
+    let biometry: Bool     // SEP signer only — gate SecKey with .biometryAny
 }
 
 enum SignerKind: String {
@@ -64,6 +65,7 @@ func parseArgs() throws -> CLIArgs {
     var ttl = 3600  // 1h
     var deviceName = "vvterm-sep-spike"
     var insecure = false
+    var biometry = false
 
     let args = CommandLine.arguments.dropFirst()
     var iter = args.makeIterator()
@@ -85,6 +87,13 @@ func parseArgs() throws -> CLIArgs {
             deviceName = iter.next() ?? deviceName
         case "--insecure":
             insecure = true
+        case "--biometry":
+            // SEP signer only (Part C / session 1.6b). Creates the SEP key
+            // with .biometryAny so SecKeyCreateSignature blocks until Touch
+            // ID / Face ID is presented. Requires a real biometric sensor —
+            // will block forever on the headless macos-14 runner. Run on a
+            // Touch-ID Mac (1.6b Option B) or an iOS device (1.6b Option A).
+            biometry = true
         case "-h", "--help":
             print("""
             sep-spike-cli — SEP-WebAuthn spike driver
@@ -96,9 +105,12 @@ func parseArgs() throws -> CLIArgs {
               --token <t>        Invite token from `tctl users add` (required)
               --host <h>         Teleport proxy host (default: teleport.pcad.it)
               --signer <s>       software | sep  (default: software)
-              --ttl <secs>      Cert TTL in seconds (default: 3600)
+              --ttl <secs>       Cert TTL in seconds (default: 3600)
               --device-name <n>  MFA device name (default: vvterm-sep-spike)
               --insecure         Skip TLS verification (dev clusters)
+              --biometry         SEP only: gate key with .biometryAny (Touch/Face ID)
+                                 Requires a real biometric sensor; blocks on sign.
+                                 Session 1.6b (Part C). Ignored for --signer software.
               -h, --help         Show this help
             """)
             exit(0)
@@ -116,7 +128,8 @@ func parseArgs() throws -> CLIArgs {
     }
     return CLIArgs(
         token: token, host: host, signerKind: signer,
-        ttl: ttl, deviceName: deviceName, insecure: insecure
+        ttl: ttl, deviceName: deviceName, insecure: insecure,
+        biometry: biometry
     )
 }
 
@@ -327,12 +340,17 @@ func runSpike(args: CLIArgs) throws {
     let signer: WebAuthnSigner
     switch args.signerKind {
     case .software: signer = SoftwareSigner()
-    case .sep:      signer = SecureEnclaveSigner()
+    case .sep:
+        if args.biometry {
+            signer = SecureEnclaveSigner(biometry: true)
+        } else {
+            signer = SecureEnclaveSigner()
+        }
     }
 
     print("=== SEP-WebAuthn spike ===")
     print("host:    \(args.host)")
-    print("signer:  \(signer.label)")
+    print("signer:  \(signer.label)\(args.biometry && args.signerKind == .sep ? " +biometry" : "")")
     print("ttl:     \(args.ttl)s")
     print("device:  \(args.deviceName)")
     print("origin:  https://\(args.host)")
@@ -508,8 +526,9 @@ func runSpike(args: CLIArgs) throws {
     }
     print("")
     print("=== SPIKE PASSED ===")
-    print("Part A (software signer): \(args.signerKind == .software ? "PASSED" : "skipped")")
-    print("Part B (SEP signer):      \(args.signerKind == .sep ? "PASSED" : "skipped")")
+    print("Part A (software signer):  \(args.signerKind == .software ? "PASSED" : "skipped")")
+    print("Part B (SEP signer):       \(args.signerKind == .sep && !args.biometry ? "PASSED" : "skipped")")
+    print("Part C (SEP + biometry):   \(args.signerKind == .sep && args.biometry ? "PASSED" : "skipped")")
     print("Wire format accepted by Teleport. Cert TTL: \(args.ttl)s")
 }
 
