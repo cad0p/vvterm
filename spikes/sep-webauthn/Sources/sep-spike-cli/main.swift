@@ -168,6 +168,22 @@ final class TeleportClient {
         let json = try JSONEncoder().encode(body)
         return try postJSON(path: path, body: json, as: type)
     }
+
+    func putJSONEncodable<E: Encodable, D: Decodable>(
+        path: String,
+        body: E,
+        as type: D.Type
+    ) throws -> (status: Int, body: Data, decoded: D?) {
+        let url = baseURL.appendingPathComponent(path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try session.synchronousDataTask(with: req)
+        let http = response as! HTTPURLResponse
+        let decoded = try? JSONDecoder().decode(D.self, from: data)
+        return (http.statusCode, data, decoded)
+    }
 }
 
 final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
@@ -217,9 +233,6 @@ struct RegisterChallengeResponse: Decodable {
     }
 }
 
-struct AddDeviceResponse: Decodable {
-    // Teleport returns `{} ` (OK) on success. Anything else is an error.
-}
 
 struct LoginBeginResponse: Decodable {
     // { "webauthn_challenge": { "publicKey": { "challenge": "...", "rpId": "..." } } }
@@ -371,37 +384,44 @@ func runSpike(args: CLIArgs) throws {
     )
     print("  attestationObject: \(ccr.response.attestationObject.prefix(40))...")
 
-    // ── Step 3: POST /webapi/mfa/devices ───────────────────────────────
-    print("[3/7] POST /webapi/mfa/devices")
-    struct AddDeviceReq: Encodable {
-        // JSON keys MUST match lib/web/mfa.go addMFADeviceRequest struct.
-        let tokenId: String
+    // ── Step 3: PUT /webapi/users/password/token ────────────────────────
+    // This is the invite-token device-add endpoint. POST /webapi/mfa/devices
+    // is WithAuth (requires a session cookie) and there's no token-path POST
+    // for device add — tsh uses gRPC AddMFADeviceSync. The web invite flow
+    // uses PUT /webapi/users/password/token (changeUserAuthentication),
+    // which takes the invite token + the attestation, registers the FIRST
+    // device, AND returns a session (cookie set on the response).
+    print("[3/7] PUT /webapi/users/password/token (changeUserAuthentication)")
+    struct ChangeUserAuthReq: Encodable {
+        // JSON keys MUST match lib/web/apiserver.go changeUserAuthenticationRequest.
+        let token: String
         let deviceName: String
-        let deviceUsage: String
-        let webauthnRegisterResponse: CredentialCreationResponse
+        let password: String          // empty — passwordless-only user
+        let webauthnCreationResponse: CredentialCreationResponse
         enum CodingKeys: String, CodingKey {
-            case tokenId            = "tokenId"
+            case token
             case deviceName
-            case deviceUsage
-            case webauthnRegisterResponse
+            case password
+            case webauthnCreationResponse
         }
     }
-    let addReq = AddDeviceReq(
-        tokenId: args.token,
+    let changeReq = ChangeUserAuthReq(
+        token: args.token,
         deviceName: args.deviceName,
-        deviceUsage: "passwordless",
-        webauthnRegisterResponse: ccr
+        password: "",
+        webauthnCreationResponse: ccr
     )
-    let (rc3Status, rc3Body, _) = try client.postJSONEncodable(
-        path: "/webapi/mfa/devices", body: addReq,
-        as: AddDeviceResponse.self
+    struct ChangedUserAuthn: Decodable {}  // response is {} or has recovery codes; we don't need it
+    let (rc3Status, rc3Body, _) = try client.putJSONEncodable(
+        path: "/webapi/users/password/token", body: changeReq,
+        as: ChangedUserAuthn.self
     )
     print("  → HTTP \(rc3Status)")
     guard rc3Status == 200 else {
         print("  body: \(String(data: rc3Body, encoding: .utf8) ?? "<binary>")")
         throw CLIError.http(status: rc3Status, body: String(data: rc3Body, encoding: .utf8) ?? "")
     }
-    print("  ✓ device registered")
+    print("  ✓ device registered (first passwordless device for pier-vvterm-test)")
 
     // ── Step 4: /webapi/mfa/login/begin ───────────────────────────────
     print("[4/7] POST /webapi/mfa/login/begin {\"passwordless\": true}")
