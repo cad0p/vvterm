@@ -180,24 +180,22 @@ func run() error {
 	}
 	fmt.Printf("wrote auth_data_get.bin (%d bytes)\n", len(authDataGet))
 
-	// Compute the digest that gets signed. Mirrors api.go:445:
-	//   digest = sha256(authData || sha256(ccdJSON))
-	// api.go then passes `digest` to native.Authenticate, which calls
-	// SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256, digest, ...).
-	// The SEP's X962SHA256 algorithm hashes the input AGAIN internally, so
-	// the actual signed bytes are sha256(digest) = sha256(sha256(authData || sha256(ccdJSON))).
+	// Compute the WebAuthn message = authData || clientDataHash, then
+	// sha256(message) = digest. Sign the digest directly (Go's ecdsa.SignASN1
+	// takes a pre-hashed digest — it does NOT re-hash).
 	//
-	// The Swift port reproduces this exactly — see SecureEnclaveSigner.sign
-	// for the double-hash note. The fixture generator must sign the same
-	// sha256(digest) bytes to produce a comparable signature.
-	dataToSign := append(authData, ccdHash[:]...)
-	digest := sha256.Sum256(dataToSign)
+	// This matches authenticate.m:55-59: api.go computes digest = sha256(message)
+	// and passes it to SecKeyCreateSignature with the *Digest* variant
+	// (kSecKeyAlgorithmECDSASignatureDigestX962SHA256), which signs the digest
+	// directly. The server (go-webauthn EC2PublicKeyData.Verify) computes the
+	// same sha256(message) and verifies. SINGLE HASH — no double-hashing.
+	//
+	// (Run #29838845521 failed with 'Unable to verify signature' because the
+	// earlier code used the *Message* variant, which double-hashed.)
+	message := append(authData, ccdHash[:]...)
+	digest := sha256.Sum256(message)
 
-	// Sign sha256(digest) — the double-hashed form — with the fixed
-	// private key, to produce a deterministic signature matching what the
-	// SEP / SoftwareSigner would produce.
-	doubleHash := sha256.Sum256(digest[:])
-	sigDER, err := ecdsa.SignASN1(rand.Reader, privKey, doubleHash[:])
+	sigDER, err := ecdsa.SignASN1(rand.Reader, privKey, digest[:])
 	if err != nil {
 		return fmt.Errorf("ecdsa sign: %w", err)
 	}

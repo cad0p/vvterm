@@ -39,18 +39,26 @@ public protocol WebAuthnSigner: AnyObject {
     /// what `darwin.ECDSAPublicKeyFromRaw` expects.
     func createKey() throws -> (credentialID: Data, publicKeyRaw: Data)
 
-    /// Sign `digest` (32-byte SHA-256) with the private key referenced by
-    /// `credentialID`. Returns the raw ECDSA signature in ASN.1 DER
-    /// `SEQUENCE { r INTEGER, s INTEGER }` form — this is what
-    /// `SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256, ...)`
-    /// returns on Apple platforms, and what Teleport's `native.Authenticate`
-    /// returns to `api.go:Register` / `api.go:Login`.
+    /// Sign the WebAuthn message `authData || clientDataHash`.
     ///
-    /// Note: WebAuthn/COSE ES256 signatures are *fixed-width* (r||s, 64 bytes)
-    /// per FIDO2, but Teleport's `tsh mfa add --type TOUCHID` path sends DER
-    /// and Teleport accepts it (the go-webauthn verifier parses both). The
-    /// spike sends DER to match `api.go` byte-for-byte.
-    func sign(digest: Data, credentialID: Data) throws -> Data
+    /// The server (go-webauthn EC2PublicKeyData.Verify) computes
+    /// `sha256(message)` and verifies the signature against it. Each signer
+    /// is responsible for hashing `message` exactly once before signing:
+    ///
+    ///   - SoftwareSigner uses CryptoKit's `signature(for: Data)`, which
+    ///     hashes internally → signs sha256(message).
+    ///   - SecureEnclaveSigner computes sha256(message) then signs the
+    ///     digest directly via `.ecdsaSignatureDigestX962SHA256` (matching
+    ///     authenticate.m:58).
+    ///
+    /// Both produce a signature over sha256(authData || clientDataHash),
+    /// which is what the server expects.
+    ///
+    /// Returns the raw ECDSA signature in ASN.1 DER
+    /// `SEQUENCE { r INTEGER, s INTEGER }` form — this is what
+    /// `SecKeyCreateSignature` returns and what Teleport's `native.Authenticate`
+    /// returns to `api.go:Register` / `api.go:Login`.
+    func sign(message: Data, credentialID: Data) throws -> Data
 }
 
 // MARK: - Errors
