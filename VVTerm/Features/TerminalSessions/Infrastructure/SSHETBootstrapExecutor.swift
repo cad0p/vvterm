@@ -1,6 +1,33 @@
 import ETBootstrap
 import Foundation
 
+nonisolated enum EternalTerminalHostCompatibility: Equatable {
+    case supported
+    case unsupportedNativeWindows
+    case unsupportedShell
+
+    init(environment: RemoteEnvironment) {
+        if environment.platform == .windows {
+            self = .unsupportedNativeWindows
+        } else if environment.shellProfile.supportsPOSIXExecWrapper {
+            self = .supported
+        } else {
+            self = .unsupportedShell
+        }
+    }
+
+    var bootstrapDiagnostic: String? {
+        switch self {
+        case .supported:
+            nil
+        case .unsupportedNativeWindows:
+            "VVTERM_ET_UNSUPPORTED_NATIVE_WINDOWS"
+        case .unsupportedShell:
+            "VVTERM_ET_REQUIRES_POSIX_SHELL"
+        }
+    }
+}
+
 /// Runs swift-et's SSH bootstrap and auxiliary remote operations through VVTerm's SSH stack.
 actor SSHETBootstrapExecutor: ETBootstrapExecutor {
     nonisolated static var bootstrapOptions: ETBootstrapOptions {
@@ -49,6 +76,13 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
                 to: connection.server,
                 credentials: connection.credentials
             )
+            let compatibility = EternalTerminalHostCompatibility(
+                environment: await client.remoteEnvironment()
+            )
+            if let diagnostic = compatibility.bootstrapDiagnostic {
+                await client.disconnect()
+                return diagnostic
+            }
             if let startupPlanProvider {
                 startupPlan = try await startupPlanProvider(client)
             }

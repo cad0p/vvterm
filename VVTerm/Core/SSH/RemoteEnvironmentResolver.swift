@@ -12,7 +12,7 @@ struct RemoteShellProfile: Hashable, Sendable {
     let executableName: String?
     let shellName: String?
 
-    var supportsPOSIXExecWrapper: Bool {
+    nonisolated var supportsPOSIXExecWrapper: Bool {
         family == .posix
     }
 

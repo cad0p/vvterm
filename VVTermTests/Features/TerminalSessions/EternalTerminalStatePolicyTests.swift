@@ -135,6 +135,62 @@ struct EternalTerminalStatePolicyTests {
     }
 
     @Test
+    func wslEnvironmentUsesTheSupportedPOSIXPath() {
+        let environment = RemoteEnvironment(
+            platform: .linux,
+            shellProfile: .posix(shellName: "bash"),
+            activeShellName: "bash",
+            powerShellExecutable: nil
+        )
+
+        #expect(EternalTerminalHostCompatibility(environment: environment) == .supported)
+    }
+
+    @Test
+    func nativeWindowsIsRejectedBeforePOSIXBootstrap() {
+        let environment = RemoteEnvironment(
+            platform: .windows,
+            shellProfile: .powershell(executableName: "pwsh"),
+            activeShellName: "pwsh",
+            powerShellExecutable: "pwsh"
+        )
+        let compatibility = EternalTerminalHostCompatibility(environment: environment)
+        let message = EternalTerminalErrorPresentation.message(
+            for: ETBootstrapError.markerNotFound(
+                compatibility.bootstrapDiagnostic ?? ""
+            ),
+            host: "windows.example.com",
+            port: 2022
+        )
+
+        #expect(compatibility == .unsupportedNativeWindows)
+        #expect(message.contains("does not run as a native Windows"))
+        #expect(message.contains("WSL"))
+        #expect(message.contains("SSH with psmux"))
+    }
+
+    @Test
+    func unknownNonPOSIXShellHasActionableGuidance() {
+        let environment = RemoteEnvironment(
+            platform: .unknown,
+            shellProfile: .unknown(),
+            activeShellName: nil,
+            powerShellExecutable: nil
+        )
+        let compatibility = EternalTerminalHostCompatibility(environment: environment)
+        let message = EternalTerminalErrorPresentation.message(
+            for: ETBootstrapError.markerNotFound(
+                compatibility.bootstrapDiagnostic ?? ""
+            ),
+            host: "example.com",
+            port: 2022
+        )
+
+        #expect(compatibility == .unsupportedShell)
+        #expect(message.contains("requires a POSIX login shell"))
+    }
+
+    @Test
     func tmuxStartupUsesAShortSelfDeletingRemoteScript() throws {
         let token = try #require(UUID(uuidString: "45B943D4-58C7-4BC9-B089-A9F0ED25C2D3"))
         let command = String(repeating: "tmux set-option -g mouse on; ", count: 100)
