@@ -124,8 +124,11 @@ public enum WebAuthn {
     ///   - origin: e.g. "https://teleport.pcad.it"
     ///   - rpID: e.g. "teleport.pcad.it"
     ///   - challenge: server-provided challenge bytes
-    ///   - credentialID: opaque string identifier for the new credential
-    ///     (Teleport uses a UUID; the spike uses a UUID-style string)
+    ///   - credentialID: the opaque credential identifier bytes (what the
+    ///     signer uses as its lookup key). On the wire this becomes the
+    ///     base64url-encoded `id`/`rawId`. In api.go this is a string
+    ///     (uuid.NewString()); the spike uses 32 random bytes. Either is
+    ///     opaque to WebAuthn — the server stores whatever the client sends.
     ///   - publicKeyRaw: ANSI X9.63 form (0x04 || X(32) || Y(32)), from
     ///     SecKeyCopyExternalRepresentation / CryptoKit x963Representation
     ///   - signer: the WebAuthnSigner (software or SEP)
@@ -135,29 +138,32 @@ public enum WebAuthn {
         origin: String,
         rpID: String,
         challenge: Data,
-        credentialID: String,
+        credentialID: Data,
         publicKeyRaw: Data,
         signer: WebAuthnSigner
     ) throws -> CredentialCreationResponse {
         // Build the COSE EC2 public key CBOR.
         let pubKeyCBOR = try coseEC2PublicKeyCBOR(publicKeyRaw: publicKeyRaw)
 
-        // Build authenticatorData + clientDataJSON + digest.
+        // The credential ID is embedded in authenticatorData as raw bytes.
+        // (api.go uses []byte(credentialID) where credentialID is a string —
+        // same bytes, different source type.)
         let attData = try makeAttestationData(
             ceremony: .create,
             origin: origin,
             rpID: rpID,
             challenge: challenge,
             cred: CredentialData(
-                id: Data(credentialID.utf8),
+                id: credentialID,
                 pubKeyCBOR: pubKeyCBOR
             )
         )
 
-        // Sign the digest. The signer holds the private key.
+        // Sign the digest with the SAME credential ID bytes the signer used
+        // as its lookup key when createKey() stored the private key.
         let sig = try signer.sign(
             digest: attData.digest,
-            credentialID: Data(credentialID.utf8)
+            credentialID: credentialID
         )
 
         // Assemble the attestation object via the shared helper (tested
@@ -167,10 +173,21 @@ public enum WebAuthn {
             signature: sig
         )
 
-        let idB64url = Data(credentialID.utf8).base64URLEncodedString()
+        // The wire `id` is the credential ID as a base64url string; `rawId`
+        // is the same bytes base64url-encoded (URLEncodedBase64 in Go).
+        // For a string credential ID (like api.go's UUID), the "bytes" are
+        // the UTF-8 encoding of that string. For the spike's raw-bytes ID,
+        // the bytes ARE the ID — `id` and `rawId` carry the same content,
+        // just `id` as a decoded string and `rawId` as base64url.
+        let idB64url = credentialID.base64URLEncodedString()
+        // `id` (decoded string) — for a random 32-byte ID this is
+        // non-printable, but WebAuthn treats `id` as opaque; Teleport stores
+        // whatever is sent. api.go sets `id` = the string credentialID. We
+        // mirror by sending the base64url form as the `id` string (matching
+        // what a spec-compliant client does for non-UTF8 credential IDs).
 
         return CredentialCreationResponse(
-            id: credentialID,
+            id: idB64url,
             type: "public-key",
             rawId: idB64url,
             response: AuthenticatorAttestationResponse(
@@ -216,8 +233,9 @@ public enum WebAuthn {
     ///   - rpID: e.g. "teleport.pcad.it"
     ///   - challenge: server-provided challenge bytes (from
     ///     /webapi/mfa/login/begin → webauthn_challenge.publicKey.challenge)
-    ///   - credentialID: opaque string identifier (matches what was
-    ///     registered)
+    ///   - credentialID: the opaque credential identifier bytes (what the
+    ///     signer uses as its lookup key — must match what was passed to
+    ///     register)
     ///   - userHandle: optional user handle bytes (from the credential, if
     ///     known; Teleport returns this from FindCredentials — for the spike
     ///     we pass nil since passwordless logins don't echo it back)
@@ -228,7 +246,7 @@ public enum WebAuthn {
         origin: String,
         rpID: String,
         challenge: Data,
-        credentialID: String,
+        credentialID: Data,
         userHandle: Data?,
         signer: WebAuthnSigner
     ) throws -> CredentialAssertionResponse {
@@ -243,13 +261,13 @@ public enum WebAuthn {
 
         let sig = try signer.sign(
             digest: attData.digest,
-            credentialID: Data(credentialID.utf8)
+            credentialID: credentialID
         )
 
-        let idB64url = Data(credentialID.utf8).base64URLEncodedString()
+        let idB64url = credentialID.base64URLEncodedString()
 
         return CredentialAssertionResponse(
-            id: credentialID,
+            id: idB64url,
             type: "public-key",
             rawId: idB64url,
             response: AuthenticatorAssertionResponse(
