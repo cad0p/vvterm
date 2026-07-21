@@ -14,6 +14,7 @@ struct VVTermApp: App {
         TerminalDefaults.applyIfNeeded()
         #if os(iOS)
         VVTermLauncherWidgetRefresh.refreshIfNeeded()
+        AnalyticsTracker.shared.prepareAppleAdsAttribution()
         #endif
     }
 
