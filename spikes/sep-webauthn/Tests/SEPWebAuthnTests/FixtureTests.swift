@@ -228,8 +228,9 @@ final class FixtureTests: XCTestCase {
         let (credID, _) = try signer.createKey()
         let credIDString = credID.base64URLEncodedString()
         XCTAssertFalse(credIDString.isEmpty, "credential ID string must not be empty")
-        // Round-trip: the string → utf8 bytes → base64url should equal the original.
-        let roundTrip = Data(credIDString.utf8).base64URLEncodedString()
-        XCTAssertEqual(roundTrip, credIDString, "credential ID base64url round-trip failed")
+        // Round-trip: decode the base64url string back to bytes, should
+        // equal the original credential ID bytes.
+        let decoded = Data(base64URLEncoded: credIDString)
+        XCTAssertEqual(decoded, credID, "credential ID base64url decode failed")
     }
 }
