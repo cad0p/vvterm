@@ -164,18 +164,33 @@ rejection. Each is reproduced byte-for-byte from the Go source:
 - **Signature is DER-encoded ASN.1** (`SEQUENCE { r INTEGER, s INTEGER }`),
   not fixed-width 64-byte r||s. This is what `SecKeyCreateSignature` returns
   and what `api.go` sends. (go-webauthn's verifier accepts both.)
-- **The digest is double-hashed.** `api.go:445` computes
-  `digest = sha256(authData || sha256(clientDataJSON))` and passes `digest`
-  to `native.Authenticate`, which calls
-  `SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256, digest, ...)`.
-  The SEP's `.ecdsaSignatureMessageX962SHA256` algorithm **hashes the input
-  again** internally — so the actual signed bytes are
-  `sha256(authData || sha256(clientDataJSON))`, hashed twice. The Swift port
-  reproduces this exactly (see `SecureEnclaveSigner.sign` for the note).
+- **The signature is single-hashed (NOT double-hashed).** `api.go:445`
+  computes `digest = sha256(authData || sha256(clientDataJSON))` and passes
+  `digest` to `native.Authenticate`, which calls `SecKeyCreateSignature`
+  with `.ecdsaSignatureDigestX962SHA256` — the **Digest** variant that signs
+  the pre-computed hash directly, WITHOUT re-hashing. The server
+  (go-webauthn `EC2PublicKeyData.Verify`) computes the same single hash and
+  verifies against it. **The original spike used the wrong algorithm**
+  (`.ecdsaSignatureMessageX962SHA256`, the Message variant, which
+  double-hashed) and the server rejected the signature with 'Unable to
+  verify signature' (run #29838845521). Fix: PR #15. See
+  `SecureEnclaveSigner.sign` for the corrected code.
 - **`credentialID` is a string** (UUID in production, opaque string in the
   spike). `id` in the JSON response is the string itself; `rawId` is
   `[]byte(credentialID)` base64url-encoded. See `api_darwin.go:204` +
   `api.go:517-520`.
+- **`ssh_pub_key` is `[]byte` in Go** → `encoding/json` base64-encodes it
+  on the wire. `tsh` sends `[]byte(authorized_keys_string)`, so the JSON
+  value is `base64("ssh-ed25519 AAAA...")`. The CLI sends `Data` (which
+  Swift's `JSONEncoder` base64-encodes), matching Go. Sending the raw string
+  fails with 'illegal base64 data at input byte 3' (run #29840265864, fix PR #16).
+- **Step 3 (device registration) uses `PUT /webapi/users/password/token`**
+  (the `changeUserAuthentication` endpoint), NOT `POST /webapi/mfa/devices`.
+  The latter is `WithAuth` (requires a session cookie); the invite-token path
+  has no HTTP device-add endpoint (tsh uses gRPC). The PUT endpoint takes
+  `{token, deviceName, password, webauthnCreationResponse}`, registers the
+  FIRST device, and returns a session. (Run #29837616258 failed with 'missing
+  session cookie'; fix PR #13.)
 
 ## Out of scope
 
