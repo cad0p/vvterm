@@ -26,7 +26,7 @@ struct TerminalShellStartupPlan: Sendable {
     let command: String?
     let tmuxLifecycle: TmuxShellLifecycleContext?
 
-    static let plainShell = TerminalShellStartupPlan(
+    nonisolated static let plainShell = TerminalShellStartupPlan(
         command: nil,
         tmuxLifecycle: nil
     )

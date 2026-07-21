@@ -30,12 +30,14 @@ VVTerm is a cross-platform SSH terminal app for Apple platforms. The current cod
 
 - GPU-accelerated terminal rendering via `GhosttyKit`
 - SSH authentication with password, SSH key, and SSH key + passphrase
-- Connection modes for standard SSH, Tailscale, Mosh, and Cloudflare Access
+- Connection modes for standard SSH, Tailscale, Mosh, Eternal Terminal, and Cloudflare Access
 - Multi-session connection management with tabs, split panes, reconnect handling, and persisted session state
 - tmux-aware startup, attach, install, and recovery flows
 - Rich paste and clipboard helpers for terminal input
 - iOS keyboard accessory support, including special keys and custom actions
 - iOS Live Activity status for active terminal connections
+
+Eternal Terminal connections use the configured SSH authentication and SSH port to run `etterminal`, then connect to `etserver` on TCP port `2022` by default. Install Eternal Terminal on the host and allow inbound traffic to the configured ET port. VVTerm's working-directory and optional tmux startup, attach, installation, and cleanup behavior also applies to ET sessions.
 
 ### Servers and organization
 
@@ -170,6 +172,7 @@ Swift package dependencies currently resolved by the Xcode project:
 
 - [Cloudflared](https://github.com/wiedymi/swift-cloudflared)
 - [swift-mosh](https://github.com/wiedymi/swift-mosh)
+- [swift-et](https://github.com/wiedymi/swift-et)
 - [mlx-swift](https://github.com/ml-explore/mlx-swift)
 - [ZIPFoundation](https://github.com/weichsel/ZIPFoundation)
 - [swift-numerics](https://github.com/apple/swift-numerics)

@@ -1,10 +1,12 @@
 import SwiftUI
 import MoshBootstrap
+import ETSession
 
 enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
     case standard
     case tailscale
     case mosh
+    case eternalTerminal
     case cloudflare
 
     var id: String { rawValue }
@@ -17,6 +19,8 @@ enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
             return String(localized: "Tailscale")
         case .mosh:
             return String(localized: "Mosh")
+        case .eternalTerminal:
+            return String(localized: "Eternal Terminal")
         case .cloudflare:
             return String(localized: "Cloudflare")
         }
@@ -30,6 +34,8 @@ enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
             return "network"
         case .mosh:
             return "antenna.radiowaves.left.and.right"
+        case .eternalTerminal:
+            return "arrow.trianglehead.2.clockwise.rotate.90"
         case .cloudflare:
             return "shield.lefthalf.filled"
         }
@@ -43,6 +49,8 @@ enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
             return .tailscale
         case .mosh:
             return .mosh
+        case .eternalTerminal:
+            return .eternalTerminal
         case .cloudflare:
             return .cloudflare
         }
@@ -54,6 +62,8 @@ enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
             self = .tailscale
         case .mosh:
             self = .mosh
+        case .eternalTerminal:
+            self = .eternalTerminal
         case .cloudflare:
             self = .cloudflare
         case .standard:
@@ -124,6 +134,7 @@ struct ServerFormSheet: View {
     @State private var name: String = ""
     @State private var host: String = ""
     @State private var port: String = "22"
+    @State private var eternalTerminalPort: String = "2022"
     @State private var username: String = ""
     @State private var transportSelection: ServerTransportSelection = .standard
     @State private var selectedAuthMethod: AuthMethod = .password
@@ -180,6 +191,7 @@ struct ServerFormSheet: View {
             _name = State(initialValue: server.name)
             _host = State(initialValue: server.host)
             _port = State(initialValue: String(server.port))
+            _eternalTerminalPort = State(initialValue: String(server.eternalTerminalPort))
             _username = State(initialValue: server.username)
             _transportSelection = State(initialValue: ServerTransportSelection(server: server))
             _selectedAuthMethod = State(initialValue: server.authMethod)
@@ -268,6 +280,7 @@ struct ServerFormSheet: View {
     private struct ConnectionTestSnapshot: Equatable {
         let host: String
         let port: String
+        let eternalTerminalPort: String
         let username: String
         let transportSelection: ServerTransportSelection
         let authMethod: AuthMethod
@@ -285,6 +298,7 @@ struct ServerFormSheet: View {
         ConnectionTestSnapshot(
             host: host,
             port: port,
+            eternalTerminalPort: eternalTerminalPort,
             username: effectiveUsername,
             transportSelection: transportSelection,
             authMethod: selectedAuthMethod,
@@ -438,6 +452,7 @@ struct ServerFormSheet: View {
             }
             .onChange(of: host) { _ in resetConnectionTestState() }
             .onChange(of: port) { _ in resetConnectionTestState() }
+            .onChange(of: eternalTerminalPort) { _ in resetConnectionTestState() }
             .onChange(of: username) { _ in resetConnectionTestState() }
             .onChange(of: transportSelection) { _ in resetConnectionTestState() }
             .onChange(of: selectedAuthMethod) { _ in resetConnectionTestState() }
@@ -621,6 +636,17 @@ struct ServerFormSheet: View {
                     Label(transport.displayName, systemImage: transport.icon)
                         .tag(transport)
                 }
+            }
+
+            if transportSelection == .eternalTerminal {
+                TextField("ET Port", text: $eternalTerminalPort, prompt: Text("2022"))
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+
+                Text(String(localized: "Eternal Terminal uses SSH to start etterminal, then connects directly to etserver. Install Eternal Terminal on the host and allow inbound TCP traffic to the ET port."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if transportSelection == .cloudflare {
@@ -901,9 +927,12 @@ struct ServerFormSheet: View {
     // MARK: - Validation
 
     private var isValid: Bool {
-        !name.isEmpty &&
+        let validETPort = transportSelection != .eternalTerminal
+            || Int(eternalTerminalPort).map { (1...65535).contains($0) } == true
+        return !name.isEmpty &&
         !host.isEmpty &&
-        Int(port) != nil &&
+        Int(port).map { (1...65535).contains($0) } == true &&
+        validETPort &&
         hasValidCredentials
     }
 
@@ -951,6 +980,7 @@ struct ServerFormSheet: View {
             name: name,
             host: host,
             port: portNum,
+            eternalTerminalPort: Int(eternalTerminalPort) ?? 2022,
             username: effectiveUsername,
             connectionMode: transportSelection.connectionMode,
             authMethod: transportSelection == .tailscale ? .password : selectedAuthMethod,
@@ -1082,6 +1112,21 @@ struct ServerFormSheet: View {
                                 )
                             }
                         )
+                    } else if testServer.connectionMode == .eternalTerminal {
+                        let session = ETTerminalSession(
+                            host: testServer.host,
+                            port: UInt16(exactly: testServer.eternalTerminalPort) ?? 2022,
+                            bootstrapExecutor: SSHETBootstrapExecutor(
+                                connectedClient: client
+                            )
+                        )
+                        do {
+                            try await session.connect()
+                            await session.close()
+                        } catch {
+                            await session.close()
+                            throw error
+                        }
                     }
                 }
                 return .success(())
@@ -1100,7 +1145,13 @@ struct ServerFormSheet: View {
                 connectionTestSucceeded = true
                 success = true
             case .failure(let error):
-                let baseMessage = error.localizedDescription
+                let baseMessage = testServer.connectionMode == .eternalTerminal
+                    ? EternalTerminalErrorPresentation.message(
+                        for: error,
+                        host: testServer.host,
+                        port: testServer.eternalTerminalPort
+                    )
+                    : error.localizedDescription
                 if testServer.connectionMode == .tailscale {
                     let reminder = String(localized: "This app currently supports direct tailnet connections only (no userspace proxy fallback).")
                     if baseMessage.contains(reminder) {

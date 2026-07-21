@@ -45,6 +45,21 @@ final class AnalyticsTracker {
         send(name: "connection_succeeded", url: "/app/connection", data: ["transport": .string(transport)])
     }
 
+    func trackConnectionAttempted(transport: String) {
+        send(name: "connection_attempted", url: "/app/connection", data: ["transport": .string(transport)])
+    }
+
+    func trackConnectionReconnecting(transport: String) {
+        send(name: "connection_reconnecting", url: "/app/connection", data: ["transport": .string(transport)])
+    }
+
+    func trackConnectionFailed(transport: String, reason: String) {
+        send(name: "connection_failed", url: "/app/connection", data: [
+            "transport": .string(transport),
+            "reason": .string(reason)
+        ])
+    }
+
     func trackPaywallViewed(source: String) {
         send(name: "paywall_viewed", url: "/app/paywall", data: ["source": .string(source)])
     }

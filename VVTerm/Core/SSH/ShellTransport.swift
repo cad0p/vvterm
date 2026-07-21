@@ -3,6 +3,7 @@ import Foundation
 enum ShellTransport: String, Codable, Hashable, Sendable {
     case ssh
     case mosh
+    case eternalTerminal
     case sshFallback
 }
 

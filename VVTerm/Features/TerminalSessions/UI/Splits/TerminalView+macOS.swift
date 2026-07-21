@@ -27,8 +27,8 @@ extension View {
 
 // MARK: - SSH Terminal Pane Wrapper
 
-/// Wraps SSH connection and Ghostty terminal for a pane
-struct SSHTerminalPaneWrapper: NSViewRepresentable {
+/// Wraps a remote connection and Ghostty terminal for a pane.
+struct RemoteTerminalPaneWrapper: NSViewRepresentable {
     let paneId: UUID
     let server: Server
     let credentials: ServerCredentials
@@ -70,7 +70,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
             existingTerminal.terminalContextMenuActions = terminalContextMenuActions
             existingTerminal.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
             existingTerminal.writeCallback = { [weak coordinator] data in
-                coordinator?.sendToSSH(data)
+                coordinator?.sendToTransport(data)
             }
             coordinator.installRichPasteInterception(on: existingTerminal)
 
@@ -83,7 +83,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
             DispatchQueue.main.async {
                 onReady()
                 if TerminalTabManager.shared.shellId(for: paneId) == nil {
-                    coordinator.startSSHConnection(terminal: existingTerminal)
+                    coordinator.startConnection(terminal: existingTerminal)
                 }
             }
 
@@ -103,7 +103,7 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         terminalView.onReady = { [weak coordinator, weak terminalView] in
             onReady()
             if let terminalView = terminalView {
-                coordinator?.startSSHConnection(terminal: terminalView)
+                coordinator?.startConnection(terminal: terminalView)
             }
         }
         terminalView.onProcessExit = processExitHandler(for: terminalView)
@@ -124,9 +124,9 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         coordinator.installRichPasteInterception(on: terminalView)
         TerminalTabManager.shared.registerTerminal(terminalView, for: paneId)
 
-        // Setup write callback to send keyboard input to SSH
+        // Route terminal input to the selected remote transport.
         terminalView.writeCallback = { [weak coordinator] data in
-            coordinator?.sendToSSH(data)
+            coordinator?.sendToTransport(data)
         }
         terminalView.setupWriteCallback()
 
@@ -163,15 +163,11 @@ struct SSHTerminalPaneWrapper: NSViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> TerminalPaneSSHCoordinator {
-        // Use a dedicated SSH client per pane to avoid channel contention
-        // and startup races when many panes/tabs are opened quickly.
-        let client = SSHClient()
-        return TerminalPaneSSHCoordinator(
+    func makeCoordinator() -> TerminalPaneConnectionCoordinator {
+        TerminalPaneConnectionCoordinator(
             paneId: paneId,
             server: server,
             credentials: credentials,
-            sshClient: client,
             richPasteUIModel: richPasteUIModel
         )
     }

@@ -380,10 +380,10 @@ actor RemoteTmuxManager {
         return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
-    func sendScript(_ script: String, using client: SSHClient, shellId: UUID) async {
+    func sendScript(_ script: String, using client: SSHClient, shellId: UUID) async throws {
         let payload = script.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
         guard let data = payload.data(using: .utf8) else { return }
-        try? await client.write(data, to: shellId)
+        try await client.write(data, to: shellId)
     }
 
     func killSession(

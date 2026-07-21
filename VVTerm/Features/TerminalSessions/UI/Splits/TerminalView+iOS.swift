@@ -240,8 +240,8 @@ private struct TerminalKeyboardAvoidanceModifier: ViewModifier {
     }
 }
 
-/// Wraps SSH connection and Ghostty terminal for a pane on iOS/iPadOS.
-struct SSHTerminalPaneWrapper: View {
+/// Wraps a remote connection and Ghostty terminal for a pane on iOS/iPadOS.
+struct RemoteTerminalPaneWrapper: View {
     let paneId: UUID
     let server: Server
     let credentials: ServerCredentials
@@ -255,7 +255,7 @@ struct SSHTerminalPaneWrapper: View {
 
     var body: some View {
         GeometryReader { geometry in
-            SSHTerminalPaneRepresentable(
+            RemoteTerminalPaneRepresentable(
                 paneId: paneId,
                 server: server,
                 credentials: credentials,
@@ -343,7 +343,7 @@ private final class TerminalSceneActivationView: UIView {
     }
 }
 
-private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
+private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
     let paneId: UUID
     let server: Server
     let credentials: ServerCredentials
@@ -358,12 +358,11 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.scenePhase) private var scenePhase
 
-    func makeCoordinator() -> TerminalPaneSSHCoordinator {
-        TerminalPaneSSHCoordinator(
+    func makeCoordinator() -> TerminalPaneConnectionCoordinator {
+        TerminalPaneConnectionCoordinator(
             paneId: paneId,
             server: server,
             credentials: credentials,
-            sshClient: SSHClient(),
             richPasteUIModel: richPasteUIModel
         )
     }
@@ -392,7 +391,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
 
             DispatchQueue.main.async {
                 onReady()
-                startSSHConnectionIfNeeded(
+                startConnectionIfNeeded(
                     terminal: existingTerminal,
                     coordinator: coordinator,
                     state: TerminalTabManager.shared.paneStates[paneId]?.connectionState ?? .idle
@@ -417,7 +416,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
                 coordinator.isTerminalReady = true
                 onReady()
                 if let terminalView {
-                    startSSHConnectionIfNeeded(
+                    startConnectionIfNeeded(
                         terminal: terminalView,
                         coordinator: coordinator,
                         state: TerminalTabManager.shared.paneStates[paneId]?.connectionState ?? .idle
@@ -446,7 +445,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         TerminalTabManager.shared.registerTerminal(terminalView, for: paneId)
 
         terminalView.writeCallback = { [weak coordinator] data in
-            coordinator?.sendToSSH(data)
+            coordinator?.sendToTransport(data)
         }
         terminalView.setupWriteCallback()
         terminalView.onResize = { [weak coordinator] cols, rows in
@@ -470,7 +469,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         }
 
         guard TerminalTabManager.shared.paneStates[paneId] != nil else {
-            context.coordinator.cancelShell()
+            context.coordinator.cancelConnection()
             terminalView.writeCallback = nil
             terminalView.onReady = nil
             terminalView.onProcessExit = nil
@@ -514,12 +513,12 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         }
 
         let state = TerminalTabManager.shared.paneStates[paneId]?.connectionState ?? .idle
-        let shouldStartSSHConnection = TerminalConnectionStartPolicy.shouldStart(
+        let shouldStartConnection = TerminalConnectionStartPolicy.shouldStart(
             connectionState: state
         )
 
-        if shouldStartSSHConnection {
-            startSSHConnectionIfNeeded(
+        if shouldStartConnection {
+            startConnectionIfNeeded(
                 terminal: terminalView,
                 coordinator: context.coordinator,
                 state: state
@@ -540,11 +539,11 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         let paneId = coordinator.paneId
         Task { @MainActor in
             TerminalTabManager.shared.unregisterTerminal(terminalView, for: paneId)
-            coordinator.cancelShell()
+            coordinator.cancelConnection()
         }
     }
 
-    private func configureExistingTerminal(_ terminal: GhosttyTerminalView, coordinator: TerminalPaneSSHCoordinator) {
+    private func configureExistingTerminal(_ terminal: GhosttyTerminalView, coordinator: TerminalPaneConnectionCoordinator) {
         terminal.onProcessExit = processExitHandler(for: terminal)
         terminal.onVoiceButtonTapped = onVoiceTrigger
         terminal.onPwdChange = { [paneId] rawDirectory in
@@ -561,7 +560,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         terminal.terminalContextMenuActions = terminalContextMenuActions
         terminal.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
         terminal.writeCallback = { [weak coordinator] data in
-            coordinator?.sendToSSH(data)
+            coordinator?.sendToTransport(data)
         }
         coordinator.installRichPasteInterception(on: terminal)
         terminal.onResize = { [weak coordinator] cols, rows in
@@ -577,15 +576,14 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
         }
     }
 
-    private func startSSHConnectionIfNeeded(
+    private func startConnectionIfNeeded(
         terminal: GhosttyTerminalView,
-        coordinator: TerminalPaneSSHCoordinator,
+        coordinator: TerminalPaneConnectionCoordinator,
         state: ConnectionState
     ) {
         guard TerminalTabManager.shared.paneStates[paneId] != nil else { return }
-        guard TerminalTabManager.shared.shellId(for: paneId) == nil else { return }
-        guard coordinator.shellTask == nil else { return }
-        guard !TerminalTabManager.shared.isShellStartInFlight(for: paneId) else { return }
+        guard !coordinator.hasLiveConnection else { return }
+        guard !coordinator.isConnectionStartInFlight else { return }
         guard UIApplication.shared.applicationState == .active else { return }
 
         switch state {
@@ -595,7 +593,7 @@ private struct SSHTerminalPaneRepresentable: UIViewRepresentable {
             return
         }
 
-        coordinator.startSSHConnection(terminal: terminal)
+        coordinator.startConnection(terminal: terminal)
     }
 }
 #endif

@@ -121,7 +121,7 @@ struct TerminalTabView: View {
             }
             .keyboardShortcut(.defaultAction)
         } message: {
-            Text("The SSH connection will be terminated.")
+            Text("The remote connection will be terminated.")
         }
         .alert("Voice Input Unavailable", isPresented: $showingPermissionError) {
             Button("OK", role: .cancel) { }
@@ -831,6 +831,7 @@ struct TerminalPaneView: View {
         }
         .onChange(of: networkMonitor.readiness) { readiness in
             if readiness == .ready {
+                TerminalTabManager.shared.notifyEternalTerminalNetworkPathChanged(for: paneId)
                 attemptAutoReconnectIfNeeded()
             }
         }
@@ -928,7 +929,7 @@ struct TerminalPaneView: View {
     @ViewBuilder
     private func terminalSurface(credentials: ServerCredentials) -> some View {
         #if os(iOS)
-        SSHTerminalPaneWrapper(
+        RemoteTerminalPaneWrapper(
             paneId: paneId,
             server: server,
             credentials: credentials,
@@ -943,7 +944,7 @@ struct TerminalPaneView: View {
         .id(reconnectToken)
         .allowsHitTesting(connectionState.isConnected)
         #else
-        SSHTerminalPaneWrapper(
+        RemoteTerminalPaneWrapper(
             paneId: paneId,
             server: server,
             credentials: credentials,
@@ -1042,7 +1043,11 @@ struct TerminalPaneView: View {
             guard tabManager.isCurrentReconnectPreparation(preparationToken) else { return }
             guard !requiresReadyNetwork || networkMonitor.readiness == .ready else { return }
 
-            await tabManager.unregisterSSHClient(for: paneId)
+            if server.connectionMode == .eternalTerminal {
+                await tabManager.unregisterEternalTerminalRuntime(for: paneId)
+            } else {
+                await tabManager.unregisterSSHClient(for: paneId)
+            }
             guard tabManager.isCurrentReconnectPreparation(preparationToken) else { return }
             guard tabManager.paneStates[paneId] != nil else { return }
             #if os(iOS)
@@ -1133,12 +1138,15 @@ struct TerminalPaneView: View {
                     return
                 }
 
-                if TerminalTabManager.shared.shellId(for: paneId) != nil {
+                if TerminalTabManager.shared.shellId(for: paneId) != nil
+                    || TerminalTabManager.shared.existingEternalTerminalRuntime(for: paneId) != nil,
+                   connectionState.isConnected {
                     TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
                     return
                 }
 
                 let inFlight = TerminalTabManager.shared.isShellStartInFlight(for: paneId)
+                    || TerminalTabManager.shared.existingEternalTerminalRuntime(for: paneId)?.isStartInFlight == true
                 if inFlight {
                     // Keep polling while a shell start is still in flight so stale locks
                     // and hung attempts are eventually surfaced to the user.
