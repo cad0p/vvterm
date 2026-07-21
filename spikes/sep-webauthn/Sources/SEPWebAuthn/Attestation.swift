@@ -252,7 +252,7 @@ public func coseEC2PublicKeyCBOR(publicKeyRaw: Data) throws -> Data {
     // api.go:294-296 — x and y must be exactly 32 bytes (FillBytes semantics).
     // The SEP / CryptoKit always produces 32-byte coords, but defensively
     // zero-pad on the left if somehow shorter.
-    let pad: (inout Data) -> Void = { d in
+    let pad: (inout Data) throws -> Void = { d in
         if d.count < 32 {
             d = Data(repeating: 0, count: 32 - d.count) + d
         } else if d.count > 32 {
