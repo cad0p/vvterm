@@ -40,6 +40,9 @@ nonisolated enum EternalTerminalErrorPresentation {
                 return String(localized: "Eternal Terminal could not start through SSH. Verify the SSH credentials and that etterminal is installed on the host.")
             case .markerNotFound(let excerpt):
                 let excerpt = excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+                if excerpt.localizedCaseInsensitiveContains("communicating with et daemon") {
+                    return String(localized: "etterminal is installed, but it cannot reach the local etserver daemon. Start or restart the et service on the host, then try again.")
+                }
                 guard !excerpt.isEmpty else {
                     return String(localized: "etterminal did not return valid connection details. Verify the Eternal Terminal installation on the host.")
                 }

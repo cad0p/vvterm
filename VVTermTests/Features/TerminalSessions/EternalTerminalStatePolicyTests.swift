@@ -80,4 +80,19 @@ struct EternalTerminalStatePolicyTests {
         #expect(message.contains("Host response:"))
         #expect(message.contains("etterminal: command not found"))
     }
+
+    @Test
+    func unavailableETDaemonHasActionableServiceGuidance() {
+        let message = EternalTerminalErrorPresentation.message(
+            for: ETBootstrapError.markerNotFound(
+                "Error: Connection error communicating with et daemon: No such file or directory."
+            ),
+            host: "example.com",
+            port: 2022
+        )
+
+        #expect(message.contains("etterminal is installed"))
+        #expect(message.contains("Start or restart the et service"))
+        #expect(!message.contains("Stack Trace"))
+    }
 }
