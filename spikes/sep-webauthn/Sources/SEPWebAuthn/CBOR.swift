@@ -122,7 +122,7 @@ public enum CBOR {
 
 // MARK: - base64url helpers (no padding)
 
-extension Data {
+public extension Data {
     /// base64url without padding — mirrors Go's base64.RawURLEncoding.
     func base64URLEncodedString() -> String {
         var s = self.base64EncodedString()

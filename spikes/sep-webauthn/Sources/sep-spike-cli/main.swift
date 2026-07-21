@@ -202,7 +202,7 @@ extension URLSession {
 struct RegisterChallengeResponse: Decodable {
     // { "webauthn": { "publicKey": { "challenge": "...", "rp": {"id": "...", "name": "..."},
     //   "user": {"name": "...", "displayName": "...", "id": "..."}, ... } } }
-    let webauthn: WebAuthnCC?
+    let webauthn: WebauthnCC?
     struct WebauthnCC: Decodable {
         let publicKey: PublicKey
         struct PublicKey: Decodable {
