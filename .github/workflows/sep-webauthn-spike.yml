@@ -70,6 +70,8 @@ jobs:
       - name: Install Go (for fixture generation)
         uses: actions/setup-go@v5
         with:
+          # The fixture generator is self-contained (fxamacker/cbor + stdlib
+          # only — the Teleport ECDSAPublicKeyFromRaw helper is inlined).
           go-version: '1.21'
 
       - name: Show tool versions
@@ -84,17 +86,14 @@ jobs:
           set -euo pipefail
           swift build
 
-      - name: Regenerate fixtures from Teleport source
+      - name: Regenerate fixtures
         working-directory: spikes/sep-webauthn
-        env:
-          TELEPORT_SRC: ${{ runner.temp }}/teleport
         run: |
           set -euo pipefail
-          # Shallow-clone the pinned Teleport version for fixture generation.
-          # (The fixture generator imports lib/auth/touchid/api.go and
-          # lib/darwin/pub_key.go via a `replace` directive.)
-          git clone --depth 1 --branch v18.9.1 \
-            https://github.com/gravitational/teleport.git "$TELEPORT_SRC"
+          # The fixture generator is self-contained — it inlines the one
+          # Teleport function it needed (ecdsaPublicKeyFromRaw, a 45-line
+          # stdlib-only parser) so it doesn't pull the entire teleport module
+          # (which requires Go >= 1.25.11 and has a complex nested api module).
           ./fixtures/regenerate.sh
 
       - name: Run fixture tests (byte-comparison vs Go output)
