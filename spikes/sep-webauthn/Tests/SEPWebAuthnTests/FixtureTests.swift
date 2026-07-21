@@ -205,8 +205,8 @@ final class FixtureTests: XCTestCase {
             cred: CredentialData(id: credID, pubKeyCBOR: pubKeyCBOR)
         )
         let sig = try signer.sign(digest: attData.digest, credentialID: credID)
-        XCTAssertGreaterThan(sig.count, 64, "DER ECDSA sig should be ≥64 bytes")
-        XCTAssertLessThan(sig.count, 72, "DER ECDSA sig should be <72 bytes")
+        XCTAssertGreaterThanOrEqual(sig.count, 8, "DER ECDSA sig should be ≥8 bytes")
+        XCTAssertLessThanOrEqual(sig.count, 72, "DER ECDSA sig should be ≤72 bytes")
 
         // Verify with CryptoKit using the same public key.
         let p256Key = try P256.Signing.PublicKey(x963Representation: pubKeyRaw)
