@@ -38,8 +38,15 @@ nonisolated enum EternalTerminalErrorPresentation {
             switch bootstrapError {
             case .sshFailed:
                 return String(localized: "Eternal Terminal could not start through SSH. Verify the SSH credentials and that etterminal is installed on the host.")
-            case .markerNotFound:
-                return String(localized: "etterminal did not return valid connection details. Verify the Eternal Terminal installation on the host.")
+            case .markerNotFound(let excerpt):
+                let excerpt = excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !excerpt.isEmpty else {
+                    return String(localized: "etterminal did not return valid connection details. Verify the Eternal Terminal installation on the host.")
+                }
+                return String(
+                    format: String(localized: "etterminal did not return valid connection details. Host response: %@"),
+                    excerpt
+                )
             case .malformedCredentials:
                 return String(localized: "etterminal returned malformed connection details. Update Eternal Terminal on the host and try again.")
             }

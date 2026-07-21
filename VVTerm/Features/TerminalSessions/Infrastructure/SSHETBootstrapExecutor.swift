@@ -35,6 +35,7 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
     }
 
     func run(command: String) async throws -> String {
+        let command = Self.commandCapturingCombinedOutput(command)
         guard let connection else {
             return try await client.execute(command, timeout: .seconds(20))
         }
@@ -54,6 +55,12 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
             await client.disconnect()
             throw error
         }
+    }
+
+    /// ETBootstrap parses credentials written by etterminal's logging stream.
+    /// SSHClient intentionally returns stdout only, so merge stderr for this command.
+    nonisolated static func commandCapturingCombinedOutput(_ command: String) -> String {
+        "(\(command)) 2>&1"
     }
 
     func withConnectedClient<Result: Sendable>(

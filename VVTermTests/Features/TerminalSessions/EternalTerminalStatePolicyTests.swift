@@ -1,3 +1,4 @@
+import ETBootstrap
 import ETSession
 import Testing
 @testable import VVTerm
@@ -47,5 +48,25 @@ struct EternalTerminalStatePolicyTests {
 
         #expect(message.contains("et.example.com:22022"))
         #expect(message.contains("TCP port 22022"))
+    }
+
+    @Test
+    func bootstrapCommandCapturesETTerminalLoggingOutput() {
+        #expect(
+            SSHETBootstrapExecutor.commandCapturingCombinedOutput("start-et")
+                == "(start-et) 2>&1"
+        )
+    }
+
+    @Test
+    func missingBootstrapMarkerIncludesTheSanitizedHostResponse() {
+        let message = EternalTerminalErrorPresentation.message(
+            for: ETBootstrapError.markerNotFound("sh: etterminal: command not found"),
+            host: "example.com",
+            port: 2022
+        )
+
+        #expect(message.contains("Host response:"))
+        #expect(message.contains("etterminal: command not found"))
     }
 }
