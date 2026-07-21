@@ -147,7 +147,9 @@ while [[ "$(date +%s)" -lt "$deadline" ]]; do
     # Check if all required markers are present in the log.
     missing=0
     for marker in "${REQUIRED_MARKERS[@]}"; do
-        if ! grep -q "${MARKER_PREFIX} ${marker}" "$LOG_FILE" 2>/dev/null; then
+        # grep -F (fixed-string) so the [IOTEST] prefix isn't interpreted
+        # as a character class by BRE.
+        if ! grep -Fq "${MARKER_PREFIX} ${marker}" "$LOG_FILE" 2>/dev/null; then
             missing=1
             break
         fi
@@ -174,7 +176,7 @@ echo "==> Marker check"
 if [[ "$all_markers_found" -ne 1 ]]; then
     echo "FAIL: not all required markers appeared within ${RUN_TIMEOUT}s"
     for marker in "${REQUIRED_MARKERS[@]}"; do
-        if grep -q "${MARKER_PREFIX} ${marker}" "$LOG_FILE" 2>/dev/null; then
+        if grep -Fq "${MARKER_PREFIX} ${marker}" "$LOG_FILE" 2>/dev/null; then
             echo "    ✓ $marker"
         else
             echo "    ✗ $marker (MISSING)"

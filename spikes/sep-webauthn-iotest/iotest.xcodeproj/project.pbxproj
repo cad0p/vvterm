@@ -9,7 +9,6 @@
 		A10000010000000000000001 /* iotestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000001 /* iotestApp.swift */; };
 		A10000010000000000000002 /* WebAuthnProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000002 /* WebAuthnProbe.swift */; };
 		A10000010000000000000003 /* ProbeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000003 /* ProbeView.swift */; };
-		A10000010000000000000004 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000004 /* Info.plist */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -140,7 +139,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000010000000000000004 /* Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
