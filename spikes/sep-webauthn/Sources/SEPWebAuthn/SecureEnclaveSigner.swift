@@ -77,12 +77,18 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
             kSecAttrKeySizeInBits as String:     256,
             kSecAttrTokenID as String:           kSecAttrTokenIDSecureEnclave,
             kSecPrivateKeyAttrs as String: [
-                kSecAttrIsPermanent as String:       true,
+                // kSecAttrIsPermanent:false — keep the key in-memory only,
+                // NOT persisted to the keychain. A persistent SEP key
+                // (kSecAttrIsPermanent:true, like Teleport's register.m uses)
+                // requires the binary to be signed with a keychain-access-groups
+                // entitlement; a `swift build` debug CLI is ad-hoc signed and
+                // gets errSecMissingEntitlement (-34018) on key creation.
+                // The spike is single-process and caches the SecKey in
+                // `self.keys[credentialID]`, so transient is sufficient.
+                // Production (session 2.2) will use kSecAttrIsPermanent:true
+                // with a proper app signature.
+                kSecAttrIsPermanent as String:       false,
                 kSecAttrAccessControl as String:     access,
-                // label/tag disambiguate keys in the keychain; not strictly
-                // needed for the spike (we hold the SecKey in-memory), but
-                // included for parity with register.m.
-                kSecAttrApplicationLabel as String:  credentialID,
             ] as [String: Any],
         ]
 
