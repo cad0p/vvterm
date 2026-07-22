@@ -61,6 +61,12 @@ enum ProbeLog {
     static func jsError(_ message: String) {
         logger.error("[IOTEST] js_error=\(message, privacy: .public)")
     }
+
+    // Ceremony scaffolding (session 1.7) — validates the ceremony JS strings
+    // parse without a syntax error. CI-able; the actual ceremony is device-only.
+    static func ceremonyJSSyntaxOK(login: Bool, privilege: Bool) {
+        logger.notice("[IOTEST] ceremony_js_syntax_ok login=\(login ? "true" : "false") privilege=\(privilege ? "true" : "false")")
+    }
 }
 
 /// The probe script injected into the page. Stores results in window globals
@@ -125,19 +131,39 @@ struct ProbeState {
 @MainActor
 final class WebAuthnProbeModel: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var state = ProbeState()
-    private var webView: WKWebView?
+    /// The shared webview. Created eagerly on init so it's available
+    /// regardless of which tab (Probe or Ceremony) appears first. Exposed
+    /// (read-only) so the Ceremony screen can inject JS into the same
+    /// page context the probe already loaded.
+    private(set) var webView: WKWebView?
+    /// The target URL. Exposed so the Ceremony screen can show it.
+    let targetURL = URL(string: "https://teleport.pcad.it/web/login")!
     private var pollCount = 0
     private let maxPolls = 50  // 50 × 200ms = 10s timeout for the async probe
 
-    func makeWebView() -> WKWebView {
+    override init() {
+        super.init()
+        // Create the webview eagerly so both tabs can use it immediately.
         let config = WKWebViewConfiguration()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         // Allow inspection of the JS context (simulator/dev only).
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = self
-        self.webView = webView
-        return webView
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = self
+        self.webView = wv
+    }
+
+    /// Returns the shared webview for UIViewRepresentable. Creates it if
+    /// it doesn't exist (defensive — init should have created it).
+    func makeWebView() -> WKWebView {
+        if let webView { return webView }
+        let config = WKWebViewConfiguration()
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = self
+        self.webView = wv
+        return wv
     }
 
     func load(url: URL) {
@@ -263,6 +289,77 @@ final class WebAuthnProbeModel: NSObject, ObservableObject, WKNavigationDelegate
             let capsJSON = (try? JSONSerialization.data(withJSONObject: caps)) ?? Data()
             let capsString = String(data: capsJSON, encoding: .utf8) ?? "{}"
             ProbeLog.clientCapabilities(capsString)
+        }
+
+        // ── Ceremony scaffolding check (session 1.7) ────────────────────
+        // Validate that the ceremony JS strings (loginJS, privilegeJS) are
+        // syntactically valid by attempting to parse them with `new Function`.
+        // This catches JS syntax errors in CI without needing a device. The
+        // actual ceremony (Face ID, login, privilege token) is device-only.
+        // The check runs after the probe so the page is fully loaded.
+        self.checkCeremonyJSSyntax()
+    }
+
+    /// Validate the ceremony JS strings parse without a syntax error.
+    /// Emits `ceremony_js_syntax_ok=true|false` markers the CI greps for.
+    /// Uses `new Function(js)` which parses but does NOT execute the body
+    /// (the IIFE wrapper means the body is a single function expression).
+    func checkCeremonyJSSyntax() {
+        guard let webView else { return }
+        // JSON-encode the JS sources so all newlines/quotes/backslashes are
+        // escaped correctly for embedding in a JS string literal. JSONEncoder
+        // produces a quoted string like "(function() {\n ... })".
+        guard let loginData = try? JSONEncoder().encode(loginJS),
+              let loginJSON = String(data: loginData, encoding: .utf8),
+              let privData = try? JSONEncoder().encode(privilegeJS),
+              let privJSON = String(data: privData, encoding: .utf8)
+        else {
+            ProbeLog.jsError("ceremony_syntax_check: failed to JSON-encode JS sources")
+            appendLog("Ceremony JS syntax check: JSON encode failed")
+            return
+        }
+        // The check JS: parse each source with `new Function(src)` (parses
+        // but does NOT execute the IIFE body). Emits {login, privilege,
+        // loginErr, privilegeErr}.
+        let check = """
+        (function() {
+            var loginSrc = \(loginJSON);
+            var privSrc = \(privJSON);
+            var results = {login: false, privilege: false, loginErr: '', privilegeErr: ''};
+            try { new Function(loginSrc); results.login = true; }
+            catch(e) { results.loginErr = String(e); }
+            try { new Function(privSrc); results.privilege = true; }
+            catch(e) { results.privilegeErr = String(e); }
+            return JSON.stringify(results);
+        })();
+        """
+        webView.evaluateJavaScript(check) { result, error in
+            if let error {
+                ProbeLog.jsError("ceremony_syntax_check: \(error.localizedDescription)")
+                self.appendLog("Ceremony JS syntax check FAILED: \(error.localizedDescription)")
+                return
+            }
+            guard let json = result as? String else {
+                ProbeLog.jsError("ceremony_syntax_check: non-string result")
+                self.appendLog("Ceremony JS syntax check: non-string result")
+                return
+            }
+            self.appendLog("Ceremony JS syntax: \(json)")
+            guard let data = json.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                ProbeLog.jsError("ceremony_syntax_check: invalid JSON \(json)")
+                return
+            }
+            let loginOK = parsed["login"] as? Bool ?? false
+            let privilegeOK = parsed["privilege"] as? Bool ?? false
+            ProbeLog.ceremonyJSSyntaxOK(login: loginOK, privilege: privilegeOK)
+            if let loginErr = parsed["loginErr"] as? String, !loginErr.isEmpty {
+                ProbeLog.jsError("ceremony_login_js: \(loginErr)")
+            }
+            if let privErr = parsed["privilegeErr"] as? String, !privErr.isEmpty {
+                ProbeLog.jsError("ceremony_privilege_js: \(privErr)")
+            }
         }
     }
 

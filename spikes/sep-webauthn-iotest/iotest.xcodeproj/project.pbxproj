@@ -9,6 +9,9 @@
 		A10000010000000000000001 /* iotestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000001 /* iotestApp.swift */; };
 		A10000010000000000000002 /* WebAuthnProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000002 /* WebAuthnProbe.swift */; };
 		A10000010000000000000003 /* ProbeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000003 /* ProbeView.swift */; };
+		C10000010000000000000001 /* CeremonyRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000100000000000000001 /* CeremonyRunner.swift */; };
+		C10000010000000000000002 /* CeremonyJS.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000100000000000000002 /* CeremonyJS.swift */; };
+		C10000010000000000000003 /* CeremonyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000100000000000000003 /* CeremonyView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +20,10 @@
 		A10000100000000000000002 /* WebAuthnProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthnProbe.swift; sourceTree = "<group>"; };
 		A10000100000000000000003 /* ProbeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProbeView.swift; sourceTree = "<group>"; };
 		A10000100000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C10000100000000000000004 /* iotest.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iotest.entitlements; sourceTree = "<group>"; };
+		C10000100000000000000001 /* CeremonyRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CeremonyRunner.swift; sourceTree = "<group>"; };
+		C10000100000000000000002 /* CeremonyJS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CeremonyJS.swift; sourceTree = "<group>"; };
+		C10000100000000000000003 /* CeremonyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CeremonyView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +58,7 @@
 			children = (
 				A10000400000000000000003 /* App */,
 				A10000400000000000000004 /* WebAuthnProbe */,
+				C10000400000000000000001 /* Ceremony */,
 				A10000400000000000000005 /* Resources */,
 			);
 			path = iotest;
@@ -77,8 +85,19 @@
 			isa = PBXGroup;
 			children = (
 				A10000100000000000000004 /* Info.plist */,
+				C10000100000000000000004 /* iotest.entitlements */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		C10000400000000000000001 /* Ceremony */ = {
+			isa = PBXGroup;
+			children = (
+				C10000100000000000000001 /* CeremonyRunner.swift */,
+				C10000100000000000000002 /* CeremonyJS.swift */,
+				C10000100000000000000003 /* CeremonyView.swift */,
+			);
+			path = Ceremony;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -152,6 +171,9 @@
 				A10000010000000000000001 /* iotestApp.swift in Sources */,
 				A10000010000000000000002 /* WebAuthnProbe.swift in Sources */,
 				A10000010000000000000003 /* ProbeView.swift in Sources */,
+				C10000010000000000000001 /* CeremonyRunner.swift in Sources */,
+				C10000010000000000000002 /* CeremonyJS.swift in Sources */,
+				C10000010000000000000003 /* CeremonyView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -286,6 +308,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = iotest/Resources/iotest.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -315,6 +338,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = iotest/Resources/iotest.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
