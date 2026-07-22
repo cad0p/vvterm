@@ -104,6 +104,10 @@ struct VVTermApp: App {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-stats-storage-harness")
     }
 
+    private var usesStatsCardsLayoutUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-stats-cards-layout-harness")
+    }
+
     private var usesTerminalZenModeUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-zen-mode-harness")
     }
@@ -115,6 +119,9 @@ struct VVTermApp: App {
         #if DEBUG
         if usesNoticePresentationUITestHarness {
             NoticePresentationUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesStatsCardsLayoutUITestHarness {
+            StatsCardsLayoutUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesTerminalZenModeUITestHarness {
             TerminalZenModeUITestHarness()

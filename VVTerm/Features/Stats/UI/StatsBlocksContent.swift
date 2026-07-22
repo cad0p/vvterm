@@ -38,38 +38,34 @@ struct StatsAppearancePreviewContent: View {
     }
 }
 
-private enum StatsGridLayoutSelection {
-    // Mirrors the old ViewThatFits candidates: each column had to satisfy the
-    // widest natural single-column card, currently the locked Docker upsell.
+nonisolated enum StatsGridLayoutPolicy {
     static func minimumGridWidth(
         for columnCount: Int,
-        style: StatsVisualStyle,
-        includesLockedDockerCard: Bool
+        minimumColumnWidth: CGFloat,
+        spacing: CGFloat
     ) -> CGFloat {
-        let columnWidth = includesLockedDockerCard
-            ? max(style.gridMinimumColumnWidth, LockedDockerCard.wideLayoutMinimumWidth)
-            : style.gridMinimumColumnWidth
-        return CGFloat(columnCount) * columnWidth
-            + CGFloat(max(0, columnCount - 1)) * style.cardSpacing
+        let safeColumnCount = max(1, columnCount)
+        return CGFloat(safeColumnCount) * max(0, minimumColumnWidth)
+            + CGFloat(safeColumnCount - 1) * max(0, spacing)
     }
 
     static func columnCount(
         for availableWidth: CGFloat,
-        style: StatsVisualStyle,
-        includesLockedDockerCard: Bool
+        minimumColumnWidth: CGFloat,
+        spacing: CGFloat
     ) -> Int {
         guard availableWidth > 0 else { return 1 }
         if availableWidth >= minimumGridWidth(
             for: 3,
-            style: style,
-            includesLockedDockerCard: includesLockedDockerCard
+            minimumColumnWidth: minimumColumnWidth,
+            spacing: spacing
         ) {
             return 3
         }
         if availableWidth >= minimumGridWidth(
             for: 2,
-            style: style,
-            includesLockedDockerCard: includesLockedDockerCard
+            minimumColumnWidth: minimumColumnWidth,
+            spacing: spacing
         ) {
             return 2
         }
@@ -77,10 +73,147 @@ private enum StatsGridLayoutSelection {
     }
 }
 
+private struct StatsCardsGridLayout: Layout {
+    let minimumColumnWidth: CGFloat
+    let spacing: CGFloat
+    let preferredColumnSpans: [Int]
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache()
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.measurement = nil
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) -> CGSize {
+        let measurement = measurement(for: proposal.width, subviews: subviews)
+        cache.measurement = measurement
+        return measurement.size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) {
+        let resolvedMeasurement: Measurement
+        if let cachedMeasurement = cache.measurement, cachedMeasurement.size.width == bounds.width {
+            resolvedMeasurement = cachedMeasurement
+        } else {
+            resolvedMeasurement = measurement(for: bounds.width, subviews: subviews)
+            cache.measurement = resolvedMeasurement
+        }
+        var rowOffsets = [CGFloat](repeating: bounds.minY, count: resolvedMeasurement.rowHeights.count)
+        for row in rowOffsets.indices.dropFirst() {
+            rowOffsets[row] = rowOffsets[row - 1] + resolvedMeasurement.rowHeights[row - 1] + spacing
+        }
+
+        for item in resolvedMeasurement.items {
+            let width = resolvedMeasurement.width(forColumnSpan: item.columnSpan)
+            let x = bounds.minX + CGFloat(item.column) * (resolvedMeasurement.columnWidth + spacing)
+            subviews[item.index].place(
+                at: CGPoint(x: x, y: rowOffsets[item.row]),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: width, height: resolvedMeasurement.rowHeights[item.row])
+            )
+        }
+    }
+
+    private func measurement(for proposedWidth: CGFloat?, subviews: Subviews) -> Measurement {
+        let availableWidth = resolvedWidth(proposedWidth)
+        let columnCount = StatsGridLayoutPolicy.columnCount(
+            for: availableWidth,
+            minimumColumnWidth: minimumColumnWidth,
+            spacing: spacing
+        )
+        let totalSpacing = CGFloat(columnCount - 1) * spacing
+        let columnWidth = max(0, (availableWidth - totalSpacing) / CGFloat(columnCount))
+        var items: [Item] = []
+        var rowHeights: [CGFloat] = []
+        var row = 0
+        var column = 0
+
+        for index in subviews.indices {
+            let requestedSpan = preferredColumnSpans.indices.contains(index)
+                ? preferredColumnSpans[index]
+                : 1
+            let columnSpan = requestedSpan > 1 && columnCount >= 3 ? 2 : 1
+
+            if column + columnSpan > columnCount {
+                row += 1
+                column = 0
+            }
+            if row == rowHeights.count {
+                rowHeights.append(0)
+            }
+
+            let itemWidth = columnWidth * CGFloat(columnSpan) + spacing * CGFloat(columnSpan - 1)
+            let size = subviews[index].sizeThatFits(ProposedViewSize(width: itemWidth, height: nil))
+            rowHeights[row] = max(rowHeights[row], size.height)
+            items.append(Item(index: index, row: row, column: column, columnSpan: columnSpan))
+
+            column += columnSpan
+            if column == columnCount {
+                row += 1
+                column = 0
+            }
+        }
+
+        let totalHeight = rowHeights.reduce(0, +)
+            + CGFloat(max(0, rowHeights.count - 1)) * spacing
+        return Measurement(
+            size: CGSize(width: availableWidth, height: totalHeight),
+            columnWidth: columnWidth,
+            items: items,
+            rowHeights: rowHeights,
+            spacing: spacing
+        )
+    }
+
+    private func resolvedWidth(_ proposedWidth: CGFloat?) -> CGFloat {
+        guard let proposedWidth, proposedWidth.isFinite else {
+            return StatsGridLayoutPolicy.minimumGridWidth(
+                for: 1,
+                minimumColumnWidth: minimumColumnWidth,
+                spacing: spacing
+            )
+        }
+        return max(0, proposedWidth)
+    }
+
+    struct Item {
+        let index: Int
+        let row: Int
+        let column: Int
+        let columnSpan: Int
+    }
+
+    struct Cache {
+        var measurement: Measurement?
+    }
+
+    struct Measurement {
+        let size: CGSize
+        let columnWidth: CGFloat
+        let items: [Item]
+        let rowHeights: [CGFloat]
+        let spacing: CGFloat
+
+        func width(forColumnSpan span: Int) -> CGFloat {
+            columnWidth * CGFloat(span) + spacing * CGFloat(span - 1)
+        }
+    }
+}
+
 struct StatsBlocksContent: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(StatsResolvedAppearance.storageKey) private var appearanceMode = "system"
-    @State private var measuredGridWidth: CGFloat = 0
 
     let serverName: String
     let stats: ServerStats
@@ -162,12 +295,7 @@ struct StatsBlocksContent: View {
             .frame(maxWidth: constrainsWidth ? nil : .infinity)
         } else {
             VStack(spacing: style.cardSpacing) {
-                responsiveGrid(style: style, availableWidth: measuredGridWidth)
-                    .onGeometryChange(for: CGFloat.self) { proxy in
-                        proxy.size.width
-                    } action: { newWidth in
-                        measuredGridWidth = newWidth
-                    }
+                responsiveGrid(style: style)
 
                 if showsCustomizationEntryPoint, let customizeAction {
                     StatsCustomizeButton(style: style, action: customizeAction)
@@ -186,97 +314,27 @@ struct StatsBlocksContent: View {
         preferences.visibleBlocks.filter(shouldRenderBlock)
     }
 
-    @ViewBuilder
-    private func responsiveGrid(style: StatsVisualStyle, availableWidth: CGFloat) -> some View {
-        let columnCount = StatsGridLayoutSelection.columnCount(
-            for: availableWidth,
-            style: style,
-            includesLockedDockerCard: includesLockedDockerCard
-        )
-
-        statsGrid(style: style, columnCount: columnCount)
-            .frame(
-                minWidth: columnCount > 1
-                    ? StatsGridLayoutSelection.minimumGridWidth(
-                        for: columnCount,
-                        style: style,
-                        includesLockedDockerCard: includesLockedDockerCard
-                    )
-                    : nil
-            )
-    }
-
-    private func statsGrid(style: StatsVisualStyle, columnCount: Int) -> some View {
-        let rows = gridRows(for: renderedBlocks, columnCount: columnCount)
-
-        return Grid(alignment: .topLeading, horizontalSpacing: style.cardSpacing, verticalSpacing: style.cardSpacing) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                GridRow(alignment: .top) {
-                    ForEach(row, id: \.self) { blockID in
-                        statsBlock(blockID, style: style)
-                            .gridCellColumns(gridSpan(for: blockID, columnCount: columnCount))
-                    }
-
-                    ForEach(0..<emptyCells(in: row, columnCount: columnCount), id: \.self) { _ in
-                        Color.clear
-                            .frame(minWidth: 0, minHeight: 0)
-                            .gridCellUnsizedAxes([.horizontal, .vertical])
-                    }
-                }
+    private func responsiveGrid(style: StatsVisualStyle) -> some View {
+        StatsCardsGridLayout(
+            minimumColumnWidth: effectiveMinimumColumnWidth(for: style),
+            spacing: style.cardSpacing,
+            preferredColumnSpans: renderedBlocks.map { blockID in
+                blockID == .docker && isDockerUnlocked ? 2 : 1
+            }
+        ) {
+            ForEach(renderedBlocks, id: \.self) { blockID in
+                statsBlock(blockID, style: style)
+                    .accessibilityIdentifier("vvterm.stats.card.\(blockID.rawValue)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    private var includesLockedDockerCard: Bool {
-        renderedBlocks.contains(.docker) && !isDockerUnlocked && dockerUpgradeAction != nil
-    }
-
-    private func gridRows(for items: [StatsPreferences.BlockID], columnCount: Int) -> [[StatsPreferences.BlockID]] {
-        var rows: [[StatsPreferences.BlockID]] = []
-        var currentRow: [StatsPreferences.BlockID] = []
-        var remainingColumns = columnCount
-
-        for blockID in items {
-            let span = gridSpan(for: blockID, columnCount: columnCount)
-
-            if span > remainingColumns, !currentRow.isEmpty {
-                rows.append(currentRow)
-                currentRow = []
-                remainingColumns = columnCount
-            }
-
-            currentRow.append(blockID)
-            remainingColumns -= span
-
-            if remainingColumns == 0 {
-                rows.append(currentRow)
-                currentRow = []
-                remainingColumns = columnCount
-            }
+    private func effectiveMinimumColumnWidth(for style: StatsVisualStyle) -> CGFloat {
+        guard renderedBlocks.contains(.docker), !isDockerUnlocked, dockerUpgradeAction != nil else {
+            return style.gridMinimumColumnWidth
         }
-
-        if !currentRow.isEmpty {
-            rows.append(currentRow)
-        }
-
-        return rows
-    }
-
-    private func emptyCells(in row: [StatsPreferences.BlockID], columnCount: Int) -> Int {
-        let occupiedColumns = row.reduce(0) { partialResult, blockID in
-            partialResult + gridSpan(for: blockID, columnCount: columnCount)
-        }
-        return max(0, columnCount - occupiedColumns)
-    }
-
-    private func gridSpan(for blockID: StatsPreferences.BlockID, columnCount: Int) -> Int {
-        switch blockID {
-        case .docker:
-            return isDockerUnlocked && columnCount >= 3 ? 2 : 1
-        case .system, .cpu, .memory, .gpu, .network, .storage, .processes:
-            return 1
-        }
+        return max(style.gridMinimumColumnWidth, LockedDockerCard.wideLayoutMinimumWidth)
     }
 
     private func shouldRenderBlock(_ blockID: StatsPreferences.BlockID) -> Bool {

@@ -736,33 +736,21 @@ struct LockedDockerCard: View {
 
     let style: StatsVisualStyle
     let action: () -> Void
-    @State private var measuredCardWidth: CGFloat = 0
 
     var body: some View {
         Button(action: action) {
             AppleCard(style: style) {
-                selectedLayout
+                ViewThatFits(in: .horizontal) {
+                    wideLayout
+                        .frame(minWidth: Self.wideLayoutMinimumWidth, alignment: .topLeading)
+                    compactLayout
+                }
                 .padding(style.cardPadding)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.size.width
-                } action: { newWidth in
-                    measuredCardWidth = newWidth
-                }
             }
         }
         .buttonStyle(StatsCardButtonStyle())
         .accessibilityLabel(Text("Unlock Docker monitoring"))
-    }
-
-    @ViewBuilder
-    private var selectedLayout: some View {
-        if contentWidth >= Self.wideLayoutMinimumWidth {
-            wideLayout
-                .frame(minWidth: Self.wideLayoutMinimumWidth, alignment: .topLeading)
-        } else {
-            compactLayout
-        }
     }
 
     private var wideLayout: some View {
@@ -859,11 +847,9 @@ struct LockedDockerCard: View {
         .background(Color.blue.opacity(0.12), in: Capsule())
     }
 
-    @ViewBuilder
     private var compactUnlockPill: some View {
-        if contentWidth >= Self.fullUnlockPillMinimumWidth {
+        ViewThatFits(in: .horizontal) {
             unlockPill
-        } else {
             HStack(spacing: 6) {
                 Image(systemName: "lock.open")
                     .font(.caption.weight(.bold))
@@ -877,14 +863,6 @@ struct LockedDockerCard: View {
             .background(Color.blue.opacity(0.12), in: Capsule())
         }
     }
-
-    private var contentWidth: CGFloat {
-        max(0, measuredCardWidth - style.cardPadding * 2)
-    }
-
-    // Mirrors the old compact pill fallback: header + spacing + the full
-    // "Unlock Docker" pill need roughly this much horizontal room.
-    private static let fullUnlockPillMinimumWidth: CGFloat = 320
 
     @ViewBuilder
     private var featureRows: some View {
