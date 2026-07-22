@@ -14,6 +14,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct HeadlessView: View {
     @StateObject private var runner = HeadlessRunner()
@@ -95,6 +96,14 @@ struct HeadlessView: View {
                     ProgressView().scaleEffect(0.8)
                 }
                 Spacer()
+                Button(action: {
+                    UIPasteboard.general.string = runner.fullLogDump()
+                }) {
+                    Label("Copy logs", systemImage: "doc.on.doc")
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .disabled(runner.log.isEmpty)
                 statusBadge(runner.overallStatus)
             }
             .padding(.horizontal, 8).padding(.vertical, 6)

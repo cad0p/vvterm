@@ -348,6 +348,30 @@ final class HeadlessRunner: NSObject, ObservableObject {
     private func appendLog(_ line: String) {
         log.append(line)
     }
+
+    /// Build a full log dump for the "Copy logs" button. Includes the
+    /// key results (headless ID, cert, POST duration, status) followed
+    /// by the complete log panel, so the user can paste it into a results
+    /// note without needing Xcode's console.
+    func fullLogDump() -> String {
+        var lines: [String] = []
+        lines.append("=== Session 1.9 Headless Bootstrap — results ===")
+        lines.append("Status: \(overallStatus)")
+        lines.append("Method: \(safariMethod)")
+        lines.append("Headless ID: \(headlessID)")
+        lines.append("POST duration: \(String(format: "%.1f", postDuration))s")
+        if !postError.isEmpty {
+            lines.append("POST error: \(postError)")
+        }
+        if !certBase64.isEmpty {
+            lines.append("Cert length: \(certBase64.count) chars")
+            lines.append("Cert (first 80): \(String(certBase64.prefix(80)))")
+        }
+        lines.append("")
+        lines.append("=== Log ===")
+        lines.append(contentsOf: log)
+        return lines.joined(separator: "\n")
+    }
 }
 
 // MARK: - ASWebAuthenticationPresentationContextProviding
