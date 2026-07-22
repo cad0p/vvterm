@@ -66,11 +66,20 @@ struct SEPBiometryView: View {
 
                 // Steps list
                 if runner.steps.isEmpty {
-                    ContentUnavailableView(
-                        "No run yet",
-                        systemImage: "play.circle",
-                        description: Text("Paste an invite token and tap Run")
-                    )
+                    // ContentUnavailableView is iOS 17+; our deployment
+                    // target is 16.1. Use a plain fallback so the app builds
+                    // on iOS 16 (and the 1.6b test isn't gated on iOS 17).
+                    VStack(spacing: 8) {
+                        Image(systemName: "play.circle")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.secondary)
+                        Text("No run yet")
+                            .font(.headline)
+                        Text("Paste an invite token and tap Run")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
                         Section("Steps") {

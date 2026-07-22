@@ -282,9 +282,9 @@ final class SEPBiometryTestRunner: ObservableObject {
         // then base64-encoded, prefixed with "ssh-ed25519 ".
         var wire = Data()
         let alg = Data("ssh-ed25519".utf8)
-        wire.append(UInt32(alg.count).bigEndianBytes)
+        wire.append(contentsOf: UInt32(alg.count).bigEndianBytes)
         wire.append(alg)
-        wire.append(UInt32(pub.count).bigEndianBytes)
+        wire.append(contentsOf: UInt32(pub.count).bigEndianBytes)
         wire.append(pub)
         let b64 = wire.base64EncodedString()
         return "ssh-ed25519 \(b64) sep-spike-ios"
