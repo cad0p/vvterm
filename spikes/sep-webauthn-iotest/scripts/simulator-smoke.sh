@@ -37,8 +37,9 @@ RUN_TIMEOUT=90         # seconds to wait for app to run + emit probes (incl. cer
 MARKER_PREFIX="[IOTEST]"
 
 # Markers the smoke test asserts. Each must appear in the captured log.
-# The ceremony_js_syntax_ok marker is emitted after the probe completes
-# (session 1.7) — it validates the ceremony JS strings parse without error.
+# The ceremony_js_syntax_ok markers (session 1.7) validate the ceremony JS
+# strings parse without error — two separate markers (login + privilege)
+# because the checks run independently.
 REQUIRED_MARKERS=(
     "app_launched"
     "load_started"
@@ -46,7 +47,8 @@ REQUIRED_MARKERS=(
     "js_injection_roundtrip=2"
     "public_key_credential_exists=true"
     "platform_authenticator_available="
-    "ceremony_js_syntax_ok login=true privilege=true"
+    "ceremony_js_syntax_ok name=login ok=true"
+    "ceremony_js_syntax_ok name=privilege ok=true"
 )
 
 echo "==> Config"

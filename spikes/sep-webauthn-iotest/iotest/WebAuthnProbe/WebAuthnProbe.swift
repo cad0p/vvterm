@@ -64,8 +64,10 @@ enum ProbeLog {
 
     // Ceremony scaffolding (session 1.7) — validates the ceremony JS strings
     // parse without a syntax error. CI-able; the actual ceremony is device-only.
-    static func ceremonyJSSyntaxOK(login: Bool, privilege: Bool) {
-        logger.notice("[IOTEST] ceremony_js_syntax_ok login=\(login ? "true" : "false") privilege=\(privilege ? "true" : "false")")
+    // Two separate markers (login + privilege) so the CI can assert each
+    // independently. The smoke test greps for both.
+    static func ceremonyJSSyntaxOK(name: String, ok: Bool) {
+        logger.notice("[IOTEST] ceremony_js_syntax_ok name=\(name, privacy: .public) ok=\(ok ? "true" : "false")")
     }
 }
 
@@ -302,64 +304,46 @@ final class WebAuthnProbeModel: NSObject, ObservableObject, WKNavigationDelegate
 
     /// Validate the ceremony JS strings parse without a syntax error.
     /// Emits `ceremony_js_syntax_ok=true|false` markers the CI greps for.
-    /// Uses `new Function(js)` which parses but does NOT execute the body
-    /// (the IIFE wrapper means the body is a single function expression).
+    ///
+    /// Approach: inject each ceremony source wrapped in a function
+    /// definition (`var __check = function() { <source> };`). This parses
+    /// the source as a function body (catching syntax errors) but does NOT
+    /// call the function, so the IIFE body doesn't execute. We use
+    /// `evaluateJavaScript`'s error callback to detect parse errors.
+    ///
+    /// We can't use `new Function(src)` or `eval(src)` because Teleport's
+    /// CSP is `script-src 'self'` (blocks `unsafe-eval`) — this was caught
+    /// by the 1.7 CI run (#29953261600, first attempt).
     func checkCeremonyJSSyntax() {
         guard let webView else { return }
-        // JSON-encode the JS sources so all newlines/quotes/backslashes are
-        // escaped correctly for embedding in a JS string literal. JSONEncoder
-        // produces a quoted string like "(function() {\n ... })".
-        guard let loginData = try? JSONEncoder().encode(loginJS),
-              let loginJSON = String(data: loginData, encoding: .utf8),
-              let privData = try? JSONEncoder().encode(privilegeJS),
-              let privJSON = String(data: privData, encoding: .utf8)
-        else {
-            ProbeLog.jsError("ceremony_syntax_check: failed to JSON-encode JS sources")
-            appendLog("Ceremony JS syntax check: JSON encode failed")
-            return
-        }
-        // The check JS: parse each source with `new Function(src)` (parses
-        // but does NOT execute the IIFE body). Emits {login, privilege,
-        // loginErr, privilegeErr}.
-        let check = """
-        (function() {
-            var loginSrc = \(loginJSON);
-            var privSrc = \(privJSON);
-            var results = {login: false, privilege: false, loginErr: '', privilegeErr: ''};
-            try { new Function(loginSrc); results.login = true; }
-            catch(e) { results.loginErr = String(e); }
-            try { new Function(privSrc); results.privilege = true; }
-            catch(e) { results.privilegeErr = String(e); }
-            return JSON.stringify(results);
-        })();
-        """
-        webView.evaluateJavaScript(check) { result, error in
+        checkOneJSSyntax(webView: webView, name: "login", source: loginJS)
+        checkOneJSSyntax(webView: webView, name: "privilege", source: privilegeJS)
+    }
+
+    /// Check one JS source for syntax errors by wrapping it in a function
+    /// definition and injecting via evaluateJavaScript. If the source has a
+    /// syntax error, the error callback fires and we emit a failure marker.
+    private func checkOneJSSyntax(webView: WKWebView, name: String, source: String) {
+        // Wrap the source in a function body. The source is an IIFE
+        // `(function(){...})();` — wrapping it makes `function(){ (function(){...})(); }`
+        // which is valid syntax. The IIFE doesn't execute because we only
+        // define the function, not call it.
+        // We append a trailing `; 0;` so evaluateJavaScript returns a value
+        // (0) on success, confirming the injection worked.
+        let wrapped = "var __iotestCheck_\(name) = function() { \(source) }; 0;"
+        webView.evaluateJavaScript(wrapped) { result, error in
             if let error {
-                ProbeLog.jsError("ceremony_syntax_check: \(error.localizedDescription)")
-                self.appendLog("Ceremony JS syntax check FAILED: \(error.localizedDescription)")
+                // A syntax error in the source surfaces here.
+                ProbeLog.ceremonyJSSyntaxOK(name: name, ok: false)
+                ProbeLog.jsError("ceremony_\(name)_js: \(error.localizedDescription)")
+                self.appendLog("Ceremony \(name) JS syntax FAILED: \(error.localizedDescription)")
                 return
             }
-            guard let json = result as? String else {
-                ProbeLog.jsError("ceremony_syntax_check: non-string result")
-                self.appendLog("Ceremony JS syntax check: non-string result")
-                return
-            }
-            self.appendLog("Ceremony JS syntax: \(json)")
-            guard let data = json.data(using: .utf8),
-                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else {
-                ProbeLog.jsError("ceremony_syntax_check: invalid JSON \(json)")
-                return
-            }
-            let loginOK = parsed["login"] as? Bool ?? false
-            let privilegeOK = parsed["privilege"] as? Bool ?? false
-            ProbeLog.ceremonyJSSyntaxOK(login: loginOK, privilege: privilegeOK)
-            if let loginErr = parsed["loginErr"] as? String, !loginErr.isEmpty {
-                ProbeLog.jsError("ceremony_login_js: \(loginErr)")
-            }
-            if let privErr = parsed["privilegeErr"] as? String, !privErr.isEmpty {
-                ProbeLog.jsError("ceremony_privilege_js: \(privErr)")
-            }
+            // Success — the source parsed without error.
+            ProbeLog.ceremonyJSSyntaxOK(name: name, ok: true)
+            self.appendLog("Ceremony \(name) JS syntax OK")
+            // Clean up the global we created.
+            webView.evaluateJavaScript("delete window.__iotestCheck_\(name)") { _, _ in }
         }
     }
 
