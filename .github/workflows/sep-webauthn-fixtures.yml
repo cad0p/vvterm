@@ -49,9 +49,27 @@ jobs:
           swift --version
           xcodebuild -version
 
+      - name: Install Go (for fixture generation)
+        uses: actions/setup-go@v5
+        with:
+          # The fixture generator is self-contained — it inlines the one
+          # Teleport function it needed (ecdsaPublicKeyFromRaw) so it doesn't
+          # pull the entire teleport module (which requires Go >= 1.25.11
+          # and has a complex nested api module).
+          go-version: '1.21'
+
       - name: Build package
         working-directory: spikes/sep-webauthn
         run: swift build
+
+      - name: Regenerate fixtures
+        working-directory: spikes/sep-webauthn
+        run: |
+          set -euo pipefail
+          # The fixture generator is self-contained — it inlines the one
+          # Teleport function it needed (ecdsaPublicKeyFromRaw, a 45-line
+          # stdlib-only parser) so it doesn't pull the entire teleport module.
+          ./fixtures/regenerate.sh
 
       - name: Run fixture tests (byte-comparison vs Go output)
         working-directory: spikes/sep-webauthn
