@@ -17,6 +17,7 @@ struct SEPBiometryView: View {
     @StateObject private var runner = SEPBiometryTestRunner()
     @State private var token: String = ""
     @State private var host: String = "teleport.pcad.it"
+    @FocusState private var tokenFieldFocused: Bool
 
     private let stepIcons: [SEPBiometryStepStatus: String] = [
         .pending: "○", .inProgress: "⏳", .done: "✓", .failed: "✗",
@@ -48,9 +49,12 @@ struct SEPBiometryView: View {
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                             .lineLimit(2...4)
+                            .focused($tokenFieldFocused)
+                            .submitLabel(.done)
                     }
 
                     Button {
+                        tokenFieldFocused = false  // dismiss keyboard
                         Task { await runner.run(token: token.trimmingCharacters(in: .whitespacesAndNewlines), host: host) }
                     } label: {
                         Label(runner.overallStatus == "running" ? "Running…" : "Run register + login", systemImage: "play.circle.fill")
@@ -80,6 +84,8 @@ struct SEPBiometryView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { tokenFieldFocused = false }
                 } else {
                     List {
                         Section("Steps") {
@@ -111,6 +117,7 @@ struct SEPBiometryView: View {
                             }
                         }
                     }
+                    .scrollDismissesKeyboard(.immediately)
                 }
             }
             .navigationTitle("SEP + biometry")
