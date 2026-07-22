@@ -46,6 +46,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000400000000000000001 /* iotest */,
+				D10000400000000000000002 /* SEPWebAuthn (from spike) */,
 				A10000400000000000000002 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -64,7 +65,6 @@
 				A10000400000000000000003 /* App */,
 				A10000400000000000000004 /* WebAuthnProbe */,
 				D10000400000000000000001 /* HeadlessBootstrap */,
-				D10000400000000000000002 /* SEPWebAuthn (from spike) */,
 				A10000400000000000000005 /* Resources */,
 			);
 			path = iotest;
