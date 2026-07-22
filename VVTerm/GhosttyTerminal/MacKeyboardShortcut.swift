@@ -42,5 +42,45 @@ enum MacTerminalShortcutRouting {
     ) -> Bool {
         isFirstResponder && shortcut.matches(keyCode: keyCode, modifiers: modifiers)
     }
+
+    static func zoomAction(
+        keyCode: UInt16,
+        characters: String?,
+        modifiers: NSEvent.ModifierFlags,
+        isFirstResponder: Bool
+    ) -> TerminalZoomAction? {
+        guard isFirstResponder else { return nil }
+
+        let physicalKey: TerminalZoomShortcutKey?
+        switch keyCode {
+        case Ghostty.Input.Key.equal.keyCode!:
+            physicalKey = .equal
+        case Ghostty.Input.Key.minus.keyCode!:
+            physicalKey = .minus
+        case Ghostty.Input.Key.digit0.keyCode!:
+            physicalKey = .zero
+        case Ghostty.Input.Key.numpadAdd.keyCode!:
+            physicalKey = .keypadPlus
+        case Ghostty.Input.Key.numpadSubtract.keyCode!:
+            physicalKey = .keypadMinus
+        case Ghostty.Input.Key.numpad0.keyCode!:
+            physicalKey = .keypadZero
+        default:
+            physicalKey = characters == "-" ? .minus : nil
+        }
+
+        let shortcutKey = TerminalZoomShortcutRouting.resolvedKey(
+            physicalKey: physicalKey,
+            characters: characters ?? ""
+        )
+        guard let shortcutKey else { return nil }
+        return TerminalZoomShortcutRouting.action(
+            for: shortcutKey,
+            hasCommandModifier: modifiers.contains(.command),
+            hasShiftModifier: modifiers.contains(.shift),
+            hasControlModifier: modifiers.contains(.control),
+            hasAlternateModifier: modifiers.contains(.option)
+        )
+    }
 }
 #endif

@@ -803,6 +803,44 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testCommandPlusAndMinusZoomWithoutReachingTerminalInput() throws {
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+
+        terminal.tap()
+        app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("=", modifierFlags: .command)
+        wait(for: diagnostics, labelContaining: "zoomActions=1", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastZoomAction=zoomIn", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("=", modifierFlags: [.command, .shift])
+        wait(for: diagnostics, labelContaining: "zoomActions=2", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastZoomAction=zoomIn", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("-", modifierFlags: .command)
+        wait(for: diagnostics, labelContaining: "zoomActions=3", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastZoomAction=zoomOut", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("0", modifierFlags: .command)
+        wait(for: diagnostics, labelContaining: "zoomActions=4", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastZoomAction=reset", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("=", modifierFlags: [])
+        wait(for: diagnostics, labelContaining: "inputHex=3d", timeout: 5, diagnostics: diagnosticsText(in: app))
+        app.typeKey("-", modifierFlags: [])
+        wait(for: diagnostics, labelContaining: "inputHex=2d", timeout: 5, diagnostics: diagnosticsText(in: app))
+        app.typeKey("0", modifierFlags: [])
+        wait(for: diagnostics, labelContaining: "inputHex=30", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "zoomActions=4", timeout: 5, diagnostics: diagnosticsText(in: app))
+    }
+
+    @MainActor
     func testHardwareKeyboardFocusSuppressesAccessoryBar() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)

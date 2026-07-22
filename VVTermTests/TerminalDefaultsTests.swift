@@ -11,6 +11,137 @@ struct TerminalDefaultsTests {
     }
 
     @Test
+    func terminalZoomShortcutRecognizesStandardAndKeypadForms() {
+        #expect(TerminalZoomShortcutRouting.key(forCommandInput: "=") == .equal)
+        #expect(TerminalZoomShortcutRouting.key(forCommandInput: "+") == .literalPlus)
+        #expect(TerminalZoomShortcutRouting.key(forCommandInput: "-") == .minus)
+        #expect(TerminalZoomShortcutRouting.key(forCommandInput: "0") == .zero)
+        #expect(TerminalZoomShortcutRouting.key(forCommandInput: "1") == nil)
+        #expect(TerminalZoomShortcutRouting.resolvedKey(
+            physicalKey: .equal,
+            characters: "+"
+        ) == .literalPlus)
+        #expect(TerminalZoomShortcutRouting.resolvedKey(
+            physicalKey: .equal,
+            characters: "="
+        ) == .equal)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .equal,
+            hasCommandModifier: true,
+            hasShiftModifier: true,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .zoomIn)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .literalPlus,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .zoomIn)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .equal,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .zoomIn)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .keypadPlus,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .zoomIn)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .minus,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .zoomOut)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .keypadMinus,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .zoomOut)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .zero,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .reset)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .keypadZero,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == .reset)
+    }
+
+    @Test
+    func terminalZoomShortcutRejectsUnmodifiedAndConflictingCommands() {
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .equal,
+            hasCommandModifier: false,
+            hasShiftModifier: true,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == nil)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .minus,
+            hasCommandModifier: true,
+            hasShiftModifier: true,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == nil)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .literalPlus,
+            hasCommandModifier: true,
+            hasShiftModifier: true,
+            hasControlModifier: true,
+            hasAlternateModifier: false
+        ) == nil)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .keypadMinus,
+            hasCommandModifier: true,
+            hasShiftModifier: false,
+            hasControlModifier: false,
+            hasAlternateModifier: true
+        ) == nil)
+        #expect(TerminalZoomShortcutRouting.action(
+            for: .zero,
+            hasCommandModifier: true,
+            hasShiftModifier: true,
+            hasControlModifier: false,
+            hasAlternateModifier: false
+        ) == nil)
+    }
+
+    @Test
+    func paneZoomUsesExistingStepAndClampsWithoutChangingGlobalDefault() {
+        let defaults = makeDefaults()
+        defaults.set(12.0, forKey: TerminalDefaults.fontSizeKey)
+
+        let zoomedIn = TerminalPresentationOverrides.empty
+            .applyingZoom(.zoomIn, defaults: defaults)
+        #expect(zoomedIn.fontSize == 13.0)
+        #expect(defaults.double(forKey: TerminalDefaults.fontSizeKey) == 12.0)
+
+        let maximum = TerminalPresentationOverrides(fontSize: TerminalDefaults.maximumFontSize)
+            .applyingZoom(.zoomIn, defaults: defaults)
+        #expect(maximum.fontSize == TerminalDefaults.maximumFontSize)
+
+        let minimum = TerminalPresentationOverrides(fontSize: TerminalDefaults.minimumFontSize)
+            .applyingZoom(.zoomOut, defaults: defaults)
+        #expect(minimum.fontSize == TerminalDefaults.minimumFontSize)
+    }
+
+    @Test
     func macOSDefaultsExposeMenloAndTwelvePointSize() throws {
         #if os(macOS)
         #expect(TerminalDefaults.defaultFontName == "Menlo")

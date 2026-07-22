@@ -75,6 +75,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var returnInputCount = 0
     @State private var codexResponseCount = 0
     @State private var zoomActionCount = 0
+    @State private var lastZoomAction = "none"
     @Environment(\.scenePhase) private var scenePhase
 
     private var preservesTerminalSize: Bool {
@@ -116,8 +117,16 @@ struct TerminalKeyboardUITestHarness: View {
                             }
                         }
                     },
-                    onZoomAction: { _ in
+                    onZoomAction: { action in
                         zoomActionCount += 1
+                        switch action {
+                        case .zoomIn:
+                            lastZoomAction = "zoomIn"
+                        case .zoomOut:
+                            lastZoomAction = "zoomOut"
+                        case .reset:
+                            lastZoomAction = "reset"
+                        }
                     }
                 )
                 .terminalKeyboardAvoidance(
@@ -514,6 +523,7 @@ struct TerminalKeyboardUITestHarness: View {
             + " mouseCaptured=\(terminalView.surface?.mouseCaptured == true)"
             + " primaryMousePresses=\(primaryMousePresses) primaryMouseReleases=\(primaryMouseReleases)"
             + " mouseScrollReports=\(mouseScrollReports) zoomActions=\(zoomActionCount)"
+            + " lastZoomAction=\(lastZoomAction)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
     }
 

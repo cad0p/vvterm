@@ -118,6 +118,32 @@ struct TerminalFindNavigatorLifecycle {
 }
 
 @MainActor
+private func makeTerminalZoomKeyCommands(action: Selector) -> [UIKeyCommand] {
+    let shortcuts: [(input: String, modifiers: UIKeyModifierFlags)] = [
+        ("=", .command),
+        ("=", [.command, .shift]),
+        ("+", .command),
+        ("+", [.command, .shift]),
+        ("-", .command),
+        ("0", .command),
+    ]
+
+    return shortcuts.map { shortcut in
+        let command = UIKeyCommand(
+            input: shortcut.input,
+            modifierFlags: shortcut.modifiers,
+            action: action
+        )
+        if #available(iOS 15.0, *) {
+            command.wantsPriorityOverSystemBehavior = true
+            command.allowsAutomaticLocalization = false
+            command.allowsAutomaticMirroring = false
+        }
+        return command
+    }
+}
+
+@MainActor
 private final class TerminalIMEProxyTextView: UIView, UITextInput {
     weak var terminalOwner: GhosttyTerminalView?
     /// Local mirror of recently typed input. Committed text stays in the document after
@@ -158,6 +184,9 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
     private lazy var terminalNavigationCommands: [UIKeyCommand] = Self.makeTerminalNavigationCommands(
         action: #selector(handleTerminalNavigationCommand(_:))
+    )
+    private lazy var terminalZoomCommands = makeTerminalZoomKeyCommands(
+        action: #selector(handleTerminalZoomCommand(_:))
     )
 
     override init(frame: CGRect) {
@@ -237,7 +266,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        terminalNavigationCommands + (super.keyCommands ?? [])
+        terminalNavigationCommands + terminalZoomCommands + (super.keyCommands ?? [])
     }
 
     var keyboardType: UIKeyboardType {
@@ -838,6 +867,11 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         terminalOwner?.handleIMEProxyNavigationCommand(sender)
     }
 
+    @objc
+    private func handleTerminalZoomCommand(_ sender: UIKeyCommand) {
+        terminalOwner?.handleTerminalZoomCommand(sender)
+    }
+
     private func notifyTextInputStateDidChange() {
         terminalOwner?.syncTextInputModelFromIMEProxy()
     }
@@ -1003,6 +1037,14 @@ class GhosttyTerminalView: UIView {
     private var lastPixelSize: CGSize = .zero
     private var lastContentScale: CGFloat = 0
     private var lastReportedGrid: (cols: Int, rows: Int) = (0, 0)
+
+    var currentTerminalGridSize: (cols: Int, rows: Int)? {
+        guard let size = terminalSize() else { return nil }
+        let cols = Int(size.columns)
+        let rows = Int(size.rows)
+        guard cols > 0, rows > 0 else { return nil }
+        return (cols, rows)
+    }
     private var lastKeyboardAvoidanceCursorRect: CGRect?
     /// Cell size in points for row-to-pixel conversion
     var cellSize: CGSize = .zero
@@ -4061,9 +4103,12 @@ class GhosttyTerminalView: UIView {
     // MARK: - Keyboard Input (Hardware Keyboard)
 
     override var keyCommands: [UIKeyCommand]? {
-        // Keep keyCommands nil; handle command shortcuts in pressesBegan.
-        return nil
+        terminalZoomCommands + (super.keyCommands ?? [])
     }
+
+    private lazy var terminalZoomCommands = makeTerminalZoomKeyCommands(
+        action: #selector(handleTerminalZoomCommand(_:))
+    )
 
     fileprivate func handleIMEProxyNavigationCommand(_ command: UIKeyCommand) {
         guard canRouteTerminalInput else { return }
@@ -4074,6 +4119,23 @@ class GhosttyTerminalView: UIView {
         }
         let mods = Ghostty.Input.Mods(uiKeyModifiers: command.modifierFlags)
         sendToolbarKey(key, accumulatedMods: mods)
+    }
+
+    @objc
+    fileprivate func handleTerminalZoomCommand(_ command: UIKeyCommand) {
+        guard canRouteTerminalInput,
+              let input = command.input,
+              let key = TerminalZoomShortcutRouting.key(forCommandInput: input),
+              let action = TerminalZoomShortcutRouting.action(
+                  for: key,
+                  hasCommandModifier: command.modifierFlags.contains(.command),
+                  hasShiftModifier: command.modifierFlags.contains(.shift),
+                  hasControlModifier: command.modifierFlags.contains(.control),
+                  hasAlternateModifier: command.modifierFlags.contains(.alternate)
+              ) else {
+            return
+        }
+        performTerminalZoomAction(action)
     }
 
     private func handlePasteShortcut(_ key: UIKey) -> Bool {
@@ -4116,6 +4178,11 @@ class GhosttyTerminalView: UIView {
 
     private func handleCommandShortcut(_ key: UIKey) -> Bool {
         guard key.modifierFlags.contains(.command) else { return false }
+        if let action = terminalZoomShortcutAction(for: key) {
+            performTerminalZoomAction(action)
+            return true
+        }
+
         let input = key.charactersIgnoringModifiers.lowercased()
         switch input {
         case "c":
@@ -4132,6 +4199,45 @@ class GhosttyTerminalView: UIView {
         default:
             return false
         }
+    }
+
+    private func performTerminalZoomAction(_ action: TerminalZoomAction) {
+        if let result = onZoomAction?(action) {
+            showZoomIndicator(fontSize: result.effectiveFontSize)
+        }
+    }
+
+    private func terminalZoomShortcutAction(for key: UIKey) -> TerminalZoomAction? {
+        let physicalKey: TerminalZoomShortcutKey?
+        switch key.keyCode {
+        case .keyboardEqualSign:
+            physicalKey = .equal
+        case .keyboardHyphen:
+            physicalKey = .minus
+        case .keyboard0:
+            physicalKey = .zero
+        case .keypadPlus:
+            physicalKey = .keypadPlus
+        case .keypadHyphen:
+            physicalKey = .keypadMinus
+        case .keypad0:
+            physicalKey = .keypadZero
+        default:
+            physicalKey = key.characters == "-" ? .minus : nil
+        }
+
+        let shortcutKey = TerminalZoomShortcutRouting.resolvedKey(
+            physicalKey: physicalKey,
+            characters: key.characters
+        )
+        guard let shortcutKey else { return nil }
+        return TerminalZoomShortcutRouting.action(
+            for: shortcutKey,
+            hasCommandModifier: key.modifierFlags.contains(.command),
+            hasShiftModifier: key.modifierFlags.contains(.shift),
+            hasControlModifier: key.modifierFlags.contains(.control),
+            hasAlternateModifier: key.modifierFlags.contains(.alternate)
+        )
     }
 
     private func isRepeatableSpecialHardwareKey(_ key: UIKey) -> Bool {

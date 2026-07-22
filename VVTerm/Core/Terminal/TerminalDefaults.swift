@@ -28,10 +28,67 @@ enum TerminalCursorStyle: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum TerminalZoomAction {
+nonisolated enum TerminalZoomAction: Equatable, Sendable {
     case zoomIn
     case zoomOut
     case reset
+}
+
+nonisolated enum TerminalZoomShortcutKey: Sendable {
+    case equal
+    case literalPlus
+    case minus
+    case zero
+    case keypadPlus
+    case keypadMinus
+    case keypadZero
+}
+
+nonisolated enum TerminalZoomShortcutRouting {
+    nonisolated static func key(forCommandInput input: String) -> TerminalZoomShortcutKey? {
+        switch input {
+        case "=": .equal
+        case "+": .literalPlus
+        case "-": .minus
+        case "0": .zero
+        default: nil
+        }
+    }
+
+    nonisolated static func resolvedKey(
+        physicalKey: TerminalZoomShortcutKey?,
+        characters: String
+    ) -> TerminalZoomShortcutKey? {
+        if characters == "+" {
+            return .literalPlus
+        }
+        return physicalKey
+    }
+
+    nonisolated static func action(
+        for key: TerminalZoomShortcutKey,
+        hasCommandModifier: Bool,
+        hasShiftModifier: Bool,
+        hasControlModifier: Bool,
+        hasAlternateModifier: Bool
+    ) -> TerminalZoomAction? {
+        guard hasCommandModifier,
+              !hasControlModifier,
+              !hasAlternateModifier else {
+            return nil
+        }
+
+        switch key {
+        case .equal:
+            return .zoomIn
+        case .literalPlus, .keypadPlus:
+            return .zoomIn
+        case .minus, .keypadMinus:
+            return hasShiftModifier ? nil : .zoomOut
+        case .zero, .keypadZero:
+            return hasShiftModifier ? nil : .reset
+        }
+    }
 }
 
 enum TerminalOptionAsAltMode: String, CaseIterable, Identifiable {

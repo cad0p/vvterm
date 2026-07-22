@@ -471,6 +471,14 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
     // Track last terminal size (cols, rows) to detect changes for SSH resize
     private var lastTerminalSize: (cols: Int, rows: Int) = (0, 0)
 
+    var currentTerminalGridSize: (cols: Int, rows: Int)? {
+        guard let size = terminalSize() else { return nil }
+        let cols = Int(size.columns)
+        let rows = Int(size.rows)
+        guard cols > 0, rows > 0 else { return nil }
+        return (cols, rows)
+    }
+
     // Override safe area insets to use full available space, including rounded corners
     // This matches Ghostty's SurfaceScrollView implementation
     override var safeAreaInsets: NSEdgeInsets {
@@ -523,6 +531,18 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let isFirstResponder = window?.firstResponder === self
+
+        if let action = MacTerminalShortcutRouting.zoomAction(
+            keyCode: event.keyCode,
+            characters: event.characters,
+            modifiers: event.modifierFlags,
+            isFirstResponder: isFirstResponder
+        ) {
+            if let result = onZoomAction?(action) {
+                showZoomIndicator(fontSize: result.effectiveFontSize)
+            }
+            return true
+        }
 
         switch true {
         case MacTerminalShortcutRouting.shouldHandle(
