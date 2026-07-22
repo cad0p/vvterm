@@ -138,4 +138,27 @@ struct RemoteTerminalBootstrapTests {
 
         #expect(pastedPath == "'/tmp/vv term/file'\\''s name.png'")
     }
+
+    @Test
+    func terminalEnvironmentDictionaryIncludesResolvedTypeAndTrueColorCapabilities() {
+        let environment = RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+            terminalType: .xtermGhostty
+        )
+
+        #expect(environment["TERM"] == "xterm-ghostty")
+        #expect(environment["COLORTERM"] == "truecolor")
+        #expect(environment["TERM_PROGRAM"] == "vvterm")
+        #expect(environment["TERM_PROGRAM_VERSION"] == RemoteTerminalBootstrap.appVersion())
+        #expect(environment.count == 4)
+    }
+
+    @Test
+    func terminalEnvironmentDictionaryKeepsCompatibilityTerminalFallback() {
+        let environment = RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+            terminalType: .xterm256Color
+        )
+
+        #expect(environment["TERM"] == "xterm-256color")
+        #expect(environment["COLORTERM"] == "truecolor")
+    }
 }

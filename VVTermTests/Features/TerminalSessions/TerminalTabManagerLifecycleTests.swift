@@ -104,6 +104,38 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func terminalZoomOnlyChangesRequestedPaneOverride() async {
+        let defaults = UserDefaults.standard
+        let previousFontSize = defaults.object(forKey: TerminalDefaults.fontSizeKey)
+        defaults.set(12.0, forKey: TerminalDefaults.fontSizeKey)
+        defer {
+            if let previousFontSize {
+                defaults.set(previousFontSize, forKey: TerminalDefaults.fontSizeKey)
+            } else {
+                defaults.removeObject(forKey: TerminalDefaults.fontSizeKey)
+            }
+        }
+
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "Pane zoom")
+            installTab(tab, in: manager, connectionState: .connected)
+            let siblingPaneId = UUID()
+            manager.paneStates[siblingPaneId] = TerminalPaneState(
+                paneId: siblingPaneId,
+                tabId: tab.id,
+                serverId: tab.serverId
+            )
+
+            let result = manager.handleTerminalZoom(.zoomIn, for: tab.rootPaneId)
+
+            #expect(result?.effectiveFontSize == 13.0)
+            #expect(manager.presentationOverrides(for: tab.rootPaneId).fontSize == 13.0)
+            #expect(manager.presentationOverrides(for: siblingPaneId).isEmpty)
+            #expect(defaults.double(forKey: TerminalDefaults.fontSizeKey) == 12.0)
+        }
+    }
+
+    @Test
     func successfulMoshRegistrationReplacesFallbackDiagnostics() async {
         await withCleanManager { manager in
             let tab = TerminalTab(serverId: UUID(), title: "Mosh recovery")

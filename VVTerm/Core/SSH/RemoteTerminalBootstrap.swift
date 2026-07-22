@@ -71,6 +71,17 @@ enum RemoteTerminalBootstrap {
         terminalEnvironment(bundle: bundle).map(\.name)
     }
 
+    nonisolated static func terminalEnvironmentDictionary(
+        bundle: Bundle = .main,
+        terminalType: RemoteTerminalType
+    ) -> [String: String] {
+        var environment = Dictionary(
+            uniqueKeysWithValues: terminalEnvironment(bundle: bundle).map { ($0.name, $0.value) }
+        )
+        environment["TERM"] = terminalType.rawValue
+        return environment
+    }
+
     nonisolated static func environmentExportScript(
         bundle: Bundle = .main,
         terminalType: RemoteTerminalType? = nil

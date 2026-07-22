@@ -38,6 +38,7 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
     private let connection: Connection?
     private let startupPlanProvider: (@Sendable (SSHClient) async throws -> TerminalShellStartupPlan)?
     private var startupPlan: TerminalShellStartupPlan = .plainShell
+    private var terminalType = RemoteTerminalBootstrap.defaultTerminalType
 
     private struct Connection: Sendable {
         let server: Server
@@ -65,6 +66,10 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
         startupPlan
     }
 
+    func preparedTerminalType() -> RemoteTerminalType {
+        terminalType
+    }
+
     func run(command: String) async throws -> String {
         let command = Self.remoteBootstrapCommand(command)
         guard let connection else {
@@ -83,6 +88,7 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
                 await client.disconnect()
                 return diagnostic
             }
+            terminalType = await client.remoteTerminalType()
             if let startupPlanProvider {
                 startupPlan = try await startupPlanProvider(client)
             }

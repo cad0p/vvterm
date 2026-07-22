@@ -306,7 +306,7 @@ final class EternalTerminalRuntime {
             do {
                 try await session.resize(rows: rows, cols: cols)
             } catch {
-                logger.debug("Ignored ET resize before connection: \(error.localizedDescription, privacy: .public)")
+                logger.debug("Failed to send ET terminal size: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -388,11 +388,15 @@ final class EternalTerminalRuntime {
         ).run(using: bootstrapExecutor)
         let resumeCredentials = try EternalTerminalResumeCredentials(credentials)
         try resumeStore.save(resumeCredentials, for: paneId)
+        let terminalType = await bootstrapExecutor.preparedTerminalType()
         let session = try ETTerminalSession(
             host: server.host,
             port: port,
             clientID: resumeCredentials.clientID,
-            passkey: resumeCredentials.passkey
+            passkey: resumeCredentials.passkey,
+            environmentVariables: RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+                terminalType: terminalType
+            )
         )
         return PreparedEternalTerminalSession(session: session, origin: .bootstrapped)
     }
@@ -408,7 +412,7 @@ final class EternalTerminalRuntime {
         stateTask = Task { [weak self] in
             for await state in session.stateChanges {
                 guard !Task.isCancelled, let self else { return }
-                self.handle(state, host: host, port: port)
+                await self.handle(state, session: session, host: host, port: port)
             }
         }
     }
@@ -423,7 +427,12 @@ final class EternalTerminalRuntime {
         }
     }
 
-    private func handle(_ state: ETConnectionState, host: String, port: Int) {
+    private func handle(
+        _ state: ETConnectionState,
+        session: ETTerminalSession,
+        host: String,
+        port: Int
+    ) async {
         if state == .reconnecting || state == .disconnected {
             if !reconnectEventActive {
                 reconnectEventActive = true
@@ -433,7 +442,21 @@ final class EternalTerminalRuntime {
             }
         } else if state == .connected {
             reconnectEventActive = false
-            applyStartupPlanIfNeeded()
+            do {
+                if lastTerminalSize.cols > 0, lastTerminalSize.rows > 0 {
+                    try await session.resize(
+                        rows: lastTerminalSize.rows,
+                        cols: lastTerminalSize.cols
+                    )
+                    applyStartupPlanIfNeeded()
+                } else {
+                    logger.error("ET connected without a valid Ghostty terminal grid")
+                    return
+                }
+            } catch {
+                publishFailure(error, host: host, port: port)
+                return
+            }
         }
 
         if case .failed(let error) = state {

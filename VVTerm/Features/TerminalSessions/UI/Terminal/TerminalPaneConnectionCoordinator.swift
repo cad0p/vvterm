@@ -179,6 +179,8 @@ private final class EternalTerminalPaneCoordinator {
             credentials: credentials
         )
         runtime.attach(to: terminal)
+        guard let size = terminal.currentTerminalGridSize else { return }
+        runtime.resize(cols: size.cols, rows: size.rows)
         runtime.startIfNeeded()
     }
 
@@ -187,10 +189,11 @@ private final class EternalTerminalPaneCoordinator {
     }
 
     func handleResize(cols: Int, rows: Int) {
-        TerminalTabManager.shared.existingEternalTerminalRuntime(for: paneId)?.resize(
-            cols: cols,
-            rows: rows
-        )
+        guard let runtime = TerminalTabManager.shared.existingEternalTerminalRuntime(for: paneId) else {
+            return
+        }
+        runtime.resize(cols: cols, rows: rows)
+        runtime.startIfNeeded()
     }
 
     func cancel() {
