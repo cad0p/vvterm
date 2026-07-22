@@ -363,15 +363,8 @@ struct LoginFinishReq: Encodable {
 }
 
 // MARK: - UInt32 big-endian helper for the OpenSSH wire format
-
-private extension UInt32 {
-    var bigEndianBytes: [UInt8] {
-        let be = self.bigEndian
-        return [
-            UInt8(truncatingIfNeeded: be >> 24),
-            UInt8(truncatingIfNeeded: be >> 16),
-            UInt8(truncatingIfNeeded: be >> 8),
-            UInt8(truncatingIfNeeded: be & 0xff),
-        ]
-    }
-}
+//
+// NOTE: do NOT re-declare bigEndianBytes here — CBOR.swift (compiled into
+// this same target via the relative-path group) already provides it for
+// UInt16/UInt32/UInt64. Re-declaring causes 'invalid redeclaration' at
+// compile time. The call sites above use the CBOR.swift extension.
