@@ -37,6 +37,10 @@ RUN_TIMEOUT=60         # seconds to wait for app to run + emit probes
 MARKER_PREFIX="[IOTEST]"
 
 # Markers the smoke test asserts. Each must appear in the captured log.
+#
+# Session 1.9 adds the headless_id_fixture_match marker — validates the
+# HeadlessID.compute() port matches the Go-generated fixture. The
+# headless_id_fixture_computed marker logs the computed value for debugging.
 REQUIRED_MARKERS=(
     "app_launched"
     "load_started"
@@ -44,6 +48,7 @@ REQUIRED_MARKERS=(
     "js_injection_roundtrip=2"
     "public_key_credential_exists=true"
     "platform_authenticator_available="
+    "headless_id_fixture_match=true"
 )
 
 echo "==> Config"
