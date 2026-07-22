@@ -195,7 +195,7 @@ final class HeadlessRunner: NSObject, ObservableObject {
         HeadlessLog.headlessPostStarted(user: user)
         appendLog("[3/6] POST /webapi/headless/login started (blocks until approval or 180s)…")
 
-        let postTask = Task {
+        let postTask = Task<(HeadlessLoginResponse?, Double, HeadlessError?), Never> {
             let start = Date()
             do {
                 let resp = try await HeadlessLogin.post(baseURL: self.baseURL, req: req)
@@ -203,7 +203,7 @@ final class HeadlessRunner: NSObject, ObservableObject {
                 let hasCert = (resp.cert ?? "").isEmpty == false
                 let hasHostSigners = (resp.hostSigners ?? []).isEmpty == false
                 HeadlessLog.headlessPostReturned(status: 200, hasCert: hasCert, hasHostSigners: hasHostSigners)
-                return (resp, elapsed, nil as HeadlessError?)
+                return (resp, elapsed, nil)
             } catch let he as HeadlessError {
                 let elapsed = Date().timeIntervalSince(start)
                 HeadlessLog.headlessPostFailed(he.errorDescription ?? "?")
