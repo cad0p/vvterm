@@ -1,0 +1,362 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+/* Begin PBXBuildFile section */
+		B10000010000000000000001 /* sepbiometryApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000001 /* sepbiometryApp.swift */; };
+		B10000010000000000000002 /* SEPBiometryTestRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000002 /* SEPBiometryTestRunner.swift */; };
+		B10000010000000000000003 /* SEPBiometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000003 /* SEPBiometryView.swift */; };
+		B10000010000000000000004 /* Attestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000004 /* Attestation.swift */; };
+		B10000010000000000000005 /* CBOR.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000005 /* CBOR.swift */; };
+		B10000010000000000000006 /* SecureEnclaveSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000006 /* SecureEnclaveSigner.swift */; };
+		B10000010000000000000007 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000007 /* Signer.swift */; };
+		B10000010000000000000008 /* SoftwareSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000008 /* SoftwareSigner.swift */; };
+		B10000010000000000000009 /* WebAuthn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000100000000000000009 /* WebAuthn.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B10000200000000000000000 /* sepbiometry.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = sepbiometry.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000100000000000000001 /* sepbiometryApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = sepbiometryApp.swift; sourceTree = "<group>"; };
+		B10000100000000000000002 /* SEPBiometryTestRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SEPBiometryTestRunner.swift; sourceTree = "<group>"; };
+		B10000100000000000000003 /* SEPBiometryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SEPBiometryView.swift; sourceTree = "<group>"; };
+		B10000100000000000000004 /* Attestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attestation.swift; sourceTree = "<group>"; };
+		B10000100000000000000005 /* CBOR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CBOR.swift; sourceTree = "<group>"; };
+		B10000100000000000000006 /* SecureEnclaveSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureEnclaveSigner.swift; sourceTree = "<group>"; };
+		B10000100000000000000007 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
+		B10000100000000000000008 /* SoftwareSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareSigner.swift; sourceTree = "<group>"; };
+		B10000100000000000000009 /* WebAuthn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthn.swift; sourceTree = "<group>"; };
+		B1000010000000000000000A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B10000300000000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B10000400000000000000000 = {
+			isa = PBXGroup;
+			children = (
+				B10000400000000000000001 /* sepbiometry */,
+				B10000400000000000000002 /* SEPWebAuthn (from spike) */,
+				B10000400000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B10000400000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B10000200000000000000000 /* sepbiometry.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B10000400000000000000001 /* sepbiometry */ = {
+			isa = PBXGroup;
+			children = (
+				B10000400000000000000004 /* App */,
+				B10000400000000000000005 /* SEPBiometryTest */,
+				B10000400000000000000006 /* Resources */,
+			);
+			path = sepbiometry;
+			sourceTree = "<group>";
+		};
+		B10000400000000000000004 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B10000100000000000000001 /* sepbiometryApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		B10000400000000000000005 /* SEPBiometryTest */ = {
+			isa = PBXGroup;
+			children = (
+				B10000100000000000000002 /* SEPBiometryTestRunner.swift */,
+				B10000100000000000000003 /* SEPBiometryView.swift */,
+			);
+			path = SEPBiometryTest;
+			sourceTree = "<group>";
+		};
+		B10000400000000000000006 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B1000010000000000000000A /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		B10000400000000000000002 /* SEPWebAuthn (from spike) */ = {
+			isa = PBXGroup;
+			children = (
+				B10000100000000000000004 /* Attestation.swift */,
+				B10000100000000000000005 /* CBOR.swift */,
+				B10000100000000000000006 /* SecureEnclaveSigner.swift */,
+				B10000100000000000000007 /* Signer.swift */,
+				B10000100000000000000008 /* SoftwareSigner.swift */,
+				B10000100000000000000009 /* WebAuthn.swift */,
+			);
+			name = "SEPWebAuthn (from spike)";
+			path = "../sep-webauthn/Sources/SEPWebAuthn";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B10000500000000000000000 /* sepbiometry */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000700000000000000000 /* Build configuration list for PBXNativeTarget "sepbiometry" */;
+			buildPhases = (
+				B10000600000000000000000 /* Sources */,
+				B10000300000000000000000 /* Frameworks */,
+				B10000600000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = sepbiometry;
+			productName = sepbiometry;
+			productReference = B10000200000000000000000 /* sepbiometry.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B10000800000000000000000 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					B10000500000000000000000 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = B10000700000000000000001 /* Build configuration list for PBXProject "sepbiometry" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B10000400000000000000000;
+			productRefGroup = B10000400000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B10000500000000000000000 /* sepbiometry */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B10000600000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B10000600000000000000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000010000000000000001 /* sepbiometryApp.swift in Sources */,
+				B10000010000000000000002 /* SEPBiometryTestRunner.swift in Sources */,
+				B10000010000000000000003 /* SEPBiometryView.swift in Sources */,
+				B10000010000000000000004 /* Attestation.swift in Sources */,
+				B10000010000000000000005 /* CBOR.swift in Sources */,
+				B10000010000000000000006 /* SecureEnclaveSigner.swift in Sources */,
+				B10000010000000000000007 /* Signer.swift in Sources */,
+				B10000010000000000000008 /* SoftwareSigner.swift in Sources */,
+				B10000010000000000000009 /* WebAuthn.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B10000900000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSG_CHECK = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B10000900000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSG_CHECK = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B10000900000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = sepbiometry/Resources/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.sepbiometry;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B10000900000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = sepbiometry/Resources/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.sepbiometry;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B10000700000000000000001 /* Build configuration list for PBXProject "sepbiometry" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000900000000000000001 /* Debug */,
+				B10000900000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000700000000000000000 /* Build configuration list for PBXNativeTarget "sepbiometry" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000900000000000000003 /* Debug */,
+				B10000900000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B10000800000000000000000 /* Project object */;
+}
