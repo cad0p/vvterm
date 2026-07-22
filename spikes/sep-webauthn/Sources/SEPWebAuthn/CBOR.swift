@@ -154,30 +154,33 @@ private protocol BigEndianBytes {
 
 extension UInt16: BigEndianBytes {
     var bigEndianBytes: [UInt8] {
-        let be = self.bigEndian
-        return [UInt8(truncatingIfNeeded: be >> 8),
-                UInt8(truncatingIfNeeded: be & 0xff)]
+        // Shift `self` directly — `>> 8` always yields the most-significant
+        // byte regardless of host endianness. Do NOT use `let be = self.bigEndian`
+        // then shift `be` — `.bigEndian` byte-swaps on LE arches, so shifting
+        // the swapped value double-swaps and emits little-endian bytes.
+        // (This was the latent bug caught by the 1.6b Option A iOS run —
+        // see SSHPubKey.swift's beUInt32 for the corrected pattern.)
+        return [UInt8(truncatingIfNeeded: self >> 8),
+                UInt8(truncatingIfNeeded: self & 0xff)]
     }
 }
 
 extension UInt32: BigEndianBytes {
     var bigEndianBytes: [UInt8] {
-        let be = self.bigEndian
         return [
-            UInt8(truncatingIfNeeded: be >> 24),
-            UInt8(truncatingIfNeeded: be >> 16),
-            UInt8(truncatingIfNeeded: be >> 8),
-            UInt8(truncatingIfNeeded: be & 0xff),
+            UInt8(truncatingIfNeeded: self >> 24),
+            UInt8(truncatingIfNeeded: self >> 16),
+            UInt8(truncatingIfNeeded: self >> 8),
+            UInt8(truncatingIfNeeded: self & 0xff),
         ]
     }
 }
 
 extension UInt64: BigEndianBytes {
     var bigEndianBytes: [UInt8] {
-        let be = self.bigEndian
         var out: [UInt8] = []
         for shift in stride(from: 56, through: 0, by: -8) {
-            out.append(UInt8(truncatingIfNeeded: be >> shift))
+            out.append(UInt8(truncatingIfNeeded: self >> shift))
         }
         return out
     }
