@@ -4,31 +4,50 @@ import Umami
 import UIKit
 #endif
 
-/// Anonymous product analytics sent to the self-hosted Umami instance.
-/// Every event is faceless: feature names, counts, and app context only —
-/// never commands, server addresses, usernames, or anything identifying.
-/// Fully disabled via the "Help Improve VVTerm" toggle in Settings.
+/// Anonymous product analytics sent only from verified production App Store installs.
+/// Events contain feature names, bounded values, and app context only — never commands,
+/// server addresses, usernames, or other identifying content.
 @MainActor
 final class AnalyticsTracker {
     static let shared = AnalyticsTracker()
 
     nonisolated static let enabledKey = "analytics.enabled"
 
-    private static let endpoint = URL(string: "https://analytics.vivy.app")!
-    /// Website ID on the shared Umami instance (same one the website uses).
-    /// Swap for a dedicated app website ID once created in the dashboard.
-    private static let websiteId = "22711a63-9ec0-491c-ad86-71cb0b6ad4dd"
+    private static let websiteID = "22711a63-9ec0-491c-ad86-71cb0b6ad4dd"
+    private static let lastLaunchKey = "analytics.lastTrackedLaunch"
+    private static let minimumLaunchInterval: TimeInterval = 5 * 60
+    private static let maximumPropertyCount = 16
+    private static let appleAdsPropertyKeys: Set<String> = [
+        "is_apple_ads_attributed",
+        "apple_ads_org_id",
+        "apple_ads_campaign_id",
+        "apple_ads_ad_group_id",
+        "apple_ads_keyword_id",
+        "apple_ads_ad_id",
+        "apple_ads_country_or_region",
+        "apple_ads_claim_type",
+        "apple_ads_conversion_type"
+    ]
 
-    private let client: UmamiTrackerClient
     private let defaults: UserDefaults
+    private let modeResolver: AnalyticsModeResolver
+    private let deliveryQueue: AnalyticsDeliveryQueue
     #if os(iOS)
     private let appleAdsAttribution: AppleAdsAttributionService
     #endif
+    private var admission = AnalyticsAdmissionController()
     private var hasTrackedLaunch = false
 
     private init() {
-        client = UmamiTrackerClient(configuration: .init(baseURL: Self.endpoint))
-        defaults = .standard
+        let defaults = UserDefaults.standard
+        let productionTransport = AnalyticsProductionTransport()
+        self.defaults = defaults
+        modeResolver = AnalyticsModeResolver {
+            await AnalyticsEnvironmentPolicy.currentInstallMode()
+        }
+        deliveryQueue = AnalyticsDeliveryQueue { event in
+            await productionTransport.send(event)
+        }
         #if os(iOS)
         appleAdsAttribution = .shared
         #endif
@@ -38,11 +57,14 @@ final class AnalyticsTracker {
     #if os(iOS)
     init(
         defaults: UserDefaults,
-        appleAdsAttribution: AppleAdsAttributionService
+        appleAdsAttribution: AppleAdsAttributionService,
+        modeProvider: @escaping AnalyticsModeResolver.Provider = { .production },
+        delivery: @escaping AnalyticsDeliveryQueue.Delivery = { _ in }
     ) {
-        client = UmamiTrackerClient(configuration: .init(baseURL: Self.endpoint))
         self.defaults = defaults
         self.appleAdsAttribution = appleAdsAttribution
+        modeResolver = AnalyticsModeResolver(provider: modeProvider)
+        deliveryQueue = AnalyticsDeliveryQueue(delivery: delivery)
         defaults.register(defaults: [Self.enabledKey: true])
     }
     #endif
@@ -54,7 +76,8 @@ final class AnalyticsTracker {
     func prepareAppleAdsAttribution() {
         #if os(iOS)
         guard isEnabled else { return }
-        Task(priority: .utility) { [appleAdsAttribution] in
+        Task(priority: .utility) { [modeResolver, appleAdsAttribution] in
+            guard await modeResolver.mode() == .production else { return }
             await appleAdsAttribution.prepare()
         }
         #endif
@@ -62,163 +85,154 @@ final class AnalyticsTracker {
 
     // MARK: - Events
 
-    /// Fired once per launch, after the first entitlement check so the tier is accurate.
+    /// Fired after the first entitlement check. A persistent five-minute guard also
+    /// bounds crash/relaunch loops that the once-per-process guard cannot catch.
     func trackAppLaunched(isPro: Bool) {
         guard !hasTrackedLaunch else { return }
         hasTrackedLaunch = true
-        send(name: "app_launched", url: "/app/launch", data: ["pro": .string(String(isPro))])
+        send(.appLaunched(isPro: isPro), minimumPersistentInterval: Self.minimumLaunchInterval)
     }
 
     func trackConnectionSucceeded(transport: String) {
-        send(name: "connection_succeeded", url: "/app/connection", data: ["transport": .string(transport)])
+        send(.connectionSucceeded(transport: transport))
     }
 
     func trackConnectionAttempted(transport: String) {
-        send(name: "connection_attempted", url: "/app/connection", data: ["transport": .string(transport)])
+        send(.connectionAttempted(transport: transport))
     }
 
     func trackConnectionReconnecting(transport: String) {
-        send(name: "connection_reconnecting", url: "/app/connection", data: ["transport": .string(transport)])
+        send(.connectionReconnecting(transport: transport))
     }
 
     func trackConnectionFailed(transport: String, reason: String) {
-        send(name: "connection_failed", url: "/app/connection", data: [
-            "transport": .string(transport),
-            "reason": .string(reason)
-        ])
+        send(.connectionFailed(transport: transport, reason: reason))
     }
 
     func trackPaywallViewed(source: String) {
-        send(name: "paywall_viewed", url: "/app/paywall", data: ["source": .string(source)])
+        send(.paywallViewed(source: source))
     }
 
     func trackPaywallCTATapped(source: String, productId: String) {
-        send(name: "paywall_cta_tapped", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId)
-        ])
+        send(.paywallCTATapped(source: source, productID: productId))
     }
 
     func trackPurchaseStarted(source: String, productId: String) {
-        send(name: "purchase_started", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId)
-        ])
-    }
-
-    func trackPurchase(source: String, productId: String) {
-        send(name: "purchased", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId)
-        ])
+        send(.purchaseStarted(source: source, productID: productId))
     }
 
     func trackPurchaseSucceeded(source: String, productId: String) {
-        send(name: "purchase_succeeded", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId)
-        ])
+        send(.purchaseSucceeded(source: source, productID: productId))
     }
 
     func trackPurchaseCancelled(source: String, productId: String) {
-        send(name: "purchase_cancelled", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId)
-        ])
+        send(.purchaseCancelled(source: source, productID: productId))
     }
 
     func trackPurchasePending(source: String, productId: String) {
-        send(name: "purchase_pending", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId)
-        ])
+        send(.purchasePending(source: source, productID: productId))
     }
 
     func trackPurchaseFailed(source: String, productId: String, reason: String) {
-        send(name: "purchase_failed", url: "/app/paywall", data: [
-            "source": .string(source),
-            "product": .string(productId),
-            "reason": .string(reason)
-        ])
+        send(.purchaseFailed(source: source, productID: productId, reason: reason))
     }
 
     func trackLimitHit(source: String, generation: String, current: Int, limit: Int) {
-        send(name: "\(source)_hit", url: "/app/limit", data: [
-            "source": .string(source),
-            "generation": .string(generation),
-            "current": .string(String(current)),
-            "limit": .string(String(limit))
-        ])
+        send(.limitHit(source: source, generation: generation, current: current, limit: limit))
     }
 
     func trackFreePlanGenerationAssigned(generation: String, serverCount: Int, reason: String) {
-        send(name: "free_plan_generation_assigned", url: "/app/free-plan", data: [
-            "generation": .string(generation),
-            "server_count": .string(String(serverCount)),
-            "reason": .string(reason)
-        ])
+        send(.freePlanGenerationAssigned(
+            generation: generation,
+            serverCount: serverCount,
+            reason: reason
+        ))
     }
 
     func trackWelcomeCompleted() {
-        send(name: "welcome_completed", url: "/app/welcome")
+        send(.welcomeCompleted)
     }
 
     func trackCustomActionCreated(kind: String) {
-        send(name: "custom_action_created", url: "/app/accessories", data: ["kind": .string(kind)])
+        send(.customActionCreated(kind: kind))
     }
 
     func trackSplitPaneCreated() {
-        send(name: "split_pane_created", url: "/app/terminal")
+        send(.splitPaneCreated)
     }
 
     func trackReviewPromptRequested() {
-        send(name: "review_prompt_requested", url: "/app/review")
+        send(.reviewPromptRequested)
     }
 
     func trackAnalyticsDisabled() {
-        send(name: "analytics_disabled", url: "/app/settings")
+        send(.analyticsDisabled)
     }
 
     // MARK: - Transport
 
-    private func send(name: String, url: String, data: [String: JSONValue] = [:]) {
+    private func send(
+        _ event: AnalyticsEvent,
+        minimumPersistentInterval: TimeInterval? = nil
+    ) {
+        // Capture the user's setting synchronously so analytics_disabled can be
+        // emitted immediately before the setting is switched off.
         guard isEnabled else { return }
-        Task(priority: .utility) { [client] in
-            let event = await makeEvent(
-                name: name,
-                url: url,
-                data: data
-            )
-            _ = try? await client.track(event)
+        Task(priority: .utility) { [weak self, modeResolver] in
+            guard await modeResolver.mode() == .production, let self else { return }
+            let now = Date().timeIntervalSince1970
+            guard self.admit(
+                event,
+                at: now,
+                minimumPersistentInterval: minimumPersistentInterval
+            ) else { return }
+            guard let request = await self.makeEvent(event) else { return }
+            await self.deliveryQueue.enqueue(request)
         }
     }
 
-    func preparedEvent(
-        name: String,
-        url: String,
-        data: [String: JSONValue] = [:]
-    ) async -> TrackEventRequest? {
-        guard isEnabled else { return nil }
-        return await makeEvent(name: name, url: url, data: data)
+    private func admit(
+        _ event: AnalyticsEvent,
+        at timestamp: TimeInterval,
+        minimumPersistentInterval: TimeInterval?
+    ) -> Bool {
+        if let minimumPersistentInterval {
+            let lastEmission = (defaults.object(forKey: Self.lastLaunchKey) as? Date)?
+                .timeIntervalSince1970
+            guard AnalyticsAdmissionController.admitsPersistentLaunch(
+                lastEmission: lastEmission,
+                at: timestamp,
+                minimumInterval: minimumPersistentInterval
+            ) else { return false }
+        }
+        guard admission.admits(event, at: timestamp) else { return false }
+        if minimumPersistentInterval != nil {
+            defaults.set(Date(timeIntervalSince1970: timestamp), forKey: Self.lastLaunchKey)
+        }
+        return true
     }
 
-    private func makeEvent(
-        name: String,
-        url: String,
-        data: [String: JSONValue]
-    ) async -> TrackEventRequest {
+    func preparedEvent(_ event: AnalyticsEvent) async -> TrackEventRequest? {
+        guard isEnabled, await modeResolver.mode() == .production else { return nil }
+        return await makeEvent(event)
+    }
+
+    private func makeEvent(_ event: AnalyticsEvent) async -> TrackEventRequest? {
         #if os(iOS)
         let attribution = await appleAdsAttribution.attributionRecord()?.analyticsPayload ?? [:]
         #else
         let attribution: [String: JSONValue] = [:]
         #endif
 
+        let definition = event.definition
+        let payload = Self.enrichedPayload(definition.data, attribution: attribution)
+        guard payload.count <= Self.maximumPropertyCount else { return nil }
         return TrackEventRequest(
-            source: .website(Self.websiteId),
-            data: Self.enrichedPayload(data, attribution: attribution),
+            source: .website(Self.websiteID),
+            data: payload,
             title: "VVTerm App",
-            url: url,
-            name: name
+            url: definition.url,
+            name: definition.name
         )
     }
 
@@ -227,9 +241,18 @@ final class AnalyticsTracker {
         attribution: [String: JSONValue]
     ) -> [String: JSONValue] {
         var payload = data
-        payload.merge(attribution) { _, attributionValue in attributionValue }
+        for (key, value) in attribution where appleAdsPropertyKeys.contains(key) {
+            if key == "is_apple_ads_attributed" {
+                if case .bool = value {
+                    payload[key] = value
+                }
+            } else if case .string(let string) = value {
+                payload[key] = .string(String(string.prefix(AnalyticsEvent.maximumStringLength)))
+            }
+        }
         payload["platform"] = .string(Self.platform)
         payload["version"] = .string(Self.appVersion)
+        payload["build"] = .string(Self.buildNumber)
         return payload
     }
 
@@ -241,6 +264,11 @@ final class AnalyticsTracker {
         #endif
     }()
 
-    private static let appVersion: String =
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    private static let appVersion = AnalyticsTracker.boundedBundleValue("CFBundleShortVersionString")
+    private static let buildNumber = AnalyticsTracker.boundedBundleValue("CFBundleVersion")
+
+    private static func boundedBundleValue(_ key: String) -> String {
+        let value = Bundle.main.infoDictionary?[key] as? String ?? "unknown"
+        return String(value.prefix(AnalyticsEvent.maximumStringLength))
+    }
 }

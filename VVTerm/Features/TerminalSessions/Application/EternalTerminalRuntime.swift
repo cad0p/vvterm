@@ -189,7 +189,6 @@ final class EternalTerminalRuntime {
     private var connectTask: Task<Void, Never>?
     private var reconnectEventActive = false
     private var failureReported = false
-    private var hasTrackedSuccess = false
     private var startupApplied = false
     private var tmuxLifecycle: EternalTerminalTmuxResumeContext?
     private var tmuxLifecycleParser: TmuxLifecycleStreamParser?
@@ -434,12 +433,6 @@ final class EternalTerminalRuntime {
             }
         } else if state == .connected {
             reconnectEventActive = false
-            if !hasTrackedSuccess {
-                hasTrackedSuccess = true
-                AnalyticsTracker.shared.trackConnectionSucceeded(
-                    transport: ShellTransport.eternalTerminal.rawValue
-                )
-            }
             applyStartupPlanIfNeeded()
         }
 

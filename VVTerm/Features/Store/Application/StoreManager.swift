@@ -312,10 +312,6 @@ final class StoreManager: ObservableObject {
     private func applySuccessfulPurchase(of product: Product) {
         lastPurchasedProductId = product.id
         purchaseState = .purchased
-        AnalyticsTracker.shared.trackPurchase(
-            source: activePaywallSource.rawValue,
-            productId: product.id
-        )
         AnalyticsTracker.shared.trackPurchaseSucceeded(
             source: activePaywallSource.rawValue,
             productId: product.id

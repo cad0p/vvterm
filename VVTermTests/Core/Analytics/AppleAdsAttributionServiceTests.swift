@@ -139,12 +139,7 @@ struct AppleAdsAttributionServiceTests {
             appleAdsAttribution: service
         )
         let event = try #require(await tracker.preparedEvent(
-            name: "purchase_started",
-            url: "/app/paywall",
-            data: [
-                "source": .string("settings"),
-                "product": .string("pro.yearly")
-            ]
+            .purchaseStarted(source: "settings", productID: "pro.yearly")
         ))
 
         #expect(event.data?["source"] == .string("settings"))
@@ -224,10 +219,7 @@ struct AppleAdsAttributionServiceTests {
             defaults: defaults,
             appleAdsAttribution: service
         )
-        #expect(await tracker.preparedEvent(
-            name: "app_launched",
-            url: "/app/launch"
-        ) == nil)
+        #expect(await tracker.preparedEvent(.appLaunched(isPro: false)) == nil)
     }
 
     @Test
