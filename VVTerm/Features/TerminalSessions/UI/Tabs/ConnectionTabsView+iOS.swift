@@ -49,6 +49,13 @@ extension ConnectionTerminalContainer {
 
             content
         }
+        .overlay(alignment: .topTrailing) {
+            if isZenModeEnabled {
+                zenModeOverlay
+                    .transition(.opacity)
+                    .zIndex(10)
+            }
+        }
         .background(backgroundColor.ignoresSafeArea(.all))
         .modifier(
             TerminalKeyboardSafeAreaModifier(
@@ -125,6 +132,68 @@ extension ConnectionTerminalContainer {
         tabManager.disconnectServer(server.id)
         fileBrowser.disconnect(serverId: server.id)
         fileTabManager.disconnect(serverId: server.id)
+    }
+
+    private var zenModeOverlay: some View {
+        ZenModeFloatingOverlay(isPanelPresented: $showingZenPanel) { panelWidth in
+            IOSZenModePanel(
+                width: panelWidth,
+                serverName: server.name,
+                selectedView: selectedView,
+                selectedViewBinding: selectedViewBinding,
+                viewTabs: visibleViewTabs,
+                terminalTabs: serverTabs,
+                selectedTerminalTabId: selectedTabIdBinding,
+                terminalTabTitle: { tabManager.displayTitle(for: $0) },
+                paneState: { tabManager.paneStates[$0.focusedPaneId] },
+                onCloseTerminalTab: { tabManager.closeTab($0) },
+                fileTabs: serverFileTabs,
+                selectedFileTabId: selectedFileTabIdBinding,
+                fileTabTitle: displayedFileTabTitle(for:),
+                onSelectFileTab: { fileTabManager.selectTab($0) },
+                onCloseFileTab: { tab in
+                    if let removedTab = fileTabManager.closeTab(tab) {
+                        fileBrowser.removeState(for: removedTab.id)
+                    }
+                },
+                onNewTerminalTab: {
+                    showingZenPanel = false
+                    openNewTab(selectTerminalViewOnSuccess: true)
+                },
+                onNewFileTab: {
+                    showingZenPanel = false
+                    openNewFileTab(selectFilesViewOnSuccess: true)
+                },
+                onOpenSettings: {
+                    showingZenPanel = false
+                    onOpenSettings?()
+                },
+                onEditServer: {
+                    showingZenPanel = false
+                    serverToEdit = server
+                },
+                onDisconnect: {
+                    showingZenPanel = false
+                    if let onDisconnectRoute {
+                        onDisconnectRoute()
+                    } else {
+                        disconnectFromServer()
+                    }
+                },
+                onBack: {
+                    showingZenPanel = false
+                    onLeaveRoute?()
+                },
+                onExitZen: exitZenMode
+            )
+        }
+    }
+
+    private func exitZenMode() {
+        showingZenPanel = false
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+            isZenModeEnabled = false
+        }
     }
 
     private var disconnectAlertTitle: String {

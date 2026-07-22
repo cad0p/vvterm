@@ -103,7 +103,10 @@ struct ContentView: View {
                     server: server,
                     isZenModeEnabled: $isZenModeEnabled,
                     isSidebarVisible: isSidebarVisible,
-                    onToggleSidebar: toggleSidebarInZenMode
+                    onToggleSidebar: toggleSidebarInZenMode,
+                    onOpenSettings: nil,
+                    onLeaveRoute: nil,
+                    onDisconnectRoute: nil
                 )
                 .id(server.id) // Ensure isolation per server
             } else if !hasOpenConnectionSurfaces {

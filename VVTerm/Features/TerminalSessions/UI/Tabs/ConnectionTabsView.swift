@@ -16,6 +16,9 @@ struct ConnectionTerminalContainer: View {
     @Binding var isZenModeEnabled: Bool
     let isSidebarVisible: Bool
     let onToggleSidebar: () -> Void
+    let onOpenSettings: (() -> Void)?
+    let onLeaveRoute: (() -> Void)?
+    let onDisconnectRoute: (() -> Void)?
 
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.colorScheme) private var colorScheme

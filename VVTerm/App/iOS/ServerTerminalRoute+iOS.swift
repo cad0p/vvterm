@@ -92,6 +92,13 @@ struct ServerTerminalRoute: View {
         selectedTab?.focusedPaneId
     }
 
+    private var canEnterZenMode: Bool {
+        TerminalZenModePolicy.canEnter(
+            isTerminalSelected: selectedView == ConnectionViewTab.terminal.id,
+            hasActiveTerminal: selectedTab != nil
+        )
+    }
+
     private var hasNavigationContext: Bool {
         route.isConnecting
             || !tabManager.tabs(for: route.serverId).isEmpty
@@ -142,6 +149,7 @@ struct ServerTerminalRoute: View {
             .navigationBarBackButtonHidden(true)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { navigationToolbar }
+            .toolbar(isZenModeEnabled ? .hidden : .visible, for: .navigationBar)
             .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
             .limitReachedAlert(.fileTabs, isPresented: $showingFileTabLimitAlert)
             .sheet(item: $presentedRouteSheet, onDismiss: updateTerminalRouteActivation) { sheet in
@@ -165,6 +173,7 @@ struct ServerTerminalRoute: View {
             .onAppear {
                 isRouteVisible = true
                 dismissIfContextEnded()
+                reconcileZenMode()
                 updateTerminalRouteActivation()
             }
             .onDisappear {
@@ -178,9 +187,11 @@ struct ServerTerminalRoute: View {
                 if newValue != ConnectionViewTab.terminal.id {
                     clearPendingVoiceReturnForFocusedPane()
                 }
+                reconcileZenMode()
                 updateTerminalRouteActivation()
             }
             .onChange(of: selectedTab?.id) { _ in
+                reconcileZenMode()
                 updateTerminalRouteActivation()
             }
             .onChange(of: focusedPaneId) { _ in
@@ -191,6 +202,7 @@ struct ServerTerminalRoute: View {
             }
             .onChangeCompat(of: tabManager.tabsByServer) { _ in
                 dismissIfContextEnded()
+                reconcileZenMode()
                 updateTerminalRouteActivation()
             }
             .onChangeCompat(of: fileTabs.tabsByServer) { _ in
@@ -236,7 +248,10 @@ struct ServerTerminalRoute: View {
                 server: server,
                 isZenModeEnabled: $isZenModeEnabled,
                 isSidebarVisible: false,
-                onToggleSidebar: {}
+                onToggleSidebar: {},
+                onOpenSettings: { presentRouteSheet(.settings) },
+                onLeaveRoute: leaveRoute,
+                onDisconnectRoute: { disconnect(server) }
             )
             .navigationTitle(server.name)
         } else if route.isConnecting {
@@ -289,12 +304,6 @@ struct ServerTerminalRoute: View {
             }
 
             Menu {
-                Button {
-                    presentRouteSheet(.settings)
-                } label: {
-                    Label("Settings", systemImage: "gear")
-                }
-
                 if let server = selectedServer {
                     if selectedView == ConnectionViewTab.terminal.id {
                         Button {
@@ -308,6 +317,22 @@ struct ServerTerminalRoute: View {
                         } label: {
                             Label("Keyboard", systemImage: "keyboard")
                         }
+
+                        if canEnterZenMode {
+                            Button {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                    isZenModeEnabled = true
+                                }
+                            } label: {
+                                Label(
+                                    "Enter Zen Mode",
+                                    systemImage: "arrow.up.left.and.arrow.down.right"
+                                )
+                            }
+                            .accessibilityIdentifier("vvterm.terminal.enterZenMode")
+                        }
+
+                        Divider()
                     }
 
                     Button {
@@ -316,12 +341,24 @@ struct ServerTerminalRoute: View {
                         Label("Edit Server", systemImage: "pencil")
                     }
 
+                    Button {
+                        presentRouteSheet(.settings)
+                    } label: {
+                        Label("Settings", systemImage: "gear")
+                    }
+
                     Divider()
 
                     Button(role: .destructive) {
                         disconnect(server)
                     } label: {
                         Label("Disconnect", systemImage: "xmark.circle")
+                    }
+                } else {
+                    Button {
+                        presentRouteSheet(.settings)
+                    } label: {
+                        Label("Settings", systemImage: "gear")
                     }
                 }
             } label: {
@@ -501,9 +538,17 @@ struct ServerTerminalRoute: View {
     }
 
     private func leaveRoute() {
+        isZenModeEnabled = false
         tabManager.invalidateReconnectPreparations(for: route.serverId)
         keyboardCoordinator.relinquishRouteOwnershipForNavigation()
         onBack()
+    }
+
+    private func reconcileZenMode() {
+        isZenModeEnabled = TerminalZenModePolicy.resolvedEnabled(
+            requested: isZenModeEnabled,
+            hasRouteContext: hasNavigationContext
+        )
     }
 
     private func presentRouteSheet(_ sheet: PresentedRouteSheet) {
@@ -670,6 +715,7 @@ struct ServerTerminalRoute: View {
     }
 
     private func disconnect(_ server: Server) {
+        isZenModeEnabled = false
         fileBrowser.disconnect(serverId: server.id)
         fileTabs.disconnect(serverId: server.id)
         tabManager.disconnectServer(server.id)

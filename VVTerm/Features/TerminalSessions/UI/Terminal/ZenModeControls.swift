@@ -12,6 +12,12 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
     private let chromeTrailingPadding: CGFloat = 12
     #endif
 
+    #if os(iOS)
+    private let launcherSize: CGFloat = 44
+    #else
+    private let launcherSize: CGFloat = 40
+    #endif
+
     init(
         isPanelPresented: Binding<Bool>,
         indicatorColor: Color? = nil,
@@ -74,7 +80,7 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 15, weight: .semibold))
-                .frame(width: 40, height: 40)
+                .frame(width: launcherSize, height: launcherSize)
                 .foregroundStyle(.primary)
                 .zenModeLauncherGlass()
                 .overlay(
@@ -85,6 +91,7 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
         .buttonStyle(.plain)
         .accessibilityLabel(String(localized: "Zen controls"))
         .accessibilityValue(isPanelPresented ? String(localized: "Expanded") : String(localized: "Collapsed"))
+        .accessibilityIdentifier("vvterm.zen.controls")
     }
 
     private func closePanel() {
