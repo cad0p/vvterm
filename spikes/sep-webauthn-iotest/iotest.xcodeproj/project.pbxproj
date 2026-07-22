@@ -9,6 +9,12 @@
 		A10000010000000000000001 /* iotestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000001 /* iotestApp.swift */; };
 		A10000010000000000000002 /* WebAuthnProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000002 /* WebAuthnProbe.swift */; };
 		A10000010000000000000003 /* ProbeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000100000000000000003 /* ProbeView.swift */; };
+		D10000010000000000000001 /* HeadlessID.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000001 /* HeadlessID.swift */; };
+		D10000010000000000000002 /* HeadlessLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000002 /* HeadlessLogin.swift */; };
+		D10000010000000000000003 /* HeadlessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000003 /* HeadlessRunner.swift */; };
+		D10000010000000000000004 /* HeadlessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000004 /* HeadlessView.swift */; };
+		D10000010000000000000005 /* SSHPubKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000005 /* SSHPubKey.swift */; };
+		D10000010000000000000006 /* headless_id.txt in Resources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000006 /* headless_id.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +23,12 @@
 		A10000100000000000000002 /* WebAuthnProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthnProbe.swift; sourceTree = "<group>"; };
 		A10000100000000000000003 /* ProbeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProbeView.swift; sourceTree = "<group>"; };
 		A10000100000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D10000100000000000000001 /* HeadlessID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessID.swift; sourceTree = "<group>"; };
+		D10000100000000000000002 /* HeadlessLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessLogin.swift; sourceTree = "<group>"; };
+		D10000100000000000000003 /* HeadlessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessRunner.swift; sourceTree = "<group>"; };
+		D10000100000000000000004 /* HeadlessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessView.swift; sourceTree = "<group>"; };
+		D10000100000000000000005 /* SSHPubKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHPubKey.swift; sourceTree = "<group>"; };
+		D10000100000000000000006 /* headless_id.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = headless_id.txt; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +63,8 @@
 			children = (
 				A10000400000000000000003 /* App */,
 				A10000400000000000000004 /* WebAuthnProbe */,
+				D10000400000000000000001 /* HeadlessBootstrap */,
+				D10000400000000000000002 /* SEPWebAuthn (from spike) */,
 				A10000400000000000000005 /* Resources */,
 			);
 			path = iotest;
@@ -77,8 +91,29 @@
 			isa = PBXGroup;
 			children = (
 				A10000100000000000000004 /* Info.plist */,
+				D10000100000000000000006 /* headless_id.txt */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		D10000400000000000000001 /* HeadlessBootstrap */ = {
+			isa = PBXGroup;
+			children = (
+				D10000100000000000000001 /* HeadlessID.swift */,
+				D10000100000000000000002 /* HeadlessLogin.swift */,
+				D10000100000000000000003 /* HeadlessRunner.swift */,
+				D10000100000000000000004 /* HeadlessView.swift */,
+			);
+			path = HeadlessBootstrap;
+			sourceTree = "<group>";
+		};
+		D10000400000000000000002 /* SEPWebAuthn (from spike) */ = {
+			isa = PBXGroup;
+			children = (
+				D10000100000000000000005 /* SSHPubKey.swift */,
+			);
+			name = "SEPWebAuthn (from spike)";
+			path = "../sep-webauthn/Sources/SEPWebAuthn";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -139,6 +174,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000010000000000000006 /* headless_id.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,6 +188,11 @@
 				A10000010000000000000001 /* iotestApp.swift in Sources */,
 				A10000010000000000000002 /* WebAuthnProbe.swift in Sources */,
 				A10000010000000000000003 /* ProbeView.swift in Sources */,
+				D10000010000000000000001 /* HeadlessID.swift in Sources */,
+				D10000010000000000000002 /* HeadlessLogin.swift in Sources */,
+				D10000010000000000000003 /* HeadlessRunner.swift in Sources */,
+				D10000010000000000000004 /* HeadlessView.swift in Sources */,
+				D10000010000000000000005 /* SSHPubKey.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
