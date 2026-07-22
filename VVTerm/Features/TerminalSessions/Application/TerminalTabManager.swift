@@ -70,6 +70,10 @@ final class TerminalTabManager: ObservableObject {
         }
     }
 
+    /// Tabs temporarily presenting only their focused pane. The focused pane is
+    /// still derived from TerminalTab, and this presentation state is not persisted.
+    @Published private(set) var splitZoomedTabIds: Set<UUID> = []
+
     /// Servers with at least one live terminal shell.
     @Published var connectedServerIds: Set<UUID> = []
 
@@ -295,6 +299,8 @@ final class TerminalTabManager: ObservableObject {
             return
         }
 
+        splitZoomedTabIds.remove(currentTab.id)
+
         // Clean up all panes in this tab
         for paneId in currentTab.allPaneIds {
             cleanupPane(paneId, intent: intent)
@@ -384,7 +390,7 @@ final class TerminalTabManager: ObservableObject {
         reconnectPreparationsInFlight.removeAll()
         tabOpensInFlight.removeAll()
         for paneId in paneIds {
-            unregisterTerminal(for: paneId)
+            detachTerminalRegistration(for: paneId)
             if paneStates[paneId] != nil {
                 paneStates[paneId]?.disconnectReason = .transportEnded
                 paneStates[paneId]?.connectionState = .disconnected
@@ -602,7 +608,209 @@ final class TerminalTabManager: ObservableObject {
               let index = serverTabs.firstIndex(where: { $0.id == tab.id }) else { return }
         serverTabs[index] = tab
         tabsByServer[tab.serverId] = serverTabs
+        if !tab.hasSplits {
+            splitZoomedTabIds.remove(tab.id)
+        }
         updateTmuxFocus(for: tab)
+    }
+
+    func focusPane(in tab: TerminalTab, paneId: UUID) {
+        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
+              currentTab.allPaneIds.contains(paneId),
+              currentTab.focusedPaneId != paneId else {
+            return
+        }
+        currentTab.focusedPaneId = paneId
+        updateTab(currentTab)
+    }
+
+    func updateSplitRatio(
+        in tab: TerminalTab,
+        node: TerminalSplitNode,
+        ratio: Double
+    ) {
+        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
+              let currentLayout = currentTab.layout else {
+            return
+        }
+        currentTab.layout = currentLayout.replacingNode(
+            node,
+            with: node.withUpdatedRatio(ratio)
+        )
+        updateTab(currentTab)
+    }
+
+    func equalizeSplitLayout(in tab: TerminalTab) {
+        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
+              let currentLayout = currentTab.layout else {
+            return
+        }
+        currentTab.layout = currentLayout.equalized()
+        updateTab(currentTab)
+    }
+
+    func isSplitZoomed(in tab: TerminalTab) -> Bool {
+        guard splitZoomedTabIds.contains(tab.id),
+              let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
+            return false
+        }
+        return currentTab.hasSplits
+    }
+
+    func canPerformSplitCommand(
+        _ command: TerminalSplitCommand,
+        in tab: TerminalTab
+    ) -> Bool {
+        guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
+              currentTab.allPaneIds.contains(currentTab.focusedPaneId) else {
+            return false
+        }
+
+        switch command {
+        case .splitRight, .splitDown, .closeFocusedPane:
+            return true
+        case .toggleZoom, .selectPrevious, .selectNext, .equalize:
+            return currentTab.hasSplits
+        case .selectAbove:
+            return currentTab.layout?.neighboringPane(
+                from: currentTab.focusedPaneId,
+                direction: .above
+            ) != nil
+        case .selectBelow:
+            return currentTab.layout?.neighboringPane(
+                from: currentTab.focusedPaneId,
+                direction: .below
+            ) != nil
+        case .selectLeft:
+            return currentTab.layout?.neighboringPane(
+                from: currentTab.focusedPaneId,
+                direction: .left
+            ) != nil
+        case .selectRight:
+            return currentTab.layout?.neighboringPane(
+                from: currentTab.focusedPaneId,
+                direction: .right
+            ) != nil
+        case .moveDividerUp:
+            return currentTab.layout?.hasDivider(
+                near: currentTab.focusedPaneId,
+                direction: .up
+            ) == true
+        case .moveDividerDown:
+            return currentTab.layout?.hasDivider(
+                near: currentTab.focusedPaneId,
+                direction: .down
+            ) == true
+        case .moveDividerLeft:
+            return currentTab.layout?.hasDivider(
+                near: currentTab.focusedPaneId,
+                direction: .left
+            ) == true
+        case .moveDividerRight:
+            return currentTab.layout?.hasDivider(
+                near: currentTab.focusedPaneId,
+                direction: .right
+            ) == true
+        }
+    }
+
+    @discardableResult
+    func performSplitCommand(
+        _ command: TerminalSplitCommand,
+        in tab: TerminalTab
+    ) -> TerminalSplitCommandOutcome {
+        guard canPerformSplitCommand(command, in: tab),
+              var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
+            return .unavailable
+        }
+
+        switch command {
+        case .splitRight:
+            guard StoreManager.shared.isPro else { return .requiresUpgrade }
+            return splitRight(tab: currentTab, paneId: currentTab.focusedPaneId) == nil
+                ? .unavailable
+                : .performed
+        case .splitDown:
+            guard StoreManager.shared.isPro else { return .requiresUpgrade }
+            return splitDown(tab: currentTab, paneId: currentTab.focusedPaneId) == nil
+                ? .unavailable
+                : .performed
+        case .closeFocusedPane:
+            return .requiresCloseConfirmation
+        case .toggleZoom:
+            if splitZoomedTabIds.contains(currentTab.id) {
+                splitZoomedTabIds.remove(currentTab.id)
+            } else {
+                splitZoomedTabIds.insert(currentTab.id)
+            }
+        case .selectPrevious:
+            guard let paneId = currentTab.layout?.pane(before: currentTab.focusedPaneId) else {
+                return .unavailable
+            }
+            currentTab.focusedPaneId = paneId
+            updateTab(currentTab)
+        case .selectNext:
+            guard let paneId = currentTab.layout?.pane(after: currentTab.focusedPaneId) else {
+                return .unavailable
+            }
+            currentTab.focusedPaneId = paneId
+            updateTab(currentTab)
+        case .selectAbove:
+            return selectNeighbor(in: currentTab, direction: .above)
+        case .selectBelow:
+            return selectNeighbor(in: currentTab, direction: .below)
+        case .selectLeft:
+            return selectNeighbor(in: currentTab, direction: .left)
+        case .selectRight:
+            return selectNeighbor(in: currentTab, direction: .right)
+        case .equalize:
+            guard let layout = currentTab.layout else { return .unavailable }
+            currentTab.layout = layout.equalized()
+            updateTab(currentTab)
+        case .moveDividerUp:
+            return moveDivider(in: currentTab, direction: .up)
+        case .moveDividerDown:
+            return moveDivider(in: currentTab, direction: .down)
+        case .moveDividerLeft:
+            return moveDivider(in: currentTab, direction: .left)
+        case .moveDividerRight:
+            return moveDivider(in: currentTab, direction: .right)
+        }
+
+        return .performed
+    }
+
+    private func selectNeighbor(
+        in tab: TerminalTab,
+        direction: TerminalSplitFocusDirection
+    ) -> TerminalSplitCommandOutcome {
+        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
+              let paneId = currentTab.layout?.neighboringPane(
+                  from: currentTab.focusedPaneId,
+                  direction: direction
+              ) else {
+            return .unavailable
+        }
+        currentTab.focusedPaneId = paneId
+        updateTab(currentTab)
+        return .performed
+    }
+
+    private func moveDivider(
+        in tab: TerminalTab,
+        direction: TerminalSplitResizeDirection
+    ) -> TerminalSplitCommandOutcome {
+        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
+              let layout = currentTab.layout,
+              let updatedLayout = layout.movingDivider(
+                  near: currentTab.focusedPaneId,
+                  direction: direction
+              ) else {
+            return .unavailable
+        }
+        currentTab.layout = updatedLayout
+        updateTab(currentTab)
+        return .performed
     }
 
     // MARK: - Terminal Registry
@@ -622,10 +830,10 @@ final class TerminalTabManager: ObservableObject {
                 self.keyboardCoordinator.setWindowAttached(attachment, for: paneId)
             }
         }
-        terminal.onTerminalDirectTouch = { [weak self] isFocusTap in
-            Task { @MainActor [weak self] in
-                self?.keyboardCoordinator.directTouchOnTerminal(isFocusTap: isFocusTap)
-            }
+        terminal.onTerminalDirectTouch = { [weak self, weak terminal] isFocusTap in
+            guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
+            self.keyboardCoordinator.setActivePane(paneId)
+            self.keyboardCoordinator.directTouchOnTerminal(isFocusTap: isFocusTap)
         }
         terminal.onKeyboardAccessoryHideRequested = { [weak self] in
             self?.keyboardCoordinator.userRequestedHide()
@@ -660,9 +868,10 @@ final class TerminalTabManager: ObservableObject {
         scheduleTerminalRegistryVersionUpdate()
     }
 
-    /// Unregister a terminal view
-    func unregisterTerminal(for paneId: UUID) {
-        if let terminal = terminalViews.removeValue(forKey: paneId) {
+    @discardableResult
+    private func detachTerminalRegistration(for paneId: UUID) -> GhosttyTerminalView? {
+        let terminal = terminalViews.removeValue(forKey: paneId)
+        if let terminal {
             #if os(iOS)
             terminal.onWindowAttachmentChange = nil
             terminal.onTerminalDirectTouch = nil
@@ -674,9 +883,9 @@ final class TerminalTabManager: ObservableObject {
             keyboardCoordinator.setWindowAttached(false, for: paneId)
             keyboardCoordinator.removePane(paneId)
             #endif
-            terminal.cleanup()
         }
         scheduleTerminalRegistryVersionUpdate()
+        return terminal
     }
 
     /// Unregister a dismantled platform view only if it is still the pane's
@@ -691,7 +900,8 @@ final class TerminalTabManager: ObservableObject {
             terminal.cleanup()
             return
         }
-        unregisterTerminal(for: paneId)
+        detachTerminalRegistration(for: paneId)
+        terminal.cleanup()
     }
 
     #if os(iOS)
@@ -1257,10 +1467,7 @@ final class TerminalTabManager: ObservableObject {
 
         clearTmuxRuntimeState(for: paneId)
         reconnectPreparationsInFlight.removeValue(forKey: paneId)
-        unregisterTerminal(for: paneId)
-        #if os(iOS)
-        keyboardCoordinator.removePane(paneId)
-        #endif
+        detachTerminalRegistration(for: paneId)
         paneStates.removeValue(forKey: paneId)
         runtimeTitleByPane.removeValue(forKey: paneId)
         titleOverrideByPane.removeValue(forKey: paneId)
@@ -2480,6 +2687,7 @@ extension TerminalTabManager {
         isRestoring = true
         tabsByServer = [:]
         selectedTabByServer = [:]
+        splitZoomedTabIds = []
         connectedServerIds = []
         selectedViewByServer = [:]
         paneStates = [:]

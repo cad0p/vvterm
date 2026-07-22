@@ -76,6 +76,10 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var codexResponseCount = 0
     @State private var zoomActionCount = 0
     @State private var lastZoomAction = "none"
+    @State private var paneShortcutActionCount = 0
+    @State private var lastPaneShortcutAction = "none"
+    @State private var paneFocusActionCount = 0
+    @State private var showingPaneCloseConfirmation = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var preservesTerminalSize: Bool {
@@ -127,6 +131,16 @@ struct TerminalKeyboardUITestHarness: View {
                         case .reset:
                             lastZoomAction = "reset"
                         }
+                    },
+                    onPaneKeyboardShortcut: { action in
+                        paneShortcutActionCount += 1
+                        lastPaneShortcutAction = String(describing: action)
+                        if action == .closeFocusedPane {
+                            showingPaneCloseConfirmation = true
+                        }
+                    },
+                    onPaneFocus: {
+                        paneFocusActionCount += 1
                     }
                 )
                 .terminalKeyboardAvoidance(
@@ -385,6 +399,12 @@ struct TerminalKeyboardUITestHarness: View {
             .padding(8)
         }
         .background(Color.black)
+        .alert("Close this terminal?", isPresented: $showingPaneCloseConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Close", role: .destructive) {}
+        } message: {
+            Text("The SSH connection will be terminated.")
+        }
         .sheet(isPresented: $showingSettings, onDismiss: {
             applyRouteActivation(.foregroundActive)
         }) {
@@ -524,6 +544,9 @@ struct TerminalKeyboardUITestHarness: View {
             + " primaryMousePresses=\(primaryMousePresses) primaryMouseReleases=\(primaryMouseReleases)"
             + " mouseScrollReports=\(mouseScrollReports) zoomActions=\(zoomActionCount)"
             + " lastZoomAction=\(lastZoomAction)"
+            + " paneShortcutActions=\(paneShortcutActionCount)"
+            + " lastPaneShortcutAction=\(lastPaneShortcutAction)"
+            + " paneFocusActions=\(paneFocusActionCount)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
     }
 
@@ -746,6 +769,8 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     let paneId: UUID
     let onInput: (Data) -> Void
     let onZoomAction: (TerminalZoomAction) -> Void
+    let onPaneKeyboardShortcut: (TerminalSplitCommand) -> Void
+    let onPaneFocus: () -> Void
 
     func makeUIView(context: Context) -> TerminalKeyboardHarnessContainerView {
         TerminalKeyboardHarnessContainerView()
@@ -755,6 +780,8 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
         uiView.paneId = paneId
         uiView.onInput = onInput
         uiView.onZoomAction = onZoomAction
+        uiView.onPaneKeyboardShortcut = onPaneKeyboardShortcut
+        uiView.onPaneFocus = onPaneFocus
         uiView.installTerminalIfNeeded(app: ghosttyApp.app, appWrapper: ghosttyApp)
         uiView.requestKeyboardFocusIfNeeded(focusRequestID: focusRequestID)
 
@@ -780,6 +807,8 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
     var paneId: UUID?
     var onInput: ((Data) -> Void)?
     var onZoomAction: ((TerminalZoomAction) -> Void)?
+    var onPaneKeyboardShortcut: ((TerminalSplitCommand) -> Void)?
+    var onPaneFocus: (() -> Void)?
     private var lastHandledFocusRequestID: Int?
     private var pendingFocusRequestID = 0
 
@@ -826,6 +855,18 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
                 effectiveFontSize: overrides.resolvedFontSize()
             )
         }
+        terminal.onPaneKeyboardShortcut = { [weak self] action in
+            self?.onPaneKeyboardShortcut?(action)
+        }
+        terminal.terminalContextMenuActions = TerminalContextMenuActions(
+            focus: { [weak self] in self?.onPaneFocus?() },
+            splitRight: {},
+            splitLeft: {},
+            splitDown: {},
+            splitUp: {},
+            currentTitle: { "" },
+            setTitle: { _ in }
+        )
         terminal.onReady = { [weak self, weak terminal] in
             guard let self, let terminal else { return }
             terminal.acceptsTerminalInput = true

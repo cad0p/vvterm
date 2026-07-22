@@ -144,6 +144,53 @@ private func makeTerminalZoomKeyCommands(action: Selector) -> [UIKeyCommand] {
 }
 
 @MainActor
+private func makeTerminalSplitKeyCommands(action: Selector) -> [UIKeyCommand] {
+    let shortcuts: [(input: String, modifiers: UIKeyModifierFlags, title: String)] = [
+        ("d", .command, String(localized: "Split Right")),
+        ("d", [.command, .shift], String(localized: "Split Down")),
+        ("w", .command, String(localized: "Close Pane")),
+        ("\r", [.command, .shift], String(localized: "Zoom Split")),
+        ("[", .command, String(localized: "Select Previous Split")),
+        ("]", .command, String(localized: "Select Next Split")),
+        (UIKeyCommand.inputUpArrow, [.command, .alternate], String(localized: "Select Split Above")),
+        (UIKeyCommand.inputDownArrow, [.command, .alternate], String(localized: "Select Split Below")),
+        (UIKeyCommand.inputLeftArrow, [.command, .alternate], String(localized: "Select Split Left")),
+        (UIKeyCommand.inputRightArrow, [.command, .alternate], String(localized: "Select Split Right")),
+        ("=", [.command, .control], String(localized: "Equalize Splits")),
+        (UIKeyCommand.inputUpArrow, [.command, .control], String(localized: "Move Divider Up")),
+        (UIKeyCommand.inputDownArrow, [.command, .control], String(localized: "Move Divider Down")),
+        (UIKeyCommand.inputLeftArrow, [.command, .control], String(localized: "Move Divider Left")),
+        (UIKeyCommand.inputRightArrow, [.command, .control], String(localized: "Move Divider Right")),
+    ]
+
+    return shortcuts.map { shortcut in
+        let command = UIKeyCommand(
+            input: shortcut.input,
+            modifierFlags: shortcut.modifiers,
+            action: action
+        )
+        command.discoverabilityTitle = shortcut.title
+        if #available(iOS 15.0, *) {
+            command.wantsPriorityOverSystemBehavior = true
+            command.allowsAutomaticLocalization = false
+            command.allowsAutomaticMirroring = false
+        }
+        return command
+    }
+}
+
+private extension UIKeyModifierFlags {
+    var terminalSplitShortcutModifiers: TerminalSplitShortcutModifiers {
+        var result: TerminalSplitShortcutModifiers = []
+        if contains(.command) { result.insert(.command) }
+        if contains(.shift) { result.insert(.shift) }
+        if contains(.control) { result.insert(.control) }
+        if contains(.alternate) { result.insert(.alternate) }
+        return result
+    }
+}
+
+@MainActor
 private final class TerminalIMEProxyTextView: UIView, UITextInput {
     weak var terminalOwner: GhosttyTerminalView?
     /// Local mirror of recently typed input. Committed text stays in the document after
@@ -187,6 +234,9 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     )
     private lazy var terminalZoomCommands = makeTerminalZoomKeyCommands(
         action: #selector(handleTerminalZoomCommand(_:))
+    )
+    private lazy var terminalSplitCommands = makeTerminalSplitKeyCommands(
+        action: #selector(handleTerminalSplitCommand(_:))
     )
 
     override init(frame: CGRect) {
@@ -266,7 +316,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        terminalNavigationCommands + terminalZoomCommands + (super.keyCommands ?? [])
+        terminalSplitCommands + terminalNavigationCommands + terminalZoomCommands + (super.keyCommands ?? [])
     }
 
     var keyboardType: UIKeyboardType {
@@ -872,6 +922,11 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         terminalOwner?.handleTerminalZoomCommand(sender)
     }
 
+    @objc
+    private func handleTerminalSplitCommand(_ sender: UIKeyCommand) {
+        terminalOwner?.handleTerminalSplitCommand(sender)
+    }
+
     private func notifyTextInputStateDidChange() {
         terminalOwner?.syncTextInputModelFromIMEProxy()
     }
@@ -922,7 +977,13 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     private static func makeTerminalNavigationCommands(action: Selector) -> [UIKeyCommand] {
         terminalNavigationInputs.flatMap { input in
-            terminalNavigationModifierCombinations.map { modifiers in
+            terminalNavigationModifierCombinations.compactMap { modifiers in
+                guard TerminalSplitShortcutRouting.command(
+                    for: input,
+                    modifiers: modifiers.terminalSplitShortcutModifiers
+                ) == nil else {
+                    return nil
+                }
                 let command = UIKeyCommand(input: input, modifierFlags: modifiers, action: action)
                 if #available(iOS 15.0, *) {
                     command.wantsPriorityOverSystemBehavior = true
@@ -981,6 +1042,9 @@ class GhosttyTerminalView: UIView {
 
     /// Callback invoked when a pinch gesture requests terminal pane zoom.
     var onZoomAction: ((TerminalZoomAction) -> TerminalZoomResult?)?
+
+    /// App-owned pane actions invoked by iPad hardware-keyboard shortcuts.
+    var onPaneKeyboardShortcut: ((TerminalSplitCommand) -> Void)?
 
     /// Per-surface presentation overrides used to preserve pane zoom across global config reloads.
     private(set) var surfacePresentationOverrides: TerminalPresentationOverrides = .empty
@@ -1450,6 +1514,7 @@ class GhosttyTerminalView: UIView {
         onProgressReport = nil
         onResize = nil
         onKeyboardAvoidanceCursorRectChange = nil
+        onPaneKeyboardShortcut = nil
         keyboardAvoidancePreservedSurfaceSize = nil
         keyboardAvoidanceReferenceSurfaceSize = nil
         tracksKeyboardAvoidanceReferenceSize = false
@@ -2336,6 +2401,7 @@ class GhosttyTerminalView: UIView {
 
     private func notifyDirectTouchOnTerminal(isFocusTap: Bool = false) {
         guard !isFindNavigatorActive else { return }
+        terminalContextMenuActions?.focus()
         onTerminalDirectTouch?(isFocusTap)
     }
 
@@ -4106,11 +4172,14 @@ class GhosttyTerminalView: UIView {
     // MARK: - Keyboard Input (Hardware Keyboard)
 
     override var keyCommands: [UIKeyCommand]? {
-        terminalZoomCommands + (super.keyCommands ?? [])
+        terminalSplitCommands + terminalZoomCommands + (super.keyCommands ?? [])
     }
 
     private lazy var terminalZoomCommands = makeTerminalZoomKeyCommands(
         action: #selector(handleTerminalZoomCommand(_:))
+    )
+    private lazy var terminalSplitCommands = makeTerminalSplitKeyCommands(
+        action: #selector(handleTerminalSplitCommand(_:))
     )
 
     fileprivate func handleIMEProxyNavigationCommand(_ command: UIKeyCommand) {
@@ -4139,6 +4208,19 @@ class GhosttyTerminalView: UIView {
             return
         }
         performTerminalZoomAction(action)
+    }
+
+    @objc
+    fileprivate func handleTerminalSplitCommand(_ command: UIKeyCommand) {
+        guard canRouteTerminalInput,
+              let input = command.input,
+              let action = terminalSplitCommand(
+                  input: input,
+                  modifiers: command.modifierFlags
+              ) else {
+            return
+        }
+        onPaneKeyboardShortcut?(action)
     }
 
     private func handlePasteShortcut(_ key: UIKey) -> Bool {
@@ -4181,6 +4263,13 @@ class GhosttyTerminalView: UIView {
 
     private func handleCommandShortcut(_ key: UIKey) -> Bool {
         guard key.modifierFlags.contains(.command) else { return false }
+        if let action = terminalSplitCommand(
+            input: key.charactersIgnoringModifiers,
+            modifiers: key.modifierFlags
+        ) {
+            onPaneKeyboardShortcut?(action)
+            return true
+        }
         if let action = terminalZoomShortcutAction(for: key) {
             performTerminalZoomAction(action)
             return true
@@ -4202,6 +4291,18 @@ class GhosttyTerminalView: UIView {
         default:
             return false
         }
+    }
+
+    private func terminalSplitCommand(
+        input: String,
+        modifiers: UIKeyModifierFlags
+    ) -> TerminalSplitCommand? {
+        // Caps Lock and UIKit's numeric-pad marker do not conflict with app
+        // shortcuts; this matches the existing terminal zoom routing.
+        return TerminalSplitShortcutRouting.command(
+            for: input,
+            modifiers: modifiers.terminalSplitShortcutModifiers
+        )
     }
 
     private func performTerminalZoomAction(_ action: TerminalZoomAction) {

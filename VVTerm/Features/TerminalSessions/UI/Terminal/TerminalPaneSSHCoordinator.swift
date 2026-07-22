@@ -299,7 +299,6 @@ final class TerminalPaneSSHCoordinator {
         }
         self.shellId = nil
 
-        terminal?.cleanup()
         terminal = nil
     }
 

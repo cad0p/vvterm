@@ -267,6 +267,7 @@ struct RemoteTerminalPaneWrapper: View {
     let richPasteUIModel: TerminalRichPasteUIModel
     let isActive: Bool
     let terminalContextMenuActions: TerminalContextMenuActions
+    let onPaneKeyboardShortcut: (TerminalSplitCommand) -> Void
     let onProcessExit: () -> Void
     let onReady: () -> Void
     let onVoiceTrigger: (() -> Void)?
@@ -282,6 +283,7 @@ struct RemoteTerminalPaneWrapper: View {
                 size: geometry.size,
                 isActive: isActive,
                 terminalContextMenuActions: terminalContextMenuActions,
+                onPaneKeyboardShortcut: onPaneKeyboardShortcut,
                 onProcessExit: onProcessExit,
                 onReady: onReady,
                 onVoiceTrigger: onVoiceTrigger
@@ -370,6 +372,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
     let size: CGSize
     let isActive: Bool
     let terminalContextMenuActions: TerminalContextMenuActions
+    let onPaneKeyboardShortcut: (TerminalSplitCommand) -> Void
     let onProcessExit: () -> Void
     let onReady: () -> Void
     let onVoiceTrigger: (() -> Void)?
@@ -456,6 +459,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
         terminalView.onZoomAction = { [paneId] action in
             TerminalTabManager.shared.handleTerminalZoom(action, for: paneId)
         }
+        terminalView.onPaneKeyboardShortcut = onPaneKeyboardShortcut
         terminalView.terminalContextMenuActions = terminalContextMenuActions
         terminalView.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
 
@@ -488,11 +492,12 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
         }
 
         guard TerminalTabManager.shared.paneStates[paneId] != nil else {
-            context.coordinator.cancelConnection()
+            terminalView.acceptsTerminalInput = false
             terminalView.writeCallback = nil
             terminalView.onReady = nil
             terminalView.onProcessExit = nil
             terminalView.onVoiceButtonTapped = nil
+            terminalView.onPaneKeyboardShortcut = nil
             return
         }
 
@@ -514,6 +519,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
             terminalView.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
         }
         terminalView.onVoiceButtonTapped = onVoiceTrigger
+        terminalView.onPaneKeyboardShortcut = onPaneKeyboardShortcut
         terminalView.terminalContextMenuActions = terminalContextMenuActions
         if size.width > 0, size.height > 0, size != context.coordinator.lastReportedSize {
             context.coordinator.lastReportedSize = size
@@ -550,6 +556,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
 
         let paneStillExists = TerminalTabManager.shared.paneStates[coordinator.paneId] != nil
         if paneStillExists {
+            terminalView.onPaneKeyboardShortcut = nil
             coordinator.preservePane = true
             return
         }
@@ -576,6 +583,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
         terminal.onZoomAction = { [paneId] action in
             TerminalTabManager.shared.handleTerminalZoom(action, for: paneId)
         }
+        terminal.onPaneKeyboardShortcut = onPaneKeyboardShortcut
         terminal.terminalContextMenuActions = terminalContextMenuActions
         terminal.applyPresentationOverrides(TerminalTabManager.shared.presentationOverrides(for: paneId))
         terminal.writeCallback = { [weak coordinator] data in

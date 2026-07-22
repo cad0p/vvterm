@@ -1190,6 +1190,130 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func focusingPaneUsesLatestManagerStateWhenViewTabIsStale() async {
+        await withCleanManager { manager in
+            let wasPro = StoreManager.shared.isPro
+            StoreManager.shared.isPro = true
+            defer { StoreManager.shared.isPro = wasPro }
+
+            let staleTab = TerminalTab(serverId: UUID(), title: "Focus stale tab")
+            installTab(staleTab, in: manager, connectionState: .connected)
+
+            guard let firstSplitPane = manager.splitHorizontal(
+                tab: staleTab,
+                paneId: staleTab.rootPaneId
+            ), let secondSplitPane = manager.splitVertical(
+                tab: staleTab,
+                paneId: firstSplitPane
+            ) else {
+                Issue.record("Expected split panes")
+                return
+            }
+
+            manager.focusPane(in: staleTab, paneId: firstSplitPane)
+
+            guard let currentTab = manager.tabs(for: staleTab.serverId).first else {
+                Issue.record("Expected current tab")
+                return
+            }
+            #expect(currentTab.focusedPaneId == firstSplitPane)
+            #expect(Set(currentTab.allPaneIds) == [
+                staleTab.rootPaneId,
+                firstSplitPane,
+                secondSplitPane,
+            ])
+        }
+    }
+
+    @Test
+    func splitKeyboardCommandsNavigateZoomAndResizeLatestLayout() async {
+        await withCleanManager { manager in
+            let wasPro = StoreManager.shared.isPro
+            StoreManager.shared.isPro = true
+            defer { StoreManager.shared.isPro = wasPro }
+
+            let staleTab = TerminalTab(serverId: UUID(), title: "Keyboard splits")
+            installTab(staleTab, in: manager, connectionState: .connected)
+
+            #expect(manager.performSplitCommand(.splitRight, in: staleTab) == .performed)
+            #expect(manager.performSplitCommand(.splitDown, in: staleTab) == .performed)
+
+            guard let threePaneTab = manager.tabs(for: staleTab.serverId).first,
+                  case .split(let originalRoot) = threePaneTab.layout else {
+                Issue.record("Expected three-pane split layout")
+                return
+            }
+
+            #expect(manager.performSplitCommand(.selectLeft, in: staleTab) == .performed)
+            #expect(manager.tabs(for: staleTab.serverId).first?.focusedPaneId == staleTab.rootPaneId)
+
+            #expect(manager.performSplitCommand(.selectNext, in: staleTab) == .performed)
+            let nextPane = manager.tabs(for: staleTab.serverId).first?.focusedPaneId
+            #expect(nextPane != nil)
+            #expect(nextPane != staleTab.rootPaneId)
+
+            #expect(manager.performSplitCommand(.toggleZoom, in: staleTab) == .performed)
+            #expect(manager.isSplitZoomed(in: threePaneTab))
+            #expect(manager.performSplitCommand(.selectNext, in: staleTab) == .performed)
+            #expect(manager.isSplitZoomed(in: threePaneTab))
+
+            #expect(manager.performSplitCommand(.moveDividerLeft, in: staleTab) == .performed)
+            guard let resizedTab = manager.tabs(for: staleTab.serverId).first,
+                  case .split(let resizedRoot) = resizedTab.layout else {
+                Issue.record("Expected resized split layout")
+                return
+            }
+            #expect(resizedRoot.ratio < originalRoot.ratio)
+
+            #expect(manager.performSplitCommand(.equalize, in: staleTab) == .performed)
+            #expect(manager.performSplitCommand(.closeFocusedPane, in: staleTab) == .requiresCloseConfirmation)
+            #expect(manager.tabs(for: staleTab.serverId).first?.paneCount == 3)
+
+            #expect(manager.performSplitCommand(.toggleZoom, in: staleTab) == .performed)
+            #expect(!manager.isSplitZoomed(in: threePaneTab))
+        }
+    }
+
+    @Test
+    func splitCreationCommandReportsUpgradeRequirement() async {
+        await withCleanManager { manager in
+            let wasPro = StoreManager.shared.isPro
+            StoreManager.shared.isPro = false
+            defer { StoreManager.shared.isPro = wasPro }
+
+            let tab = TerminalTab(serverId: UUID(), title: "Free split")
+            installTab(tab, in: manager, connectionState: .connected)
+
+            #expect(manager.performSplitCommand(.splitRight, in: tab) == .requiresUpgrade)
+            #expect(manager.tabs(for: tab.serverId).first?.paneCount == 1)
+        }
+    }
+
+    @Test
+    func closingSplitPaneKeepsSiblingConnected() async {
+        await withCleanManager { manager in
+            let wasPro = StoreManager.shared.isPro
+            StoreManager.shared.isPro = true
+            defer { StoreManager.shared.isPro = wasPro }
+
+            let tab = TerminalTab(serverId: UUID(), title: "Close split")
+            installTab(tab, in: manager, connectionState: .connected)
+            guard let splitPane = manager.splitHorizontal(tab: tab, paneId: tab.rootPaneId) else {
+                Issue.record("Expected split pane")
+                return
+            }
+            manager.updatePaneState(splitPane, connectionState: .connected)
+
+            manager.closePane(tab: tab, paneId: splitPane)
+
+            #expect(manager.paneStates[splitPane] == nil)
+            #expect(manager.paneStates[tab.rootPaneId]?.connectionState == .connected)
+            #expect(manager.paneStates[tab.rootPaneId]?.disconnectReason == nil)
+            #expect(manager.tabs(for: tab.serverId).first?.allPaneIds == [tab.rootPaneId])
+        }
+    }
+
+    @Test
     func closeTabUsesLatestManagerStateWhenViewTabIsStale() async {
         await withCleanManager { manager in
             let wasPro = StoreManager.shared.isPro

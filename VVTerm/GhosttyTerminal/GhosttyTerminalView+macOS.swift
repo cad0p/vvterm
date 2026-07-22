@@ -454,6 +454,9 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
         super.viewDidMoveToWindow()
         // Manage display link based on window attachment
         if window != nil {
+            if useCustomIO, displayLink == nil {
+                setupDisplayLink()
+            }
             // Request render to start display link if needed
             DispatchQueue.main.async { [weak self] in
                 self?.requestRender()

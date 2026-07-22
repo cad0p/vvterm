@@ -33,7 +33,6 @@ struct VVTermCommands: Commands {
             Button(String(localized: "Discover Local Devices...")) {
                 openLocalSSHDiscovery?()
             }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
             .disabled(openLocalSSHDiscovery == nil)
 
             Button("Close Tab") {

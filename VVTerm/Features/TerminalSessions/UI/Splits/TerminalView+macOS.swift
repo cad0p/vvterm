@@ -163,6 +163,23 @@ struct RemoteTerminalPaneWrapper: NSViewRepresentable {
         }
     }
 
+    static func dismantleNSView(_ nsView: NSView, coordinator: TerminalPaneConnectionCoordinator) {
+        guard let scrollView = nsView as? TerminalScrollView else { return }
+        let terminal = scrollView.surfaceView
+        let paneStillExists = TerminalTabManager.shared.paneStates[coordinator.paneId] != nil
+        if paneStillExists {
+            coordinator.preservePane = true
+            return
+        }
+
+        coordinator.terminal = nil
+        let paneId = coordinator.paneId
+        DispatchQueue.main.async {
+            TerminalTabManager.shared.unregisterTerminal(terminal, for: paneId)
+            coordinator.cancelConnection()
+        }
+    }
+
     func makeCoordinator() -> TerminalPaneConnectionCoordinator {
         TerminalPaneConnectionCoordinator(
             paneId: paneId,

@@ -67,11 +67,9 @@ struct TerminalTabView: View {
     private var splitActions: TerminalSplitActions? {
         guard isSelected else { return nil }
         return TerminalSplitActions(
-            splitHorizontal: { splitHorizontal() },
-            splitVertical: { splitVertical() },
-            splitLeft: { splitLeft() },
-            splitUp: { splitUp() },
-            closePane: { requestClosePane() }
+            perform: handleSplitCommand,
+            isEnabled: { tabManager.canPerformSplitCommand($0, in: tab) },
+            isZoomed: { tabManager.isSplitZoomed(in: tab) }
         )
     }
 
@@ -79,24 +77,12 @@ struct TerminalTabView: View {
         ZStack {
             // Refresh when terminals register/unregister so overlays can update immediately.
             let _ = tabManager.terminalRegistryVersion
-            if let layout = tab.layout {
+            if tabManager.isSplitZoomed(in: tab), tab.hasSplits {
+                renderPane(tab.focusedPaneId)
+            } else if let layout = tab.layout {
                 renderNode(layout)
             } else {
-                // Single pane - no splits
-                TerminalPaneView(
-                    paneId: tab.rootPaneId,
-                    server: server,
-                    isFocused: true,
-                    isTabSelected: isSelected,
-                    onFocus: { },
-                    onProcessExit: { handlePaneExit(paneId: tab.rootPaneId) },
-                    terminalContextMenuActions: terminalContextMenuActions(for: tab.rootPaneId),
-                    showsVoiceButton: isSelected
-                        && voiceButtonEnabled
-                        && !showingVoiceRecording
-                        && hasFocusedTerminal,
-                    onVoiceTrigger: { startVoiceRecording() }
-                )
+                renderPane(tab.rootPaneId)
             }
 
             if shouldShowVoiceOverlay {
@@ -167,24 +153,7 @@ struct TerminalTabView: View {
     private func renderNode(_ node: TerminalSplitNode) -> AnyView {
         switch node {
         case .leaf(let paneId):
-            return AnyView(
-                TerminalPaneView(
-                    paneId: paneId,
-                    server: server,
-                    isFocused: tab.focusedPaneId == paneId,
-                    isTabSelected: isSelected,
-                    onFocus: { focusPane(paneId) },
-                    onProcessExit: { handlePaneExit(paneId: paneId) },
-                    terminalContextMenuActions: terminalContextMenuActions(for: paneId),
-                    showsVoiceButton: isSelected
-                        && voiceButtonEnabled
-                        && !showingVoiceRecording
-                        && tab.focusedPaneId == paneId
-                        && hasFocusedTerminal,
-                    onVoiceTrigger: { startVoiceRecording() }
-                )
-                .id("\(paneId)-\(layoutVersion)")
-            )
+            return renderPane(paneId)
 
         case .split(let split):
             let currentNode = node
@@ -208,28 +177,40 @@ struct TerminalTabView: View {
         }
     }
 
+    private func renderPane(_ paneId: UUID) -> AnyView {
+        AnyView(
+            TerminalPaneView(
+                paneId: paneId,
+                server: server,
+                isFocused: tab.focusedPaneId == paneId,
+                isTabSelected: isSelected,
+                onFocus: { focusPane(paneId) },
+                onProcessExit: { handlePaneExit(paneId: paneId) },
+                terminalContextMenuActions: terminalContextMenuActions(for: paneId),
+                onPaneKeyboardShortcut: handleSplitCommand,
+                showsVoiceButton: isSelected
+                    && voiceButtonEnabled
+                    && !showingVoiceRecording
+                    && tab.focusedPaneId == paneId
+                    && hasFocusedTerminal,
+                onVoiceTrigger: { startVoiceRecording() }
+            )
+            .id("\(paneId)-\(layoutVersion)")
+        )
+    }
+
     // MARK: - Actions
 
     private func focusPane(_ paneId: UUID) {
-        var updatedTab = tab
-        updatedTab.focusedPaneId = paneId
-        tabManager.updateTab(updatedTab)
+        tabManager.focusPane(in: tab, paneId: paneId)
     }
 
     private func updateRatio(node: TerminalSplitNode, newRatio: Double) {
-        guard var layout = tab.layout else { return }
-        let updated = node.withUpdatedRatio(newRatio)
-        layout = layout.replacingNode(node, with: updated)
-        var updatedTab = tab
-        updatedTab.layout = layout
-        tabManager.updateTab(updatedTab)
+        tabManager.updateSplitRatio(in: tab, node: node, ratio: newRatio)
     }
 
     private func equalizeLayout() {
-        guard let layout = tab.layout else { return }
-        var updatedTab = tab
-        updatedTab.layout = layout.equalized()
-        tabManager.updateTab(updatedTab)
+        tabManager.equalizeSplitLayout(in: tab)
     }
 
     private func handlePaneExit(paneId: UUID) {
@@ -245,22 +226,6 @@ struct TerminalTabView: View {
     }
 
     // MARK: - Split Actions
-
-    func splitHorizontal() {
-        splitPane(tab.focusedPaneId, placement: .right)
-    }
-
-    func splitVertical() {
-        splitPane(tab.focusedPaneId, placement: .down)
-    }
-
-    func splitLeft() {
-        splitPane(tab.focusedPaneId, placement: .left)
-    }
-
-    func splitUp() {
-        splitPane(tab.focusedPaneId, placement: .up)
-    }
 
     private func splitPane(_ paneId: UUID, placement: TerminalSplitPlacement) {
         guard StoreManager.shared.isPro else {
@@ -301,6 +266,21 @@ struct TerminalTabView: View {
 
     func closeCurrentPane() {
         tabManager.closePane(tab: tab, paneId: tab.focusedPaneId)
+    }
+
+    private func handleSplitCommand(_ command: TerminalSplitCommand) {
+        switch tabManager.performSplitCommand(command, in: tab) {
+        case .performed:
+            if command.createsPane {
+                layoutVersion += 1
+            }
+        case .requiresUpgrade:
+            showingSplitPaneUpgradeAlert = true
+        case .requiresCloseConfirmation:
+            requestClosePane()
+        case .unavailable:
+            break
+        }
     }
 
     // MARK: - Voice Input
@@ -530,6 +510,7 @@ struct TerminalPaneView: View {
     let onFocus: () -> Void
     let onProcessExit: () -> Void
     let terminalContextMenuActions: TerminalContextMenuActions
+    let onPaneKeyboardShortcut: (TerminalSplitCommand) -> Void
     let showsVoiceButton: Bool
     let onVoiceTrigger: () -> Void
 
@@ -937,6 +918,7 @@ struct TerminalPaneView: View {
             richPasteUIModel: richPasteUI,
             isActive: shouldFocus,
             terminalContextMenuActions: terminalContextMenuActions,
+            onPaneKeyboardShortcut: onPaneKeyboardShortcut,
             onProcessExit: onProcessExit,
             onReady: { isReady = true },
             onVoiceTrigger: voiceTriggerHandlerForTerminal,

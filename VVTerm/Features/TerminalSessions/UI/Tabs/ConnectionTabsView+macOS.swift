@@ -149,6 +149,9 @@ extension ConnectionTerminalContainer {
             .onChange(of: serverFileTabs.count) { _ in activateToolbarBridge() }
             .onChange(of: selectedFileTabId) { _ in activateToolbarBridge() }
             .onChange(of: selectedTabId) { _ in activateToolbarBridge(); updateCommandBridge() }
+            .onChange(of: selectedTab?.focusedPaneId) { _ in updateCommandBridge() }
+            .onChange(of: selectedTab?.layout) { _ in updateCommandBridge() }
+            .onChange(of: tabManager.splitZoomedTabIds) { _ in updateCommandBridge() }
             .onChange(of: isZenModeEnabled) { _ in activateToolbarBridge() }
             .alert(
                 disconnectAlertTitle,
@@ -244,11 +247,15 @@ extension ConnectionTerminalContainer {
             ownerId: server.id.uuidString,
             serverViewTabActions: serverViewTabActions(),
             splitActions: TerminalSplitActions(
-                splitHorizontal: { splitFocusedPane(.right) },
-                splitVertical: { splitFocusedPane(.down) },
-                splitLeft: { splitFocusedPane(.left) },
-                splitUp: { splitFocusedPane(.up) },
-                closePane: { requestCloseFocusedPane() }
+                perform: performSplitCommand,
+                isEnabled: { command in
+                    guard let selectedTab else { return false }
+                    return tabManager.canPerformSplitCommand(command, in: selectedTab)
+                },
+                isZoomed: {
+                    guard let selectedTab else { return false }
+                    return tabManager.isSplitZoomed(in: selectedTab)
+                }
             ),
             activeServerId: server.id,
             activePaneId: selectedTab?.focusedPaneId
@@ -499,6 +506,19 @@ extension ConnectionTerminalContainer {
             _ = tabManager.splitDown(tab: selectedTab, paneId: selectedTab.focusedPaneId)
         case .up:
             _ = tabManager.splitUp(tab: selectedTab, paneId: selectedTab.focusedPaneId)
+        }
+    }
+
+    private func performSplitCommand(_ command: TerminalSplitCommand) {
+        guard let selectedTab else { return }
+        switch tabManager.performSplitCommand(command, in: selectedTab) {
+        case .performed, .unavailable:
+            break
+        case .requiresUpgrade:
+            showingZenPanel = false
+            showingSplitPaneUpgradeAlert = true
+        case .requiresCloseConfirmation:
+            requestCloseFocusedPane()
         }
     }
 

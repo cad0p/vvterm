@@ -841,6 +841,81 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
+    func testSplitPaneShortcutsRouteWithoutReachingTerminalInput() throws {
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+
+        terminal.tap()
+        app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
+        wait(for: diagnostics, labelContaining: "hardware=true", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("d", modifierFlags: .command)
+        wait(for: diagnostics, labelContaining: "paneShortcutActions=1", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastPaneShortcutAction=splitRight", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        app.typeKey("d", modifierFlags: [.command, .shift])
+        wait(for: diagnostics, labelContaining: "paneShortcutActions=2", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastPaneShortcutAction=splitDown", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+
+        let commands: [(key: String, modifiers: XCUIElement.KeyModifierFlags, action: String)] = [
+            (XCUIKeyboardKey.return.rawValue, [.command, .shift], "toggleZoom"),
+            ("[", [.command], "selectPrevious"),
+            ("]", [.command], "selectNext"),
+            (XCUIKeyboardKey.upArrow.rawValue, [.command, .option], "selectAbove"),
+            (XCUIKeyboardKey.downArrow.rawValue, [.command, .option], "selectBelow"),
+            (XCUIKeyboardKey.leftArrow.rawValue, [.command, .option], "selectLeft"),
+            (XCUIKeyboardKey.rightArrow.rawValue, [.command, .option], "selectRight"),
+            ("=", [.command, .control], "equalize"),
+            (XCUIKeyboardKey.upArrow.rawValue, [.command, .control], "moveDividerUp"),
+            (XCUIKeyboardKey.downArrow.rawValue, [.command, .control], "moveDividerDown"),
+            (XCUIKeyboardKey.leftArrow.rawValue, [.command, .control], "moveDividerLeft"),
+            (XCUIKeyboardKey.rightArrow.rawValue, [.command, .control], "moveDividerRight"),
+        ]
+
+        for (index, command) in commands.enumerated() {
+            app.typeKey(command.key, modifierFlags: command.modifiers)
+            wait(
+                for: diagnostics,
+                labelContaining: "paneShortcutActions=\(index + 3)",
+                timeout: 5,
+                diagnostics: diagnosticsText(in: app)
+            )
+            wait(
+                for: diagnostics,
+                labelContaining: "lastPaneShortcutAction=\(command.action)",
+                timeout: 5,
+                diagnostics: diagnosticsText(in: app)
+            )
+            wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+        }
+
+        app.typeKey("w", modifierFlags: .command)
+        wait(for: diagnostics, labelContaining: "paneShortcutActions=15", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "lastPaneShortcutAction=closeFocusedPane", timeout: 5, diagnostics: diagnosticsText(in: app))
+        let confirmation = app.alerts["Close this terminal?"]
+        XCTAssertTrue(
+            confirmation.waitForExistence(timeout: 5),
+            "Cmd-W did not request the existing focused-pane close confirmation. \(diagnosticsText(in: app))"
+        )
+        confirmation.buttons["Cancel"].tap()
+        wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+    }
+
+    @MainActor
+    func testTouchingTerminalRequestsPaneFocus() throws {
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+
+        wait(for: diagnostics, labelContaining: "paneFocusActions=0", timeout: 5, diagnostics: diagnosticsText(in: app))
+        terminal.tap()
+        wait(for: diagnostics, labelContaining: "paneFocusActions=1", timeout: 5, diagnostics: diagnosticsText(in: app))
+    }
+
+    @MainActor
     func testHardwareKeyboardFocusSuppressesAccessoryBar() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
