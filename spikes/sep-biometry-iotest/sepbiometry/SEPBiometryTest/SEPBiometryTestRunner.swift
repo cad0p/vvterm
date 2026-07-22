@@ -270,49 +270,13 @@ final class SEPBiometryTestRunner: ObservableObject {
     // (CryptoKit added ed25519 in iOS 13.)
 
     private func generateSSHPubKey() async throws -> String {
-        // CryptoKit Ed25519 — generate a fresh keypair, emit the OpenSSH
-        // authorized_keys string. We only send the pub key; the private key
-        // is discarded (the spike doesn't connect with it).
-        let priv = Curve25519.Signing.PrivateKey()
-        let pub = priv.publicKey.rawRepresentation  // 32 bytes
-
-        // OpenSSH ed25519 public key wire format:
-        //   string "ssh-ed25519"
-        //   string pubkey (32 bytes)
-        // then base64-encoded, prefixed with "ssh-ed25519 ".
-        //
-        // NOTE: we do NOT use UInt32.bigEndianBytes from CBOR.swift here —
-        // that extension is buggy (it does `let be = self.bigEndian` then
-        // shifts `be`, which double-swaps on little-endian arm64 and emits
-        // little-endian bytes). The bug was latent in the 1.5 spike because
-        // the CBOR path never exercises it (all CBOR values are < 256, using
-        // the 1-byte form). This is the first code to actually use it, and
-        // the server rejected the malformed key with
-        // "illegal base64 data at input byte 3".
-        //
-        // Instead, emit big-endian uint32 length prefixes by shifting `self`
-        // directly — `>> 24` always yields the most-significant byte
-        // regardless of host endianness.
-        var wire = Data()
-        let alg = Data("ssh-ed25519".utf8)
-        wire.append(beUInt32(UInt32(alg.count)))
-        wire.append(alg)
-        wire.append(beUInt32(UInt32(pub.count)))
-        wire.append(pub)
-        let b64 = wire.base64EncodedString()
-        return "ssh-ed25519 \(b64) sep-spike-ios"
+        // Pure-Swift ed25519 keypair via CryptoKit — consolidated into
+        // SEPWebAuthn.SSHPubKey so the OpenSSH wire format is provably
+        // identical to the macOS CLI. (Previously this had its own
+        // beUInt32 helper + inline wire-format code; PR #23 consolidated
+        // both into SSHPubKey.swift.)
+        return SSHPubKey.generateEd25519AuthorizedKeys(comment: "sep-spike-ios")
     }
-}
-
-/// Big-endian uint32 → 4 bytes, host-endianness-independent.
-/// Shifting `value >> 24` always yields the most-significant byte.
-private func beUInt32(_ value: UInt32) -> Data {
-    var out = Data(count: 4)
-    out[0] = UInt8(truncatingIfNeeded: value >> 24)
-    out[1] = UInt8(truncatingIfNeeded: value >> 16)
-    out[2] = UInt8(truncatingIfNeeded: value >> 8)
-    out[3] = UInt8(truncatingIfNeeded: value & 0xff)
-    return out
 }
 
 // MARK: - Wire types (mirror sep-spike-cli/main.swift)

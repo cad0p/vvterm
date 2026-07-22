@@ -287,33 +287,13 @@ struct LoginFinishResponse: Decodable {
 // MARK: - SSH keypair generation
 
 func generateSSHPubKey() throws -> String {
-    // Use Process to call `ssh-keygen` — universally available on macOS
-    // runners, avoids depending on a Swift SSH library. Generates an
-    // ed25519 keypair, returns the .pub content (authorized_keys format),
-    // which is what AuthenticateSSHUserRequest.ssh_pub_key expects.
-    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(
-        "sep-spike-\(UUID().uuidString)"
-    )
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
-    proc.arguments = [
-        "-t", "ed25519",
-        "-N", "",
-        "-f", tmp.path,
-        "-C", "sep-spike",
-    ]
-    let pipe = Pipe()
-    proc.standardError = pipe
-    try proc.run()
-    proc.waitUntilExit()
-    if proc.terminationStatus != 0 {
-        let err = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        throw CLIError.decode("ssh-keygen failed: \(err)")
-    }
-    let pub = try String(contentsOf: URL(fileURLWithPath: tmp.path + ".pub"))
-    // Stash the private key path for potential follow-up use (not needed
-    // for the spike — we only POST the pub key).
-    return pub.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Pure-Swift ed25519 keypair via CryptoKit — no `ssh-keygen` / `Process`
+    // dependency, so the same code runs on macOS (CLI) and iOS (app).
+    // Consolidated into SEPWebAuthn.SSHPubKey so the OpenSSH wire format is
+    // provably identical across both paths. (Previously this function
+    // shelled out to /usr/bin/ssh-keygen; the iOS app had its own
+    // duplicate. PR #23 consolidated them.)
+    return SSHPubKey.generateEd25519AuthorizedKeys(comment: "sep-spike")
 }
 
 func generateTLSPubKey() -> String {
