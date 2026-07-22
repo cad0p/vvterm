@@ -16,7 +16,7 @@ final class TerminalPaneSSHCoordinator {
 
     private let richPasteRuntime: TerminalRichPasteRuntime
     private let transportWriteQueue = TerminalTransportWriteQueue()
-    private var lastTerminalSize: (cols: Int, rows: Int) = (0, 0)
+    private var lastTerminalSize: (cols: Int, rows: Int, pixels: TerminalPixelSize?) = (0, 0, nil)
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "SSHPane")
 
     init(
@@ -61,16 +61,27 @@ final class TerminalPaneSSHCoordinator {
         }
     }
 
-    func handleResize(cols: Int, rows: Int) {
+    @MainActor
+    func handleResize(cols: Int, rows: Int, pixelSize: TerminalPixelSize?) {
         guard cols > 0 && rows > 0 else { return }
-        guard cols != lastTerminalSize.cols || rows != lastTerminalSize.rows else { return }
-        lastTerminalSize = (cols, rows)
+        guard let route = Self.sshRoute(
+            paneId: paneId,
+            fallbackClient: sshClient,
+            shellId: shellId
+        ) else { return }
+        guard cols != lastTerminalSize.cols
+                || rows != lastTerminalSize.rows
+                || pixelSize != lastTerminalSize.pixels else { return }
+        lastTerminalSize = (cols, rows, pixelSize)
 
-        Task(priority: .userInitiated) { [paneId, sshClient, shellId, logger] in
-            let route = Self.sshRoute(paneId: paneId, fallbackClient: sshClient, shellId: shellId)
-            guard let route else { return }
+        Task(priority: .userInitiated) { [logger] in
             do {
-                try await route.client.resize(cols: cols, rows: rows, for: route.shellId)
+                try await route.client.resize(
+                    cols: cols,
+                    rows: rows,
+                    pixelSize: pixelSize,
+                    for: route.shellId
+                )
             } catch {
                 logger.warning("Failed to resize PTY: \(error.localizedDescription)")
             }
@@ -197,6 +208,13 @@ final class TerminalPaneSSHCoordinator {
                     }
                     TerminalTabManager.shared.updatePaneState(paneId, connectionState: .connected)
                     self.shellId = shell.id
+                    if let size = terminal.currentTerminalGridSize {
+                        self.handleResize(
+                            cols: size.cols,
+                            rows: size.rows,
+                            pixelSize: terminal.currentTerminalPixelSize
+                        )
+                    }
                     if shell.origin == .fresh {
                         await self.applyWorkingDirectoryIfNeeded(
                             paneId: paneId,
@@ -214,7 +232,11 @@ final class TerminalPaneSSHCoordinator {
                     return true
                 },
                 onBeforeShellStart: { cols, rows in
-                    self.lastTerminalSize = (cols, rows)
+                    self.lastTerminalSize = (
+                        cols,
+                        rows,
+                        terminal.currentTerminalPixelSize
+                    )
                 },
                 onTitleChange: { title in
                     TerminalTabManager.shared.updatePaneTitle(paneId, rawTitle: title)

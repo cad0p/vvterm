@@ -5,6 +5,38 @@ struct RemoteTerminalEnvironmentVariable: Hashable, Sendable {
     let value: String
 }
 
+/// Derives Kitty image-protocol availability from the active remote transport.
+/// SSH already exposes genuine `SSH_*` variables. ET is SSH-compatible from the
+/// application's perspective but needs Snacks' documented opt-in because its PTY
+/// is not created by sshd. Mosh does not preserve Kitty graphics sequences.
+enum RemoteKittyGraphicsPolicy: Equatable, Sendable {
+    nonisolated static let compatibilityEnvironmentName = "SNACKS_SSH"
+
+    case genuineSSH
+    case eternalTerminal
+    case unsupported
+
+    nonisolated init(transport: ShellTransport) {
+        switch transport {
+        case .ssh, .sshFallback:
+            self = .genuineSSH
+        case .eternalTerminal:
+            self = .eternalTerminal
+        case .mosh:
+            self = .unsupported
+        }
+    }
+
+    nonisolated var environment: [RemoteTerminalEnvironmentVariable] {
+        switch self {
+        case .genuineSSH, .unsupported:
+            []
+        case .eternalTerminal:
+            [RemoteTerminalEnvironmentVariable(name: Self.compatibilityEnvironmentName, value: "1")]
+        }
+    }
+}
+
 enum RemoteTerminalType: String, Hashable, Sendable {
     case xterm256Color = "xterm-256color"
     case xtermGhostty = "xterm-ghostty"
@@ -59,12 +91,15 @@ enum RemoteTerminalBootstrap {
         return nil
     }
 
-    nonisolated static func terminalEnvironment(bundle: Bundle = .main) -> [RemoteTerminalEnvironmentVariable] {
+    nonisolated static func terminalEnvironment(
+        bundle: Bundle = .main,
+        transport: ShellTransport = .ssh
+    ) -> [RemoteTerminalEnvironmentVariable] {
         [
             RemoteTerminalEnvironmentVariable(name: "COLORTERM", value: "truecolor"),
             RemoteTerminalEnvironmentVariable(name: "TERM_PROGRAM", value: termProgram),
             RemoteTerminalEnvironmentVariable(name: "TERM_PROGRAM_VERSION", value: appVersion(bundle: bundle))
-        ]
+        ] + RemoteKittyGraphicsPolicy(transport: transport).environment
     }
 
     nonisolated static func terminalEnvironmentNames(bundle: Bundle = .main) -> [String] {
@@ -73,10 +108,12 @@ enum RemoteTerminalBootstrap {
 
     nonisolated static func terminalEnvironmentDictionary(
         bundle: Bundle = .main,
-        terminalType: RemoteTerminalType
+        terminalType: RemoteTerminalType,
+        transport: ShellTransport = .ssh
     ) -> [String: String] {
         var environment = Dictionary(
-            uniqueKeysWithValues: terminalEnvironment(bundle: bundle).map { ($0.name, $0.value) }
+            uniqueKeysWithValues: terminalEnvironment(bundle: bundle, transport: transport)
+                .map { ($0.name, $0.value) }
         )
         environment["TERM"] = terminalType.rawValue
         return environment

@@ -468,15 +468,16 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
     // Track last size sent to Ghostty to avoid redundant updates
     private var lastSurfaceSize: CGSize = .zero
 
-    // Track last terminal size (cols, rows) to detect changes for SSH resize
-    private var lastTerminalSize: (cols: Int, rows: Int) = (0, 0)
-
     var currentTerminalGridSize: (cols: Int, rows: Int)? {
         guard let size = terminalSize() else { return nil }
         let cols = Int(size.columns)
         let rows = Int(size.rows)
         guard cols > 0, rows > 0 else { return nil }
         return (cols, rows)
+    }
+
+    var currentTerminalPixelSize: TerminalPixelSize? {
+        TerminalPixelSize(size: lastSurfaceSize)
     }
 
     // Override safe area insets to use full available space, including rounded corners
@@ -511,8 +512,7 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
         if didUpdate, let size = terminalSize() {
             let cols = Int(size.columns)
             let rows = Int(size.rows)
-            if cols != lastTerminalSize.cols || rows != lastTerminalSize.rows {
-                lastTerminalSize = (cols, rows)
+            if cols > 0, rows > 0 {
                 onResize?(cols, rows)
             }
         }

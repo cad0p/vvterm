@@ -503,7 +503,12 @@ actor SSHClient {
 
     // MARK: - Shell
 
-    func startShell(cols: Int = 80, rows: Int = 24, startupCommand: String? = nil) async throws -> ShellHandle {
+    func startShell(
+        cols: Int = 80,
+        rows: Int = 24,
+        pixelSize: TerminalPixelSize? = nil,
+        startupCommand: String? = nil
+    ) async throws -> ShellHandle {
         try Task.checkCancellation()
         guard !_isAborted, let sshSession = session else {
             throw SSHError.notConnected
@@ -519,6 +524,7 @@ actor SSHClient {
                 using: sshSession,
                 cols: cols,
                 rows: rows,
+                pixelSize: pixelSize,
                 startupCommand: startupCommand,
                 environment: environment,
                 terminalType: terminalType
@@ -537,6 +543,7 @@ actor SSHClient {
                 using: sshSession,
                 cols: cols,
                 rows: rows,
+                pixelSize: pixelSize,
                 startupCommand: startupCommand,
                 environment: environment,
                 terminalType: terminalType
@@ -587,6 +594,7 @@ actor SSHClient {
                     using: sshSession,
                     cols: cols,
                     rows: rows,
+                    pixelSize: pixelSize,
                     startupCommand: startupCommand,
                     environment: environment,
                     terminalType: terminalType
@@ -622,6 +630,7 @@ actor SSHClient {
         using expectedSession: SSHSession,
         cols: Int,
         rows: Int,
+        pixelSize: TerminalPixelSize?,
         startupCommand: String?,
         environment: RemoteEnvironment,
         terminalType: RemoteTerminalType
@@ -630,6 +639,7 @@ actor SSHClient {
         let shell = try await expectedSession.startShell(
             cols: cols,
             rows: rows,
+            pixelSize: pixelSize,
             startupCommand: startupCommand,
             environment: environment,
             terminalType: terminalType
@@ -672,10 +682,19 @@ actor SSHClient {
         try await session.write(data, to: shellId)
     }
 
-    func resize(cols: Int, rows: Int, for shellId: UUID) async throws {
+    func resize(
+        cols: Int,
+        rows: Int,
+        pixelSize: TerminalPixelSize? = nil,
+        for shellId: UUID
+    ) async throws {
         if let runtime = moshShells[shellId] {
+            guard let wireCols = Int32(exactly: cols),
+                  let wireRows = Int32(exactly: rows) else {
+                throw SSHError.unknown("Invalid terminal size \(cols)x\(rows)")
+            }
             do {
-                try await runtime.session.enqueue(.resize(cols: Int32(cols), rows: Int32(rows)))
+                try await runtime.session.enqueue(.resize(cols: wireCols, rows: wireRows))
                 return
             } catch {
                 throw SSHError.moshSessionFailed(error.localizedDescription)
@@ -685,7 +704,12 @@ actor SSHClient {
         guard let session = session else {
             throw SSHError.notConnected
         }
-        try await session.resize(cols: cols, rows: rows, for: shellId)
+        try await session.resize(
+            cols: cols,
+            rows: rows,
+            pixelSize: pixelSize,
+            for: shellId
+        )
     }
 
     func closeShell(_ shellId: UUID) async {
@@ -2113,12 +2137,17 @@ actor SSHSession {
     func startShell(
         cols: Int,
         rows: Int,
+        pixelSize: TerminalPixelSize? = nil,
         startupCommand: String? = nil,
         environment: RemoteEnvironment = .fallbackPOSIX,
         terminalType: RemoteTerminalType = RemoteTerminalBootstrap.defaultTerminalType
     ) async throws -> ShellHandle {
         guard isActive, let session = libssh2Session else {
             throw SSHError.notConnected
+        }
+        guard let wireCols = Int32(exactly: cols),
+              let wireRows = Int32(exactly: rows) else {
+            throw SSHError.unknown("Invalid terminal size \(cols)x\(rows)")
         }
 
         let startupId = UUID()
@@ -2189,10 +2218,10 @@ actor SSHSession {
                         UInt32(terminalType.rawValue.utf8.count),
                         nil,
                         0,
-                        Int32(cols),
-                        Int32(rows),
-                        0,
-                        0
+                        wireCols,
+                        wireRows,
+                        Int32(pixelSize?.width ?? 0),
+                        Int32(pixelSize?.height ?? 0)
                     )
                 }
             } catch {
@@ -3076,15 +3105,40 @@ actor SSHSession {
 
     // MARK: - Resize
 
-    func resize(cols: Int, rows: Int, for shellId: UUID) async throws {
+    func resize(
+        cols: Int,
+        rows: Int,
+        pixelSize: TerminalPixelSize? = nil,
+        for shellId: UUID
+    ) async throws {
         guard let state = shellChannels[shellId] else {
             throw SSHError.notConnected
         }
+        guard let wireCols = Int32(exactly: cols),
+              let wireRows = Int32(exactly: rows) else {
+            throw SSHError.unknown("Invalid terminal size \(cols)x\(rows)")
+        }
 
-        // Use _ex variant since macros not available in Swift
-        let result = libssh2_channel_request_pty_size_ex(state.channel, Int32(cols), Int32(rows), 0, 0)
-        if result != 0 && result != Int32(LIBSSH2_ERROR_EAGAIN) {
+        // Use _ex variant since macros not available in Swift. The SSH session
+        // is nonblocking, so an EAGAIN result has not transmitted the resize.
+        while true {
+            try Task.checkCancellation()
+            let result = libssh2_channel_request_pty_size_ex(
+                state.channel,
+                wireCols,
+                wireRows,
+                Int32(pixelSize?.width ?? 0),
+                Int32(pixelSize?.height ?? 0)
+            )
+            if result == 0 {
+                return
+            }
+            if result == Int32(LIBSSH2_ERROR_EAGAIN) {
+                await waitForSocket()
+                continue
+            }
             logger.warning("PTY resize failed: \(result)")
+            return
         }
     }
 

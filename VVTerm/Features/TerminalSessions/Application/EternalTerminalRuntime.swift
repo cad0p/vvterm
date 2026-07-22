@@ -192,7 +192,7 @@ final class EternalTerminalRuntime {
     private var startupApplied = false
     private var tmuxLifecycle: EternalTerminalTmuxResumeContext?
     private var tmuxLifecycleParser: TmuxLifecycleStreamParser?
-    private var lastTerminalSize: (cols: Int, rows: Int) = (0, 0)
+    private var lastTerminalSize: (cols: Int, rows: Int, pixels: TerminalPixelSize?) = (0, 0, nil)
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "VVTerm",
         category: "EternalTerminal"
@@ -297,14 +297,21 @@ final class EternalTerminalRuntime {
         }
     }
 
-    func resize(cols: Int, rows: Int) {
+    func resize(cols: Int, rows: Int, pixelSize: TerminalPixelSize?) {
         guard cols > 0, rows > 0 else { return }
-        guard (cols, rows) != lastTerminalSize else { return }
-        lastTerminalSize = (cols, rows)
+        guard cols != lastTerminalSize.cols
+                || rows != lastTerminalSize.rows
+                || pixelSize != lastTerminalSize.pixels else { return }
+        lastTerminalSize = (cols, rows, pixelSize)
         guard let session else { return }
         Task(priority: .userInitiated) { [logger] in
             do {
-                try await session.resize(rows: rows, cols: cols)
+                try await session.resize(
+                    rows: rows,
+                    cols: cols,
+                    pixelWidth: pixelSize?.width,
+                    pixelHeight: pixelSize?.height
+                )
             } catch {
                 logger.debug("Failed to send ET terminal size: \(error.localizedDescription, privacy: .public)")
             }
@@ -395,7 +402,8 @@ final class EternalTerminalRuntime {
             clientID: resumeCredentials.clientID,
             passkey: resumeCredentials.passkey,
             environmentVariables: RemoteTerminalBootstrap.terminalEnvironmentDictionary(
-                terminalType: terminalType
+                terminalType: terminalType,
+                transport: .eternalTerminal
             )
         )
         return PreparedEternalTerminalSession(session: session, origin: .bootstrapped)
@@ -446,7 +454,9 @@ final class EternalTerminalRuntime {
                 if lastTerminalSize.cols > 0, lastTerminalSize.rows > 0 {
                     try await session.resize(
                         rows: lastTerminalSize.rows,
-                        cols: lastTerminalSize.cols
+                        cols: lastTerminalSize.cols,
+                        pixelWidth: lastTerminalSize.pixels?.width,
+                        pixelHeight: lastTerminalSize.pixels?.height
                     )
                     applyStartupPlanIfNeeded()
                 } else {

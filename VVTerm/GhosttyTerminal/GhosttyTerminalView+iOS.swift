@@ -1045,6 +1045,10 @@ class GhosttyTerminalView: UIView {
         guard cols > 0, rows > 0 else { return nil }
         return (cols, rows)
     }
+
+    var currentTerminalPixelSize: TerminalPixelSize? {
+        TerminalPixelSize(size: lastPixelSize)
+    }
     private var lastKeyboardAvoidanceCursorRect: CGRect?
     /// Cell size in points for row-to-pixel conversion
     var cellSize: CGSize = .zero
@@ -1725,7 +1729,6 @@ class GhosttyTerminalView: UIView {
         let cols = Int(size.columns)
         let rows = Int(size.rows)
         guard cols > 0, rows > 0 else { return }
-        guard cols != lastReportedGrid.cols || rows != lastReportedGrid.rows else { return }
         lastReportedGrid = (cols, rows)
         #if DEBUG
         keyboardUITestGridResizeCount += 1

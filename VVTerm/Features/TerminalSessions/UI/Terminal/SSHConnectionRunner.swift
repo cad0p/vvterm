@@ -36,6 +36,7 @@ enum SSHConnectionRunner {
                 let size = terminal.terminalSize()
                 let cols = Int(size?.columns ?? 80)
                 let rows = Int(size?.rows ?? 24)
+                let pixelSize = terminal.currentTerminalPixelSize
 
                 await onBeforeShellStart(cols, rows)
                 let shell: ShellHandle
@@ -55,6 +56,7 @@ enum SSHConnectionRunner {
                     shell = try await sshClient.startShell(
                         cols: cols,
                         rows: rows,
+                        pixelSize: pixelSize,
                         startupCommand: freshStartup.command
                     )
                     startup = freshStartup

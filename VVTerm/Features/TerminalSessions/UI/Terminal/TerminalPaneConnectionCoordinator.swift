@@ -134,9 +134,12 @@ final class TerminalPaneConnectionCoordinator {
     }
 
     func handleResize(cols: Int, rows: Int) {
+        let pixelSize = terminal?.currentTerminalPixelSize
         switch backend {
-        case .ssh(let coordinator): coordinator.handleResize(cols: cols, rows: rows)
-        case .eternalTerminal(let coordinator): coordinator.handleResize(cols: cols, rows: rows)
+        case .ssh(let coordinator):
+            coordinator.handleResize(cols: cols, rows: rows, pixelSize: pixelSize)
+        case .eternalTerminal(let coordinator):
+            coordinator.handleResize(cols: cols, rows: rows, pixelSize: pixelSize)
         }
     }
 
@@ -180,7 +183,11 @@ private final class EternalTerminalPaneCoordinator {
         )
         runtime.attach(to: terminal)
         guard let size = terminal.currentTerminalGridSize else { return }
-        runtime.resize(cols: size.cols, rows: size.rows)
+        runtime.resize(
+            cols: size.cols,
+            rows: size.rows,
+            pixelSize: terminal.currentTerminalPixelSize
+        )
         runtime.startIfNeeded()
     }
 
@@ -188,11 +195,11 @@ private final class EternalTerminalPaneCoordinator {
         TerminalTabManager.shared.existingEternalTerminalRuntime(for: paneId)?.send(data)
     }
 
-    func handleResize(cols: Int, rows: Int) {
+    func handleResize(cols: Int, rows: Int, pixelSize: TerminalPixelSize?) {
         guard let runtime = TerminalTabManager.shared.existingEternalTerminalRuntime(for: paneId) else {
             return
         }
-        runtime.resize(cols: cols, rows: rows)
+        runtime.resize(cols: cols, rows: rows, pixelSize: pixelSize)
         runtime.startIfNeeded()
     }
 

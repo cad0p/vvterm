@@ -1629,7 +1629,8 @@ final class TerminalTabManager: ObservableObject {
         backend: RemoteTmuxBackend,
         lifecycleMarkerToken: String,
         ownership: TmuxSessionOwnership,
-        reattachingManagedSession: Bool
+        reattachingManagedSession: Bool,
+        transport: ShellTransport
     ) -> String? {
         switch selection {
         case .skipTmux:
@@ -1640,21 +1641,24 @@ final class TerminalTabManager: ObservableObject {
                     sessionName: tmuxResolver.sessionName(for: paneId),
                     ownership: .managed,
                     backend: backend,
-                    lifecycleMarkerToken: lifecycleMarkerToken
+                    lifecycleMarkerToken: lifecycleMarkerToken,
+                    transport: transport
                 )
             }
             return RemoteTmuxManager.shared.attachCommand(
                 sessionName: tmuxResolver.sessionName(for: paneId),
                 workingDirectory: workingDirectory,
                 backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken
+                lifecycleMarkerToken: lifecycleMarkerToken,
+                transport: transport
             )
         case .attachExisting(let sessionName):
             return RemoteTmuxManager.shared.attachExistingCommand(
                 sessionName: sessionName,
                 ownership: ownership,
                 backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken
+                lifecycleMarkerToken: lifecycleMarkerToken,
+                transport: transport
             )
         }
     }
@@ -1752,13 +1756,15 @@ final class TerminalTabManager: ObservableObject {
         serverId: UUID,
         client: SSHClient,
         startToken: SSHShellRegistry.StartToken,
-        availabilityResolver: () async -> RemoteTmuxAvailability
+        availabilityResolver: () async -> RemoteTmuxAvailability,
+        transport: ShellTransport = .ssh
     ) async throws -> TerminalShellStartupPlan {
         try await tmuxStartupPlan(
             for: paneId,
             serverId: serverId,
             client: client,
             availabilityResolver: availabilityResolver,
+            transport: transport,
             requestId: startToken.id,
             validateOwner: {
                 try self.requireCurrentShellOwner(
@@ -1783,6 +1789,7 @@ final class TerminalTabManager: ObservableObject {
             availabilityResolver: {
                 await RemoteTmuxManager.shared.tmuxAvailability(using: client)
             },
+            transport: .eternalTerminal,
             requestId: runtimeToken,
             validateOwner: {
                 try Task.checkCancellation()
@@ -1834,6 +1841,7 @@ final class TerminalTabManager: ObservableObject {
         serverId: UUID,
         client: SSHClient,
         availabilityResolver: () async -> RemoteTmuxAvailability,
+        transport: ShellTransport,
         requestId: UUID,
         validateOwner: () throws -> Void
     ) async throws -> TerminalShellStartupPlan {
@@ -1921,7 +1929,8 @@ final class TerminalTabManager: ObservableObject {
                 backend: backend,
                 lifecycleMarkerToken: lifecycleMarkerToken,
                 ownership: ownership,
-                reattachingManagedSession: isReattachingManagedSession
+                reattachingManagedSession: isReattachingManagedSession,
+                transport: transport
             ),
             tmuxLifecycle: TmuxShellLifecycleContext(
                 ownership: ownership,

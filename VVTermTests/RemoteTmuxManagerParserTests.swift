@@ -421,6 +421,56 @@ struct RemoteTmuxManagerParserTests {
     }
 
     @Test
+    func managedETSessionPropagatesSnacksHintWithoutFabricatingSSHEnvironment() throws {
+        let create = RemoteTmuxManager.shared.attachCommand(
+            sessionName: "vvterm_et",
+            workingDirectory: "/tmp",
+            lifecycleMarkerToken: "create",
+            transport: .eternalTerminal
+        )
+        let reattach = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "vvterm_et",
+            ownership: .managed,
+            lifecycleMarkerToken: "reattach",
+            transport: .eternalTerminal
+        )
+        let external = RemoteTmuxManager.shared.attachExistingCommand(
+            sessionName: "shared",
+            ownership: .external,
+            lifecycleMarkerToken: "external",
+            transport: .eternalTerminal
+        )
+
+        let assignment = "set-environment -t '=vvterm_et' SNACKS_SSH '1'"
+        #expect(create.contains(assignment))
+        #expect(reattach.contains(assignment))
+        #expect(!external.contains("SNACKS_SSH"))
+        for command in [create, reattach, external] {
+            #expect(!command.contains("SSH_CONNECTION"))
+            #expect(!command.contains("SSH_CLIENT"))
+            #expect(!command.contains("SSH_TTY"))
+        }
+
+        let hint = try #require(create.range(of: assignment))
+        let terminalWindow = try #require(create.range(of: "new-window -d"))
+        #expect(hint.lowerBound < terminalWindow.lowerBound)
+    }
+
+    @Test
+    func managedSSHAndMoshSessionsClearStaleETCompatibilityHint() {
+        for transport in [ShellTransport.ssh, .sshFallback, .mosh] {
+            let command = RemoteTmuxManager.shared.attachCommand(
+                sessionName: "vvterm_transport",
+                workingDirectory: "/tmp",
+                transport: transport
+            )
+            #expect(command.contains("set-environment -u -t '=vvterm_transport' SNACKS_SSH"))
+            #expect(!command.contains("SNACKS_SSH '1'"))
+            #expect(!command.contains("SSH_CONNECTION"))
+        }
+    }
+
+    @Test
     func managedUnixCreationBootstrapsLegacyTmuxBeforeStartingTerminalShell() {
         let command = RemoteTmuxManager.shared.attachCommand(
             sessionName: "vvterm_managed",

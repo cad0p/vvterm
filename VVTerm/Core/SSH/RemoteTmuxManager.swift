@@ -246,13 +246,15 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil
+        lifecycleMarkerToken: String? = nil,
+        transport: ShellTransport = .ssh
     ) -> String {
         let body = attachOrCreateBody(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
             backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken
+            lifecycleMarkerToken: lifecycleMarkerToken,
+            transport: transport
         )
         return body
     }
@@ -261,7 +263,8 @@ actor RemoteTmuxManager {
         sessionName: String,
         ownership: TmuxSessionOwnership,
         backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil
+        lifecycleMarkerToken: String? = nil,
+        transport: ShellTransport = .ssh
     ) -> String {
         let body = attachExistingBody(
             sessionName: sessionName,
@@ -270,7 +273,8 @@ actor RemoteTmuxManager {
                 : lifecycleMissingSessionCommand(backend: backend),
             backend: backend,
             lifecycleMarkerToken: lifecycleMarkerToken,
-            ownership: ownership
+            ownership: ownership,
+            transport: transport
         )
         return body
     }
@@ -478,7 +482,8 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil
+        lifecycleMarkerToken: String? = nil,
+        transport: ShellTransport = .ssh
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachOrCreateCommand(
@@ -493,7 +498,8 @@ actor RemoteTmuxManager {
             sessionName: sessionName,
             workingDirectory: workingDirectory,
             backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken
+            lifecycleMarkerToken: lifecycleMarkerToken,
+            transport: transport
         )
         return attachExistingBody(
             sessionName: sessionName,
@@ -501,7 +507,8 @@ actor RemoteTmuxManager {
             backend: backend,
             lifecycleMarkerToken: lifecycleMarkerToken,
             reportsCreationFailure: true,
-            ownership: .managed
+            ownership: .managed,
+            transport: transport
         )
     }
 
@@ -511,7 +518,8 @@ actor RemoteTmuxManager {
         backend: RemoteTmuxBackend = .unixTmux,
         lifecycleMarkerToken: String? = nil,
         reportsCreationFailure: Bool = false,
-        ownership: TmuxSessionOwnership
+        ownership: TmuxSessionOwnership,
+        transport: ShellTransport = .ssh
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachExistingCommand(
@@ -530,7 +538,7 @@ actor RemoteTmuxManager {
         let usesManagedConfiguration = ownership == .managed
         let replacesProcess = lifecycleMarkerToken == nil
         let managedConfiguration = usesManagedConfiguration
-            ? "\(managedSessionConfigurationCommand(sessionName: sessionName)); \(managedWindowsConfigurationCommand(sessionName: sessionName)); "
+            ? "\(managedSessionConfigurationCommand(sessionName: sessionName, transport: transport)); \(managedWindowsConfigurationCommand(sessionName: sessionName)); "
             : ""
         let exactAttach = tmuxAttachCommand(
             target: exactSession,
@@ -587,7 +595,8 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil
+        lifecycleMarkerToken: String? = nil,
+        transport: ShellTransport = .ssh
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsCreateSessionCommand(
@@ -607,7 +616,10 @@ actor RemoteTmuxManager {
             "=\(sessionName):\(bootstrapWindowName)"
         )
         let tmux = tmuxCommand(includeUTF8: false)
-        let sessionConfiguration = managedSessionConfigurationCommand(sessionName: sessionName)
+        let sessionConfiguration = managedSessionConfigurationCommand(
+            sessionName: sessionName,
+            transport: transport
+        )
         let windowsConfiguration = managedWindowsConfigurationCommand(sessionName: sessionName)
         let createBootstrap = "\(tmux) new-session -d -s \(escapedSession) -n \(escapedBootstrapWindow) -c \(escapedDir) \(RemoteTerminalBootstrap.shellQuoted("sleep 86400"))"
         let loginShell = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
@@ -636,7 +648,10 @@ actor RemoteTmuxManager {
         """
     }
 
-    nonisolated private func managedSessionConfigurationCommand(sessionName: String) -> String {
+    nonisolated private func managedSessionConfigurationCommand(
+        sessionName: String,
+        transport: ShellTransport
+    ) -> String {
         let tmux = tmuxCommand(includeUTF8: false)
         let sessionOptionTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
         let sessionEnvironmentTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
@@ -649,10 +664,18 @@ actor RemoteTmuxManager {
             "\(tmux) set-option -q -t \(sessionOptionTarget) set-titles on",
             "\(tmux) set-option -q -t \(sessionOptionTarget) set-titles-string \(paneTitle)"
         ]
-        commands.append(contentsOf: RemoteTerminalBootstrap.terminalEnvironment().map { variable in
+        let terminalEnvironment = RemoteTerminalBootstrap.terminalEnvironment(transport: transport)
+        commands.append(contentsOf: terminalEnvironment.map { variable in
             let value = RemoteTerminalBootstrap.shellQuoted(variable.value)
             return "\(tmux) set-environment -t \(sessionEnvironmentTarget) \(variable.name) \(value)"
         })
+        if !terminalEnvironment.contains(where: {
+            $0.name == RemoteKittyGraphicsPolicy.compatibilityEnvironmentName
+        }) {
+            commands.append(
+                "\(tmux) set-environment -u -t \(sessionEnvironmentTarget) \(RemoteKittyGraphicsPolicy.compatibilityEnvironmentName)"
+            )
+        }
         return commands.joined(separator: " && ")
     }
 

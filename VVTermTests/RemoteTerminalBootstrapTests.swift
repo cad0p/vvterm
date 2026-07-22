@@ -161,4 +161,38 @@ struct RemoteTerminalBootstrapTests {
         #expect(environment["TERM"] == "xterm-256color")
         #expect(environment["COLORTERM"] == "truecolor")
     }
+
+    @Test
+    func kittyGraphicsPolicyUsesOnlyTheETSpecificSnacksHint() {
+        let ssh = RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+            terminalType: .xtermGhostty,
+            transport: .ssh
+        )
+        let fallback = RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+            terminalType: .xtermGhostty,
+            transport: .sshFallback
+        )
+        let eternalTerminal = RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+            terminalType: .xtermGhostty,
+            transport: .eternalTerminal
+        )
+        let mosh = RemoteTerminalBootstrap.terminalEnvironmentDictionary(
+            terminalType: .xtermGhostty,
+            transport: .mosh
+        )
+
+        #expect(RemoteKittyGraphicsPolicy(transport: .ssh) == .genuineSSH)
+        #expect(RemoteKittyGraphicsPolicy(transport: .sshFallback) == .genuineSSH)
+        #expect(RemoteKittyGraphicsPolicy(transport: .eternalTerminal) == .eternalTerminal)
+        #expect(RemoteKittyGraphicsPolicy(transport: .mosh) == .unsupported)
+        #expect(ssh["SNACKS_SSH"] == nil)
+        #expect(fallback["SNACKS_SSH"] == nil)
+        #expect(mosh["SNACKS_SSH"] == nil)
+        #expect(eternalTerminal["SNACKS_SSH"] == "1")
+        for environment in [ssh, fallback, eternalTerminal, mosh] {
+            #expect(environment["SSH_CONNECTION"] == nil)
+            #expect(environment["SSH_CLIENT"] == nil)
+            #expect(environment["SSH_TTY"] == nil)
+        }
+    }
 }
