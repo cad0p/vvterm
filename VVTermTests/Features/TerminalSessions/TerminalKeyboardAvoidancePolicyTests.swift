@@ -110,7 +110,48 @@ struct TerminalKeyboardAvoidancePolicyTests {
                 .hidden,
             ]
         )
-        #expect(geometries.map(\.preservesTerminalSurfaceSize) == [true, false, true, false])
+    }
+
+    @Test
+    func defaultLayoutResizesOnlyForDockedKeyboard() {
+        let docked = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: false,
+            geometry: .docked(frame: CGRect(x: 0, y: 500, width: 390, height: 300)),
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 700, width: 8, height: 18)
+        )
+        let floating = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: false,
+            geometry: .floating(frame: CGRect(x: 160, y: 480, width: 210, height: 220)),
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 220, y: 610, width: 8, height: 18)
+        )
+
+        #expect(docked == .init(bottomInset: 300, verticalOffset: 0, preservesTerminalSurfaceSize: false))
+        #expect(floating == .unobstructed)
+    }
+
+    @Test
+    func preservedLayoutMovesWithoutLeavingDockedInsetBehind() {
+        let docked = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: true,
+            geometry: .docked(frame: CGRect(x: 0, y: 500, width: 390, height: 300)),
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 700, width: 8, height: 18)
+        )
+        let floating = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: true,
+            geometry: .floating(frame: CGRect(x: 160, y: 480, width: 210, height: 220)),
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 220, y: 610, width: 8, height: 18)
+        )
+
+        #expect(docked.bottomInset == 0)
+        #expect(docked.verticalOffset == -230)
+        #expect(docked.preservesTerminalSurfaceSize)
+        #expect(floating.bottomInset == 0)
+        #expect(floating.verticalOffset == -160)
+        #expect(!floating.preservesTerminalSurfaceSize)
     }
 
     @Test
@@ -122,7 +163,6 @@ struct TerminalKeyboardAvoidancePolicyTests {
         )
 
         #expect(geometry == .hidden)
-        #expect(!geometry.preservesTerminalSurfaceSize)
     }
 
     @Test
@@ -138,7 +178,6 @@ struct TerminalKeyboardAvoidancePolicyTests {
         )
 
         #expect(geometry == .floating(frame: floating))
-        #expect(!geometry.preservesTerminalSurfaceSize)
     }
 }
 #endif

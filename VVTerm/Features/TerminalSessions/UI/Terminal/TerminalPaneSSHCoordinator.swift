@@ -15,6 +15,7 @@ final class TerminalPaneSSHCoordinator {
     var lastReportedSize: CGSize = .zero
 
     private let richPasteRuntime: TerminalRichPasteRuntime
+    private let transportWriteQueue = TerminalTransportWriteQueue()
     private var lastTerminalSize: (cols: Int, rows: Int) = (0, 0)
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "SSHPane")
 
@@ -41,10 +42,17 @@ final class TerminalPaneSSHCoordinator {
         richPasteRuntime.install(on: terminal)
     }
 
+    @MainActor
     func sendToSSH(_ data: Data) {
-        Task(priority: .userInitiated) { [paneId, sshClient, shellId, logger] in
-            let route = Self.sshRoute(paneId: paneId, fallbackClient: sshClient, shellId: shellId)
-            guard let route else { return }
+        guard let route = Self.sshRoute(
+            paneId: paneId,
+            fallbackClient: sshClient,
+            shellId: shellId
+        ) else {
+            return
+        }
+        let logger = logger
+        transportWriteQueue.enqueue {
             do {
                 try await route.client.write(data, to: route.shellId)
             } catch {
@@ -69,7 +77,6 @@ final class TerminalPaneSSHCoordinator {
         }
     }
 
-    @MainActor
     private static func sshRoute(
         paneId: UUID,
         fallbackClient: SSHClient,

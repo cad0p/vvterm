@@ -557,8 +557,11 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
-    func testCrossAppFocusTransferReleasesAndRestoresTerminalInput() throws {
-        let app = launchKeyboardHarness(preservesTerminalSize: true)
+    func testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild() throws {
+        let app = launchKeyboardHarness(
+            preservesTerminalSize: true,
+            simulatesKeyboardFrames: true
+        )
         let terminal = waitForTerminal(in: app)
         terminal.tap()
 
@@ -583,7 +586,13 @@ final class TerminalKeyboardUITests: XCTestCase {
         transferButton.tap()
         wait(
             for: diagnostics,
-            labelContaining: "softwareInputActive=false",
+            labelContaining: "reconnect=inactive",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
             timeout: 5,
             diagnostics: diagnosticsText(in: app)
         )
@@ -593,6 +602,7 @@ final class TerminalKeyboardUITests: XCTestCase {
             timeout: 5,
             diagnostics: diagnosticsText(in: app)
         )
+        let rebuildCount = try requiredDiagnosticMetric("inputRebuilds", in: app)
 
         let returnButton = app.buttons["vvterm.keyboardTest.window.key"]
         XCTAssertTrue(returnButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
@@ -602,6 +612,11 @@ final class TerminalKeyboardUITests: XCTestCase {
             labelContaining: "softwareInputActive=true",
             timeout: 5,
             diagnostics: diagnosticsText(in: app)
+        )
+        XCTAssertEqual(
+            try requiredDiagnosticMetric("inputRebuilds", in: app),
+            rebuildCount,
+            diagnosticsText(in: app)
         )
 
         terminal.typeText("x")
@@ -615,7 +630,10 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testDockedFloatingDockedGeometryClearsStaleSurfacePreservation() throws {
-        let app = launchKeyboardHarness(preservesTerminalSize: true)
+        let app = launchKeyboardHarness(
+            preservesTerminalSize: true,
+            simulatesKeyboardFrames: true
+        )
         let terminal = waitForTerminal(in: app)
         terminal.tap()
 
@@ -663,6 +681,45 @@ final class TerminalKeyboardUITests: XCTestCase {
             timeout: 5,
             diagnostics: diagnosticsText(in: app)
         )
+    }
+
+    @MainActor
+    func testDefaultLayoutClearsDockedInsetForEveryFloatingTransition() throws {
+        let app = launchKeyboardHarness(
+            preservesTerminalSize: false,
+            simulatesKeyboardFrames: true
+        )
+        let terminal = waitForTerminal(in: app)
+        terminal.tap()
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+
+        app.buttons["vvterm.keyboardTest.geometry.hidden"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "keyboardVisible=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        let unobstructedRows = try requiredDiagnosticMetric("gridRows", in: app)
+
+        for _ in 0..<3 {
+            app.buttons["vvterm.keyboardTest.geometry.docked"].tap()
+            waitForDiagnosticMetrics(in: app) { metrics in
+                guard let rows = metrics["gridRows"] else { return false }
+                return rows < unobstructedRows
+            }
+
+            app.buttons["vvterm.keyboardTest.geometry.floating"].tap()
+            waitForDiagnosticMetrics(in: app) { metrics in
+                metrics["gridRows"] == unobstructedRows
+            }
+            wait(
+                for: diagnostics,
+                labelContaining: "accessorySuppressed=false",
+                timeout: 5,
+                diagnostics: diagnosticsText(in: app)
+            )
+        }
     }
 
     @MainActor
@@ -1054,7 +1111,7 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     @MainActor
-    func testPrintableHardwareKeyRepeatUsesInterpretedTextUntilReleaseOrCancel() throws {
+    func testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel() throws {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
@@ -1285,7 +1342,7 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testIMECompositionStopsPrintableHardwareKeyRepeat() throws {
-        let app = launchKeyboardHarness()
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
         let terminal = waitForTerminal(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
         terminal.tap()

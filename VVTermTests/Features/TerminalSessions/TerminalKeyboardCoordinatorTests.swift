@@ -1487,6 +1487,7 @@ struct TerminalKeyboardCoordinatorTests {
             TerminalKeyboardCoordinator.presentationRefreshAction(
                 keyboardPresentationDesired: true,
                 refreshRequested: true,
+                windowOwnsInput: true,
                 softwareInputActive: true,
                 softwareKeyboardVisible: false,
                 presentationVerificationPending: true,
@@ -1502,6 +1503,7 @@ struct TerminalKeyboardCoordinatorTests {
             TerminalKeyboardCoordinator.presentationRefreshAction(
                 keyboardPresentationDesired: true,
                 refreshRequested: true,
+                windowOwnsInput: true,
                 softwareInputActive: true,
                 softwareKeyboardVisible: false,
                 presentationVerificationPending: false,
@@ -1513,6 +1515,7 @@ struct TerminalKeyboardCoordinatorTests {
             TerminalKeyboardCoordinator.presentationRefreshAction(
                 keyboardPresentationDesired: true,
                 refreshRequested: true,
+                windowOwnsInput: true,
                 softwareInputActive: true,
                 softwareKeyboardVisible: false,
                 presentationVerificationPending: false,
@@ -1528,6 +1531,7 @@ struct TerminalKeyboardCoordinatorTests {
             TerminalKeyboardCoordinator.presentationRefreshAction(
                 keyboardPresentationDesired: true,
                 refreshRequested: true,
+                windowOwnsInput: true,
                 softwareInputActive: true,
                 softwareKeyboardVisible: true,
                 presentationVerificationPending: true,
@@ -1535,6 +1539,103 @@ struct TerminalKeyboardCoordinatorTests {
                 refreshAttemptLimit: 2
             ) == .none
         )
+    }
+
+    @Test
+    func nonKeyWindowCannotRebuildKeyboardPresentation() {
+        #expect(
+            TerminalKeyboardCoordinator.presentationRefreshAction(
+                keyboardPresentationDesired: true,
+                refreshRequested: true,
+                windowOwnsInput: false,
+                softwareInputActive: true,
+                softwareKeyboardVisible: false,
+                presentationVerificationPending: false,
+                refreshAttemptCount: 0,
+                refreshAttemptLimit: 2
+            ) == .none
+        )
+    }
+
+    @Test
+    func keyboardFrameMustBeSubstantiallyVisibleOnActiveScreen() {
+        let screen = CGRect(x: 0, y: 0, width: 1_366, height: 1_024)
+        let floating = CGRect(x: 1_000, y: 650, width: 320, height: 280)
+
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                floating,
+                in: screen
+            ) == floating
+        )
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 980, width: 1_366, height: 44),
+                in: screen
+            ) == nil
+        )
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 1_500, y: 650, width: 320, height: 280),
+                in: screen
+            ) == nil
+        )
+    }
+
+    @Test
+    func floatingLayoutGuideSurvivesStaleHideOnlyWhileWindowOwnsInput() {
+        let screen = CGRect(x: 0, y: 0, width: 1_366, height: 1_024)
+        let floating = CGRect(x: 1_000, y: 650, width: 320, height: 280)
+
+        #expect(
+            TerminalKeyboardCoordinator.keyboardFrameAfterHideNotification(
+                layoutFrame: floating,
+                screenFrame: screen,
+                windowOwnsInput: true,
+                softwareInputActive: true
+            ) == floating
+        )
+        #expect(
+            TerminalKeyboardCoordinator.keyboardFrameAfterHideNotification(
+                layoutFrame: floating,
+                screenFrame: screen,
+                windowOwnsInput: false,
+                softwareInputActive: true
+            ) == nil
+        )
+        #expect(
+            TerminalKeyboardCoordinator.keyboardFrameAfterHideNotification(
+                layoutFrame: floating,
+                screenFrame: screen,
+                windowOwnsInput: true,
+                softwareInputActive: false
+            ) == nil
+        )
+    }
+
+    @Test
+    @MainActor
+    func directTouchInNonKeyWindowDoesNotStartReacquisition() async {
+        let paneId = UUID()
+        let session = TerminalKeyboardInputSessionSpy()
+        let coordinator = TerminalKeyboardCoordinator()
+        coordinator.terminalProvider = { requestedPaneId in
+            requestedPaneId == paneId ? session : nil
+        }
+        coordinator.setActivePane(paneId)
+        coordinator.setViewActive(true)
+        coordinator.setPaneInputEligible(true, for: paneId)
+        coordinator.setWindowAttached(true, for: paneId)
+        await drainMainQueue()
+        session.resetCommands()
+        session.snapshot.windowIsKey = false
+
+        coordinator.directTouchOnTerminal()
+        await drainMainQueue()
+
+        #expect(session.rebuildCount == 0)
+        #expect(session.releaseCount == 0)
+        #expect(session.acquireCount == 0)
     }
 }
 

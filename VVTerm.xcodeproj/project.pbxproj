@@ -1098,10 +1098,10 @@
 		D1A7B0C12EAB100100A00021 /* XCRemoteSwiftPackageReference "swift-mosh" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/wiedymi/swift-mosh";
-				requirement = {
-					kind = exactVersion;
-					version = 0.1.8;
-				};
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.8;
+			};
 		};
 		D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */ = {
 			isa = XCRemoteSwiftPackageReference;

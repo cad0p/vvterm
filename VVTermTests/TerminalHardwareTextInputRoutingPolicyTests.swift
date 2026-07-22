@@ -3,18 +3,151 @@ import Testing
 
 struct TerminalHardwareTextInputRoutingPolicyTests {
     @Test
-    func repeatsPlainSystemInterpretedPrintableKey() {
+    func directlyRoutesLayoutResolvedLettersBeforeSystemAlternateCharacterHandling() {
         #expect(
-            TerminalHardwareKeyRepeatPolicy.shouldRepeat(
-                source: .systemInterpretedText,
-                isPrintableKey: true,
-                isRepeatableSpecialKey: false,
+            TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+                "h",
+                primaryLanguage: "en-US",
                 hasControlModifier: false,
                 hasAlternateModifier: false,
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false
+            ) == "h"
+        )
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+                "H",
+                primaryLanguage: "de-DE",
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            ) == "H"
+        )
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+                "ż",
+                primaryLanguage: "pl-PL",
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            ) == "ż"
+        )
+    }
+
+    @Test
+    func leavesCompositionDeadKeysAndModifiedTextWithUIKit() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+                "h",
+                primaryLanguage: nil,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            ) == nil
+        )
+        for testCase in [
+            ("h", "ja-JP", false, false, false, false),
+            ("h", "en-US", false, false, false, true),
+            ("h", "en-US", false, true, false, false),
+            ("h", "en-US", false, false, true, false),
+            ("h", "en-US", true, false, false, false),
+            ("", "en-US", false, false, false, false),
+            ("^", "de-DE", false, false, false, false),
+        ] {
+            #expect(
+                TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+                    testCase.0,
+                    primaryLanguage: testCase.1,
+                    hasControlModifier: testCase.2,
+                    hasAlternateModifier: testCase.3,
+                    hasCommandModifier: testCase.4,
+                    hasActiveIMEComposition: testCase.5
+                ) == nil
+            )
+        }
+    }
+
+    @Test
+    func koreanInputNeverAssociatesIMECommitsWithOnePhysicalKey() {
+        let inputModeAllowsOneToOneText = TerminalHardwareTextInputRoutingPolicy
+            .inputModeAllowsOneToOneHardwareText("ko-KR")
+
+        #expect(!inputModeAllowsOneToOneText)
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+                "ㅎ",
+                primaryLanguage: "ko-KR",
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false
+            ) == nil
+        )
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRecordPendingInterpretedHardwareKey(
+                keyProducesText: true,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false,
+                hasActiveIMEComposition: false,
+                isSystemTextInputToggleKey: false,
+                inputModeAllowsOneToOneText: inputModeAllowsOneToOneText
+            ) == false
+        )
+    }
+
+    @Test
+    func koreanBackwardDeleteReturnsToUIKitWhileLocalCompositionDocumentExists() {
+        #expect(
+            TerminalHardwareTextInputRoutingPolicy.shouldRouteBackwardDeleteToSystemTextInput(
+                inputModeAllowsOneToOneText: false,
+                hasLocalTextInputSession: true,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false
             )
         )
+        #expect(
+            !TerminalHardwareTextInputRoutingPolicy.shouldRouteBackwardDeleteToSystemTextInput(
+                inputModeAllowsOneToOneText: false,
+                hasLocalTextInputSession: false,
+                hasControlModifier: false,
+                hasAlternateModifier: false,
+                hasCommandModifier: false
+            )
+        )
+        #expect(
+            !TerminalHardwareTextInputRoutingPolicy.shouldRouteBackwardDeleteToSystemTextInput(
+                inputModeAllowsOneToOneText: false,
+                hasLocalTextInputSession: true,
+                hasControlModifier: true,
+                hasAlternateModifier: false,
+                hasCommandModifier: false
+            )
+        )
+    }
+
+    @Test
+    func repeatsPlainLayoutResolvedAndSystemInterpretedPrintableKeys() {
+        for source in [
+            TerminalHardwareKeyRepeatSource.layoutResolvedText,
+            .systemInterpretedText,
+        ] {
+            #expect(
+                TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+                    source: source,
+                    isPrintableKey: true,
+                    isRepeatableSpecialKey: false,
+                    hasControlModifier: false,
+                    hasAlternateModifier: false,
+                    hasCommandModifier: false,
+                    hasActiveIMEComposition: false
+                )
+            )
+        }
     }
 
     @Test
@@ -62,7 +195,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
     func doesNotRepeatSystemOptionTextCommandKeysOrActiveIMEInput() {
         #expect(
             !TerminalHardwareKeyRepeatPolicy.shouldRepeat(
-                source: .systemInterpretedText,
+                source: .layoutResolvedText,
                 isPrintableKey: true,
                 isRepeatableSpecialKey: false,
                 hasControlModifier: false,
@@ -84,7 +217,7 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
         )
         #expect(
             !TerminalHardwareKeyRepeatPolicy.shouldRepeat(
-                source: .systemInterpretedText,
+                source: .layoutResolvedText,
                 isPrintableKey: true,
                 isRepeatableSpecialKey: false,
                 hasControlModifier: false,
@@ -309,7 +442,8 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasAlternateModifier: false,
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
-                isSystemTextInputToggleKey: false
+                isSystemTextInputToggleKey: false,
+                inputModeAllowsOneToOneText: true
             )
         )
     }
@@ -323,7 +457,8 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasAlternateModifier: true,
                 hasCommandModifier: false,
                 hasActiveIMEComposition: false,
-                isSystemTextInputToggleKey: false
+                isSystemTextInputToggleKey: false,
+                inputModeAllowsOneToOneText: true
             ) == false
         )
     }
@@ -337,7 +472,8 @@ struct TerminalHardwareTextInputRoutingPolicyTests {
                 hasAlternateModifier: false,
                 hasCommandModifier: false,
                 hasActiveIMEComposition: true,
-                isSystemTextInputToggleKey: false
+                isSystemTextInputToggleKey: false,
+                inputModeAllowsOneToOneText: true
             ) == false
         )
     }

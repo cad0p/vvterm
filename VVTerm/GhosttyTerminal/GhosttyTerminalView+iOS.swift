@@ -50,6 +50,8 @@ struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
     var sceneActivationState: String
     var isFirstResponder: Bool
     var isSoftwareInputActive: Bool
+    var keyboardLayoutFrame: CGRect? = nil
+    var screenFrame: CGRect? = nil
 
     var lifecycleDescription: String {
         [
@@ -58,6 +60,7 @@ struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
             "scene=\(sceneActivationState)",
             "firstResponder=\(isFirstResponder)",
             "softwareInput=\(isSoftwareInputActive)",
+            "keyboardLayoutFrame=\(keyboardLayoutFrame?.debugDescription ?? "nil")",
         ].joined(separator: " ")
     }
 }
@@ -1260,6 +1263,10 @@ class GhosttyTerminalView: UIView {
         // Use a reasonable default size if frame is zero
         let initialFrame = frame.width > 0 && frame.height > 0 ? frame : CGRect(x: 0, y: 0, width: 800, height: 600)
         super.init(frame: initialFrame)
+        // The default guide collapses undocked/floating keyboards to the
+        // bottom safe area. Track their real frame so stale docked geometry
+        // can be rejected during floating/full transitions.
+        keyboardLayoutGuide.followsUndockedKeyboard = true
 
         // Set content scale factor for retina rendering (important before surface
         // creation). Avoid UIScreen.main (stale instance risk on iOS 26); the
@@ -2036,12 +2043,27 @@ class GhosttyTerminalView: UIView {
     }
 
     func keyboardCoordinatorDiagnosticSnapshot() -> TerminalKeyboardCoordinatorDiagnosticSnapshot {
-        TerminalKeyboardCoordinatorDiagnosticSnapshot(
+        let keyboardLayoutFrame: CGRect?
+        let screenFrame: CGRect?
+        if let window {
+            let frameInWindow = convert(keyboardLayoutGuide.layoutFrame, to: window)
+            keyboardLayoutFrame = window.convert(
+                frameInWindow,
+                to: window.screen.coordinateSpace
+            )
+            screenFrame = window.screen.bounds
+        } else {
+            keyboardLayoutFrame = nil
+            screenFrame = nil
+        }
+        return TerminalKeyboardCoordinatorDiagnosticSnapshot(
             windowAttached: window != nil,
             windowIsKey: window?.isKeyWindow == true,
             sceneActivationState: window?.windowScene.map { String(describing: $0.activationState) } ?? "nil",
             isFirstResponder: isFirstResponder,
-            isSoftwareInputActive: isKeyboardTextInputActive
+            isSoftwareInputActive: isKeyboardTextInputActive,
+            keyboardLayoutFrame: keyboardLayoutFrame,
+            screenFrame: screenFrame
         )
     }
 
@@ -2064,6 +2086,9 @@ class GhosttyTerminalView: UIView {
             "inputView=\(shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")",
             "language=\(imeProxyTextView.textInputMode?.primaryLanguage ?? "nil")",
             "layoutFrame=\(keyboardLayoutGuide.layoutFrame.debugDescription)",
+            "bounds=\(bounds.debugDescription)",
+            "safeArea=\(safeAreaInsets)",
+            "grid=\(lastReportedGrid.cols)x\(lastReportedGrid.rows)",
         ].joined(separator: " ")
     }
 
@@ -4267,6 +4292,10 @@ class GhosttyTerminalView: UIView {
             payload: event
         )
         if case .started(let active) = registration {
+            logKeyboardLifecycle(
+                "hardware.repeat.started",
+                detail: "keyCode=\(keyCode) source=\(source.lifecycleDescription)"
+            )
             scheduleHardwareKeyRepeatTimer(token: active.token)
         }
         return registration
@@ -4319,12 +4348,16 @@ class GhosttyTerminalView: UIView {
     private func endHardwareKeyRepeat(keyCode: UInt16) -> TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Active? {
         guard let active = hardwareKeyRepeatState.end(keyCode: keyCode) else { return nil }
         stopHardwareKeyRepeatTimer()
+        logKeyboardLifecycle("hardware.repeat.ended", detail: "keyCode=\(keyCode)")
         return active
     }
 
     private func cancelTrackedHardwareInput() {
         stopHardwareKeyRepeatTimer()
         let active = hardwareKeyRepeatState.cancel()
+        if let active {
+            logKeyboardLifecycle("hardware.repeat.cancelled", detail: "keyCode=\(active.keyCode)")
+        }
         var trackedPresses = hardwarePressesSentToGhostty
         hardwarePressesSentToGhostty.removeAll()
         systemTextInputPresses.removeAll()
@@ -4484,6 +4517,19 @@ class GhosttyTerminalView: UIView {
 
     private func shouldRoutePressToSystemTextInput(_ key: UIKey) -> Bool {
         let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
+        if key.keyCode == .keyboardDeleteOrBackspace,
+           TerminalHardwareTextInputRoutingPolicy.shouldRouteBackwardDeleteToSystemTextInput(
+               inputModeAllowsOneToOneText: TerminalHardwareTextInputRoutingPolicy
+                   .inputModeAllowsOneToOneHardwareText(
+                       imeProxyTextView.textInputMode?.primaryLanguage
+                   ),
+               hasLocalTextInputSession: hasLocalTextInputSession,
+               hasControlModifier: key.modifierFlags.contains(.control),
+               hasAlternateModifier: key.modifierFlags.contains(.alternate),
+               hasCommandModifier: key.modifierFlags.contains(.command)
+           ) {
+            return true
+        }
         return TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
             hasControlModifier: key.modifierFlags.contains(.control),
             hasAlternateModifier: key.modifierFlags.contains(.alternate),
@@ -4494,6 +4540,17 @@ class GhosttyTerminalView: UIView {
             isTextInputModifierOnlyKey: isTextInputModifierOnlyKey(key),
             hasTerminalFallbackKey: fallbackHardwareKey(for: key) != nil,
             keyProducesText: keyProducesText
+        )
+    }
+
+    private func directlyRoutableHardwareText(for key: UIKey) -> String? {
+        TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+            key.characters,
+            primaryLanguage: imeProxyTextView.textInputMode?.primaryLanguage,
+            hasControlModifier: key.modifierFlags.contains(.control),
+            hasAlternateModifier: key.modifierFlags.contains(.alternate),
+            hasCommandModifier: key.modifierFlags.contains(.command),
+            hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
         )
     }
 
@@ -4533,6 +4590,22 @@ class GhosttyTerminalView: UIView {
             if shouldUseOptionKeyAsTerminalAlt(key) {
                 terminalAltOptionKeyCodes.insert(keyCode)
             }
+            if let text = directlyRoutableHardwareText(for: key),
+               sendInterpretedHardwareKeyText(
+                   text,
+                   for: key,
+                   repeatSource: .layoutResolvedText
+               ) {
+                if hasLocalTextInputSession {
+                    invalidateLocalTextInputSession()
+                }
+                result.didHandleGhosttyInput = true
+                logKeyboardLifecycle(
+                    "hardware.press.handled",
+                    detail: "keyCode=\(keyCode) route=layoutResolved"
+                )
+                continue
+            }
             if shouldRoutePressToSystemTextInput(key) {
                 let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
                 systemTextInputPresses.insert(keyCode)
@@ -4558,11 +4631,19 @@ class GhosttyTerminalView: UIView {
                     hasAlternateModifier: key.modifierFlags.contains(.alternate),
                     hasCommandModifier: key.modifierFlags.contains(.command),
                     hasActiveIMEComposition: textInputModel.hasActiveIMEComposition,
-                    isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock
+                    isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock,
+                    inputModeAllowsOneToOneText: TerminalHardwareTextInputRoutingPolicy
+                        .inputModeAllowsOneToOneHardwareText(
+                            imeProxyTextView.textInputMode?.primaryLanguage
+                        )
                 ) {
                     pendingSystemTextInputHardwareKeys.append(key)
                 }
                 result.forwardedToSystem.insert(press)
+                logKeyboardLifecycle(
+                    "hardware.press.forwarded",
+                    detail: "keyCode=\(keyCode) route=systemText"
+                )
                 continue
             }
 
@@ -4576,6 +4657,10 @@ class GhosttyTerminalView: UIView {
                 cSurface: cSurface
             ) {
                 result.didHandleGhosttyInput = true
+                logKeyboardLifecycle(
+                    "hardware.press.handled",
+                    detail: "keyCode=\(keyCode) route=terminal"
+                )
             }
         }
 
@@ -4605,6 +4690,7 @@ class GhosttyTerminalView: UIView {
             }
             endHardwareKeyRepeat(keyCode: keyCode)
             surface.sendKeyEvent(hardwareKeyEvent(pressedEvent, action: .release))
+            logKeyboardLifecycle("hardware.press.ended", detail: "keyCode=\(keyCode)")
             result.didHandleGhosttyInput = true
             if shouldForwardToSystem {
                 result.forwardedToSystem.insert(press)
@@ -4615,6 +4701,7 @@ class GhosttyTerminalView: UIView {
     }
 
     fileprivate func processHardwarePressesCancelled(_: Set<UIPress>) {
+        logKeyboardLifecycle("hardware.press.cancelled")
         cancelTrackedHardwareInput()
     }
 
@@ -5610,7 +5697,7 @@ extension GhosttyTerminalView {
         )
     }
 
-    func keyboardUITestBeginInterpretedHardwareKeyRepeat(text: String, shifted: Bool) {
+    func keyboardUITestBeginLayoutResolvedHardwareKeyRepeat(text: String, shifted: Bool) {
         guard !text.isEmpty, let surface else { return }
         keyboardUITestUsesManualHardwareKeyRepeatClock = true
         cancelTrackedHardwareInput()
@@ -5639,12 +5726,12 @@ extension GhosttyTerminalView {
             consumedMods: ghosttyModifiers,
             unshiftedCodepoint: 0x68
         )
-        systemTextInputPresses.insert(keyCode)
         _ = sendResolvedInterpretedHardwareKeyText(
             text,
             keyCode: keyCode,
             modifiers: modifiers,
-            sourceEvent: sourceEvent
+            sourceEvent: sourceEvent,
+            repeatSource: .layoutResolvedText
         )
     }
 
@@ -6688,7 +6775,11 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
     }
 
     @discardableResult
-    fileprivate func sendInterpretedHardwareKeyText(_ text: String, for key: UIKey) -> Bool {
+    fileprivate func sendInterpretedHardwareKeyText(
+        _ text: String,
+        for key: UIKey,
+        repeatSource: TerminalHardwareKeyRepeatSource = .systemInterpretedText
+    ) -> Bool {
         guard let sourceEvent = Ghostty.Input.KeyEvent(uiKey: key, action: .press) else {
             sendText(text)
             return true
@@ -6697,7 +6788,8 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
             text,
             keyCode: UInt16(key.keyCode.rawValue),
             modifiers: key.modifierFlags,
-            sourceEvent: sourceEvent
+            sourceEvent: sourceEvent,
+            repeatSource: repeatSource
         )
     }
 
@@ -6706,7 +6798,8 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
         _ text: String,
         keyCode: UInt16,
         modifiers: UIKeyModifierFlags,
-        sourceEvent: Ghostty.Input.KeyEvent
+        sourceEvent: Ghostty.Input.KeyEvent,
+        repeatSource: TerminalHardwareKeyRepeatSource
     ) -> Bool {
         guard canRouteTerminalInput, let surface else { return false }
         let interpretedEvent = Ghostty.Input.KeyEvent(
@@ -6720,7 +6813,7 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
         )
         let registration = registerHardwareKeyRepeat(
             keyCode: keyCode,
-            source: .systemInterpretedText,
+            source: repeatSource,
             event: interpretedEvent,
             isRepeatableSpecialKey: false,
             modifiers: modifiers,

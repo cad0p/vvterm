@@ -262,7 +262,7 @@ struct TerminalKeyboardUITestHarness: View {
 
                 HStack(spacing: 8) {
                     Button("Repeat h") {
-                        terminalView?.keyboardUITestBeginInterpretedHardwareKeyRepeat(
+                        terminalView?.keyboardUITestBeginLayoutResolvedHardwareKeyRepeat(
                             text: "h",
                             shifted: false
                         )
@@ -270,7 +270,7 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.begin.h")
 
                     Button("Repeat H") {
-                        terminalView?.keyboardUITestBeginInterpretedHardwareKeyRepeat(
+                        terminalView?.keyboardUITestBeginLayoutResolvedHardwareKeyRepeat(
                             text: "H",
                             shifted: true
                         )

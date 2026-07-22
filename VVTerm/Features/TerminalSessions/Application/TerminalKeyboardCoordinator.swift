@@ -284,6 +284,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     nonisolated static func presentationRefreshAction(
         keyboardPresentationDesired: Bool,
         refreshRequested: Bool,
+        windowOwnsInput: Bool,
         softwareInputActive: Bool,
         softwareKeyboardVisible: Bool,
         presentationVerificationPending: Bool,
@@ -292,12 +293,50 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     ) -> PresentationRefreshAction {
         guard keyboardPresentationDesired,
               refreshRequested,
+              windowOwnsInput,
               softwareInputActive,
               !softwareKeyboardVisible,
               refreshAttemptCount < refreshAttemptLimit else {
             return .none
         }
         return presentationVerificationPending ? .deferUntilVerification : .rebuild
+    }
+
+    nonisolated static func visibleKeyboardFrame(
+        _ frame: CGRect?,
+        in screenFrame: CGRect?,
+        minimumHeight: CGFloat = 100
+    ) -> CGRect? {
+        guard let frame,
+              let screenFrame,
+              !frame.isNull,
+              !frame.isEmpty,
+              !frame.isInfinite,
+              !screenFrame.isNull,
+              !screenFrame.isEmpty,
+              !screenFrame.isInfinite else {
+            return nil
+        }
+        let overlap = screenFrame.intersection(frame)
+        guard !overlap.isNull, overlap.height >= max(minimumHeight, 0) else {
+            return nil
+        }
+        return frame
+    }
+
+    nonisolated static func keyboardFrameAfterHideNotification(
+        layoutFrame: CGRect?,
+        screenFrame: CGRect?,
+        windowOwnsInput: Bool,
+        softwareInputActive: Bool,
+        minimumHeight: CGFloat = 100
+    ) -> CGRect? {
+        guard windowOwnsInput, softwareInputActive else { return nil }
+        return visibleKeyboardFrame(
+            layoutFrame,
+            in: screenFrame,
+            minimumHeight: minimumHeight
+        )
     }
 
     func setActivePane(_ paneId: UUID?) {
@@ -379,6 +418,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         presentationRefreshAttemptCount = 0
         if let terminal = activeTerminal {
             let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+            guard snapshot.windowAttached, snapshot.windowIsKey else {
+                markDirty(reason: "sceneActivatedWithoutInputOwnership")
+                return
+            }
             if snapshot.isSoftwareInputActive {
                 if Self.desiredKeyboardVisible(inputs: currentInputs),
                    !isSoftwareKeyboardVisible {
@@ -518,6 +561,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         if isUserHidden {
             return
         }
+        guard !isSoftwareKeyboardVisible,
+              let terminal = activeTerminal else {
+            return
+        }
+        let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+        guard snapshot.windowAttached, snapshot.windowIsKey else {
+            return
+        }
         requestAutomaticPresentationRefresh()
         // See userRequestedShow: user actions get a fresh repair budget.
         presentationRefreshAttemptCount = 0
@@ -532,20 +583,23 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         #if DEBUG
         guard !Self.usesUITestKeyboardFrameSimulation else { return }
         #endif
-        guard viewActive, let frame else { return }
+        guard viewActive, let frame, let terminal = activeTerminal else { return }
         updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
-        guard let screenBounds = UIApplication.shared.connectedScenes
-            .compactMap({ ($0 as? UIWindowScene)?.screen.bounds })
-            .first(where: { $0.intersects(frame) }) ?? (UIApplication.shared.connectedScenes
-                .compactMap { ($0 as? UIWindowScene)?.screen.bounds }.first)
-        else { return }
-        let overlap = screenBounds.intersection(frame)
-        let visible = !overlap.isNull && overlap.height >= softwareKeyboardMinimumHeight
-        let visibleFrame = visible ? frame : nil
+        let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+        guard snapshot.windowAttached,
+              snapshot.windowIsKey,
+              snapshot.isSoftwareInputActive else {
+            return
+        }
+        let visibleFrame = Self.visibleKeyboardFrame(
+            frame,
+            in: snapshot.screenFrame,
+            minimumHeight: softwareKeyboardMinimumHeight
+        )
         if softwareKeyboardEndFrame != visibleFrame {
             softwareKeyboardEndFrame = visibleFrame
         }
-        noteSoftwareKeyboardVisible(visible)
+        noteSoftwareKeyboardVisible(visibleFrame != nil)
     }
 
     private func noteSoftwareKeyboardHidden(
@@ -556,6 +610,22 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         guard !Self.usesUITestKeyboardFrameSimulation else { return }
         #endif
         updateKeyboardAnimation(duration: animationDuration, curveRawValue: animationCurveRawValue)
+        if let terminal = activeTerminal {
+            let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
+            if let layoutFrame = Self.keyboardFrameAfterHideNotification(
+                layoutFrame: snapshot.keyboardLayoutFrame,
+                screenFrame: snapshot.screenFrame,
+                windowOwnsInput: snapshot.windowAttached && snapshot.windowIsKey,
+                softwareInputActive: snapshot.isSoftwareInputActive,
+                minimumHeight: softwareKeyboardMinimumHeight
+            ) {
+                if softwareKeyboardEndFrame != layoutFrame {
+                    softwareKeyboardEndFrame = layoutFrame
+                }
+                noteSoftwareKeyboardVisible(true)
+                return
+            }
+        }
         clearSoftwareKeyboardObservation()
     }
 
@@ -777,6 +847,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             let refreshAction = Self.presentationRefreshAction(
                 keyboardPresentationDesired: keyboardPresentationDesired,
                 refreshRequested: refreshRequested,
+                windowOwnsInput: before.windowAttached && before.windowIsKey,
                 softwareInputActive: before.isSoftwareInputActive,
                 softwareKeyboardVisible: isSoftwareKeyboardVisible,
                 presentationVerificationPending: presentationVerifyTask != nil,
@@ -1077,7 +1148,9 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             let inputs = self.currentInputs
             guard Self.desiredKeyboardVisible(inputs: inputs) else { return }
             let snapshot = terminal.keyboardCoordinatorDiagnosticSnapshot()
-            guard snapshot.isSoftwareInputActive else { return }
+            guard snapshot.windowAttached,
+                  snapshot.windowIsKey,
+                  snapshot.isSoftwareInputActive else { return }
             if self.pendingPresentationRequest != .none {
                 self.markDirty(reason: "presentationUnverified")
                 return

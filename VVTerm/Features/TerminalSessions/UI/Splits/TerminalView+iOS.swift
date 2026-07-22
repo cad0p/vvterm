@@ -53,23 +53,25 @@ extension View {
 
 @MainActor
 private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
-    @Published private(set) var verticalOffset: CGFloat = 0
+    @Published private(set) var layout = TerminalKeyboardAvoidancePolicy.Layout.unobstructed
 
     private weak var terminal: GhosttyTerminalView?
     private var keyboardFrame: CGRect?
     private var cursorRect: CGRect = .zero
+    private var preservesTerminalSize = false
 
     func update(
-        enabled: Bool,
+        preservesTerminalSize: Bool,
         terminal newTerminal: GhosttyTerminalView?,
         keyboardFrame: CGRect?,
         animation: Animation?
     ) {
         self.keyboardFrame = keyboardFrame
+        self.preservesTerminalSize = preservesTerminalSize
 
-        guard enabled, let newTerminal else {
+        guard let newTerminal else {
             detachTerminal()
-            setVerticalOffset(0, animation: animation)
+            setLayout(.unobstructed, animation: animation)
             return
         }
 
@@ -89,7 +91,7 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
 
     func detach() {
         detachTerminal()
-        verticalOffset = 0
+        layout = .unobstructed
     }
 
     private func detachTerminal() {
@@ -101,12 +103,20 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
 
     private func recalculate(animation: Animation?) {
         guard let terminal, let window = terminal.window else {
-            setVerticalOffset(0, animation: animation)
+            setLayout(.unobstructed, animation: animation)
             return
         }
 
         let currentBoundsFrame = terminal.convert(terminal.bounds, to: window)
-        let baseBoundsFrame = currentBoundsFrame.offsetBy(dx: 0, dy: -verticalOffset)
+        var baseBoundsFrame = currentBoundsFrame.offsetBy(
+            dx: 0,
+            dy: -layout.verticalOffset
+        )
+        // Default docked-keyboard mode now owns its inset instead of relying on
+        // SwiftUI's keyboard safe area. Reconstruct the unobstructed frame from
+        // the previously applied inset so docked -> floating transitions cannot
+        // oscillate between stale and current geometry.
+        baseBoundsFrame.size.height += layout.bottomInset
         let keyboardFrameInWindow = keyboardFrame.map {
             window.convert($0, from: window.screen.coordinateSpace)
         }
@@ -119,30 +129,44 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
             terminalFrame: baseBoundsFrame,
             keyboardFrame: keyboardFrameInWindow
         )
-        terminal.setKeyboardAvoidanceSizePreservationEnabled(
-            geometry.preservesTerminalSurfaceSize
-        )
-
         let currentTerminalFrame = terminal.convert(terminal.keyboardAvoidanceTerminalRect(), to: window)
         let currentCursorFrame = terminal.convert(cursorRect, to: window)
-        let baseTerminalFrame = currentTerminalFrame.offsetBy(dx: 0, dy: -verticalOffset)
-        let baseCursorFrame = currentCursorFrame.offsetBy(dx: 0, dy: -verticalOffset)
-        let newOffset = TerminalKeyboardAvoidancePolicy.verticalOffset(
-            terminalFrame: baseTerminalFrame,
-            cursorFrame: baseCursorFrame,
-            keyboardFrame: geometry.frame
+        var baseTerminalFrame = currentTerminalFrame.offsetBy(
+            dx: 0,
+            dy: -layout.verticalOffset
         )
-        setVerticalOffset(newOffset, animation: animation)
+        baseTerminalFrame.size.height += layout.bottomInset
+        let baseCursorFrame = currentCursorFrame.offsetBy(
+            dx: 0,
+            dy: -layout.verticalOffset
+        )
+        let newLayout = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: preservesTerminalSize,
+            geometry: geometry,
+            terminalFrame: baseTerminalFrame,
+            cursorFrame: baseCursorFrame
+        )
+        terminal.setKeyboardAvoidanceSizePreservationEnabled(
+            newLayout.preservesTerminalSurfaceSize
+        )
+        setLayout(newLayout, animation: animation)
     }
 
-    private func setVerticalOffset(_ newValue: CGFloat, animation: Animation?) {
-        guard abs(verticalOffset - newValue) >= 0.5 else { return }
+    private func setLayout(
+        _ newValue: TerminalKeyboardAvoidancePolicy.Layout,
+        animation: Animation?
+    ) {
+        guard abs(layout.bottomInset - newValue.bottomInset) >= 0.5
+                || abs(layout.verticalOffset - newValue.verticalOffset) >= 0.5
+                || layout.preservesTerminalSurfaceSize != newValue.preservesTerminalSurfaceSize else {
+            return
+        }
         if let animation {
             withAnimation(animation) {
-                verticalOffset = newValue
+                layout = newValue
             }
         } else {
-            verticalOffset = newValue
+            layout = newValue
         }
     }
 }
@@ -180,37 +204,32 @@ private struct TerminalKeyboardAvoidanceModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        Group {
-            if isEnabled {
-                content
-                    .offset(y: model.verticalOffset)
-                    .clipped()
-                    .ignoresSafeArea(.keyboard, edges: .bottom)
-            } else {
-                content
+        content
+            .padding(.bottom, model.layout.bottomInset)
+            .offset(y: model.layout.verticalOffset)
+            .clipped()
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .onAppear {
+                refresh(animation: nil)
             }
-        }
-        .onAppear {
-            refresh(animation: nil)
-        }
-        .onDisappear {
-            for paneId in paneIds {
-                terminalProvider(paneId)?.onKeyboardAvoidanceCursorRectChange = nil
+            .onDisappear {
+                for paneId in paneIds {
+                    terminalProvider(paneId)?.onKeyboardAvoidanceCursorRectChange = nil
+                }
+                model.detach()
             }
-            model.detach()
-        }
-        .onChange(of: isEnabled) { _ in
-            refresh(animation: keyboardAnimation)
-        }
-        .onChange(of: focusedPaneId) { _ in
-            refresh(animation: .easeOut(duration: 0.12))
-        }
-        .onChange(of: terminalRegistryVersion) { _ in
-            refresh(animation: nil)
-        }
-        .onChange(of: keyboardCoordinator.softwareKeyboardEndFrame) { _ in
-            refresh(animation: keyboardAnimation)
-        }
+            .onChange(of: isEnabled) { _ in
+                refresh(animation: keyboardAnimation)
+            }
+            .onChange(of: focusedPaneId) { _ in
+                refresh(animation: .easeOut(duration: 0.12))
+            }
+            .onChange(of: terminalRegistryVersion) { _ in
+                refresh(animation: nil)
+            }
+            .onChange(of: keyboardCoordinator.softwareKeyboardEndFrame) { _ in
+                refresh(animation: keyboardAnimation)
+            }
     }
 
     private var keyboardAnimation: Animation {
@@ -232,7 +251,7 @@ private struct TerminalKeyboardAvoidanceModifier: ViewModifier {
     private func refresh(animation: Animation?) {
         let terminal = focusedPaneId.flatMap(terminalProvider)
         model.update(
-            enabled: isEnabled,
+            preservesTerminalSize: isEnabled,
             terminal: terminal,
             keyboardFrame: keyboardCoordinator.softwareKeyboardEndFrame,
             animation: animation

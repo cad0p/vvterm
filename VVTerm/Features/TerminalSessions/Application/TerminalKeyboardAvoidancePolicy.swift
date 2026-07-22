@@ -1,26 +1,22 @@
 import CoreGraphics
 
 enum TerminalKeyboardAvoidancePolicy {
-    enum KeyboardGeometry: Equatable {
+    nonisolated enum KeyboardGeometry: Equatable {
         case hidden
         case docked(frame: CGRect)
         case floating(frame: CGRect)
+    }
 
-        var frame: CGRect? {
-            switch self {
-            case .hidden:
-                return nil
-            case let .docked(frame), let .floating(frame):
-                return frame
-            }
-        }
+    nonisolated struct Layout: Equatable {
+        var bottomInset: CGFloat
+        var verticalOffset: CGFloat
+        var preservesTerminalSurfaceSize: Bool
 
-        var preservesTerminalSurfaceSize: Bool {
-            if case .docked = self {
-                return true
-            }
-            return false
-        }
+        static let unobstructed = Layout(
+            bottomInset: 0,
+            verticalOffset: 0,
+            preservesTerminalSurfaceSize: false
+        )
     }
 
     nonisolated static let defaultCursorClearance: CGFloat = 12
@@ -33,10 +29,13 @@ enum TerminalKeyboardAvoidancePolicy {
         guard let keyboardFrame,
               !screenFrame.isNull,
               !screenFrame.isEmpty,
+              !screenFrame.isInfinite,
               !terminalFrame.isNull,
               !terminalFrame.isEmpty,
+              !terminalFrame.isInfinite,
               !keyboardFrame.isNull,
               !keyboardFrame.isEmpty,
+              !keyboardFrame.isInfinite,
               terminalFrame.intersects(keyboardFrame)
         else {
             return .hidden
@@ -58,6 +57,12 @@ enum TerminalKeyboardAvoidancePolicy {
         guard let keyboardFrame,
               !keyboardFrame.isNull,
               !keyboardFrame.isEmpty,
+              !keyboardFrame.isInfinite,
+              !terminalFrame.isNull,
+              !terminalFrame.isEmpty,
+              !terminalFrame.isInfinite,
+              !cursorFrame.isNull,
+              !cursorFrame.isInfinite,
               terminalFrame.intersects(keyboardFrame)
         else {
             return 0
@@ -74,5 +79,49 @@ enum TerminalKeyboardAvoidancePolicy {
         guard maximumLift > 0 else { return 0 }
 
         return -min(requiredLift, maximumLift)
+    }
+
+    nonisolated static func layout(
+        preservesTerminalSize: Bool,
+        geometry: KeyboardGeometry,
+        terminalFrame: CGRect,
+        cursorFrame: CGRect
+    ) -> Layout {
+        switch geometry {
+        case .hidden:
+            return .unobstructed
+        case let .docked(frame):
+            if preservesTerminalSize {
+                return Layout(
+                    bottomInset: 0,
+                    verticalOffset: verticalOffset(
+                        terminalFrame: terminalFrame,
+                        cursorFrame: cursorFrame,
+                        keyboardFrame: frame
+                    ),
+                    preservesTerminalSurfaceSize: true
+                )
+            }
+            let overlap = min(
+                max(terminalFrame.maxY - max(frame.minY, terminalFrame.minY), 0),
+                max(terminalFrame.height, 0)
+            )
+            return Layout(
+                bottomInset: overlap,
+                verticalOffset: 0,
+                preservesTerminalSurfaceSize: false
+            )
+        case let .floating(frame):
+            guard preservesTerminalSize else { return .unobstructed }
+            return Layout(
+                bottomInset: 0,
+                verticalOffset: verticalOffset(
+                    terminalFrame: terminalFrame,
+                    cursorFrame: cursorFrame,
+                    keyboardFrame: frame
+                ),
+                preservesTerminalSurfaceSize: false
+            )
+        }
     }
 }
