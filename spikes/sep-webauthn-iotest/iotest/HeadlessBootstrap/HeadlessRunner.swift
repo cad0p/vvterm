@@ -117,6 +117,13 @@ final class HeadlessRunner: NSObject, ObservableObject {
     /// is kept for Phase 2 (gRPC mTLS dial). Session 1.10.
     var tlsKeyPair: TLSKeyPair?
 
+    /// The Teleport cluster name + cluster TLS CA certs (from host_signers).
+    /// Used by Phase 2 to dial the auth service via the ALPN SNI auth route
+    /// (teleport-auth@<encoded-cluster>.teleport.cluster.local) and verify
+    /// the proxy's TLS cert. Session 1.10.
+    var clusterName: String = ""
+    var clusterCAPEMs: [String] = []
+
     /// The ASWebAuthenticationSession (if using that path).
     private var webAuthSession: ASWebAuthenticationSession?
 
@@ -147,6 +154,8 @@ final class HeadlessRunner: NSObject, ObservableObject {
         postDuration = 0
         postError = ""
         tlsKeyPair = nil
+        clusterName = ""
+        clusterCAPEMs = []
         webAuthSession = nil
     }
 
@@ -295,6 +304,17 @@ final class HeadlessRunner: NSObject, ObservableObject {
             tlsCertPEM = tlsPEM
         } else {
             tlsCertPEM = ""
+        }
+        // Capture the cluster name + TLS CA certs from host_signers for
+        // Phase 2's auth-service ALPN dial (cluster CA verification).
+        if let hostSigners = resp.hostSigners, let first = hostSigners.first {
+            clusterName = first.clusterName
+            // tls_certs are Go []byte → base64(PEM). Decode to PEM strings.
+            clusterCAPEMs = (first.tlsCerts ?? []).compactMap { b64 in
+                guard let der = Data(base64Encoded: b64),
+                      let pem = String(data: der, encoding: .utf8) else { return nil }
+                return pem
+            }
         }
         let certLen = cert.count
         HeadlessLog.headlessApproved(certLength: certLen)

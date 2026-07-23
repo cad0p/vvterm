@@ -87,10 +87,11 @@ struct HeadlessLoginResponse: Decodable {
     struct TrustedCerts: Decodable {
         let clusterName: String
         let checkingKeys: [String]
-
+        let tlsCerts: [String]?
         enum CodingKeys: String, CodingKey {
             case clusterName = "domain_name"
             case checkingKeys = "checking_keys"
+            case tlsCerts = "tls_certs"
         }
     }
 }

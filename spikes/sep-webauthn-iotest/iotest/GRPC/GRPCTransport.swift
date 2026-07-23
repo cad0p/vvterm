@@ -46,50 +46,75 @@ enum GRPCTLSOptions {
     ///   EC P-256 scalar).
     /// - Server verification: default (system trust store). Teleport's web
     ///   proxy cert is signed by a public CA, so the system validates it.
+    /// Build NWProtocolTLS.Options for dialing the Teleport AUTH service via
+    /// the ALPN SNI auth route.
+    ///
+    /// The auth service (AuthService/CreateRegisterChallenge etc.) is NOT on
+    /// the `teleport-proxy-grpc-mtls` ALPN listener (that hosts only the
+    /// Kubernetes service). It's reached via the ALPN SNI auth protocol:
+    ///   - ALPN: "teleport-auth@<hex(clusterName)>.teleport.cluster.local"
+    ///   - SNI: "<hex(clusterName)>.teleport.cluster.local"
+    ///   - Client cert: the Phase 1 TLS cert (mTLS)
+    ///   - Server verification: the cluster's TLS CA certs (from host_signers.tls_certs)
+    ///
+    /// See api/client/client.go:ConfigureALPN + api/utils/cluster.go:EncodeClusterName.
     static func make(clientCertPEM: String,
                      privateKey: SecKey,
-                     serverName: String) throws -> NWProtocolTLS.Options {
+                     clusterName: String,
+                     clusterCAPEMs: [String]) throws -> NWProtocolTLS.Options {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
-        // ALPN.
-        for proto in [teleportProxyGRPCSecure, "h2"] {
-            proto.withCString { cStr in
-                sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
-            }
+        // ALPN: teleport-auth@<hex(cluster)>.teleport.cluster.local
+        let encodedCluster = encodedClusterName(clusterName)
+        let alpnProto = "teleport-auth@\(encodedCluster)"
+        alpnProto.withCString { cStr in
+            sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
         }
-        // SNI.
-        serverName.withCString { cStr in
+        // Also offer h2 as a fallback (the auth listener serves h2 too).
+        "h2".withCString { cStr in
+            sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
+        }
+        // SNI: <hex(cluster)>.teleport.cluster.local
+        encodedCluster.withCString { cStr in
             sec_protocol_options_set_tls_server_name(secOpts, cStr)
         }
         // Client cert (mTLS).
         let secIdentity = try buildSecIdentity(certPEM: clientCertPEM, privateKey: privateKey)
         sec_protocol_options_set_local_identity(secOpts, secIdentity)
 
-        // Diagnostic: log server trust verification + client cert challenge.
-        // The verify block fires after the TLS handshake's server-cert step;
-        // the challenge block fires if the server requests a client cert.
-        //
-        // The gRPC mTLS endpoint serves the Teleport PROXY's TLS CA cert
-        // (a UUID-subdomain cert like "<uuid>.teleport.pcad.it"), NOT the
-        // public web cert (Let's Encrypt). This cert is "not standards
-        // compliant" per the system trust store. For the spike we skip server
-        // cert verification (InsecureSkipVerify equivalent) — the server's
-        // identity is proven by the fact that it issued our Phase 1 cert, and
-        // auth is via mTLS (the client cert). Production (2.2) should use the
-        // cluster CA pool from host_signers.tls_certs.
+        // Server verification: use the cluster TLS CA certs (not the system
+        // trust store — the auth listener serves the cluster CA, which the
+        // system doesn't trust).
+        let certRefs = clusterCAPEMs.compactMap { pem -> SecCertificate? in
+            guard let der = pemToDER(pem: pem, label: "CERTIFICATE") else { return nil }
+            return SecCertificateCreateWithData(nil, der as CFData)
+        }
+        GRPCRegisterLog.step("tls_setup", "cluster=\(clusterName) alpn=\(alpnProto) ca_certs=\(certRefs.count)")
         sec_protocol_options_set_verify_block(secOpts, { _, sec_trust, complete in
             let trust = sec_trust_copy_ref(sec_trust).takeRetainedValue()
+            // Set the cluster CA certs as the only trust anchors.
+            if !certRefs.isEmpty {
+                SecTrustSetAnchorCertificates(trust, certRefs as CFArray)
+                SecTrustSetAnchorCertificatesOnly(trust, true)
+            }
             var error: CFError?
             let result = SecTrustEvaluateWithError(trust, &error)
-            GRPCRegisterLog.step("tls_verify", "server trust evaluated=\(result) error=\(error?.localizedDescription ?? "none") — accepting anyway (mTLS auth)")
-            complete(true)
+            GRPCRegisterLog.step("tls_verify", "cluster CA result=\(result) error=\(error?.localizedDescription ?? "none")")
+            complete(result)
         }, .global())
         sec_protocol_options_set_challenge_block(secOpts, { _, complete in
             GRPCRegisterLog.step("tls_challenge", "server requested client cert — presenting identity")
             complete(secIdentity)
         }, .global())
         return tlsOpts
+    }
+
+    /// Encode a cluster name the way Teleport does: hex(name) + ".teleport.cluster.local".
+    /// See api/utils/cluster.go:EncodeClusterName.
+    private static func encodedClusterName(_ name: String) -> String {
+        let hex = name.utf8.map { String(format: "%02x", $0) }.joined()
+        return "\(hex).teleport.cluster.local"
     }
 
     /// Build a sec_identity_t from a PEM-encoded cert + a SecKey.
@@ -193,11 +218,14 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     static func connect(host: String,
                         port: Int = 443,
                         clientCertPEM: String,
-                        privateKey: SecKey) async throws -> TeleportGRPCConnection {
+                        privateKey: SecKey,
+                        clusterName: String,
+                        clusterCAPEMs: [String]) async throws -> TeleportGRPCConnection {
         let tlsOpts = try GRPCTLSOptions.make(
             clientCertPEM: clientCertPEM,
             privateKey: privateKey,
-            serverName: host
+            clusterName: clusterName,
+            clusterCAPEMs: clusterCAPEMs
         )
 
         let group = NIOTSEventLoopGroup()

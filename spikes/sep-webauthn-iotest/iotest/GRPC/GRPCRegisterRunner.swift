@@ -113,7 +113,7 @@ final class GRPCRegisterRunner: ObservableObject {
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
     ///   - clientCertPEM: the Phase 1 TLS cert (PEM)
     ///   - privateKey: the Phase 1 TLS private key (SecKey)
-    func run(host: String, clientCertPEM: String, privateKey: SecKey) async {
+    func run(host: String, clientCertPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String]) async {
         resetSteps()
         overallStatus = "running"
         appendLog("Starting Phase 2: gRPC SEP-key registration…")
@@ -121,7 +121,7 @@ final class GRPCRegisterRunner: ObservableObject {
 
         #if canImport(Network)
         do {
-            try await runFlow(host: host, certPEM: clientCertPEM, privateKey: privateKey)
+            try await runFlow(host: host, certPEM: clientCertPEM, privateKey: privateKey, clusterName: clusterName, clusterCAPEMs: clusterCAPEMs)
             overallStatus = "passed"
             GRPCRegisterLog.result("PASSED — SEP key registered via gRPC")
             appendLog("=== PASSED — SEP key registered via gRPC ===")
@@ -147,15 +147,17 @@ final class GRPCRegisterRunner: ObservableObject {
     // MARK: - Flow
 
     #if canImport(Network)
-    private func runFlow(host: String, certPEM: String, privateKey: SecKey) async throws {
+    private func runFlow(host: String, certPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String]) async throws {
         // ── Step 1: connect gRPC ──────────────────────────────────────────
         try await setStep(1, .inProgress)
-        appendLog("[1/6] Dialing \(host):443 with TLS+ALPN(teleport-proxy-grpc-mtls)+client cert…")
-        GRPCRegisterLog.step("dial", "host=\(host)")
+        appendLog("[1/6] Dialing \(host):443 with TLS+ALPN(teleport-auth@<cluster>)+client cert…")
+        GRPCRegisterLog.step("dial", "host=\(host) cluster=\(clusterName) ca_certs=\(clusterCAPEMs.count)")
         let conn = try await TeleportGRPCConnection.connect(
             host: host, port: 443,
             clientCertPEM: certPEM,
-            privateKey: privateKey
+            privateKey: privateKey,
+            clusterName: clusterName,
+            clusterCAPEMs: clusterCAPEMs
         )
         GRPCRegisterLog.step("dial", "connected")
         appendLog("[1/6] gRPC connected (ALPN negotiated)")
