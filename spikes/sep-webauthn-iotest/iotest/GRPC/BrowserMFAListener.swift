@@ -256,7 +256,10 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
             return
         }
         let query = String(pathAndQuery[pathAndQuery.index(after: questionIdx)...])
-        let params = URLComponents(query: query)?.queryItems ?? []
+        // URLComponents(query:) doesn't exist; parse the query string by
+        // prefixing with "?" so URLComponents treats it as a relative URL
+        // with a query component.
+        let params = URLComponents(string: "?" + query)?.queryItems ?? []
         let responseParam = params.first(where: { $0.name == "response" })?.value
 
         guard let responseParam, !responseParam.isEmpty else {
@@ -328,10 +331,10 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
         //    proto type directly (SwiftProtobuf supports JSON decoding).
         do {
             let loginResp = try Proto_CLILoginResponseWrapper(jsonUTF8Data: plaintext)
-            guard let webauthnResp = loginResp.browserMfaWebauthnResponse else {
+            guard loginResp.hasBrowserMfaWebauthnResponse else {
                 throw BrowserMFAListenerError.decodeFailed("no browser_mfa_webauthn_response field")
             }
-            return webauthnResp
+            return loginResp.browserMfaWebauthnResponse
         } catch {
             throw BrowserMFAListenerError.decodeFailed("CLILoginResponse: \(error.localizedDescription)")
         }
