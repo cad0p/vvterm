@@ -101,6 +101,7 @@ final class HeadlessRunner: NSObject, ObservableObject {
     @Published var steps: [HeadlessStep] = []
     @Published var overallStatus: String = "idle"   // idle | running | passed | failed
     @Published var certBase64: String = ""
+    @Published var tlsCertPEM: String = ""
     @Published var headlessID: String = ""
     @Published var approvalURL: String = ""
     @Published var log: [String] = []
@@ -110,6 +111,11 @@ final class HeadlessRunner: NSObject, ObservableObject {
     @Published var postDuration: Double = 0
     /// The error if the POST failed (the iOS-backgrounding signal).
     @Published var postError: String = ""
+
+    /// The ephemeral TLS keypair generated for this bootstrap. The public key
+    /// is sent as `tls_pub_key` so Teleport issues a TLS cert; the private key
+    /// is kept for Phase 2 (gRPC mTLS dial). Session 1.10.
+    var tlsKeyPair: TLSKeyPair?
 
     /// The ASWebAuthenticationSession (if using that path).
     private var webAuthSession: ASWebAuthenticationSession?
@@ -133,12 +139,14 @@ final class HeadlessRunner: NSObject, ObservableObject {
         ]
         overallStatus = "idle"
         certBase64 = ""
+        tlsCertPEM = ""
         headlessID = ""
         approvalURL = ""
         log = []
         safariMethod = ""
         postDuration = 0
         postError = ""
+        tlsKeyPair = nil
         webAuthSession = nil
     }
 
@@ -164,6 +172,14 @@ final class HeadlessRunner: NSObject, ObservableObject {
         let sshPubKey = SSHPubKey.generateEd25519AuthorizedKeys(comment: "vvterm-headless-spike")
         let pubKeyPrefix = String(sshPubKey.prefix(32))
         HeadlessLog.keypairGenerated(pubKeyPrefix: pubKeyPrefix)
+        // Session 1.10: also generate an ephemeral EC P-256 TLS keypair so
+        // Teleport issues a TLS cert we can use for the gRPC mTLS dial.
+        do {
+            tlsKeyPair = try TLSKeyPairGen.generate()
+            HeadlessLog.headlessStep("tls_keypair", "generated P-256 keypair")
+        } catch {
+            HeadlessLog.headlessPostFailed("TLS keypair generation failed: \(error.localizedDescription)")
+        }
         appendLog("[1/6] SSH keypair generated: \(pubKeyPrefix)…")
         setStep(1, .done, "ed25519, pub \(pubKeyPrefix.prefix(20))…")
 
@@ -188,7 +204,7 @@ final class HeadlessRunner: NSObject, ObservableObject {
             user: user,
             headlessAuthenticationID: headlessID,
             sshPubKey: sshPubKeyB64,
-            tlsPubKey: nil,
+            tlsPubKey: tlsKeyPair?.tlsPubKeyB64,
             ttl: 3_600_000_000_000,  // 1h in ns (matches tsh default)
             compatibility: ""
         )
@@ -270,9 +286,10 @@ final class HeadlessRunner: NSObject, ObservableObject {
         }
 
         certBase64 = cert
+        tlsCertPEM = resp.tlsCert ?? ""
         let certLen = cert.count
         HeadlessLog.headlessApproved(certLength: certLen)
-        appendLog("[5/6] POST returned (took \(String(format: "%.1f", elapsed))s, cert \(certLen) chars)")
+        appendLog("[5/6] POST returned (took \(String(format: "%.1f", elapsed))s, cert \(certLen) chars, tls_cert \(tlsCertPEM.count) chars)")
         setStep(5, .done, "approved, \(String(format: "%.1f", elapsed))s")
 
         // Step 6: cert extracted.
