@@ -101,6 +101,21 @@ struct FullFlowView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(runner.overallStatus == "running" || username.isEmpty || deviceName.isEmpty)
 
+                // Phase 3 only — reuses a SEP key registered in a previous run
+                // (persisted in the keychain via kSecAttrIsPermanent). Skips the
+                // headless bootstrap + Browser MFA ceremony + a new device name;
+                // goes straight to passwordless login. Fast iteration on Phase 3.
+                if runner.hasSavedKey {
+                    Button(action: {
+                        Task { await runner.runPhase3Only(host: host) }
+                    }) {
+                        Label("Phase 3 only", systemImage: "key.horizontal")
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(runner.overallStatus == "running")
+                }
+
                 if runner.overallStatus == "running" {
                     ProgressView().scaleEffect(0.8)
                 }

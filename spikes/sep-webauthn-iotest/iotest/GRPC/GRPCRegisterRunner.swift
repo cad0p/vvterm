@@ -96,12 +96,12 @@ final class GRPCRegisterRunner: ObservableObject {
     /// The registered SEP key (on success) for Phase 3.
     private(set) var registeredKey: RegisteredSEPKey?
 
-    /// The SecureEnclaveSigner used in Phase 2 (kept alive so Phase 3 can
-    /// re-use the in-memory key for the login assertion). The spike uses
-    // kSecAttrIsPermanent:false (see SecureEnclaveSigner.swift), so the SEP
-    // key is NOT in the keychain — only in this signer's in-memory dict.
-    // For a single-process spike run, passing the signer to Phase 3 works.
-    // Production (2.2) should use kSecAttrIsPermanent:true.
+    /// The SecureEnclaveSigner used in Phase 2. The SEP key is persisted to
+    /// the keychain (kSecAttrIsPermanent:true + kSecAttrApplicationLabel:
+    /// credentialID), so it survives app relaunch. Phase 3 can re-use the
+    /// in-memory signer in the same session, or load the key from the
+    /// keychain via SecureEnclaveSigner.loadKey(credentialID:) in a later
+    /// session (see FullFlowRunner.runPhase3Only).
     private(set) var signer: SecureEnclaveSigner?
 
     func resetSteps() {

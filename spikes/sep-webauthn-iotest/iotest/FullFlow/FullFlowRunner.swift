@@ -52,8 +52,22 @@ final class FullFlowRunner: ObservableObject {
     /// Phase 3 result.
     @Published var phase3CertLength: Int = 0
 
+    /// Whether a SEP key from a previous run is available in the keychain
+    /// (persisted credentialID in UserDefaults). When true, the UI offers a
+    /// "Phase 3 only" button that skips Phase 1+2.
+    @Published var hasSavedKey: Bool = false
+
     private let headless = HeadlessRunner()
     private let grpcRegister = GRPCRegisterRunner()
+
+    /// UserDefaults key for the last-registered SEP credentialID (base64url).
+    /// The credentialID is the kSecAttrApplicationLabel on the persistent
+    /// SecureEnclave key, so we can reload it across app launches.
+    private let savedCredentialIDKey = "vvterm.iotest.phase2.credentialID"
+
+    init() {
+        hasSavedKey = UserDefaults.standard.string(forKey: savedCredentialIDKey) != nil
+    }
 
     func resetPhases() {
         phases = [
@@ -145,6 +159,11 @@ final class FullFlowRunner: ObservableObject {
 
         if let key = grpcRegister.registeredKey {
             phase2CredentialID = key.credentialID.base64URLEncodedString()
+            // Persist the credentialID so Phase 3 can run standalone next
+            // launch (the SEP key itself is in the keychain via
+            // kSecAttrIsPermanent:true + kSecAttrApplicationLabel).
+            UserDefaults.standard.set(phase2CredentialID, forKey: savedCredentialIDKey)
+            hasSavedKey = true
         }
         setPhase(2, "passed", "SEP key registered, credID \(phase2CredentialID.prefix(16))…")
         appendLog("Phase 2 PASSED: SEP key registered via gRPC (credID \(phase2CredentialID.prefix(16))…)")
@@ -174,6 +193,69 @@ final class FullFlowRunner: ObservableObject {
         overallStatus = "passed"
         appendLog("\n=== FULL CHAIN PASSED: cert → gRPC → SEP-key → login → cert ===")
         FullFlowLog.step("passed", "full chain")
+    }
+
+    // MARK: - Phase 3 only (reuses a previously-registered SEP key)
+
+    /// Run ONLY Phase 3 (passwordless login) using a SEP key registered in a
+    /// previous run + persisted to the keychain. Skips Phase 1 (headless
+    /// bootstrap) + Phase 2 (gRPC register). Used for fast Phase 3 iteration:
+    /// register once, then re-run login as many times as needed.
+    ///
+    /// - Parameter host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
+    func runPhase3Only(host: String) async {
+        resetPhases()
+        overallStatus = "running"
+        appendLog("=== Phase 3 only: passwordless login with saved SEP key ===")
+        FullFlowLog.step("phase3_only_started", "host=\(host)")
+
+        // Mark Phase 1 + 2 as skipped (already done in a prior run).
+        setPhase(1, "done", "skipped (Phase 3 only)")
+        setPhase(2, "done", "skipped (Phase 3 only)")
+
+        guard let credIDB64 = UserDefaults.standard.string(forKey: savedCredentialIDKey),
+              let credID = Data(base64URLEncoded: credIDB64) else {
+            setPhase(3, "failed", "no saved credentialID")
+            overallStatus = "failed"
+            self.error = "Phase 3 only: no saved SEP key. Run the full chain first to register a key."
+            appendLog("FAILED: no saved SEP key — run the full chain first.")
+            FullFlowLog.step("failed", "phase 3 only: no saved key")
+            return
+        }
+
+        setPhase(3, "running")
+        appendLog("\n--- Phase 3 only: loading SEP key from keychain (credID \(credIDB64.prefix(16))…) ---")
+        do {
+            let signer = SecureEnclaveSigner(biometry: true)
+            guard let secKey = try signer.loadKey(credentialID: credID) else {
+                throw GRPCError.transport("SEP key not in keychain (credID=\(credIDB64.prefix(16))…). It may have been deleted — run the full chain to re-register.")
+            }
+            _ = secKey
+            let registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: Data())
+            let cert = try await runPhase3Login(host: host, registeredKey: registeredKey, signer: signer)
+            phase3CertLength = cert.count
+            setPhase(3, "passed", "login cert \(cert.count) chars")
+            appendLog("Phase 3 PASSED: passwordless login returned cert (\(cert.count) chars)")
+            FullFlowLog.step("phase3_passed", "cert=\(cert.count)")
+            overallStatus = "passed"
+        } catch {
+            setPhase(3, "failed", error.localizedDescription)
+            overallStatus = "failed"
+            self.error = "Phase 3 failed: \(error.localizedDescription)"
+            appendLog("FAILED at Phase 3: \(error.localizedDescription)")
+            FullFlowLog.step("failed", "phase 3: \(error.localizedDescription)")
+        }
+    }
+
+    /// Forget the saved SEP key (clears the persisted credentialID from
+    /// UserDefaults). The keychain key itself is left in place; a full-chain
+    /// re-run with a new device name registers a fresh one. Useful if the
+    /// server-side device was deleted in the portal.
+    func forgetSavedKey() {
+        UserDefaults.standard.removeObject(forKey: savedCredentialIDKey)
+        hasSavedKey = false
+        appendLog("Forgot saved SEP credentialID (run the full chain to register a new key).")
+        FullFlowLog.step("forgot_saved_key", "")
     }
 
     // MARK: - Phase 3 (passwordless login, reuses 1.6b login flow)
