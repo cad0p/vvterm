@@ -23,7 +23,6 @@
 import NIOCore
 import NIOHTTP1
 import NIOHTTP2
-import NIOHPACK
 import SwiftProtobuf
 import Foundation
 

@@ -56,7 +56,6 @@
 				E10000300000000000000002 /* NIOHTTP1 in Frameworks */,
 				E10000300000000000000003 /* NIOPosix in Frameworks */,
 				E10000300000000000000004 /* NIOHTTP2 in Frameworks */,
-				E10000300000000000000005 /* NIOHPACK in Frameworks */,
 				E10000300000000000000006 /* NIOTransportServices in Frameworks */,
 				E10000300000000000000007 /* SwiftProtobuf in Frameworks */,
 			);
@@ -184,7 +183,6 @@
 				E10000500000000000000002 /* NIOHTTP1 */,
 				E10000500000000000000003 /* NIOPosix */,
 				E10000500000000000000004 /* NIOHTTP2 */,
-				E10000500000000000000005 /* NIOHPACK */,
 				E10000500000000000000006 /* NIOTransportServices */,
 				E10000500000000000000007 /* SwiftProtobuf */,
 			);
@@ -530,11 +528,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E10000800000000000000002 /* XCRemoteSwiftPackageReference "swift-nio-http2" */;
 			productName = NIOHTTP2;
-		};
-		E10000500000000000000005 /* NIOHPACK */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E10000800000000000000002 /* XCRemoteSwiftPackageReference "swift-nio-http2" */;
-			productName = NIOHPACK;
 		};
 		E10000500000000000000006 /* NIOTransportServices */ = {
 			isa = XCSwiftPackageProductDependency;
