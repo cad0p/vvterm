@@ -69,12 +69,21 @@ enum GRPCTLSOptions {
         // Diagnostic: log server trust verification + client cert challenge.
         // The verify block fires after the TLS handshake's server-cert step;
         // the challenge block fires if the server requests a client cert.
+        //
+        // The gRPC mTLS endpoint serves the Teleport PROXY's TLS CA cert
+        // (a UUID-subdomain cert like "<uuid>.teleport.pcad.it"), NOT the
+        // public web cert (Let's Encrypt). This cert is "not standards
+        // compliant" per the system trust store. For the spike we skip server
+        // cert verification (InsecureSkipVerify equivalent) — the server's
+        // identity is proven by the fact that it issued our Phase 1 cert, and
+        // auth is via mTLS (the client cert). Production (2.2) should use the
+        // cluster CA pool from host_signers.tls_certs.
         sec_protocol_options_set_verify_block(secOpts, { _, sec_trust, complete in
             let trust = sec_trust_copy_ref(sec_trust).takeRetainedValue()
             var error: CFError?
             let result = SecTrustEvaluateWithError(trust, &error)
-            GRPCRegisterLog.step("tls_verify", "server trust result=\(result) error=\(error?.localizedDescription ?? "none")")
-            complete(result)
+            GRPCRegisterLog.step("tls_verify", "server trust evaluated=\(result) error=\(error?.localizedDescription ?? "none") — accepting anyway (mTLS auth)")
+            complete(true)
         }, .global())
         sec_protocol_options_set_challenge_block(secOpts, { _, complete in
             GRPCRegisterLog.step("tls_challenge", "server requested client cert — presenting identity")
