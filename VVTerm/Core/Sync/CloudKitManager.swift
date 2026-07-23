@@ -509,6 +509,125 @@ final class CloudKitManager: ObservableObject {
         throw CloudKitError.recordNotFound
     }
 
+    // MARK: - Stats Preference Operations
+
+    func fetchStatsPreferences() async throws -> StatsPreferences? {
+        await ensureAccountStatusChecked()
+        guard isAvailable else {
+            throw CloudKitError.notAvailable
+        }
+
+        try await ensureCustomZone()
+        let recordID = statsPreferencesRecordID()
+
+        do {
+            let record = try await withZoneRetry {
+                try await database.record(for: recordID)
+            }
+            guard let preferences = decodeStatsPreferences(from: record) else {
+                logger.warning("Stats preferences payload was invalid; ignoring remote value")
+                return nil
+            }
+            return preferences
+        } catch let ckError as CKError where ckError.code == .unknownItem || ckError.code == .zoneNotFound {
+            return nil
+        } catch {
+            throw error
+        }
+    }
+
+    func saveStatsPreferences(_ preferences: StatsPreferences) async throws {
+        try await prepareSyncMutation()
+        let recordID = statsPreferencesRecordID()
+        let record = try makeStatsPreferencesRecord(from: preferences.normalized(), recordID: recordID)
+        try await performSyncMutation(
+            successLog: "Saved stats preferences to CloudKit",
+            failureLog: "Failed to save stats preferences"
+        ) {
+            try await withZoneRetry {
+                try await saveRecordWithUpsert(record)
+            }
+        }
+    }
+
+    func syncStatsPreferences(_ localPreferences: StatsPreferences) async throws -> StatsPreferences {
+        try await prepareSyncMutation()
+        syncStatus = .syncing
+        defer { syncStatus = .idle }
+
+        let recordID = statsPreferencesRecordID()
+        let normalizedLocal = localPreferences.normalized()
+
+        var baseRecord: CKRecord?
+        var mergedPreferences = normalizedLocal
+
+        do {
+            let remoteRecord = try await withZoneRetry {
+                try await database.record(for: recordID)
+            }
+            baseRecord = remoteRecord
+            if let remotePreferences = decodeStatsPreferences(from: remoteRecord) {
+                let normalizedRemote = remotePreferences.normalized()
+                mergedPreferences = StatsPreferences.merged(local: normalizedLocal, remote: normalizedRemote).normalized()
+                if mergedPreferences == normalizedRemote {
+                    lastSyncDate = Date()
+                    return normalizedRemote
+                }
+            } else {
+                logger.warning("Stats preferences remote payload was invalid; keeping local preferences")
+            }
+        } catch let ckError as CKError where ckError.code == .unknownItem || ckError.code == .zoneNotFound {
+            baseRecord = nil
+            mergedPreferences = normalizedLocal
+        }
+
+        var attempts = 0
+        while attempts < 4 {
+            attempts += 1
+
+            let candidateRecord = try makeStatsPreferencesRecord(
+                from: mergedPreferences,
+                recordID: recordID,
+                existingRecord: baseRecord
+            )
+
+            do {
+                try await withZoneRetry {
+                    try await saveRecord(candidateRecord, savePolicy: .ifServerRecordUnchanged)
+                }
+                lastSyncDate = Date()
+                return mergedPreferences
+            } catch {
+                if let serverRecord = extractServerRecord(from: error),
+                   let serverPreferences = decodeStatsPreferences(from: serverRecord) {
+                    let normalizedRemote = serverPreferences.normalized()
+                    let conflictResolved = StatsPreferences.merged(local: mergedPreferences, remote: normalizedRemote).normalized()
+
+                    if conflictResolved == normalizedRemote {
+                        lastSyncDate = Date()
+                        return normalizedRemote
+                    }
+
+                    mergedPreferences = conflictResolved
+                    baseRecord = serverRecord
+                    continue
+                }
+
+                if isUnknownItemError(error) {
+                    baseRecord = nil
+                    continue
+                }
+
+                logger.error("Failed to sync stats preferences: \(error.localizedDescription)")
+                syncStatus = .error(error.localizedDescription)
+                throw error
+            }
+        }
+
+        logger.error("Failed to sync stats preferences after retries")
+        throw CloudKitError.recordNotFound
+    }
+
     private func prepareSyncMutation() async throws {
         await ensureAccountStatusChecked()
         guard isAvailable else {
@@ -706,6 +825,10 @@ final class CloudKitManager: ObservableObject {
         CKRecord.ID(recordName: TerminalAccessoryProfile.recordName, zoneID: recordZoneID)
     }
 
+    private func statsPreferencesRecordID() -> CKRecord.ID {
+        CKRecord.ID(recordName: StatsPreferences.recordName, zoneID: recordZoneID)
+    }
+
     private func decodeTerminalAccessoryProfile(from record: CKRecord) -> TerminalAccessoryProfile? {
         guard let payload = record["payload"] as? Data else {
             return nil
@@ -748,6 +871,51 @@ final class CloudKitManager: ObservableObject {
         record["payload"] = payload
         record["updatedAt"] = normalizedProfile.updatedAt
         record["lastWriterDeviceId"] = normalizedProfile.lastWriterDeviceId
+        return record
+    }
+
+    private func decodeStatsPreferences(from record: CKRecord) -> StatsPreferences? {
+        guard let payload = record["payload"] as? Data else {
+            return nil
+        }
+
+        guard var preferences = try? JSONDecoder().decode(StatsPreferences.self, from: payload) else {
+            return nil
+        }
+
+        if let schemaVersion = record["schemaVersion"] as? Int, schemaVersion > 0 {
+            preferences.schemaVersion = schemaVersion
+        }
+
+        if let updatedAt = record["updatedAt"] as? Date, updatedAt > preferences.updatedAt {
+            preferences.updatedAt = updatedAt
+        }
+
+        if let writerDeviceID = record["lastWriterDeviceId"] as? String, !writerDeviceID.isEmpty {
+            preferences.lastWriterDeviceId = writerDeviceID
+        }
+
+        return preferences.normalized()
+    }
+
+    private func makeStatsPreferencesRecord(
+        from preferences: StatsPreferences,
+        recordID: CKRecord.ID,
+        existingRecord: CKRecord? = nil
+    ) throws -> CKRecord {
+        let normalizedPreferences = preferences.normalized()
+        let payload: Data
+        do {
+            payload = try JSONEncoder().encode(normalizedPreferences)
+        } catch {
+            throw CloudKitError.encodingFailed
+        }
+
+        let record = existingRecord ?? CKRecord(recordType: RecordType.userPreference, recordID: recordID)
+        record["schemaVersion"] = normalizedPreferences.schemaVersion
+        record["payload"] = payload
+        record["updatedAt"] = normalizedPreferences.updatedAt
+        record["lastWriterDeviceId"] = normalizedPreferences.lastWriterDeviceId
         return record
     }
 

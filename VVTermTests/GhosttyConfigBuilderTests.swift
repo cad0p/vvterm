@@ -5,6 +5,28 @@ import Testing
 struct GhosttyConfigBuilderTests {
     #if os(macOS)
     @Test
+    func macOSConfigContentMapsOptionAsAltModesToGhosttyValues() {
+        let expectedValues: [(TerminalOptionAsAltMode, String)] = [
+            (.none, "false"),
+            (.left, "left"),
+            (.right, "right"),
+            (.both, "true")
+        ]
+
+        for (mode, expectedValue) in expectedValues {
+            let content = Ghostty.ConfigBuilder.configContent(
+                primaryFontFamily: "Menlo",
+                fontSize: 13,
+                shellName: "fish",
+                themeName: "Aizen Light",
+                optionAsAltMode: mode
+            )
+
+            #expect(content.contains("macos-option-as-alt = \(expectedValue)"))
+        }
+    }
+
+    @Test
     func macOSFontFamilyLinesUseDeterministicFallbackStack() {
         let lines = Ghostty.ConfigBuilder.fontFamilyLines(primaryFamily: "Menlo")
             .split(separator: "\n")
@@ -72,6 +94,7 @@ struct GhosttyConfigBuilderTests {
             .filter { $0.hasPrefix("font-family =") }
 
         #expect(fontFamilyLines == ["font-family = \"JetBrainsMono Nerd Font\""])
+        #expect(!content.contains("macos-option-as-alt"))
     }
     #endif
 

@@ -17,6 +17,9 @@
 		D1A7B0C12EAB100100A00002 /* MoshBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = D1A7B0C12EAB100100A00012 /* MoshBootstrap */; };
 		D2C4F00131AA100100B00001 /* Cloudflared in Frameworks */ = {isa = PBXBuildFile; productRef = D2C4F00131AA100100B00011 /* Cloudflared */; };
 		E7C4A10031BB100100C00001 /* Umami in Frameworks */ = {isa = PBXBuildFile; productRef = E7C4A10031BB100100C00011 /* Umami */; };
+		E8A1E70031C1000100E00001 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
+		E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00012 /* ETBootstrap */; };
+		E8A1E70031C1000100E00003 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -137,6 +140,8 @@
 				D2C4F00131AA100100B00001 /* Cloudflared in Frameworks */,
 				D1A7B0C12EAB100100A00001 /* MoshCore in Frameworks */,
 				D1A7B0C12EAB100100A00002 /* MoshBootstrap in Frameworks */,
+				E8A1E70031C1000100E00001 /* ETSession in Frameworks */,
+				E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */,
 				E7C4A10031BB100100C00001 /* Umami in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -145,6 +150,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E8A1E70031C1000100E00003 /* ETSession in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -242,6 +248,8 @@
 				D2C4F00131AA100100B00011 /* Cloudflared */,
 				D1A7B0C12EAB100100A00011 /* MoshCore */,
 				D1A7B0C12EAB100100A00012 /* MoshBootstrap */,
+				E8A1E70031C1000100E00011 /* ETSession */,
+				E8A1E70031C1000100E00012 /* ETBootstrap */,
 				E7C4A10031BB100100C00011 /* Umami */,
 			);
 			productName = VVTerm;
@@ -266,6 +274,7 @@
 			);
 			name = VVTermTests;
 			packageProductDependencies = (
+				E8A1E70031C1000100E00011 /* ETSession */,
 			);
 			productName = VVTermTests;
 			productReference = CC8312922F0CD84E006804BF /* VVTermTests.xctest */;
@@ -347,6 +356,7 @@
 				8BEE7D9B1BB9C3D15D55C283 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */,
 				D1A7B0C12EAB100100A00021 /* XCRemoteSwiftPackageReference "swift-mosh" */,
+				E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */,
 				E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -458,7 +468,7 @@
 				LIVE_ACTIVITY_CODE_SIGN_IDENTITY = "";
 				LIVE_ACTIVITY_CODE_SIGN_STYLE = Automatic;
 				LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER = "";
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER)";
@@ -479,7 +489,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VVTermLiveActivity/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -565,7 +575,7 @@
 					"$(SRCROOT)/Vendor/libssh2/macos/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"-lghostty",
 					"-lssh2",
@@ -708,7 +718,7 @@
 					"$(SRCROOT)/Vendor/libssh2/macos/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"-lghostty",
 					"-lssh2",
@@ -924,7 +934,7 @@
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -963,7 +973,7 @@
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -989,7 +999,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -1015,7 +1025,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -1103,7 +1113,7 @@
 			repositoryURL = "https://github.com/wiedymi/swift-mosh";
 			requirement = {
 				kind = exactVersion;
-				version = 0.1.6;
+				version = 0.1.8;
 			};
 		};
 		D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */ = {
@@ -1120,6 +1130,14 @@
 			requirement = {
 				branch = main;
 				kind = branch;
+			};
+		};
+		E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/wiedymi/swift-et";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.5;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1164,6 +1182,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */;
 			productName = Umami;
+		};
+		E8A1E70031C1000100E00011 /* ETSession */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */;
+			productName = ETSession;
+		};
+		E8A1E70031C1000100E00012 /* ETBootstrap */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */;
+			productName = ETBootstrap;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

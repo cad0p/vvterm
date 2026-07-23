@@ -6,31 +6,56 @@ enum NoticeTopInsetBehavior {
     case safeAreaTop
 }
 
+enum NoticeBottomInsetBehavior {
+    case contentBottom
+    case safeAreaBottom
+}
+
 @MainActor
 final class NoticeHostModel: ObservableObject {
     @Published var topBanner: NoticeItem?
-    @Published var bottomOperation: NoticeItem?
+    @Published private(set) var bottomOperations: [NoticeItem] = []
 
-    private var dismissalTasks: [NoticeLane: Task<Void, Never>] = [:]
+    private var dismissalTasks: [String: Task<Void, Never>] = [:]
+
+    var bottomOperation: NoticeItem? {
+        bottomOperations.last
+    }
 
     func show(_ item: NoticeItem) {
         set(item, for: item.lane)
     }
 
     func set(_ item: NoticeItem?, for lane: NoticeLane) {
-        dismissalTasks[lane]?.cancel()
-
         switch lane {
         case .topBanner:
+            if let currentID = topBanner?.id, currentID != item?.id {
+                cancelDismissal(for: currentID)
+            }
             topBanner = item
         case .bottomOperation:
-            bottomOperation = item
+            guard let item else {
+                bottomOperations.forEach { cancelDismissal(for: $0.id) }
+                bottomOperations.removeAll()
+                return
+            }
+
+            if let index = bottomOperations.firstIndex(where: { $0.id == item.id }) {
+                bottomOperations[index] = item
+            } else {
+                bottomOperations.append(item)
+            }
         }
 
         guard let item else { return }
 
+        scheduleDismissal(for: item)
+    }
+
+    private func scheduleDismissal(for item: NoticeItem) {
+        cancelDismissal(for: item.id)
         if case .autoDismiss(let duration) = item.lifetime {
-            dismissalTasks[lane] = Task { [weak self] in
+            dismissalTasks[item.id] = Task { [weak self] in
                 try? await Task.sleep(for: duration)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
@@ -38,6 +63,10 @@ final class NoticeHostModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func cancelDismissal(for id: String) {
+        dismissalTasks.removeValue(forKey: id)?.cancel()
     }
 
     func update(
@@ -70,7 +99,8 @@ final class NoticeHostModel: ObservableObject {
             return
         }
 
-        if var item = bottomOperation, item.id == id {
+        if let index = bottomOperations.firstIndex(where: { $0.id == id }) {
+            var item = bottomOperations[index]
             item = NoticeItem(
                 id: item.id,
                 lane: item.lane,
@@ -90,32 +120,40 @@ final class NoticeHostModel: ObservableObject {
 
     func dismiss(id: String) {
         if topBanner?.id == id {
+            cancelDismissal(for: id)
             set(nil, for: .topBanner)
-        } else if bottomOperation?.id == id {
-            set(nil, for: .bottomOperation)
+        } else if let index = bottomOperations.firstIndex(where: { $0.id == id }) {
+            cancelDismissal(for: id)
+            bottomOperations.remove(at: index)
         }
     }
 }
 
 struct NoticeHost<Content: View>: View {
     let topBanner: NoticeItem?
-    let bottomOperation: NoticeItem?
+    let bottomOperations: [NoticeItem]
     var topInsetBehavior: NoticeTopInsetBehavior = .contentTop
+    var bottomInsetBehavior: NoticeBottomInsetBehavior = .safeAreaBottom
     var bannerSurfaceStyle: NoticeSurfaceStyle = .standard
     var operationSurfaceStyle: NoticeSurfaceStyle = .standard
     let content: Content
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     init(
         topBanner: NoticeItem? = nil,
         bottomOperation: NoticeItem? = nil,
+        bottomOperations: [NoticeItem]? = nil,
         topInsetBehavior: NoticeTopInsetBehavior = .contentTop,
+        bottomInsetBehavior: NoticeBottomInsetBehavior = .safeAreaBottom,
         bannerSurfaceStyle: NoticeSurfaceStyle = .standard,
         operationSurfaceStyle: NoticeSurfaceStyle = .standard,
         @ViewBuilder content: () -> Content
     ) {
         self.topBanner = topBanner
-        self.bottomOperation = bottomOperation
+        self.bottomOperations = bottomOperations ?? bottomOperation.map { [$0] } ?? []
         self.topInsetBehavior = topInsetBehavior
+        self.bottomInsetBehavior = bottomInsetBehavior
         self.bannerSurfaceStyle = bannerSurfaceStyle
         self.operationSurfaceStyle = operationSurfaceStyle
         self.content = content()
@@ -143,13 +181,25 @@ struct NoticeHost<Content: View>: View {
                         VStack(spacing: 0) {
                             Spacer(minLength: 0)
 
-                            if let bottomOperation {
-                                OperationNoticeView(item: bottomOperation, surfaceStyle: operationSurfaceStyle)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.horizontal, bottomHorizontalPadding)
-                                    .padding(.bottom, proxy.safeAreaInsets.bottom + bottomVerticalPadding)
-                                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                                    .allowsHitTesting(true)
+                            if !bottomOperations.isEmpty {
+                                VStack(alignment: .trailing, spacing: 8) {
+                                    if bottomOperations.count > 1 {
+                                        operationStackCount
+                                    }
+
+                                    VStack(spacing: 10) {
+                                        ForEach(visibleBottomOperations) { item in
+                                            OperationNoticeView(item: item, surfaceStyle: operationSurfaceStyle)
+                                                .frame(maxWidth: .infinity)
+                                                .zIndex(operationZIndex(for: item))
+                                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                                                .allowsHitTesting(true)
+                                            }
+                                    }
+                                }
+                                .frame(maxWidth: NoticeMetrics.operationMaxWidth, alignment: .trailing)
+                                .padding(.horizontal, bottomHorizontalPadding)
+                                .padding(.bottom, bottomPadding(for: proxy.safeAreaInsets))
                             }
                         }
                     }
@@ -157,7 +207,7 @@ struct NoticeHost<Content: View>: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: topBanner?.id)
-            .animation(.easeInOut(duration: 0.2), value: bottomOperation?.id)
+            .animation(.easeInOut(duration: 0.2), value: bottomOperations.map(\.id))
     }
 
     private var topHorizontalPadding: CGFloat {
@@ -199,5 +249,52 @@ struct NoticeHost<Content: View>: View {
         #else
         return 16
         #endif
+    }
+
+    private var visibleBottomOperations: [NoticeItem] {
+        Array(bottomOperations.suffix(4))
+    }
+
+    private var operationStackCount: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "square.stack.3d.up.fill")
+            Text(bottomOperations.count, format: .number)
+                .monospacedDigit()
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(operationSurfaceStyle.primaryForegroundColor)
+        .padding(.horizontal, 10)
+        .frame(minHeight: 28)
+        .noticeSurface(
+            style: operationSurfaceStyle,
+            prominence: .emphasized,
+            cornerRadius: 14,
+            shadowRadius: 8,
+            shadowY: 4
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(bottomOperations.count, format: .number))
+        .accessibilityIdentifier("vvterm.notice.operationStackCount")
+    }
+
+    private func bottomPadding(for safeAreaInsets: EdgeInsets) -> CGFloat {
+        switch bottomInsetBehavior {
+        case .contentBottom:
+            return contentBottomPadding
+        case .safeAreaBottom:
+            return safeAreaInsets.bottom + bottomVerticalPadding
+        }
+    }
+
+    private var contentBottomPadding: CGFloat {
+        #if os(iOS)
+        return horizontalSizeClass == .regular ? 52 : 10
+        #else
+        return bottomVerticalPadding
+        #endif
+    }
+
+    private func operationZIndex(for item: NoticeItem) -> Double {
+        Double(bottomOperations.firstIndex(where: { $0.id == item.id }) ?? 0)
     }
 }

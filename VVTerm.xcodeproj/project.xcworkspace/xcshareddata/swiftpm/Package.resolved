@@ -1,5 +1,5 @@
 {
-  "originHash" : "0f969cb98f1e7e0a336b513ad6d492027e5b5c82f7713cc2a79aa019047a89b6",
+  "originHash" : "7525d3705083f37691b4be63e75b19c029060f9724524bc2ae4f70d0c32da661",
   "pins" : [
     {
       "identity" : "mlx-swift",
@@ -20,12 +20,21 @@
       }
     },
     {
+      "identity" : "swift-et",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/wiedymi/swift-et",
+      "state" : {
+        "revision" : "2e43ccd70cd74cd46e18a92d20a0ea7547ba42ed",
+        "version" : "0.1.5"
+      }
+    },
+    {
       "identity" : "swift-mosh",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wiedymi/swift-mosh",
       "state" : {
-        "revision" : "bb4eacdf65303b2ecce624a91e98298c4ee94fca",
-        "version" : "0.1.6"
+        "revision" : "9677768702727ba9094d4936062a452b9c544480",
+        "version" : "0.1.8"
       }
     },
     {
@@ -35,6 +44,15 @@
       "state" : {
         "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
         "version" : "1.1.1"
+      }
+    },
+    {
+      "identity" : "swift-protobuf",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-protobuf.git",
+      "state" : {
+        "revision" : "55d7a1cc5666b85c13464aea1c4b4a90feccb4c8",
+        "version" : "1.38.1"
       }
     },
     {

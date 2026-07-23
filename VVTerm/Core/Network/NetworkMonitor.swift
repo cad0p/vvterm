@@ -22,16 +22,13 @@ nonisolated final class ReachabilityCompletionState: @unchecked Sendable {
 final class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()
 
-    @Published private(set) var isConnected: Bool = true
-    @Published private(set) var connectionType: ConnectionType = .unknown
-    @Published private(set) var isExpensive: Bool = false
-    @Published private(set) var isConstrained: Bool = false
+    nonisolated enum Readiness: String, Hashable, Sendable {
+        case unknown
+        case ready
+        case unavailable
+    }
 
-    private let monitor: NWPathMonitor
-    private let queue = DispatchQueue(label: "com.vivy.vvterm.networkmonitor")
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Network")
-
-    enum ConnectionType: String {
+    nonisolated enum ConnectionType: String, Hashable, Sendable {
         case wifi = "WiFi"
         case cellular = "Cellular"
         case ethernet = "Ethernet"
@@ -56,6 +53,36 @@ final class NetworkMonitor: ObservableObject {
         }
     }
 
+    nonisolated struct Snapshot: Hashable, Sendable {
+        let readiness: Readiness
+        let connectionType: ConnectionType
+        let isExpensive: Bool
+        let isConstrained: Bool
+
+        static let unknown = Snapshot(
+            readiness: .unknown,
+            connectionType: .unknown,
+            isExpensive: false,
+            isConstrained: false
+        )
+    }
+
+    @Published private(set) var snapshot: Snapshot = .unknown
+
+    var readiness: Readiness { snapshot.readiness }
+    var isConnected: Bool { readiness == .ready }
+    var isOffline: Bool { readiness == .unavailable }
+    var connectionType: ConnectionType { snapshot.connectionType }
+    var isExpensive: Bool { snapshot.isExpensive }
+    var isConstrained: Bool { snapshot.isConstrained }
+
+    private let monitor: NWPathMonitor
+    private let queue = DispatchQueue(label: "com.vivy.vvterm.networkmonitor")
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
+        category: "Network"
+    )
+
     private init() {
         monitor = NWPathMonitor()
         startMonitoring()
@@ -67,36 +94,42 @@ final class NetworkMonitor: ObservableObject {
 
     private func startMonitoring() {
         monitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+            let readiness: Readiness = path.status == .satisfied ? .ready : .unavailable
+            let connectionType: ConnectionType
+            if path.usesInterfaceType(.wifi) {
+                connectionType = .wifi
+            } else if path.usesInterfaceType(.cellular) {
+                connectionType = .cellular
+            } else if path.usesInterfaceType(.wiredEthernet) {
+                connectionType = .ethernet
+            } else {
+                connectionType = .unknown
+            }
 
-                let wasConnected = self.isConnected
-                self.isConnected = path.status == .satisfied
-                self.isExpensive = path.isExpensive
-                self.isConstrained = path.isConstrained
-
-                // Determine connection type
-                if path.usesInterfaceType(.wifi) {
-                    self.connectionType = .wifi
-                } else if path.usesInterfaceType(.cellular) {
-                    self.connectionType = .cellular
-                } else if path.usesInterfaceType(.wiredEthernet) {
-                    self.connectionType = .ethernet
-                } else {
-                    self.connectionType = .unknown
-                }
-
-                // Log changes
-                if wasConnected != self.isConnected {
-                    if self.isConnected {
-                        self.logger.info("Network connected via \(self.connectionType.rawValue)")
-                    } else {
-                        self.logger.warning("Network disconnected")
-                    }
-                }
+            let nextSnapshot = Snapshot(
+                readiness: readiness,
+                connectionType: connectionType,
+                isExpensive: path.isExpensive,
+                isConstrained: path.isConstrained
+            )
+            DispatchQueue.main.async { [weak self] in
+                self?.apply(nextSnapshot)
             }
         }
         monitor.start(queue: queue)
+    }
+
+    private func apply(_ nextSnapshot: Snapshot) {
+        guard snapshot != nextSnapshot else { return }
+        snapshot = nextSnapshot
+
+        if nextSnapshot.readiness == .ready {
+            logger.info(
+                "Network path ready via \(nextSnapshot.connectionType.rawValue, privacy: .public), expensive=\(nextSnapshot.isExpensive, privacy: .public), constrained=\(nextSnapshot.isConstrained, privacy: .public)"
+            )
+        } else {
+            logger.warning("Network path unavailable")
+        }
     }
 
     /// Check if a specific host is reachable
@@ -138,7 +171,7 @@ final class NetworkMonitor: ObservableObject {
 
 extension NetworkMonitor {
     var statusDescription: String {
-        if !isConnected {
+        if isOffline {
             return String(localized: "No Connection")
         }
         var description = connectionType.displayName

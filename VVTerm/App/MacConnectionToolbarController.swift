@@ -85,10 +85,10 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
         var ids: [NSToolbarItem.Identifier] = [.flexibleSpace, .toggleSidebar, .sidebarTrackingSeparator]
         guard bridge.isActive else { return ids }
         if bridge.isZenMode {
-            // Zen: sidebar toggle (left), zen controls (right). The server
-            // title/subtitle is a plain (glass-free) titlebar accessory, since
-            // custom toolbar items always get a glass background.
-            return [.toggleSidebar, .flexibleSpace, .vvZenControls]
+            // Keep the sidebar toggle at the right edge of the sidebar section,
+            // then let AppKit render the native window title/subtitle in the
+            // content-side titlebar area.
+            return [.flexibleSpace, .toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, .vvZenControls]
         }
         if bridge.showsViewPicker { ids.append(.vvViewPicker) }
         if bridge.showsTabStrip {

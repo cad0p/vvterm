@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import VVTerm
 
@@ -69,5 +70,22 @@ final class AppLockManagerTests: XCTestCase {
         manager.authGraceSeconds = 900
 
         XCTAssertEqual(manager.authGraceSeconds, 300)
+    }
+
+    func testSceneActivationDoesNotPublishWhenBiometryAvailabilityIsUnchanged() {
+        let defaults = makeDefaults()
+        let authService = StubBiometricAuthService(
+            availabilityResult: .available(.faceID)
+        )
+        let manager = AppLockManager(defaults: defaults, authService: authService)
+        var publicationCount = 0
+        let cancellable = manager.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        manager.handleSceneActivation()
+
+        XCTAssertEqual(publicationCount, 0)
+        withExtendedLifetime(cancellable) {}
     }
 }

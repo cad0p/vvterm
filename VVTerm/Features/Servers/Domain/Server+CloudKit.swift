@@ -72,6 +72,15 @@ extension Server {
         self.name = name
         self.host = host
         self.port = port
+        if let storedETPort = record["eternalTerminalPort"] as? Int,
+           (1...65535).contains(storedETPort) {
+            self.eternalTerminalPort = storedETPort
+        } else if let storedETPort = record["eternalTerminalPort"] as? NSNumber,
+                  (1...65535).contains(storedETPort.intValue) {
+            self.eternalTerminalPort = storedETPort.intValue
+        } else {
+            self.eternalTerminalPort = 2022
+        }
         self.username = username
         self.connectionMode = connectionMode
         self.authMethod = authMethod
@@ -109,6 +118,7 @@ extension Server {
         record["name"] = name
         record["host"] = host
         record["port"] = port
+        record["eternalTerminalPort"] = eternalTerminalPort
         record["username"] = username
         if connectionMode != .standard {
             record["connectionMode"] = connectionMode.rawValue
