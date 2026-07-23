@@ -246,7 +246,19 @@ final class GRPCRegisterRunner: ObservableObject {
         // Capture the WebAuthn user handle (user.id) — the server requires it
         // for passwordless login verify (login.go:268). It's a base64url-
         // encoded byte string in the proto (UserEntity.id is a string).
-        let userHandle = Data(base64URLEncoded: webauthnCC.user.id) ?? Data(webauthnCC.user.id.utf8)
+        // Capture the WebAuthn user handle (user.id) — the server requires it
+        // for passwordless login verify (login.go:268). The proto's
+        // UserEntity.id is a STRING carrying the raw UUID (e.g.
+        // "ffd6d859-6ba3-4cc7-9432-55c8e7e59b6b") — NOT base64url-encoded,
+        // unlike the HTTP /webapi/mfa/registerchallenge response where
+        // user.id is a base64url Buffer. The 1.6b HTTP runner used
+        // Data(base64URLEncoded:); that's correct for HTTP but WRONG here:
+        // the UUID string happens to be valid base64url, so it silently decodes
+        // to garbage bytes that don't match the server's stored webID
+        // (server error: 'key /webauthn/users/<uuid> is not found'). Use the
+        // UTF-8 bytes directly so the userHandle matches the server's
+        // []byte(uuid.New().String()) storage.
+        let userHandle = Data(webauthnCC.user.id.utf8)
         GRPCRegisterLog.step("create_register_challenge", "got challenge userHandle=\(userHandle.count)B user.id=\(webauthnCC.user.id.prefix(16))")
         appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID), userHandle=\(userHandle.count)B)")
         try await setStep(4, .done, "challenge \(challenge.count)B, rpID=\(rpID)")
