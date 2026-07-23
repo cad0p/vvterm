@@ -87,7 +87,7 @@ enum GRPCTLSOptions {
         // trust store — the auth listener serves the cluster CA, which the
         // system doesn't trust).
         let certRefs = clusterCAPEMs.compactMap { pem -> SecCertificate? in
-            guard let der = pemToDER(pem: pem, label: "CERTIFICATE") else { return nil }
+            guard let der = try? pemToDER(pem: pem, label: "CERTIFICATE") else { return nil }
             return SecCertificateCreateWithData(nil, der as CFData)
         }
         GRPCRegisterLog.step("tls_setup", "cluster=\(clusterName) alpn=\(alpnProto) ca_certs=\(certRefs.count)")
