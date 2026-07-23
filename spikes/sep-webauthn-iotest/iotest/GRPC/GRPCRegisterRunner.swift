@@ -112,8 +112,8 @@ final class GRPCRegisterRunner: ObservableObject {
     /// - Parameters:
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
     ///   - clientCertPEM: the Phase 1 TLS cert (PEM)
-    ///   - clientKeyPEM: the Phase 1 TLS private key (PEM)
-    func run(host: String, clientCertPEM: String, clientKeyPEM: String) async {
+    ///   - privateKeyRaw: the Phase 1 TLS private key (raw 32-byte EC P-256 scalar)
+    func run(host: String, clientCertPEM: String, privateKeyRaw: Data) async {
         resetSteps()
         overallStatus = "running"
         appendLog("Starting Phase 2: gRPC SEP-key registration…")
@@ -121,7 +121,7 @@ final class GRPCRegisterRunner: ObservableObject {
 
         #if canImport(Network)
         do {
-            try await runFlow(host: host, certPEM: clientCertPEM, keyPEM: clientKeyPEM)
+            try await runFlow(host: host, certPEM: clientCertPEM, privateKeyRaw: privateKeyRaw)
             overallStatus = "passed"
             GRPCRegisterLog.result("PASSED — SEP key registered via gRPC")
             appendLog("=== PASSED — SEP key registered via gRPC ===")
@@ -147,7 +147,7 @@ final class GRPCRegisterRunner: ObservableObject {
     // MARK: - Flow
 
     #if canImport(Network)
-    private func runFlow(host: String, certPEM: String, keyPEM: String) async throws {
+    private func runFlow(host: String, certPEM: String, privateKeyRaw: Data) async throws {
         // ── Step 1: connect gRPC ──────────────────────────────────────────
         try await setStep(1, .inProgress)
         appendLog("[1/6] Dialing \(host):443 with TLS+ALPN(teleport-proxy-grpc-mtls)+client cert…")
@@ -155,7 +155,7 @@ final class GRPCRegisterRunner: ObservableObject {
         let conn = try await TeleportGRPCConnection.connect(
             host: host, port: 443,
             clientCertPEM: certPEM,
-            clientKeyPEM: keyPEM
+            privateKeyRaw: privateKeyRaw
         )
         GRPCRegisterLog.step("dial", "connected")
         appendLog("[1/6] gRPC connected (ALPN negotiated)")

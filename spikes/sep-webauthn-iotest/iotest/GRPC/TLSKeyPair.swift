@@ -11,8 +11,8 @@
 //  in the POST /webapi/headless/login body. Teleport signs it and returns
 //  `tls_cert` (a PEM cert). The private key is kept for Phase 2.
 //
-//  Phase 2 (gRPC mTLS dial): the PEM cert + PEM private key are passed to
-//  GRPCTLSOptions.make() to build the NWProtocolTLS.Options for the mTLS
+//  Phase 2 (gRPC mTLS dial): the raw private key bytes + PEM cert are passed
+//  to GRPCTLSOptions.make() to build the NWProtocolTLS.Options for the mTLS
 //  connection.
 //
 //  Key type: EC P-256 (ECDSA), matching Teleport's default
@@ -20,14 +20,22 @@
 //  The public key is PEM-encoded as PKIX (x509.MarshalPKIXPublicKey in Go),
 //  which is what `P256.Signing.PublicKey.derRepresentation` gives us.
 //
+//  NOTE on private key format: the private key is kept as the raw 32-byte
+//  scalar (P256.Signing.PrivateKey.rawRepresentation), NOT as PKCS#8 DER.
+//  SecKeyCreateWithData with kSecAttrKeyTypeECSECPrimeRandom expects the
+//  raw scalar for private keys; PKCS#8 DER (derRepresentation) fails with
+//  OSStatus error -50. See Apple's Security framework docs: for EC keys
+//  the data format is specified by ANSI X9.63 (raw scalar for private keys).
+//
 
 import Foundation
 import CryptoKit
 
-/// An ephemeral EC P-256 TLS keypair + PEM representations.
+/// An ephemeral EC P-256 TLS keypair + PEM public key.
 struct TLSKeyPair {
-    /// The PEM-encoded private key (PKCS#8): "-----BEGIN PRIVATE KEY-----\n..."
-    let privateKeyPEM: String
+    /// The raw 32-byte EC P-256 private key scalar (for SecKeyCreateWithData
+    /// in Phase 2). This is P256.Signing.PrivateKey.rawRepresentation.
+    let privateKeyRaw: Data
     /// The PEM-encoded public key (PKIX/SubjectPublicKeyInfo): "-----BEGIN PUBLIC KEY-----\n..."
     let publicKeyPEM: String
 
@@ -41,22 +49,21 @@ struct TLSKeyPair {
 
 enum TLSKeyPairGen {
 
-    /// Generate a fresh EC P-256 keypair + PEM representations.
+    /// Generate a fresh EC P-256 keypair + PEM public key.
     static func generate() throws -> TLSKeyPair {
         let priv = P256.Signing.PrivateKey()
         let pub = priv.publicKey
 
-        // Public key: PKIX DER → PEM.
+        // Public key: PKIX DER → PEM (for the POST body).
         let pubDER = pub.derRepresentation  // SubjectPublicKeyInfo (PKIX)
         let pubPEM = pemWrap(der: pubDER, label: "PUBLIC KEY")
 
-        // Private key: PKCS#8 DER → PEM.
-        // CryptoKit's P256.Signing.PrivateKey.derRepresentation is PKCS#8
-        // (https://developer.apple.com/documentation/cryptokit/p256/signing/privatekey/3588841-derrepresentation).
-        let privDER = priv.derRepresentation
-        let privPEM = pemWrap(der: privDER, label: "PRIVATE KEY")
+        // Private key: raw 32-byte scalar (for SecKeyCreateWithData in Phase 2).
+        // NOT derRepresentation (PKCS#8) — SecKeyCreateWithData expects the
+        // raw scalar for kSecAttrKeyTypeECSECPrimeRandom private keys.
+        let privRaw = priv.rawRepresentation
 
-        return TLSKeyPair(privateKeyPEM: privPEM, publicKeyPEM: pubPEM)
+        return TLSKeyPair(privateKeyRaw: privRaw, publicKeyPEM: pubPEM)
     }
 
     /// Wrap DER bytes in a PEM block: "-----BEGIN <label>-----\n<base64>\n-----END <label>-----\n"
