@@ -164,7 +164,7 @@ final class FullFlowRunner: ObservableObject {
             overallStatus = "failed"
             self.error = "Phase 3 failed: \(error.localizedDescription)"
             appendLog("FAILED at Phase 3: \(error.localizedDescription)")
-            FullFlowLog.step("failed", "phase 3")
+            FullFlowLog.step("failed", "phase 3: \(error.localizedDescription)")
             return
         }
 
@@ -197,6 +197,7 @@ final class FullFlowRunner: ObservableObject {
         let loginChallenge = Data(base64URLEncoded: assertion.publicKey.challenge) ?? Data(assertion.publicKey.challenge.utf8)
         let loginRpID = assertion.publicKey.rpId ?? rpID
         appendLog("  [3a] login/begin: challenge \(loginChallenge.count) bytes, rpID=\(loginRpID)")
+        FullFlowLog.step("phase3_login_begin", "challenge=\(loginChallenge.count)B rpID=\(loginRpID)")
 
         // Step 5: WebAuthn.login with the registered SEP key (Face ID #3).
         let assertionResp = try WebAuthn.login(
@@ -204,11 +205,14 @@ final class FullFlowRunner: ObservableObject {
             credentialID: registeredKey.credentialID, userHandle: nil, signer: signer
         )
         appendLog("  [3b] WebAuthn.login signed (Face ID #3)")
+        FullFlowLog.step("phase3_webauthn_login", "signed")
 
         // Step 6: ssh-keygen.
         let sshPubKey = SSHPubKey.generateEd25519AuthorizedKeys(comment: "vvterm-1.10-phase3")
 
         // Step 7: login/finish.
+        appendLog("  [3c] login/finish: posting WebAuthn assertion + ssh pub key…")
+        FullFlowLog.step("phase3_login_finish", "posting")
         let finishReq = LoginFinishReq(
             webauthnChallengeResponse: assertionResp,
             sshPubKey: Data(sshPubKey.utf8),
@@ -217,11 +221,16 @@ final class FullFlowRunner: ObservableObject {
         let finishBody = try JSONEncoder().encode(finishReq)
         let (rc7Data, rc7Status) = try await httpPOST(baseURL: baseURL, path: "/webapi/mfa/login/finish", body: finishBody)
         guard rc7Status == 200 else {
-            throw GRPCError.http2("login/finish HTTP \(rc7Status): \(String(data: rc7Data, encoding: .utf8) ?? "?")")
+            let body = String(data: rc7Data, encoding: .utf8) ?? "<binary>"
+            FullFlowLog.step("phase3_login_finish", "HTTP \(rc7Status): \(body.prefix(512))")
+            throw GRPCError.http2("login/finish HTTP \(rc7Status): \(body)")
         }
+        FullFlowLog.step("phase3_login_finish", "HTTP 200, decoding")
         guard let rc7 = try? JSONDecoder().decode(LoginFinishResponse.self, from: rc7Data),
               let cert = rc7.cert, !cert.isEmpty else {
-            throw GRPCError.decode("login/finish: no cert")
+            let body = String(data: rc7Data, encoding: .utf8) ?? "<binary>"
+            FullFlowLog.step("phase3_login_finish", "decode failed: \(body.prefix(512))")
+            throw GRPCError.decode("login/finish: no cert (body=\(body.prefix(256)))")
         }
         return cert
     }
