@@ -1,6 +1,9 @@
-// Minimal standalone proto for the session 1.10 spike.
-// Defines ONLY the messages needed for the 3 gRPC calls:
+// Minimal standalone proto for the session 1.10/1.11 spike.
+// Defines ONLY the messages needed for the gRPC calls:
 //   CreateAuthenticateChallenge, CreateRegisterChallenge, AddMFADeviceSync.
+// Session 1.11 adds Browser MFA types (BrowserMFAChallenge, BrowserMFAResponse,
+//   CreateAuthenticateChallengeRequest.browser_mfa_tsh_redirect_url) to
+//   support the existing-device assertion via the Browser MFA flow.
 // Field NUMBERS match Teleport v18.9.1 exactly (that's what matters on the
 // wire for gRPC). Field *names* use snake_case (proto3 convention) so
 // SwiftProtobuf generates clean camelCase Swift property names. The JSON
@@ -38,9 +41,8 @@ enum DeviceUsage {
 enum DeviceType {
   DEVICE_TYPE_UNSPECIFIED = 0;
   DEVICE_TYPE_TOTP = 1;
-  DEVICE_TYPE_WEBAUTHN = 2;
-  DEVICE_TYPE_SSO = 3;
-  DEVICE_TYPE_BROWSER = 4;
+  reserved 2; // DEVICE_TYPE_U2F (removed in Teleport; WEBAUTHN covers U2F/CTAP1/CTAP2/platform)
+  DEVICE_TYPE_WEBAUTHN = 3;
 }
 
 // ── WebAuthn types (from legacy/types/webauthn/webauthn.proto) ──
@@ -108,12 +110,34 @@ message MFAAuthenticateChallenge {
   TOTPChallenge totp = 2;
   CredentialAssertion webauthn_challenge = 3;
   int32 mfa_required = 4;
+  // Session 1.11: Browser MFA challenge (field 6, matches Teleport v18.9.1).
+  BrowserMFAChallenge browser_mfa_challenge = 6;
 }
 message TOTPChallenge {}
+
+// ── Browser MFA (session 1.11) ──
+// Matches lib/auth/auth.go BeginBrowserMFAChallenge +
+// api/proto/teleport/legacy/client/proto/authservice.proto:1408-1419.
+message BrowserMFAChallenge {
+  // RequestId is the ID of a browser MFA request. The client opens
+  // https://<proxy>/web/mfa/browser/<request_id> in a browser.
+  string request_id = 1;
+}
+
+// BrowserMFAResponse is sent back as ExistingMFAResponse.Browser in
+// CreateRegisterChallenge, carrying the WebAuthn assertion the browser
+// produced (decrypted from the loopback callback).
+message BrowserMFAResponse {
+  string request_id = 1;
+  CredentialAssertionResponse webauthn_response = 2;
+}
+
 message MFAAuthenticateResponse {
   oneof response {
     TOTPResponse totp = 2;
     CredentialAssertionResponse webauthn = 3;
+    // Session 1.11: Browser MFA response (field 5, matches Teleport v18.9.1).
+    BrowserMFAResponse browser = 5;
   }
 }
 message TOTPResponse {
@@ -126,6 +150,11 @@ message CreateAuthenticateChallengeRequest {
     Passwordless passwordless = 4;
   }
   ChallengeExtensions challenge_extensions = 6;
+  // Session 1.11: the loopback callback URL the server will redirect the
+  // browser to after the WebAuthn assertion. Must be
+  // http(s)://localhost|127.0.0.1|[::1]:<port>/callback?secret_key=<key>
+  // (validated by lib/client/sso/redirector.go ValidateClientRedirect).
+  string browser_mfa_tsh_redirect_url = 9;
 }
 
 message CreateRegisterChallengeRequest {

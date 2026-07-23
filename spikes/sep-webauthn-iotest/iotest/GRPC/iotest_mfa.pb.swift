@@ -8,9 +8,12 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
-/// Minimal standalone proto for the session 1.10 spike.
-/// Defines ONLY the messages needed for the 3 gRPC calls:
+/// Minimal standalone proto for the session 1.10/1.11 spike.
+/// Defines ONLY the messages needed for the gRPC calls:
 ///   CreateAuthenticateChallenge, CreateRegisterChallenge, AddMFADeviceSync.
+/// Session 1.11 adds Browser MFA types (BrowserMFAChallenge, BrowserMFAResponse,
+///   CreateAuthenticateChallengeRequest.browser_mfa_tsh_redirect_url) to
+///   support the existing-device assertion via the Browser MFA flow.
 /// Field NUMBERS match Teleport v18.9.1 exactly (that's what matters on the
 /// wire for gRPC). Field *names* use snake_case (proto3 convention) so
 /// SwiftProtobuf generates clean camelCase Swift property names. The JSON
@@ -128,9 +131,8 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
   typealias RawValue = Int
   case unspecified // = 0
   case totp // = 1
-  case webauthn // = 2
-  case sso // = 3
-  case browser // = 4
+  // 2 is reserved (was DEVICE_TYPE_U2F, removed; WEBAUTHN covers U2F/CTAP1/CTAP2/platform).
+  case webauthn // = 3
   case UNRECOGNIZED(Int)
 
   init() {
@@ -141,9 +143,7 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     switch rawValue {
     case 0: self = .unspecified
     case 1: self = .totp
-    case 2: self = .webauthn
-    case 3: self = .sso
-    case 4: self = .browser
+    case 3: self = .webauthn
     default: self = .UNRECOGNIZED(rawValue)
     }
   }
@@ -152,9 +152,7 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     switch self {
     case .unspecified: return 0
     case .totp: return 1
-    case .webauthn: return 2
-    case .sso: return 3
-    case .browser: return 4
+    case .webauthn: return 3
     case .UNRECOGNIZED(let i): return i
     }
   }
@@ -164,8 +162,6 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     .unspecified,
     .totp,
     .webauthn,
-    .sso,
-    .browser,
   ]
 
 }
@@ -461,12 +457,23 @@ struct Proto_MFAAuthenticateChallenge: Sendable {
 
   var mfaRequired: Int32 = 0
 
+  /// Session 1.11: Browser MFA challenge (field 6).
+  var browserMfaChallenge: Proto_BrowserMFAChallenge {
+    get {return _browserMfaChallenge ?? Proto_BrowserMFAChallenge()}
+    set {_browserMfaChallenge = newValue}
+  }
+  /// Returns true if `browserMfaChallenge` has been explicitly set.
+  var hasBrowserMfaChallenge: Bool {return self._browserMfaChallenge != nil}
+  /// Clears the value of `browserMfaChallenge`. Subsequent reads from it will return its default value.
+  mutating func clearBrowserMfaChallenge() {self._browserMfaChallenge = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _totp: Proto_TOTPChallenge? = nil
   fileprivate var _webauthnChallenge: Proto_CredentialAssertion? = nil
+  fileprivate var _browserMfaChallenge: Proto_BrowserMFAChallenge? = nil
 }
 
 struct Proto_TOTPChallenge: Sendable {
@@ -477,6 +484,49 @@ struct Proto_TOTPChallenge: Sendable {
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+}
+
+/// ── Browser MFA (session 1.11) ──
+/// Matches lib/auth/auth.go BeginBrowserMFAChallenge +
+/// api/proto/teleport/legacy/client/proto/authservice.proto:1408-1419.
+struct Proto_BrowserMFAChallenge: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// RequestId is the ID of a browser MFA request. The client opens
+  /// https://<proxy>/web/mfa/browser/<request_id> in a browser.
+  var requestID: String = String()
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// BrowserMFAResponse is sent back as ExistingMFAResponse.Browser in
+/// CreateRegisterChallenge, carrying the WebAuthn assertion the browser
+/// produced (decrypted from the loopback callback).
+struct Proto_BrowserMFAResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var requestID: String = String()
+
+  var webauthnResponse: Proto_CredentialAssertionResponse {
+    get {return _webauthnResponse ?? Proto_CredentialAssertionResponse()}
+    set {_webauthnResponse = newValue}
+  }
+  /// Returns true if `webauthnResponse` has been explicitly set.
+  var hasWebauthnResponse: Bool {return self._webauthnResponse != nil}
+  /// Clears the value of `webauthnResponse`. Subsequent reads from it will return its default value.
+  mutating func clearWebauthnResponse() {self._webauthnResponse = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _webauthnResponse: Proto_CredentialAssertionResponse? = nil
 }
 
 struct Proto_MFAAuthenticateResponse: Sendable {
@@ -502,11 +552,21 @@ struct Proto_MFAAuthenticateResponse: Sendable {
     set {response = .webauthn(newValue)}
   }
 
+  /// Session 1.11: Browser MFA response (field 5).
+  var browser: Proto_BrowserMFAResponse {
+    get {
+      if case .browser(let v)? = response {return v}
+      return Proto_BrowserMFAResponse()
+    }
+    set {response = .browser(newValue)}
+  }
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   enum OneOf_Response: Equatable, Sendable {
     case totp(Proto_TOTPResponse)
     case webauthn(Proto_CredentialAssertionResponse)
+    case browser(Proto_BrowserMFAResponse)
 
   }
 
@@ -556,6 +616,9 @@ struct Proto_CreateAuthenticateChallengeRequest: Sendable {
   var hasChallengeExtensions: Bool {return self._challengeExtensions != nil}
   /// Clears the value of `challengeExtensions`. Subsequent reads from it will return its default value.
   mutating func clearChallengeExtensions() {self._challengeExtensions = nil}
+
+  /// Session 1.11: loopback callback URL for Browser MFA (field 9).
+  var browserMfaTshRedirectURL: String = String()
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -725,9 +788,7 @@ extension Proto_DeviceType: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     0: .same(proto: "DEVICE_TYPE_UNSPECIFIED"),
     1: .same(proto: "DEVICE_TYPE_TOTP"),
-    2: .same(proto: "DEVICE_TYPE_WEBAUTHN"),
-    3: .same(proto: "DEVICE_TYPE_SSO"),
-    4: .same(proto: "DEVICE_TYPE_BROWSER"),
+    3: .same(proto: "DEVICE_TYPE_WEBAUTHN"),
   ]
 }
 
@@ -1317,6 +1378,7 @@ extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._
     2: .same(proto: "totp"),
     3: .standard(proto: "webauthn_challenge"),
     4: .standard(proto: "mfa_required"),
+    6: .standard(proto: "browser_mfa_challenge"),
   ]
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -1328,6 +1390,7 @@ extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._
       case 2: try { try decoder.decodeSingularMessageField(value: &self._totp) }()
       case 3: try { try decoder.decodeSingularMessageField(value: &self._webauthnChallenge) }()
       case 4: try { try decoder.decodeSingularInt32Field(value: &self.mfaRequired) }()
+      case 6: try { try decoder.decodeSingularMessageField(value: &self._browserMfaChallenge) }()
       default: break
       }
     }
@@ -1347,6 +1410,9 @@ extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._
     if self.mfaRequired != 0 {
       try visitor.visitSingularInt32Field(value: self.mfaRequired, fieldNumber: 4)
     }
+    try { if let v = self._browserMfaChallenge {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1354,6 +1420,7 @@ extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._
     if lhs._totp != rhs._totp {return false}
     if lhs._webauthnChallenge != rhs._webauthnChallenge {return false}
     if lhs.mfaRequired != rhs.mfaRequired {return false}
+    if lhs._browserMfaChallenge != rhs._browserMfaChallenge {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1378,11 +1445,88 @@ extension Proto_TOTPChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
   }
 }
 
+// MARK: - Browser MFA (session 1.11)
+
+extension Proto_BrowserMFAChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".BrowserMFAChallenge"
+  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+  ]
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_BrowserMFAChallenge, rhs: Proto_BrowserMFAChallenge) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_BrowserMFAResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".BrowserMFAResponse"
+  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+    2: .standard(proto: "webauthn_response"),
+  ]
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._webauthnResponse) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._webauthnResponse {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_BrowserMFAResponse, rhs: Proto_BrowserMFAResponse) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs._webauthnResponse != rhs._webauthnResponse {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     2: .same(proto: "totp"),
     3: .same(proto: "webauthn"),
+    5: .same(proto: "browser"),
   ]
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -1417,6 +1561,19 @@ extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._M
           self.response = .webauthn(v)
         }
       }()
+      case 5: try {
+        var v: Proto_BrowserMFAResponse?
+        var hadOneofValue = false
+        if let current = self.response {
+          hadOneofValue = true
+          if case .browser(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.response = .browser(v)
+        }
+      }()
       default: break
       }
     }
@@ -1435,6 +1592,10 @@ extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._M
     case .webauthn?: try {
       guard case .webauthn(let v)? = self.response else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case .browser?: try {
+      guard case .browser(let v)? = self.response else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
     }()
     case nil: break
     }
@@ -1486,6 +1647,7 @@ extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, Swift
     3: .standard(proto: "context_user"),
     4: .same(proto: "passwordless"),
     6: .standard(proto: "challenge_extensions"),
+    9: .standard(proto: "browser_mfa_tsh_redirect_url"),
   ]
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -1521,6 +1683,7 @@ extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, Swift
         }
       }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._challengeExtensions) }()
+      case 9: try { try decoder.decodeSingularStringField(value: &self.browserMfaTshRedirectURL) }()
       default: break
       }
     }
@@ -1545,12 +1708,16 @@ extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, Swift
     try { if let v = self._challengeExtensions {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     } }()
+    if !self.browserMfaTshRedirectURL.isEmpty {
+      try visitor.visitSingularStringField(value: self.browserMfaTshRedirectURL, fieldNumber: 9)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Proto_CreateAuthenticateChallengeRequest, rhs: Proto_CreateAuthenticateChallengeRequest) -> Bool {
     if lhs.request != rhs.request {return false}
     if lhs._challengeExtensions != rhs._challengeExtensions {return false}
+    if lhs.browserMfaTshRedirectURL != rhs.browserMfaTshRedirectURL {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

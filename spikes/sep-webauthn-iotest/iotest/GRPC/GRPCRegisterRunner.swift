@@ -95,8 +95,8 @@ final class GRPCRegisterRunner: ObservableObject {
     func resetSteps() {
         steps = [
             GRPCRegisterStep(id: 1, title: "Connect gRPC (TLS+ALPN+mTLS)"),
-            GRPCRegisterStep(id: 2, title: "CreateAuthenticateChallenge (MANAGE_DEVICES)"),
-            GRPCRegisterStep(id: 3, title: "Solve existing-device challenge (Face ID #1)"),
+            GRPCRegisterStep(id: 2, title: "CreateAuthenticateChallenge (+BrowserMFATSHRedirectURL)"),
+            GRPCRegisterStep(id: 3, title: "Browser MFA assertion (Safari + Face ID)"),
             GRPCRegisterStep(id: 4, title: "CreateRegisterChallenge (WEBAUTHN, PASSWORDLESS)"),
             GRPCRegisterStep(id: 5, title: "Create SEP key + WebAuthn.register (Face ID #2)"),
             GRPCRegisterStep(id: 6, title: "AddMFADeviceSync (ContextUser, no token)"),
@@ -165,50 +165,40 @@ final class GRPCRegisterRunner: ObservableObject {
 
         defer { Task { try? await conn.close() } }
 
-        // ── Step 2: CreateAuthenticateChallenge (ContextUser, MANAGE_DEVICES)
+        // ── Steps 2 + 3: Browser MFA ceremony (CreateAuthenticateChallenge +
+        //    the existing-device assertion). The ceremony owns both: it starts
+        //    a loopback NWListener, calls CreateAuthenticateChallenge with
+        //    BrowserMFATSHRedirectURL, opens Safari to /web/mfa/browser/<id>,
+        //    awaits the loopback callback, and returns ExistingMFAResponse.Browser.
+        //    If the user has no existing MFA device, the ceremony throws
+        //    noBrowserMFAChallenge and we fall back to the first-device path
+        //    (ExistingMFAResponse = nil).
         try await setStep(2, .inProgress)
-        var authReq = Proto_CreateAuthenticateChallengeRequest()
-        authReq.contextUser = Proto_ContextUser()
-        authReq.challengeExtensions = Proto_ChallengeExtensions()
-        authReq.challengeExtensions.scope = .manageDevices
-        GRPCRegisterLog.step("create_auth_challenge", "ContextUser MANAGE_DEVICES")
-        appendLog("[2/6] CreateAuthenticateChallenge (ContextUser, MANAGE_DEVICES)…")
-        let authChal: Proto_MFAAuthenticateChallenge = try await conn.unary(
-            path: "/proto.AuthService/CreateAuthenticateChallenge",
-            request: authReq,
-            responseType: Proto_MFAAuthenticateChallenge.self
-        )
-        GRPCRegisterLog.step("create_auth_challenge", "got challenge")
-        let challengeStr = authChal.webauthnChallenge.publicKey.challenge
-        appendLog("[2/6] Got authenticate challenge (\(challengeStr.count) bytes)")
-        try await setStep(2, .done, "challenge \(challengeStr.count)B")
+        appendLog("[2/6] CreateAuthenticateChallenge (ContextUser, MANAGE_DEVICES, +BrowserMFATSHRedirectURL)…")
+        GRPCRegisterLog.step("create_auth_challenge", "ContextUser MANAGE_DEVICES + BrowserMFATSHRedirectURL")
 
-        // ── Step 3: solve the existing-device challenge ──────────────────
-        // The authenticate challenge is for an EXISTING device (the iCloud
-        // passkey or a previously-registered SEP key). We solve it with a
-        // native SEP assertion via WebAuthn.login.
-        // NOTE: if the user has no existing MFA device, authChal.webauthnChallenge
-        // may be nil — in that case we skip step 3 (CreateRegisterChallenge
-        // works without ExistingMFAResponse for the first device).
+        let ceremony = BrowserMFACeremony()
+        ceremony.onLog = { [weak self] line in self?.appendLog(line) }
+
         var existingMfaResponse: Proto_MFAAuthenticateResponse? = nil
-        if !authChal.webauthnChallenge.publicKey.challenge.isEmpty {
+        do {
             try await setStep(3, .inProgress)
-            appendLog("[3/6] Solving existing-device challenge (Face ID #1)…")
-            GRPCRegisterLog.step("solve_existing", "Face ID #1")
-            // For the spike, we use the iCloud passkey via the native
-            // ASAuthorization API. This is the one piece 1.6b didn't do
-            // (1.6b used the invite-token path which skips this step).
-            // TODO: implement the iCloud-passkey assertion. For now, if the
-            // user has an existing device, we can't solve it natively from
-            // iOS without ASAuthorizationPlatformPublicKeyCredentialAssertion.
-            // FALLBACK: skip with ExistingMFAResponse=nil (works only if the
-            // user has no existing MFA device — the "first device" path).
-            appendLog("[3/6] SKIPPED — no existing-device assertion (first-device path)")
+            appendLog("[3/6] Browser MFA: solving existing-device challenge (Safari + Face ID)…")
+            GRPCRegisterLog.step("solve_existing", "Browser MFA ceremony")
+            let browserResp = try await ceremony.run(conn: conn, host: host)
+            GRPCRegisterLog.step("solve_existing", "got BrowserMFAResponse request_id=\(browserResp.requestID.prefix(16))…")
+            appendLog("[3/6] Browser MFA: assertion complete")
+            var mfaResp = Proto_MFAAuthenticateResponse()
+            mfaResp.browser = browserResp
+            existingMfaResponse = mfaResp
+            try await setStep(2, .done, "BrowserMFAChallenge")
+            try await setStep(3, .done, "Browser MFA assertion")
+        } catch BrowserMFACeremonyError.noBrowserMFAChallenge {
+            // The user has no existing MFA device — first-device path.
+            appendLog("[2/6] No BrowserMFAChallenge (first MFA device path)")
             GRPCRegisterLog.step("solve_existing", "skipped (first-device path)")
+            try await setStep(2, .done, "no BrowserMFAChallenge (first device)")
             try await setStep(3, .done, "skipped (first device)")
-        } else {
-            appendLog("[3/6] No existing-device challenge (first MFA device)")
-            try await setStep(3, .done, "none (first device)")
         }
 
         // ── Step 4: CreateRegisterChallenge ───────────────────────────────

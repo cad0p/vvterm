@@ -29,6 +29,8 @@
 		D10000010000000000000013 /* CBOR.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000013 /* CBOR.swift */; };
 		D10000010000000000000014 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000014 /* Signer.swift */; };
 		E10000010000000000000007 /* MFALoginWireTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000007 /* MFALoginWireTypes.swift */; };
+		E10000010000000000000008 /* BrowserMFAListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000008 /* BrowserMFAListener.swift */; };
+		E10000010000000000000009 /* BrowserMFACeremony.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000009 /* BrowserMFACeremony.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +50,8 @@
 		D10000100000000000000013 /* CBOR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CBOR.swift; sourceTree = "<group>"; };
 		D10000100000000000000014 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
 		E10000100000000000000007 /* MFALoginWireTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MFALoginWireTypes.swift; sourceTree = "<group>"; };
+		E10000100000000000000008 /* BrowserMFAListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserMFAListener.swift; sourceTree = "<group>"; };
+		E10000100000000000000009 /* BrowserMFACeremony.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserMFACeremony.swift; sourceTree = "<group>"; };
 		D10000100000000000000006 /* headless_id.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = headless_id.txt; sourceTree = "<group>"; };
 		E10000100000000000000001 /* iotest_mfa.pb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iotest_mfa.pb.swift; sourceTree = "<group>"; };
 		E10000100000000000000002 /* GRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRPCClient.swift; sourceTree = "<group>"; };
@@ -141,6 +145,8 @@
 				E10000100000000000000004 /* TLSKeyPair.swift */,
 				E10000100000000000000005 /* GRPCRegisterRunner.swift */,
 				E10000100000000000000007 /* MFALoginWireTypes.swift */,
+				E10000100000000000000008 /* BrowserMFAListener.swift */,
+				E10000100000000000000009 /* BrowserMFACeremony.swift */,
 				E10000100000000000000006 /* iotest_mfa.proto */,
 			);
 			path = GRPC;
@@ -283,6 +289,8 @@
 				E10000010000000000000003 /* GRPCTransport.swift in Sources */,
 				E10000010000000000000004 /* TLSKeyPair.swift in Sources */,
 				E10000010000000000000005 /* GRPCRegisterRunner.swift in Sources */,
+				E10000010000000000000008 /* BrowserMFAListener.swift in Sources */,
+				E10000010000000000000009 /* BrowserMFACeremony.swift in Sources */,
 				F10000010000000000000001 /* FullFlowRunner.swift in Sources */,
 				F10000010000000000000002 /* FullFlowView.swift in Sources */,
 			);
