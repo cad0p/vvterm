@@ -181,14 +181,19 @@ final class TeleportGRPCConnection: @unchecked Sendable {
         let bootstrap = NIOTSConnectionBootstrap(group: group)
             .tlsOptions(tlsOpts)
             .channelInitializer { channel in
-                channel.configureHTTP2Pipeline(
-                    mode: .client,
-                    connectionConfiguration: .init(),
-                    streamConfiguration: .init()
-                ) { streamChannel in
-                    streamChannel.eventLoop.makeSucceededFuture(())
-                }.map { multiplexer -> Void in
-                    capturedMultiplexer = multiplexer
+                // Add a state handler first so we can log the real TLS/NWError
+                // (otherwise ChannelError error 0 is opaque).
+                let stateHandler = GRPCConnectionStateHandler(host: host)
+                return channel.pipeline.addHandler(stateHandler).flatMap {
+                    channel.configureHTTP2Pipeline(
+                        mode: .client,
+                        connectionConfiguration: .init(),
+                        streamConfiguration: .init()
+                    ) { streamChannel in
+                        streamChannel.eventLoop.makeSucceededFuture(())
+                    }.map { multiplexer -> Void in
+                        capturedMultiplexer = multiplexer
+                    }
                 }
             }
 
@@ -224,6 +229,34 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     func close() async throws {
         try await channel.close().get()
         try await group.shutdownGracefully()
+    }
+}
+
+// MARK: - Connection state handler (diagnostic)
+
+/// Logs TLS handshake + connection errors with the real underlying NWError,
+/// so Phase 2 failures aren't opaque 'ChannelError error 0'.
+final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = Any
+    private let host: String
+
+    init(host: String) {
+        self.host = host
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        GRPCRegisterLog.step("conn_active", "channel active for \(host)")
+        context.fireChannelActive()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        GRPCRegisterLog.step("conn_error", "\(error) [type: \(type(of: error))]")
+        context.fireErrorCaught(error)
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        GRPCRegisterLog.step("conn_inactive", "channel closed for \(host)")
+        context.fireChannelInactive()
     }
 }
 
