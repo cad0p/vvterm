@@ -52,8 +52,25 @@ final class FullFlowRunner: ObservableObject {
     /// Phase 3 result.
     @Published var phase3CertLength: Int = 0
 
+    /// Whether a SEP key from a previous run is available in the keychain
+    /// (persisted credentialID in UserDefaults). When true, the UI offers a
+    /// "Phase 3 only" button that skips Phase 1+2.
+    @Published var hasSavedKey: Bool = false
+
     private let headless = HeadlessRunner()
     private let grpcRegister = GRPCRegisterRunner()
+
+    /// UserDefaults key for the last-registered SEP credentialID (base64url).
+    /// The credentialID is the kSecAttrApplicationLabel on the persistent
+    /// SecureEnclave key, so we can reload it across app launches.
+    private let savedCredentialIDKey = "vvterm.iotest.phase2.credentialID"
+    /// UserDefaults key for the registered SEP key's WebAuthn user handle
+    /// (base64url). Required by the server's passwordless login verify path.
+    private let savedUserHandleKey = "vvterm.iotest.phase2.userHandle"
+
+    init() {
+        hasSavedKey = UserDefaults.standard.string(forKey: savedCredentialIDKey) != nil
+    }
 
     func resetPhases() {
         phases = [
@@ -76,11 +93,14 @@ final class FullFlowRunner: ObservableObject {
     /// - Parameters:
     ///   - user: the Teleport username
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
-    func run(user: String, host: String) async {
+    ///   - deviceName: the name to register the SEP key under (must be unique
+    ///     per Teleport user; collisions return ALREADY_EXISTS from
+    ///     AddMFADeviceSync — delete the old device in the portal and retry)
+    func run(user: String, host: String, deviceName: String) async {
         resetPhases()
         overallStatus = "running"
         appendLog("=== Starting full chain: cert → gRPC → SEP-key → login ===")
-        FullFlowLog.step("started", "user=\(user) host=\(host)")
+        FullFlowLog.step("started", "user=\(user) host=\(host) device=\(deviceName)")
 
         // ── Phase 1: headless bootstrap ───────────────────────────────────
         setPhase(1, "running")
@@ -129,7 +149,7 @@ final class FullFlowRunner: ObservableObject {
         // ── Phase 2: gRPC register SEP key ────────────────────────────────
         setPhase(2, "running")
         appendLog("\n--- Phase 2: gRPC register SEP key ---")
-        await grpcRegister.run(host: host, clientCertPEM: headless.tlsCertPEM, privateKey: tlsKeyPair.privateKey, clusterName: headless.clusterName, clusterCAPEMs: headless.clusterCAPEMs)
+        await grpcRegister.run(host: host, clientCertPEM: headless.tlsCertPEM, privateKey: tlsKeyPair.privateKey, clusterName: headless.clusterName, clusterCAPEMs: headless.clusterCAPEMs, deviceName: deviceName)
 
         if grpcRegister.overallStatus != "passed" {
             setPhase(2, "failed", grpcRegister.error)
@@ -142,6 +162,12 @@ final class FullFlowRunner: ObservableObject {
 
         if let key = grpcRegister.registeredKey {
             phase2CredentialID = key.credentialID.base64URLEncodedString()
+            // Persist the credentialID + userHandle so Phase 3 can run
+            // standalone next launch (the SEP key itself is in the keychain
+            // via kSecAttrIsPermanent:true + kSecAttrApplicationLabel).
+            UserDefaults.standard.set(phase2CredentialID, forKey: savedCredentialIDKey)
+            UserDefaults.standard.set(key.userHandle.base64URLEncodedString(), forKey: savedUserHandleKey)
+            hasSavedKey = true
         }
         setPhase(2, "passed", "SEP key registered, credID \(phase2CredentialID.prefix(16))…")
         appendLog("Phase 2 PASSED: SEP key registered via gRPC (credID \(phase2CredentialID.prefix(16))…)")
@@ -164,13 +190,90 @@ final class FullFlowRunner: ObservableObject {
             overallStatus = "failed"
             self.error = "Phase 3 failed: \(error.localizedDescription)"
             appendLog("FAILED at Phase 3: \(error.localizedDescription)")
-            FullFlowLog.step("failed", "phase 3")
+            FullFlowLog.step("failed", "phase 3: \(error.localizedDescription)")
             return
         }
 
         overallStatus = "passed"
         appendLog("\n=== FULL CHAIN PASSED: cert → gRPC → SEP-key → login → cert ===")
         FullFlowLog.step("passed", "full chain")
+    }
+
+    // MARK: - Phase 3 only (reuses a previously-registered SEP key)
+
+    /// Run ONLY Phase 3 (passwordless login) using a SEP key registered in a
+    /// previous run + persisted to the keychain. Skips Phase 1 (headless
+    /// bootstrap) + Phase 2 (gRPC register). Used for fast Phase 3 iteration:
+    /// register once, then re-run login as many times as needed.
+    ///
+    /// - Parameter host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
+    func runPhase3Only(host: String) async {
+        resetPhases()
+        overallStatus = "running"
+        appendLog("=== Phase 3 only: passwordless login with saved SEP key ===")
+        FullFlowLog.step("phase3_only_started", "host=\(host)")
+
+        // Mark Phase 1 + 2 as skipped (already done in a prior run).
+        setPhase(1, "done", "skipped (Phase 3 only)")
+        setPhase(2, "done", "skipped (Phase 3 only)")
+
+        guard let credIDB64 = UserDefaults.standard.string(forKey: savedCredentialIDKey),
+              let credID = Data(base64URLEncoded: credIDB64) else {
+            setPhase(3, "failed", "no saved credentialID")
+            overallStatus = "failed"
+            self.error = "Phase 3 only: no saved SEP key. Run the full chain first to register a key."
+            appendLog("FAILED: no saved SEP key — run the full chain first.")
+            FullFlowLog.step("failed", "phase 3 only: no saved key")
+            return
+        }
+        // Load the saved userHandle (required for passwordless login verify).
+        let userHandle: Data
+        if let uhB64 = UserDefaults.standard.string(forKey: savedUserHandleKey),
+           let uh = Data(base64URLEncoded: uhB64), !uh.isEmpty {
+            userHandle = uh
+        } else {
+            setPhase(3, "failed", "no saved userHandle")
+            overallStatus = "failed"
+            self.error = "Phase 3 only: no saved userHandle. Run the full chain first to register a key."
+            appendLog("FAILED: no saved userHandle — run the full chain first.")
+            FullFlowLog.step("failed", "phase 3 only: no saved userHandle")
+            return
+        }
+
+        setPhase(3, "running")
+        appendLog("\n--- Phase 3 only: loading SEP key from keychain (credID \(credIDB64.prefix(16))…) ---")
+        do {
+            let signer = SecureEnclaveSigner(biometry: true)
+            guard let secKey = try signer.loadKey(credentialID: credID) else {
+                throw GRPCError.transport("SEP key not in keychain (credID=\(credIDB64.prefix(16))…). It may have been deleted — run the full chain to re-register.")
+            }
+            _ = secKey
+            let registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: Data(), userHandle: userHandle)
+            let cert = try await runPhase3Login(host: host, registeredKey: registeredKey, signer: signer)
+            phase3CertLength = cert.count
+            setPhase(3, "passed", "login cert \(cert.count) chars")
+            appendLog("Phase 3 PASSED: passwordless login returned cert (\(cert.count) chars)")
+            FullFlowLog.step("phase3_passed", "cert=\(cert.count)")
+            overallStatus = "passed"
+        } catch {
+            setPhase(3, "failed", error.localizedDescription)
+            overallStatus = "failed"
+            self.error = "Phase 3 failed: \(error.localizedDescription)"
+            appendLog("FAILED at Phase 3: \(error.localizedDescription)")
+            FullFlowLog.step("failed", "phase 3: \(error.localizedDescription)")
+        }
+    }
+
+    /// Forget the saved SEP key (clears the persisted credentialID from
+    /// UserDefaults). The keychain key itself is left in place; a full-chain
+    /// re-run with a new device name registers a fresh one. Useful if the
+    /// server-side device was deleted in the portal.
+    func forgetSavedKey() {
+        UserDefaults.standard.removeObject(forKey: savedCredentialIDKey)
+        UserDefaults.standard.removeObject(forKey: savedUserHandleKey)
+        hasSavedKey = false
+        appendLog("Forgot saved SEP credentialID (run the full chain to register a new key).")
+        FullFlowLog.step("forgot_saved_key", "")
     }
 
     // MARK: - Phase 3 (passwordless login, reuses 1.6b login flow)
@@ -197,18 +300,23 @@ final class FullFlowRunner: ObservableObject {
         let loginChallenge = Data(base64URLEncoded: assertion.publicKey.challenge) ?? Data(assertion.publicKey.challenge.utf8)
         let loginRpID = assertion.publicKey.rpId ?? rpID
         appendLog("  [3a] login/begin: challenge \(loginChallenge.count) bytes, rpID=\(loginRpID)")
+        FullFlowLog.step("phase3_login_begin", "challenge=\(loginChallenge.count)B rpID=\(loginRpID)")
 
         // Step 5: WebAuthn.login with the registered SEP key (Face ID #3).
+        FullFlowLog.step("phase3_webauthn_login", "signing credID=\(registeredKey.credentialID.count)B userHandle=\(registeredKey.userHandle.count)B")
         let assertionResp = try WebAuthn.login(
             origin: origin, rpID: loginRpID, challenge: loginChallenge,
-            credentialID: registeredKey.credentialID, userHandle: nil, signer: signer
+            credentialID: registeredKey.credentialID, userHandle: registeredKey.userHandle, signer: signer
         )
         appendLog("  [3b] WebAuthn.login signed (Face ID #3)")
+        FullFlowLog.step("phase3_webauthn_login", "signed sig=\(assertionResp.response.signature.count)B")
 
         // Step 6: ssh-keygen.
         let sshPubKey = SSHPubKey.generateEd25519AuthorizedKeys(comment: "vvterm-1.10-phase3")
 
         // Step 7: login/finish.
+        appendLog("  [3c] login/finish: posting WebAuthn assertion + ssh pub key…")
+        FullFlowLog.step("phase3_login_finish", "posting")
         let finishReq = LoginFinishReq(
             webauthnChallengeResponse: assertionResp,
             sshPubKey: Data(sshPubKey.utf8),
@@ -217,11 +325,16 @@ final class FullFlowRunner: ObservableObject {
         let finishBody = try JSONEncoder().encode(finishReq)
         let (rc7Data, rc7Status) = try await httpPOST(baseURL: baseURL, path: "/webapi/mfa/login/finish", body: finishBody)
         guard rc7Status == 200 else {
-            throw GRPCError.http2("login/finish HTTP \(rc7Status): \(String(data: rc7Data, encoding: .utf8) ?? "?")")
+            let body = String(data: rc7Data, encoding: .utf8) ?? "<binary>"
+            FullFlowLog.step("phase3_login_finish", "HTTP \(rc7Status): \(body.prefix(512))")
+            throw GRPCError.http2("login/finish HTTP \(rc7Status): \(body)")
         }
+        FullFlowLog.step("phase3_login_finish", "HTTP 200, decoding")
         guard let rc7 = try? JSONDecoder().decode(LoginFinishResponse.self, from: rc7Data),
               let cert = rc7.cert, !cert.isEmpty else {
-            throw GRPCError.decode("login/finish: no cert")
+            let body = String(data: rc7Data, encoding: .utf8) ?? "<binary>"
+            FullFlowLog.step("phase3_login_finish", "decode failed: \(body.prefix(512))")
+            throw GRPCError.decode("login/finish: no cert (body=\(body.prefix(256)))")
         }
         return cert
     }

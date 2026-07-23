@@ -68,6 +68,24 @@ struct GRPCRegisterStep: Identifiable {
 struct RegisteredSEPKey {
     let credentialID: Data
     let publicKeyRaw: Data
+    /// The WebAuthn user handle (user.id from the register challenge). Required
+    /// by the server's passwordless login verify path (login.go:268 —
+    /// "webauthn user handle required for passwordless"). The server uses it
+    /// to resolve which Teleport user is logging in (discoverable credential).
+    /// Captured from CreateRegisterChallenge's webauthn.publicKey.user.id.
+    let userHandle: Data
+}
+
+extension GRPCError {
+    /// gRPC status code 6 = ALREADY_EXISTS. Teleport returns this from
+    /// AddMFADeviceSync when a device with the requested name already
+    /// exists for the user. The raw message ("grpc(6): MFA device with
+    /// name \"X\" already exists") is accurate but not actionable —
+    /// surface a hint to delete the old device in the portal.
+    var isAlreadyExists: Bool {
+        if case .grpc(let status, _) = self, status == 6 { return true }
+        return false
+    }
 }
 
 /// Phase 2 runner: register a SEP key via gRPC using the Phase 1 cert.
@@ -84,12 +102,12 @@ final class GRPCRegisterRunner: ObservableObject {
     /// The registered SEP key (on success) for Phase 3.
     private(set) var registeredKey: RegisteredSEPKey?
 
-    /// The SecureEnclaveSigner used in Phase 2 (kept alive so Phase 3 can
-    /// re-use the in-memory key for the login assertion). The spike uses
-    // kSecAttrIsPermanent:false (see SecureEnclaveSigner.swift), so the SEP
-    // key is NOT in the keychain — only in this signer's in-memory dict.
-    // For a single-process spike run, passing the signer to Phase 3 works.
-    // Production (2.2) should use kSecAttrIsPermanent:true.
+    /// The SecureEnclaveSigner used in Phase 2. The SEP key is persisted to
+    /// the keychain (kSecAttrIsPermanent:true + kSecAttrApplicationLabel:
+    /// credentialID), so it survives app relaunch. Phase 3 can re-use the
+    /// in-memory signer in the same session, or load the key from the
+    /// keychain via SecureEnclaveSigner.loadKey(credentialID:) in a later
+    /// session (see FullFlowRunner.runPhase3Only).
     private(set) var signer: SecureEnclaveSigner?
 
     func resetSteps() {
@@ -113,23 +131,25 @@ final class GRPCRegisterRunner: ObservableObject {
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
     ///   - clientCertPEM: the Phase 1 TLS cert (PEM)
     ///   - privateKey: the Phase 1 TLS private key (SecKey)
-    func run(host: String, clientCertPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String]) async {
+    ///   - deviceName: the name to register the SEP key under (must be unique
+    ///     per Teleport user; ALREADY_EXISTS is surfaced as an actionable error)
+    func run(host: String, clientCertPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String], deviceName: String) async {
         resetSteps()
         overallStatus = "running"
-        appendLog("Starting Phase 2: gRPC SEP-key registration…")
-        GRPCRegisterLog.result("started host=\(host)")
+        appendLog("Starting Phase 2: gRPC SEP-key registration (device name=\(deviceName))…")
+        GRPCRegisterLog.result("started host=\(host) device=\(deviceName)")
 
         #if canImport(Network)
         do {
-            try await runFlow(host: host, certPEM: clientCertPEM, privateKey: privateKey, clusterName: clusterName, clusterCAPEMs: clusterCAPEMs)
+            try await runFlow(host: host, certPEM: clientCertPEM, privateKey: privateKey, clusterName: clusterName, clusterCAPEMs: clusterCAPEMs, deviceName: deviceName)
             overallStatus = "passed"
             GRPCRegisterLog.result("PASSED — SEP key registered via gRPC")
             appendLog("=== PASSED — SEP key registered via gRPC ===")
         } catch let e as GRPCError {
-            self.error = e.description
+            self.error = GRPCRegisterRunner.actionableMessage(for: e, deviceName: deviceName)
             overallStatus = "failed"
             GRPCRegisterLog.result("FAILED: \(e.description)")
-            appendLog("FAILED: \(e.description)")
+            appendLog("FAILED: \(GRPCRegisterRunner.actionableMessage(for: e, deviceName: deviceName))")
         } catch {
             self.error = error.localizedDescription
             overallStatus = "failed"
@@ -147,7 +167,7 @@ final class GRPCRegisterRunner: ObservableObject {
     // MARK: - Flow
 
     #if canImport(Network)
-    private func runFlow(host: String, certPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String]) async throws {
+    private func runFlow(host: String, certPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String], deviceName: String) async throws {
         // ── Step 1: connect gRPC ──────────────────────────────────────────
         try await setStep(1, .inProgress)
         appendLog("[1/6] Dialing \(host):443 with TLS+ALPN(teleport-auth@<cluster>)+client cert…")
@@ -223,7 +243,24 @@ final class GRPCRegisterRunner: ObservableObject {
         }
         let rpID = webauthnCC.rp.id.isEmpty ? host : webauthnCC.rp.id
         let challenge = webauthnCC.challenge
-        appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID))")
+        // Capture the WebAuthn user handle (user.id) — the server requires it
+        // for passwordless login verify (login.go:268). It's a base64url-
+        // encoded byte string in the proto (UserEntity.id is a string).
+        // Capture the WebAuthn user handle (user.id) — the server requires it
+        // for passwordless login verify (login.go:268). The proto's
+        // UserEntity.id is a STRING carrying the raw UUID (e.g.
+        // "ffd6d859-6ba3-4cc7-9432-55c8e7e59b6b") — NOT base64url-encoded,
+        // unlike the HTTP /webapi/mfa/registerchallenge response where
+        // user.id is a base64url Buffer. The 1.6b HTTP runner used
+        // Data(base64URLEncoded:); that's correct for HTTP but WRONG here:
+        // the UUID string happens to be valid base64url, so it silently decodes
+        // to garbage bytes that don't match the server's stored webID
+        // (server error: 'key /webauthn/users/<uuid> is not found'). Use the
+        // UTF-8 bytes directly so the userHandle matches the server's
+        // []byte(uuid.New().String()) storage.
+        let userHandle = Data(webauthnCC.user.id.utf8)
+        GRPCRegisterLog.step("create_register_challenge", "got challenge userHandle=\(userHandle.count)B user.id=\(webauthnCC.user.id.prefix(16))")
+        appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID), userHandle=\(userHandle.count)B)")
         try await setStep(4, .done, "challenge \(challenge.count)B, rpID=\(rpID)")
 
         // ── Step 5: create SEP key + WebAuthn.register ───────────────────
@@ -244,7 +281,7 @@ final class GRPCRegisterRunner: ObservableObject {
         try await setStep(6, .inProgress)
         var addReq = Proto_AddMFADeviceSyncRequest()
         addReq.contextUser = Proto_ContextUser()
-        addReq.newDeviceName = "vvterm-1.10-spike"
+        addReq.newDeviceName = deviceName
         addReq.newMfaResponse = Proto_MFARegisterResponse()
         // Build the WebAuthn registration response into the proto type.
         addReq.newMfaResponse.webauthn = Proto_CredentialCreationResponse()
@@ -269,7 +306,7 @@ final class GRPCRegisterRunner: ObservableObject {
         appendLog("[6/6] SEP key registered via gRPC AddMFADeviceSync")
         try await setStep(6, .done, "registered")
 
-        registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: pubKeyRaw)
+        registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: pubKeyRaw, userHandle: userHandle)
     }
     #endif
 
@@ -283,5 +320,21 @@ final class GRPCRegisterRunner: ObservableObject {
 
     private func appendLog(_ line: String) {
         log.append(line)
+    }
+
+    // MARK: - Actionable error messages
+
+    /// Turn a gRPC error into a user-facing message with a suggested next step.
+    /// For ALREADY_EXISTS (code 6), hint that the user delete the old device
+    /// in the Teleport web portal (or pick a new name).
+    static func actionableMessage(for error: GRPCError, deviceName: String) -> String {
+        if error.isAlreadyExists {
+            return """
+            A device named \"\(deviceName)\" already exists for this user. \
+            Delete it in the Teleport web portal (Settings → Management → Devices / \
+            Add MFA Device), then retry — or pick a new name in the Device field above.
+            """
+        }
+        return error.description
     }
 }
