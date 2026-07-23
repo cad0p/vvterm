@@ -68,6 +68,12 @@ struct GRPCRegisterStep: Identifiable {
 struct RegisteredSEPKey {
     let credentialID: Data
     let publicKeyRaw: Data
+    /// The WebAuthn user handle (user.id from the register challenge). Required
+    /// by the server's passwordless login verify path (login.go:268 —
+    /// "webauthn user handle required for passwordless"). The server uses it
+    /// to resolve which Teleport user is logging in (discoverable credential).
+    /// Captured from CreateRegisterChallenge's webauthn.publicKey.user.id.
+    let userHandle: Data
 }
 
 extension GRPCError {
@@ -237,7 +243,11 @@ final class GRPCRegisterRunner: ObservableObject {
         }
         let rpID = webauthnCC.rp.id.isEmpty ? host : webauthnCC.rp.id
         let challenge = webauthnCC.challenge
-        appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID))")
+        // Capture the WebAuthn user handle (user.id) — the server requires it
+        // for passwordless login verify (login.go:268). It's a base64url-
+        // encoded byte string in the proto (UserEntity.id is a string).
+        let userHandle = Data(base64URLEncoded: webauthnCC.user.id) ?? Data(webauthnCC.user.id.utf8)
+        appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID), userHandle=\(userHandle.count)B)")
         try await setStep(4, .done, "challenge \(challenge.count)B, rpID=\(rpID)")
 
         // ── Step 5: create SEP key + WebAuthn.register ───────────────────
@@ -283,7 +293,7 @@ final class GRPCRegisterRunner: ObservableObject {
         appendLog("[6/6] SEP key registered via gRPC AddMFADeviceSync")
         try await setStep(6, .done, "registered")
 
-        registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: pubKeyRaw)
+        registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: pubKeyRaw, userHandle: userHandle)
     }
     #endif
 

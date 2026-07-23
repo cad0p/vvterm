@@ -64,6 +64,9 @@ final class FullFlowRunner: ObservableObject {
     /// The credentialID is the kSecAttrApplicationLabel on the persistent
     /// SecureEnclave key, so we can reload it across app launches.
     private let savedCredentialIDKey = "vvterm.iotest.phase2.credentialID"
+    /// UserDefaults key for the registered SEP key's WebAuthn user handle
+    /// (base64url). Required by the server's passwordless login verify path.
+    private let savedUserHandleKey = "vvterm.iotest.phase2.userHandle"
 
     init() {
         hasSavedKey = UserDefaults.standard.string(forKey: savedCredentialIDKey) != nil
@@ -159,10 +162,11 @@ final class FullFlowRunner: ObservableObject {
 
         if let key = grpcRegister.registeredKey {
             phase2CredentialID = key.credentialID.base64URLEncodedString()
-            // Persist the credentialID so Phase 3 can run standalone next
-            // launch (the SEP key itself is in the keychain via
-            // kSecAttrIsPermanent:true + kSecAttrApplicationLabel).
+            // Persist the credentialID + userHandle so Phase 3 can run
+            // standalone next launch (the SEP key itself is in the keychain
+            // via kSecAttrIsPermanent:true + kSecAttrApplicationLabel).
             UserDefaults.standard.set(phase2CredentialID, forKey: savedCredentialIDKey)
+            UserDefaults.standard.set(key.userHandle.base64URLEncodedString(), forKey: savedUserHandleKey)
             hasSavedKey = true
         }
         setPhase(2, "passed", "SEP key registered, credID \(phase2CredentialID.prefix(16))…")
@@ -222,6 +226,19 @@ final class FullFlowRunner: ObservableObject {
             FullFlowLog.step("failed", "phase 3 only: no saved key")
             return
         }
+        // Load the saved userHandle (required for passwordless login verify).
+        let userHandle: Data
+        if let uhB64 = UserDefaults.standard.string(forKey: savedUserHandleKey),
+           let uh = Data(base64URLEncoded: uhB64), !uh.isEmpty {
+            userHandle = uh
+        } else {
+            setPhase(3, "failed", "no saved userHandle")
+            overallStatus = "failed"
+            self.error = "Phase 3 only: no saved userHandle. Run the full chain first to register a key."
+            appendLog("FAILED: no saved userHandle — run the full chain first.")
+            FullFlowLog.step("failed", "phase 3 only: no saved userHandle")
+            return
+        }
 
         setPhase(3, "running")
         appendLog("\n--- Phase 3 only: loading SEP key from keychain (credID \(credIDB64.prefix(16))…) ---")
@@ -231,7 +248,7 @@ final class FullFlowRunner: ObservableObject {
                 throw GRPCError.transport("SEP key not in keychain (credID=\(credIDB64.prefix(16))…). It may have been deleted — run the full chain to re-register.")
             }
             _ = secKey
-            let registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: Data())
+            let registeredKey = RegisteredSEPKey(credentialID: credID, publicKeyRaw: Data(), userHandle: userHandle)
             let cert = try await runPhase3Login(host: host, registeredKey: registeredKey, signer: signer)
             phase3CertLength = cert.count
             setPhase(3, "passed", "login cert \(cert.count) chars")
@@ -253,6 +270,7 @@ final class FullFlowRunner: ObservableObject {
     /// server-side device was deleted in the portal.
     func forgetSavedKey() {
         UserDefaults.standard.removeObject(forKey: savedCredentialIDKey)
+        UserDefaults.standard.removeObject(forKey: savedUserHandleKey)
         hasSavedKey = false
         appendLog("Forgot saved SEP credentialID (run the full chain to register a new key).")
         FullFlowLog.step("forgot_saved_key", "")
@@ -287,7 +305,7 @@ final class FullFlowRunner: ObservableObject {
         // Step 5: WebAuthn.login with the registered SEP key (Face ID #3).
         let assertionResp = try WebAuthn.login(
             origin: origin, rpID: loginRpID, challenge: loginChallenge,
-            credentialID: registeredKey.credentialID, userHandle: nil, signer: signer
+            credentialID: registeredKey.credentialID, userHandle: registeredKey.userHandle, signer: signer
         )
         appendLog("  [3b] WebAuthn.login signed (Face ID #3)")
         FullFlowLog.step("phase3_webauthn_login", "signed")
