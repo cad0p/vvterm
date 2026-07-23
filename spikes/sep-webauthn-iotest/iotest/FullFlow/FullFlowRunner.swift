@@ -129,7 +129,7 @@ final class FullFlowRunner: ObservableObject {
         // ── Phase 2: gRPC register SEP key ────────────────────────────────
         setPhase(2, "running")
         appendLog("\n--- Phase 2: gRPC register SEP key ---")
-        await grpcRegister.run(host: host, clientCertPEM: headless.tlsCertPEM, privateKeyRaw: tlsKeyPair.privateKeyRaw)
+        await grpcRegister.run(host: host, clientCertPEM: headless.tlsCertPEM, privateKey: tlsKeyPair.privateKey)
 
         if grpcRegister.overallStatus != "passed" {
             setPhase(2, "failed", grpcRegister.error)

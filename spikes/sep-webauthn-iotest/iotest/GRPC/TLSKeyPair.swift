@@ -11,31 +11,33 @@
 //  in the POST /webapi/headless/login body. Teleport signs it and returns
 //  `tls_cert` (a PEM cert). The private key is kept for Phase 2.
 //
-//  Phase 2 (gRPC mTLS dial): the raw private key bytes + PEM cert are passed
-//  to GRPCTLSOptions.make() to build the NWProtocolTLS.Options for the mTLS
+//  Phase 2 (gRPC mTLS dial): the SecKey + PEM cert are passed to
+//  GRPCTLSOptions.make() to build the NWProtocolTLS.Options for the mTLS
 //  connection.
 //
 //  Key type: EC P-256 (ECDSA), matching Teleport's default
 //  `cryptosuites.UserTLS` = `ECDSAP256` (lib/cryptosuites/suites.go:245).
 //  The public key is PEM-encoded as PKIX (x509.MarshalPKIXPublicKey in Go),
-//  which is what `P256.Signing.PublicKey.derRepresentation` gives us.
+//  which is what SecKeyCopyExternalRepresentation gives us (X9.63 → wrap in
+//  SubjectPublicKeyInfo... actually we use CryptoKit's derRepresentation).
 //
-//  NOTE on private key format: the private key is kept as the raw 32-byte
-//  scalar (P256.Signing.PrivateKey.rawRepresentation), NOT as PKCS#8 DER.
-//  SecKeyCreateWithData with kSecAttrKeyTypeECSECPrimeRandom expects the
-//  raw scalar for private keys; PKCS#8 DER (derRepresentation) fails with
-//  OSStatus error -50. See Apple's Security framework docs: for EC keys
-//  the data format is specified by ANSI X9.63 (raw scalar for private keys).
+//  NOTE on SecKey: we generate the key via SecKeyCreateRandomKey (not
+//  CryptoKit) so we have a native SecKey for Phase 2's
+//  sec_protocol_options_set_local_identity. SecKeyCreateWithData is finicky
+//  about EC private key formats (raw scalar vs X9.63 vs PKCS#8 all fail with
+//  OSStatus -50 on iOS); generating with SecKeyCreateRandomKey sidesteps the
+//  format ambiguity entirely.
 //
 
 import Foundation
 import CryptoKit
+import Security
 
-/// An ephemeral EC P-256 TLS keypair + PEM public key.
+/// An ephemeral EC P-256 TLS keypair.
 struct TLSKeyPair {
-    /// The raw 32-byte EC P-256 private key scalar (for SecKeyCreateWithData
-    /// in Phase 2). This is P256.Signing.PrivateKey.rawRepresentation.
-    let privateKeyRaw: Data
+    /// The SecKey for the private key (for Phase 2's sec_identity_t).
+    /// Created via SecKeyCreateRandomKey — stays valid for the process.
+    let privateKey: SecKey
     /// The PEM-encoded public key (PKIX/SubjectPublicKeyInfo): "-----BEGIN PUBLIC KEY-----\n..."
     let publicKeyPEM: String
 
@@ -49,21 +51,42 @@ struct TLSKeyPair {
 
 enum TLSKeyPairGen {
 
-    /// Generate a fresh EC P-256 keypair + PEM public key.
+    /// Generate a fresh EC P-256 keypair via SecKeyCreateRandomKey.
+    ///
+    /// Uses the system Security framework (not CryptoKit) so the resulting
+    /// SecKey can be passed directly to sec_protocol_options_set_local_identity
+    /// without any format conversion.
     static func generate() throws -> TLSKeyPair {
-        let priv = P256.Signing.PrivateKey()
-        let pub = priv.publicKey
+        // Software EC P-256 key (not SEP — the TLS key is a transport key,
+        // not a biometric-gated credential).
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+        ]
+        var error: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
+            let msg = (error?.takeRetainedValue() as Error?)?.localizedDescription ?? "unknown"
+            throw GRPCError.tls("SecKeyCreateRandomKey failed: \(msg)")
+        }
 
-        // Public key: PKIX DER → PEM (for the POST body).
-        let pubDER = pub.derRepresentation  // SubjectPublicKeyInfo (PKIX)
+        // Extract the public key in X9.63 form (0x04 || X || Y, 65 bytes).
+        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            throw GRPCError.tls("SecKeyCopyPublicKey failed")
+        }
+        var repError: Unmanaged<CFError>?
+        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &repError) as Data? else {
+            let msg = (repError?.takeRetainedValue() as Error?)?.localizedDescription ?? "unknown"
+            throw GRPCError.tls("SecKeyCopyExternalRepresentation failed: \(msg)")
+        }
+
+        // Convert X9.63 (0x04 || X || Y) → PKIX DER (SubjectPublicKeyInfo)
+        // using CryptoKit, then PEM-wrap. CryptoKit's P256.KeyAgreement.PublicKey
+        // can parse X9.63 and emit DER (PKIX).
+        let pubKey = try P256.KeyAgreement.PublicKey(x963Representation: publicKeyData)
+        let pubDER = pubKey.derRepresentation  // SubjectPublicKeyInfo (PKIX)
         let pubPEM = pemWrap(der: pubDER, label: "PUBLIC KEY")
 
-        // Private key: raw 32-byte scalar (for SecKeyCreateWithData in Phase 2).
-        // NOT derRepresentation (PKCS#8) — SecKeyCreateWithData expects the
-        // raw scalar for kSecAttrKeyTypeECSECPrimeRandom private keys.
-        let privRaw = priv.rawRepresentation
-
-        return TLSKeyPair(privateKeyRaw: privRaw, publicKeyPEM: pubPEM)
+        return TLSKeyPair(privateKey: privateKey, publicKeyPEM: pubPEM)
     }
 
     /// Wrap DER bytes in a PEM block: "-----BEGIN <label>-----\n<base64>\n-----END <label>-----\n"

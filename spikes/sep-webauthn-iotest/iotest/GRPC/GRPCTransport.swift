@@ -47,7 +47,7 @@ enum GRPCTLSOptions {
     /// - Server verification: default (system trust store). Teleport's web
     ///   proxy cert is signed by a public CA, so the system validates it.
     static func make(clientCertPEM: String,
-                     privateKeyRaw: Data,
+                     privateKey: SecKey,
                      serverName: String) throws -> NWProtocolTLS.Options {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
@@ -63,40 +63,25 @@ enum GRPCTLSOptions {
             sec_protocol_options_set_tls_server_name(secOpts, cStr)
         }
         // Client cert (mTLS).
-        let secIdentity = try buildSecIdentity(certPEM: clientCertPEM, privateKeyRaw: privateKeyRaw)
+        let secIdentity = try buildSecIdentity(certPEM: clientCertPEM, privateKey: privateKey)
         sec_protocol_options_set_local_identity(secOpts, secIdentity)
         return tlsOpts
     }
 
-    /// Build a sec_identity_t from a PEM-encoded cert + the raw private key.
+    /// Build a sec_identity_t from a PEM-encoded cert + a SecKey.
     ///
     /// Network.framework's `sec_protocol_options_set_local_identity` wants a
     /// `sec_identity_t`, which wraps a `SecIdentity` (cert + key pair in a
     /// keychain). We:
     ///   1. Parse the cert from PEM → SecCertificate.
-    ///   2. Create the SecKey from the raw 32-byte EC P-256 scalar via
-    ///      SecKeyCreateWithData (kSecAttrKeyTypeECSECPrimeRandom expects
-    ///      the raw scalar for private keys, NOT PKCS#8 DER).
-    ///   3. Add both to the keychain with a unique label.
-    ///   4. SecItemCopyMatching to get the SecIdentity.
-    ///   5. Wrap in sec_identity_t.
-    private static func buildSecIdentity(certPEM: String, privateKeyRaw: Data) throws -> sec_identity_t {
+    ///   2. Add cert + key to the keychain with a unique label.
+    ///   3. SecItemCopyMatching to get the SecIdentity.
+    ///   4. Wrap in sec_identity_t.
+    private static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> sec_identity_t {
         // 1. Parse cert.
         let certDER = try pemToDER(pem: certPEM, label: "CERTIFICATE")
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
             throw GRPCError.tls("failed to create SecCertificate from PEM")
-        }
-
-        // 2. Create the private key from the raw 32-byte scalar.
-        let keyAttrs: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
-            kSecAttrKeySizeInBits as String: 256,
-        ]
-        var keyError: Unmanaged<CFError>?
-        guard let secKey = SecKeyCreateWithData(privateKeyRaw as CFData, keyAttrs as CFDictionary, &keyError) else {
-            let msg = (keyError?.takeRetainedValue() as Error?)?.localizedDescription ?? "unknown"
-            throw GRPCError.tls("SecKeyCreateWithData failed: \(msg)")
         }
 
         // 3. Add cert + key to keychain with a unique label.
@@ -113,7 +98,7 @@ enum GRPCTLSOptions {
         }
         let keyAdd: [String: Any] = [
             kSecClass as String: kSecClassKey,
-            kSecValueRef as String: secKey,
+            kSecValueRef as String: privateKey,
             kSecAttrLabel as String: label,
             kSecAttrIsPermanent as String: true,
         ]
@@ -179,15 +164,15 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     ///   - host: the proxy hostname (e.g. "teleport.pcad.it")
     ///   - port: the proxy port (443)
     ///   - clientCertPEM: PEM TLS cert (Phase 1 tls_cert)
-    ///   - privateKeyRaw: raw 32-byte EC P-256 scalar for the private key
+    ///   - privateKey: SecKey for the private key
     /// - Returns: a connected TeleportGRPCConnection.
     static func connect(host: String,
                         port: Int = 443,
                         clientCertPEM: String,
-                        privateKeyRaw: Data) async throws -> TeleportGRPCConnection {
+                        privateKey: SecKey) async throws -> TeleportGRPCConnection {
         let tlsOpts = try GRPCTLSOptions.make(
             clientCertPEM: clientCertPEM,
-            privateKeyRaw: privateKeyRaw,
+            privateKey: privateKey,
             serverName: host
         )
 
