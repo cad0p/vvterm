@@ -1,0 +1,106 @@
+import Foundation
+
+// MARK: - Connection State
+
+enum ConnectionState: Hashable {
+    case disconnected
+    case connecting
+    case connected
+    case reconnecting(attempt: Int)
+    case failed(String)
+    case idle  // Deprecated: kept for switch exhaustiveness
+
+    var isConnected: Bool {
+        if case .connected = self { return true }
+        return false
+    }
+
+    var isConnecting: Bool {
+        switch self {
+        case .connecting, .reconnecting: return true
+        default: return false
+        }
+    }
+
+    var isIdle: Bool {
+        if case .idle = self { return true }
+        return false
+    }
+
+    var statusString: String {
+        switch self {
+        case .disconnected, .idle: return "Disconnected"
+        case .connecting: return "Connecting..."
+        case .connected: return "Connected"
+        case .reconnecting(let attempt): return "Reconnecting (\(attempt))..."
+        case .failed(let error): return "Failed: \(error)"
+        }
+    }
+}
+
+// MARK: - Connection Session (Tab)
+
+struct ConnectionSession: Identifiable, Hashable {
+    let id: UUID
+    let serverId: UUID
+    var title: String
+    var connectionState: ConnectionState
+    var createdAt: Date
+    var lastActivity: Date
+    var terminalSurfaceId: String?
+    var autoReconnect: Bool
+    var tmuxStatus: TmuxStatus
+    var workingDirectory: String?
+    var presentationOverrides: TerminalPresentationOverrides
+    /// Runtime transport for this session (never persisted).
+    var activeTransport: ShellTransport
+    /// Set only when this session is running over SSH fallback from Mosh.
+    var moshFallbackReason: MoshFallbackReason?
+    /// If set, this session is a split child of the parent session (not shown in tabs)
+    var parentSessionId: UUID?
+
+    init(
+        id: UUID = UUID(),
+        serverId: UUID,
+        title: String,
+        connectionState: ConnectionState = .disconnected,
+        createdAt: Date = Date(),
+        lastActivity: Date = Date(),
+        terminalSurfaceId: String? = nil,
+        autoReconnect: Bool = true,
+        tmuxStatus: TmuxStatus = .unknown,
+        workingDirectory: String? = nil,
+        presentationOverrides: TerminalPresentationOverrides = .empty,
+        activeTransport: ShellTransport = .ssh,
+        moshFallbackReason: MoshFallbackReason? = nil,
+        parentSessionId: UUID? = nil
+    ) {
+        self.id = id
+        self.serverId = serverId
+        self.title = title
+        self.connectionState = connectionState
+        self.createdAt = createdAt
+        self.lastActivity = lastActivity
+        self.terminalSurfaceId = terminalSurfaceId
+        self.autoReconnect = autoReconnect
+        self.tmuxStatus = tmuxStatus
+        self.workingDirectory = workingDirectory
+        self.presentationOverrides = presentationOverrides
+        self.activeTransport = activeTransport
+        self.moshFallbackReason = moshFallbackReason
+        self.parentSessionId = parentSessionId
+    }
+
+    /// Whether this is a root tab session (not a split child)
+    var isTabRoot: Bool {
+        parentSessionId == nil
+    }
+
+    var isConnected: Bool {
+        connectionState.isConnected
+    }
+
+    mutating func updateLastActivity() {
+        lastActivity = Date()
+    }
+}
