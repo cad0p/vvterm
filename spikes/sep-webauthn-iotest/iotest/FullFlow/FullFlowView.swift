@@ -15,6 +15,7 @@ struct FullFlowView: View {
     @StateObject private var runner = FullFlowRunner()
     @State private var username: String = ""
     @State private var host: String = "teleport.pcad.it"
+    @State private var deviceName: String = "vvterm-spike"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +51,19 @@ struct FullFlowView: View {
                         .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
                 }
+                HStack {
+                    Text("Device:")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("MFA device name", text: $deviceName)
+                        .font(.caption).monospaced()
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("Device name must be unique per Teleport user. If a run fails with “already exists”, delete the old device in the Teleport web portal (Settings → Management → Devices / Add MFA Device) and retry, or pick a new name.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(8)
             .background(Color.secondary.opacity(0.05))
@@ -79,13 +93,13 @@ struct FullFlowView: View {
             // Start button + overall status
             HStack {
                 Button(action: {
-                    Task { await runner.run(user: username, host: host) }
+                    Task { await runner.run(user: username, host: host, deviceName: deviceName) }
                 }) {
                     Label("Run full chain", systemImage: "play.fill")
                         .padding(.horizontal, 12).padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(runner.overallStatus == "running" || username.isEmpty)
+                .disabled(runner.overallStatus == "running" || username.isEmpty || deviceName.isEmpty)
 
                 if runner.overallStatus == "running" {
                     ProgressView().scaleEffect(0.8)

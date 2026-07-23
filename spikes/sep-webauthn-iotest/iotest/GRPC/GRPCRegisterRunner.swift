@@ -70,6 +70,18 @@ struct RegisteredSEPKey {
     let publicKeyRaw: Data
 }
 
+extension GRPCError {
+    /// gRPC status code 6 = ALREADY_EXISTS. Teleport returns this from
+    /// AddMFADeviceSync when a device with the requested name already
+    /// exists for the user. The raw message ("grpc(6): MFA device with
+    /// name \"X\" already exists") is accurate but not actionable —
+    /// surface a hint to delete the old device in the portal.
+    var isAlreadyExists: Bool {
+        if case .grpc(let status, _) = self, status == 6 { return true }
+        return false
+    }
+}
+
 /// Phase 2 runner: register a SEP key via gRPC using the Phase 1 cert.
 ///
 /// `@MainActor` because it publishes to SwiftUI + calls SecureEnclaveSigner
@@ -113,23 +125,25 @@ final class GRPCRegisterRunner: ObservableObject {
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
     ///   - clientCertPEM: the Phase 1 TLS cert (PEM)
     ///   - privateKey: the Phase 1 TLS private key (SecKey)
-    func run(host: String, clientCertPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String]) async {
+    ///   - deviceName: the name to register the SEP key under (must be unique
+    ///     per Teleport user; ALREADY_EXISTS is surfaced as an actionable error)
+    func run(host: String, clientCertPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String], deviceName: String) async {
         resetSteps()
         overallStatus = "running"
-        appendLog("Starting Phase 2: gRPC SEP-key registration…")
-        GRPCRegisterLog.result("started host=\(host)")
+        appendLog("Starting Phase 2: gRPC SEP-key registration (device name=\(deviceName))…")
+        GRPCRegisterLog.result("started host=\(host) device=\(deviceName)")
 
         #if canImport(Network)
         do {
-            try await runFlow(host: host, certPEM: clientCertPEM, privateKey: privateKey, clusterName: clusterName, clusterCAPEMs: clusterCAPEMs)
+            try await runFlow(host: host, certPEM: clientCertPEM, privateKey: privateKey, clusterName: clusterName, clusterCAPEMs: clusterCAPEMs, deviceName: deviceName)
             overallStatus = "passed"
             GRPCRegisterLog.result("PASSED — SEP key registered via gRPC")
             appendLog("=== PASSED — SEP key registered via gRPC ===")
         } catch let e as GRPCError {
-            self.error = e.description
+            self.error = GRPCRegisterRunner.actionableMessage(for: e, deviceName: deviceName)
             overallStatus = "failed"
             GRPCRegisterLog.result("FAILED: \(e.description)")
-            appendLog("FAILED: \(e.description)")
+            appendLog("FAILED: \(actionableMessage(for: e, deviceName: deviceName))")
         } catch {
             self.error = error.localizedDescription
             overallStatus = "failed"
@@ -147,7 +161,7 @@ final class GRPCRegisterRunner: ObservableObject {
     // MARK: - Flow
 
     #if canImport(Network)
-    private func runFlow(host: String, certPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String]) async throws {
+    private func runFlow(host: String, certPEM: String, privateKey: SecKey, clusterName: String, clusterCAPEMs: [String], deviceName: String) async throws {
         // ── Step 1: connect gRPC ──────────────────────────────────────────
         try await setStep(1, .inProgress)
         appendLog("[1/6] Dialing \(host):443 with TLS+ALPN(teleport-auth@<cluster>)+client cert…")
@@ -244,7 +258,7 @@ final class GRPCRegisterRunner: ObservableObject {
         try await setStep(6, .inProgress)
         var addReq = Proto_AddMFADeviceSyncRequest()
         addReq.contextUser = Proto_ContextUser()
-        addReq.newDeviceName = "vvterm-1.10-spike"
+        addReq.newDeviceName = deviceName
         addReq.newMfaResponse = Proto_MFARegisterResponse()
         // Build the WebAuthn registration response into the proto type.
         addReq.newMfaResponse.webauthn = Proto_CredentialCreationResponse()
@@ -283,5 +297,21 @@ final class GRPCRegisterRunner: ObservableObject {
 
     private func appendLog(_ line: String) {
         log.append(line)
+    }
+
+    // MARK: - Actionable error messages
+
+    /// Turn a gRPC error into a user-facing message with a suggested next step.
+    /// For ALREADY_EXISTS (code 6), hint that the user delete the old device
+    /// in the Teleport web portal (or pick a new name).
+    static func actionableMessage(for error: GRPCError, deviceName: String) -> String {
+        if error.isAlreadyExists {
+            return """
+            A device named \"\(deviceName)\" already exists for this user. \
+            Delete it in the Teleport web portal (Settings → Management → Devices / \
+            Add MFA Device), then retry — or pick a new name in the Device field above.
+            """
+        }
+        return error.description
     }
 }

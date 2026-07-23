@@ -76,11 +76,14 @@ final class FullFlowRunner: ObservableObject {
     /// - Parameters:
     ///   - user: the Teleport username
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it")
-    func run(user: String, host: String) async {
+    ///   - deviceName: the name to register the SEP key under (must be unique
+    ///     per Teleport user; collisions return ALREADY_EXISTS from
+    ///     AddMFADeviceSync — delete the old device in the portal and retry)
+    func run(user: String, host: String, deviceName: String) async {
         resetPhases()
         overallStatus = "running"
         appendLog("=== Starting full chain: cert → gRPC → SEP-key → login ===")
-        FullFlowLog.step("started", "user=\(user) host=\(host)")
+        FullFlowLog.step("started", "user=\(user) host=\(host) device=\(deviceName)")
 
         // ── Phase 1: headless bootstrap ───────────────────────────────────
         setPhase(1, "running")
@@ -129,7 +132,7 @@ final class FullFlowRunner: ObservableObject {
         // ── Phase 2: gRPC register SEP key ────────────────────────────────
         setPhase(2, "running")
         appendLog("\n--- Phase 2: gRPC register SEP key ---")
-        await grpcRegister.run(host: host, clientCertPEM: headless.tlsCertPEM, privateKey: tlsKeyPair.privateKey, clusterName: headless.clusterName, clusterCAPEMs: headless.clusterCAPEMs)
+        await grpcRegister.run(host: host, clientCertPEM: headless.tlsCertPEM, privateKey: tlsKeyPair.privateKey, clusterName: headless.clusterName, clusterCAPEMs: headless.clusterCAPEMs, deviceName: deviceName)
 
         if grpcRegister.overallStatus != "passed" {
             setPhase(2, "failed", grpcRegister.error)
