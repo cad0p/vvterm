@@ -143,7 +143,7 @@ final class GRPCRegisterRunner: ObservableObject {
             self.error = GRPCRegisterRunner.actionableMessage(for: e, deviceName: deviceName)
             overallStatus = "failed"
             GRPCRegisterLog.result("FAILED: \(e.description)")
-            appendLog("FAILED: \(actionableMessage(for: e, deviceName: deviceName))")
+            appendLog("FAILED: \(GRPCRegisterRunner.actionableMessage(for: e, deviceName: deviceName))")
         } catch {
             self.error = error.localizedDescription
             overallStatus = "failed"
