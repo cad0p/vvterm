@@ -216,6 +216,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
     case password
     case sshKey
     case sshKeyWithPassphrase
+    case faceIDTeleport
 
     var id: String { rawValue }
 
@@ -224,6 +225,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
         case .password: return String(localized: "Password")
         case .sshKey: return String(localized: "SSH Key")
         case .sshKeyWithPassphrase: return String(localized: "SSH Key + Passphrase")
+        case .faceIDTeleport: return String(localized: "Face ID (Teleport)")
         }
     }
 
@@ -232,6 +234,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
         case .password: return "key.fill"
         case .sshKey: return "lock.doc.fill"
         case .sshKeyWithPassphrase: return "lock.shield.fill"
+        case .faceIDTeleport: return "faceid"
         }
     }
 }
