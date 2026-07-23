@@ -286,7 +286,16 @@ final class HeadlessRunner: NSObject, ObservableObject {
         }
 
         certBase64 = cert
-        tlsCertPEM = resp.tlsCert ?? ""
+        // The TLS cert (resp.tlsCert) is a Go []byte marshaled as base64,
+        // so it's base64(PEM). Decode to the actual PEM string for Phase 2.
+        // (Same for resp.cert — it's base64(PEM) too; 1.9 stored it as-is.)
+        if let tlsB64 = resp.tlsCert,
+           let tlsPEMData = Data(base64Encoded: tlsB64),
+           let tlsPEM = String(data: tlsPEMData, encoding: .utf8) {
+            tlsCertPEM = tlsPEM
+        } else {
+            tlsCertPEM = ""
+        }
         let certLen = cert.count
         HeadlessLog.headlessApproved(certLength: certLen)
         appendLog("[5/6] POST returned (took \(String(format: "%.1f", elapsed))s, cert \(certLen) chars, tls_cert \(tlsCertPEM.count) chars)")
