@@ -1506,6 +1506,12 @@ actor SSHSession {
         }
 
         switch config.authMethod {
+        case .faceIDTeleport:
+            // TODO: Teleport cert seam — feed cert + ed25519 private key to
+            // libssh2_userauth_publickey_frommemory. Lands in a follow-up commit
+            // (Wave 3 of the Teleport SEP-key integration). Until then, this
+            // method is unreachable from the UI (the form gates on readiness).
+            throw SSHError.authenticationFailed
         case .password:
             guard let password = config.credentials.password else {
                 logger.error("No password provided")

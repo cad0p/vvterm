@@ -96,6 +96,9 @@ final class KeychainManager {
         }
 
         switch server.authMethod {
+        case .faceIDTeleport:
+            // Teleport creds (SEP key + cert) are managed by TeleportKeyRing, not here.
+            break
         case .password:
             credentials.password = try getPassword(for: server.id)
             logger.info("Password retrieved: \(credentials.password != nil)")

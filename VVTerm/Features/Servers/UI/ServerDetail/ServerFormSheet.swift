@@ -92,6 +92,9 @@ struct ServerFormCredentialBuilder {
         }
 
         switch authMethod {
+        case .faceIDTeleport:
+            // No password/key credentials — Teleport uses SEP key + cert (TeleportKeyRing).
+            break
         case .password:
             credentials.password = password
         case .sshKey:
@@ -364,6 +367,9 @@ struct ServerFormSheet: View {
 
                 if server.connectionMode != .tailscale {
                     switch server.authMethod {
+                    case .faceIDTeleport:
+                        // No password/key to load — Teleport creds live in TeleportKeyRing.
+                        break
                     case .password:
                         if let pwd = credentials.password {
                             password = pwd
@@ -697,6 +703,12 @@ struct ServerFormSheet: View {
                 }
 
                 switch selectedAuthMethod {
+                case .faceIDTeleport:
+                    // TODO: Teleport setup panel (Wave 3) — bootstrap + registration + login.
+                    // Placeholder until the Teleport UI views land.
+                    Text(String(localized: "Teleport setup will appear here."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 case .password:
                     SecureField("Password", text: $password, prompt: Text(String(localized: "Required")))
                         #if os(iOS)
@@ -954,6 +966,9 @@ struct ServerFormSheet: View {
         }
 
         switch selectedAuthMethod {
+        case .faceIDTeleport:
+            // Readiness is derived from keychain state, not form fields.
+            return true
         case .password:
             return !password.isEmpty
         case .sshKey:
@@ -1193,6 +1208,9 @@ struct ServerFormSheet: View {
                     let publicKeyData = sshPublicKey.isEmpty ? nil : sshPublicKey.data(using: .utf8)
                     if transportSelection != .tailscale {
                         switch selectedAuthMethod {
+                        case .faceIDTeleport:
+                            // No keychain creds to store — Teleport creds live in TeleportKeyRing.
+                            break
                         case .password:
                             if !password.isEmpty {
                                 try KeychainManager.shared.storePassword(for: newServer.id, password: password)
