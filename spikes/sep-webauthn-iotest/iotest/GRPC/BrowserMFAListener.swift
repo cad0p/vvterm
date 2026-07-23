@@ -23,7 +23,10 @@
 //  startServer + callback + WaitForResponse):
 //    1. Generate an AES-256-GCM key (32 random bytes), hex-encode for the URL.
 //    2. Start NWListener on 127.0.0.1, port 0 (OS-assigned).
-//    3. Expose clientCallbackURL = "http://127.0.0.1:<port>/callback?secret_key=<hex>".
+//    3. Expose clientCallbackURL = "http://localhost:<port>/callback?secret_key=<hex>".
+//       (localhost, not 127.0.0.1, so Safari's HTTPS-Only mode doesn't show
+//       the "connection is not secure" banner — Safari treats localhost as a
+//       secure context but shows the banner for a literal 127.0.0.1 IP.)
 //    4. On GET/POST to /callback, read `response` query param, decrypt with
 //       the key, decode CLILoginResponse JSON, extract
 //       BrowserMFAWebauthnResponse (a CredentialAssertionResponse).
@@ -35,12 +38,21 @@
 //  key is the raw 32 bytes (NOT hex-decoded for crypto — hex is only the URL
 //  transport). See lib/secret/secret.go.
 //
+//  The decrypted plaintext is Go encoding/json output of CLILoginResponse
+//  (lib/auth/authclient/clt.go:1432) — NOT proto JSON. The inner
+//  BrowserMFAWebauthnResponse is a wantypes.CredentialAssertionResponse
+//  (lib/auth/webauthntypes/webauthn.go:112), a plain Go struct with json
+//  tags. Its binary fields are protocol.URLEncodedBase64
+//  (go-webauthn/webauthn/protocol/base64.go), which marshals as
+//  base64.RawURLEncoding (URL-safe, NO padding). We therefore decode with
+//  plain Codable structs + a custom base64url-no-padding Data decoder, then
+//  map into the proto types the rest of the spike expects.
+//
 
 import Foundation
 import OSLog
 import CryptoKit
 import Network
-import SwiftProtobuf
 
 // MARK: - Log markers
 
@@ -85,9 +97,10 @@ private struct SealedEnvelope: Decodable {
 
 /// The CLILoginResponse (lib/auth/authclient/clt.go:1448) — we only need the
 /// BrowserMFAWebauthnResponse field. The JSON tag is
-/// "browser_mfa_webauthn_response". We decode this via
-/// Proto_CLILoginResponseWrapper (a SwiftProtobuf.Message) so SwiftProtobuf
-/// handles the JSON decoding + the nested CredentialAssertionResponse proto.
+/// "browser_mfa_webauthn_response". We decode the decrypted payload (Go
+/// encoding/json output, NOT proto JSON — see decryptAndDecode) with plain
+/// Codable structs (CLIResponsePayload + WebAuthnAssertionResponse) and map
+/// into the proto type the ceremony consumes.
 
 
 // MARK: - Listener
@@ -125,10 +138,13 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
     private var timeoutTimer: Timer?
     private let timeout: TimeInterval = 180
 
-    /// The host address we bind to. 127.0.0.1 is the only universally-safe
-    /// loopback on iOS (127.x.x.x other than .0.0.1 is not supported,
-    /// per Apple Developer Forums thread 724864).
-    private let host = "127.0.0.1"
+    /// The hostname we advertise in the callback URL. We bind NWListener to
+    /// `.any` (all interfaces, including loopback) but advertise `localhost`
+    /// rather than `127.0.0.1` so Safari's HTTPS-Only mode treats it as a
+    /// secure context and doesn't show the "connection is not secure"
+    /// banner. ValidateClientRedirect (lib/client/sso/redirector.go) accepts
+    /// both `localhost` and `127.0.0.1` for the http scheme.
+    private let host = "localhost"
 
     override init() {
         // Generate 32 random bytes for AES-256-GCM.
@@ -325,16 +341,29 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
         } catch {
             throw BrowserMFAListenerError.decryptFailed("open: \(error.localizedDescription)")
         }
-        // 3. Decode CLILoginResponse JSON → BrowserMFAWebauthnResponse.
-        //    The inner response is a webauthn.CredentialAssertionResponse,
-        //    serialized with the proto JSON tags. We decode it into the
-        //    proto type directly (SwiftProtobuf supports JSON decoding).
+        // Log a prefix of the decrypted plaintext so the next device run can
+        // confirm the JSON shape (e.g. which fields are present, whether keys
+        // are snake_case as expected). Truncated to avoid dumping the full
+        // WebAuthn response to the log.
+        let preview = String(data: plaintext.prefix(512), encoding: .utf8) ?? "<binary>"
+        BrowserMFAListenerLog.step("plaintext", "\(preview)")
+        // 3. Decode the decrypted CLILoginResponse JSON.
+        //
+        //    IMPORTANT: this is Go encoding/json output of the
+        //    CLILoginResponse struct (lib/auth/authclient/clt.go:1432),
+        //    NOT proto JSON. The inner BrowserMFAWebauthnResponse is a
+        //    wantypes.CredentialAssertionResponse (a plain Go struct),
+        //    and its binary fields are protocol.URLEncodedBase64, which
+        //    marshals as base64.RawURLEncoding (URL-safe, no padding).
+        //    SwiftProtobuf JSON decoding cannot handle either of these
+        //    (it expects proto field names + padded base64), so we decode
+        //    with plain Codable structs and map into the proto type.
         do {
-            let loginResp = try Proto_CLILoginResponseWrapper(jsonUTF8Data: plaintext)
-            guard loginResp.hasBrowserMfaWebauthnResponse else {
+            let loginResp = try JSONDecoder().decode(CLIResponsePayload.self, from: plaintext)
+            guard let webauthn = loginResp.browserMFAWebauthnResponse else {
                 throw BrowserMFAListenerError.decodeFailed("no browser_mfa_webauthn_response field")
             }
-            return loginResp.browserMfaWebauthnResponse
+            return webauthn.intoProto()
         } catch {
             throw BrowserMFAListenerError.decodeFailed("CLILoginResponse: \(error.localizedDescription)")
         }
@@ -384,60 +413,100 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
     """
 }
 
-// MARK: - CLILoginResponse proto wrapper (for JSON decode)
+// MARK: - CLILoginResponse Codable types (Go encoding/json decode)
 
-/// A minimal proto wrapper to decode the CLILoginResponse JSON the server
-/// produces. We only need the `browser_mfa_webauthn_response` field. We
-/// define it as a SwiftProtobuf message so we get JSON decoding for free.
-///
-/// The JSON tag matches lib/auth/authclient/clt.go:1451
-/// (`browser_mfa_webauthn_response`). The inner CredentialAssertionResponse
-/// is the same proto type we already have (Proto_CredentialAssertionResponse).
-struct Proto_CLILoginResponseWrapper: SwiftProtobuf.Message {
-    var browserMfaWebauthnResponse: Proto_CredentialAssertionResponse {
-        get {return _browserMfaWebauthnResponse ?? Proto_CredentialAssertionResponse()}
-        set {_browserMfaWebauthnResponse = newValue}
+/// The decrypted Browser MFA callback payload. This mirrors the Go
+/// `CLILoginResponse` struct (lib/auth/authclient/clt.go:1432) — it is
+/// produced by `json.Marshal` (Go encoding/json), NOT proto JSON, so we
+/// decode with plain `Codable` structs. We only declare the one field the
+/// spike needs; the rest (`username`, `cert`, `host_signers`, …) are
+/// silently ignored by `JSONDecoder`.
+private struct CLIResponsePayload: Decodable {
+    /// `browser_mfa_webauthn_response` in the JSON (Go struct tag).
+    let browserMFAWebauthnResponse: WebAuthnAssertionResponse?
+
+    enum CodingKeys: String, CodingKey {
+        case browserMFAWebauthnResponse = "browser_mfa_webauthn_response"
     }
-    var hasBrowserMfaWebauthnResponse: Bool {return _browserMfaWebauthnResponse != nil}
-    mutating func clearBrowserMfaWebauthnResponse() {_browserMfaWebauthnResponse = nil}
-
-    var unknownFields = SwiftProtobuf.UnknownStorage()
-
-    init() {}
-
-    fileprivate var _browserMfaWebauthnResponse: Proto_CredentialAssertionResponse? = nil
 }
 
-// SwiftProtobuf.Message conformance for the wrapper. This is the minimal
-// boilerplate to get JSON decoding (we only read one field). The field
-// number is irrelevant for JSON decoding (JSON uses field names), but we
-// pick 1 to be consistent with the real CLILoginResponse (which has many
-// fields — we just ignore the rest via unknownFields).
-extension Proto_CLILoginResponseWrapper: SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-    static let protoMessageName: String = "proto.CLILoginResponse"
-    static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-        1: .standard(proto: "browser_mfa_webauthn_response"),
-    ]
+/// Mirrors `wantypes.CredentialAssertionResponse`
+/// (lib/auth/webauthntypes/webauthn.go:112). The embedding mirrors the Go
+/// struct: `PublicKeyCredential` (which embeds `Credential`) + `response`.
+/// Binary fields are `protocol.URLEncodedBase64` (base64.RawURLEncoding —
+/// URL-safe, no padding), decoded via `URLSafeBase64Data` below.
+private struct WebAuthnAssertionResponse: Decodable {
+    let id: String?
+    let type: String?
+    let rawID: URLSafeBase64Data?
+    let response: AssertionResponse?
 
-    mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-        while let fieldNumber = try decoder.nextFieldNumber() {
-            switch fieldNumber {
-            case 1: try decoder.decodeSingularMessageField(value: &self._browserMfaWebauthnResponse)
-            default: break
-            }
-        }
+    enum CodingKeys: String, CodingKey {
+        // Go json tags: id, type, rawId, response.
+        case id, type, rawID = "rawId", response
+    }
+}
+
+/// Mirrors `wantypes.AuthenticatorAssertionResponse`
+/// (lib/auth/webauthntypes/webauthn.go:127). Embeds `AuthenticatorResponse`
+/// (which carries `clientDataJSON`) + the assertion-specific binary fields.
+private struct AssertionResponse: Decodable {
+    let clientDataJSON: URLSafeBase64Data?
+    let authenticatorData: URLSafeBase64Data?
+    let signature: URLSafeBase64Data?
+    let userHandle: URLSafeBase64Data?
+}
+
+/// A base64url-no-padding `Data` wrapper matching Go's
+/// `protocol.URLEncodedBase64` (go-webauthn/webauthn/protocol/base64.go:
+/// `base64.RawURLEncoding`). Swift's `Data(base64Encoded:)` only accepts
+/// padded standard base64, so we add padding (if needed) before decoding.
+/// We also accept standard base64 (with `+`/`/`) as a fallback, since older
+/// Teleport builds may emit it.
+private struct URLSafeBase64Data: Decodable {
+    let data: Data
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        data = URLSafeBase64Data.decode(raw) ?? Data()
     }
 
-    func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-        if let v = self._browserMfaWebauthnResponse {
-            try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    /// Decode a base64url (no padding) or standard base64 string to `Data`.
+    static func decode(_ string: String) -> Data? {
+        // First try base64url without padding (Go's RawURLEncoding).
+        // `Data(base64Encoded:options:)` with `.urlSafe` accepts unpadded
+        // input on Apple platforms, but we add padding defensively so the
+        // decode is robust across OS versions.
+        var s = string.replacingOccurrences(of: "-", with: "+")
+                      .replacingOccurrences(of: "_", with: "/")
+        let mod = s.count % 4
+        if mod != 0 {
+            s.append(String(repeating: "=", count: 4 - mod))
         }
-        try unknownFields.traverse(visitor: &visitor)
+        return Data(base64Encoded: s)
     }
+}
 
-    static func ==(lhs: Proto_CLILoginResponseWrapper, rhs: Proto_CLILoginResponseWrapper) -> Bool {
-        if lhs._browserMfaWebauthnResponse != rhs._browserMfaWebauthnResponse {return false}
-        if lhs.unknownFields != rhs.unknownFields {return false}
-        return true
+// MARK: - Mapping to the proto types the ceremony/runner consume
+
+extension WebAuthnAssertionResponse {
+    /// Map the Codable-decoded response into the proto type
+    /// (`Proto_CredentialAssertionResponse`) the rest of the spike expects.
+    /// Missing fields default to empty (matching proto3 semantics).
+    func intoProto() -> Proto_CredentialAssertionResponse {
+        var p = Proto_CredentialAssertionResponse()
+        p.id = id ?? ""
+        p.type = type ?? ""
+        p.rawID = rawID?.data ?? Data()
+        if let response {
+            var r = Proto_AuthenticatorAssertionResponse()
+            r.clientDataJson = response.clientDataJSON?.data ?? Data()
+            r.authenticatorData = response.authenticatorData?.data ?? Data()
+            r.signature = response.signature?.data ?? Data()
+            r.userHandle = response.userHandle?.data ?? Data()
+            p.response = r
+        }
+        return p
     }
 }
