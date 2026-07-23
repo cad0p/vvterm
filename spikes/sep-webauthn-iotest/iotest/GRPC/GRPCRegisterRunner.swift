@@ -214,7 +214,9 @@ final class GRPCRegisterRunner: ObservableObject {
         var regReq = Proto_CreateRegisterChallengeRequest()
         regReq.deviceType = .webauthn
         regReq.deviceUsage = .passwordless
-        regReq.existingMfaResponse = existingMfaResponse
+        if let existingMfaResponse {
+            regReq.existingMfaResponse = existingMfaResponse
+        }
         GRPCRegisterLog.step("create_register_challenge", "WEBAUTHN PASSWORDLESS")
         appendLog("[4/6] CreateRegisterChallenge (WEBAUTHN, PASSWORDLESS)…")
         let regChal: Proto_MFARegisterChallenge = try await conn.unary(
