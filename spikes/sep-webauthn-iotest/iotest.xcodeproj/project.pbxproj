@@ -23,6 +23,12 @@
 		E10000010000000000000006 /* iotest_mfa.proto in Resources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000006 /* iotest_mfa.proto */; };
 		F10000010000000000000001 /* FullFlowRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000100000000000000001 /* FullFlowRunner.swift */; };
 		F10000010000000000000002 /* FullFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000100000000000000002 /* FullFlowView.swift */; };
+		D10000010000000000000010 /* WebAuthn.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000010 /* WebAuthn.swift */; };
+		D10000010000000000000011 /* SecureEnclaveSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000011 /* SecureEnclaveSigner.swift */; };
+		D10000010000000000000012 /* Attestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000012 /* Attestation.swift */; };
+		D10000010000000000000013 /* CBOR.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000013 /* CBOR.swift */; };
+		D10000010000000000000014 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000014 /* Signer.swift */; };
+		E10000010000000000000007 /* MFALoginWireTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000007 /* MFALoginWireTypes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +42,12 @@
 		D10000100000000000000003 /* HeadlessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessRunner.swift; sourceTree = "<group>"; };
 		D10000100000000000000004 /* HeadlessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessView.swift; sourceTree = "<group>"; };
 		D10000100000000000000005 /* SSHPubKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHPubKey.swift; sourceTree = "<group>"; };
+		D10000100000000000000010 /* WebAuthn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthn.swift; sourceTree = "<group>"; };
+		D10000100000000000000011 /* SecureEnclaveSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureEnclaveSigner.swift; sourceTree = "<group>"; };
+		D10000100000000000000012 /* Attestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attestation.swift; sourceTree = "<group>"; };
+		D10000100000000000000013 /* CBOR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CBOR.swift; sourceTree = "<group>"; };
+		D10000100000000000000014 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
+		E10000100000000000000007 /* MFALoginWireTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MFALoginWireTypes.swift; sourceTree = "<group>"; };
 		D10000100000000000000006 /* headless_id.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = headless_id.txt; sourceTree = "<group>"; };
 		E10000100000000000000001 /* iotest_mfa.pb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iotest_mfa.pb.swift; sourceTree = "<group>"; };
 		E10000100000000000000002 /* GRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRPCClient.swift; sourceTree = "<group>"; };
@@ -128,6 +140,7 @@
 				E10000100000000000000003 /* GRPCTransport.swift */,
 				E10000100000000000000004 /* TLSKeyPair.swift */,
 				E10000100000000000000005 /* GRPCRegisterRunner.swift */,
+				E10000100000000000000007 /* MFALoginWireTypes.swift */,
 				E10000100000000000000006 /* iotest_mfa.proto */,
 			);
 			path = GRPC;
@@ -157,6 +170,11 @@
 			isa = PBXGroup;
 			children = (
 				D10000100000000000000005 /* SSHPubKey.swift */,
+				D10000100000000000000010 /* WebAuthn.swift */,
+				D10000100000000000000011 /* SecureEnclaveSigner.swift */,
+				D10000100000000000000012 /* Attestation.swift */,
+				D10000100000000000000013 /* CBOR.swift */,
+				D10000100000000000000014 /* Signer.swift */,
 			);
 			name = "SEPWebAuthn (from spike)";
 			path = "../sep-webauthn/Sources/SEPWebAuthn";
@@ -254,7 +272,13 @@
 				D10000010000000000000003 /* HeadlessRunner.swift in Sources */,
 				D10000010000000000000004 /* HeadlessView.swift in Sources */,
 				D10000010000000000000005 /* SSHPubKey.swift in Sources */,
+				D10000010000000000000010 /* WebAuthn.swift in Sources */,
+				D10000010000000000000011 /* SecureEnclaveSigner.swift in Sources */,
+				D10000010000000000000012 /* Attestation.swift in Sources */,
+				D10000010000000000000013 /* CBOR.swift in Sources */,
+				D10000010000000000000014 /* Signer.swift in Sources */,
 				E10000010000000000000001 /* iotest_mfa.pb.swift in Sources */,
+				E10000010000000000000007 /* MFALoginWireTypes.swift in Sources */,
 				E10000010000000000000002 /* GRPCClient.swift in Sources */,
 				E10000010000000000000003 /* GRPCTransport.swift in Sources */,
 				E10000010000000000000004 /* TLSKeyPair.swift in Sources */,

@@ -266,6 +266,8 @@ struct Proto_CredentialAssertionResponse: @unchecked Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  var id: String = String()
+
   var type: String = String()
 
   var rawID: Data = Data()
@@ -396,6 +398,8 @@ struct Proto_CredentialCreationResponse: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
+
+  var id: String = String()
 
   var type: String = String()
 
@@ -936,6 +940,7 @@ extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._Mess
 extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialAssertionResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    5: .same(proto: "id"),
     1: .same(proto: "type"),
     2: .standard(proto: "raw_id"),
     3: .same(proto: "response"),
@@ -950,6 +955,7 @@ extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobu
       case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
       case 2: try { try decoder.decodeSingularBytesField(value: &self.rawID) }()
       case 3: try { try decoder.decodeSingularMessageField(value: &self._response) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.id) }()
       default: break
       }
     }
@@ -969,10 +975,14 @@ extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobu
     try { if let v = self._response {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     } }()
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 5)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Proto_CredentialAssertionResponse, rhs: Proto_CredentialAssertionResponse) -> Bool {
+    if lhs.id != rhs.id {return false}
     if lhs.type != rhs.type {return false}
     if lhs.rawID != rhs.rawID {return false}
     if lhs._response != rhs._response {return false}
@@ -1212,6 +1222,7 @@ extension Proto_UserEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImpleme
 extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialCreationResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    5: .same(proto: "id"),
     1: .same(proto: "type"),
     2: .standard(proto: "raw_id"),
     3: .same(proto: "response"),
@@ -1226,6 +1237,7 @@ extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf
       case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
       case 2: try { try decoder.decodeSingularBytesField(value: &self.rawID) }()
       case 3: try { try decoder.decodeSingularMessageField(value: &self._response) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.id) }()
       default: break
       }
     }
@@ -1245,10 +1257,14 @@ extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf
     try { if let v = self._response {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     } }()
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 5)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Proto_CredentialCreationResponse, rhs: Proto_CredentialCreationResponse) -> Bool {
+    if lhs.id != rhs.id {return false}
     if lhs.type != rhs.type {return false}
     if lhs.rawID != rhs.rawID {return false}
     if lhs._response != rhs._response {return false}

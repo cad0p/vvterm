@@ -61,6 +61,7 @@ message CredentialDescriptor {
   repeated string transports = 3;
 }
 message CredentialAssertionResponse {
+  string id = 5;
   string type = 1;
   bytes raw_id = 2;
   AuthenticatorAssertionResponse response = 3;
@@ -92,6 +93,7 @@ message UserEntity {
   string display_name = 3;
 }
 message CredentialCreationResponse {
+  string id = 5;
   string type = 1;
   bytes raw_id = 2;
   AuthenticatorAttestationResponse response = 3;

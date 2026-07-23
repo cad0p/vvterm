@@ -177,7 +177,7 @@ final class GRPCRegisterRunner: ObservableObject {
             responseType: Proto_MFAAuthenticateChallenge.self
         )
         GRPCRegisterLog.step("create_auth_challenge", "got challenge")
-        let challengeStr = authChal.webauthnChallenge?.publicKey.challenge ?? Data()
+        let challengeStr = authChal.webauthnChallenge.publicKey.challenge
         appendLog("[2/6] Got authenticate challenge (\(challengeStr.count) bytes)")
         try await setStep(2, .done, "challenge \(challengeStr.count)B")
 
@@ -189,7 +189,7 @@ final class GRPCRegisterRunner: ObservableObject {
         // may be nil — in that case we skip step 3 (CreateRegisterChallenge
         // works without ExistingMFAResponse for the first device).
         var existingMfaResponse: Proto_MFAAuthenticateResponse? = nil
-        if authChal.webauthnChallenge != nil && !challengeStr.isEmpty {
+        if !authChal.webauthnChallenge.publicKey.challenge.isEmpty {
             try await setStep(3, .inProgress)
             appendLog("[3/6] Solving existing-device challenge (Face ID #1)…")
             GRPCRegisterLog.step("solve_existing", "Face ID #1")
@@ -223,11 +223,11 @@ final class GRPCRegisterRunner: ObservableObject {
             responseType: Proto_MFARegisterChallenge.self
         )
         GRPCRegisterLog.step("create_register_challenge", "got challenge")
-        guard let webauthnCC = regChal.webauthn?.publicKey,
-              !webauthnCC.challenge.isEmpty else {
+        let webauthnCC = regChal.webauthn.publicKey
+        guard !webauthnCC.challenge.isEmpty else {
             throw GRPCError.decode("no webauthn register challenge")
         }
-        let rpID = webauthnCC.rp?.id ?? host
+        let rpID = webauthnCC.rp.id.isEmpty ? host : webauthnCC.rp.id
         let challenge = webauthnCC.challenge
         appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID))")
         try await setStep(4, .done, "challenge \(challenge.count)B, rpID=\(rpID)")
@@ -255,9 +255,9 @@ final class GRPCRegisterRunner: ObservableObject {
         // Build the WebAuthn registration response into the proto type.
         addReq.newMfaResponse.webauthn = Proto_CredentialCreationResponse()
         // The SEPWebAuthn.CredentialCreationResponse fields are base64url-
-        // encoded STRINGS; the proto expects raw BYTES. Decode them.
+        // encoded STRINGS; the proto expects raw BYTES (raw_id) + a string id.
         addReq.newMfaResponse.webauthn.id = ccr.id
-        addReq.newMfaResponse.webauthn.rawId = Data(base64URLEncoded: ccr.rawId) ?? Data(ccr.rawId.utf8)
+        addReq.newMfaResponse.webauthn.rawID = Data(base64URLEncoded: ccr.rawId) ?? Data(ccr.rawId.utf8)
         addReq.newMfaResponse.webauthn.type = ccr.type
         addReq.newMfaResponse.webauthn.response.clientDataJson = Data(base64URLEncoded: ccr.response.clientDataJSON) ?? Data(ccr.response.clientDataJSON.utf8)
         addReq.newMfaResponse.webauthn.response.attestationObject = Data(base64URLEncoded: ccr.response.attestationObject) ?? Data(ccr.response.attestationObject.utf8)
