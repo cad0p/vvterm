@@ -303,12 +303,13 @@ final class FullFlowRunner: ObservableObject {
         FullFlowLog.step("phase3_login_begin", "challenge=\(loginChallenge.count)B rpID=\(loginRpID)")
 
         // Step 5: WebAuthn.login with the registered SEP key (Face ID #3).
+        FullFlowLog.step("phase3_webauthn_login", "signing credID=\(registeredKey.credentialID.count)B userHandle=\(registeredKey.userHandle.count)B")
         let assertionResp = try WebAuthn.login(
             origin: origin, rpID: loginRpID, challenge: loginChallenge,
             credentialID: registeredKey.credentialID, userHandle: registeredKey.userHandle, signer: signer
         )
         appendLog("  [3b] WebAuthn.login signed (Face ID #3)")
-        FullFlowLog.step("phase3_webauthn_login", "signed")
+        FullFlowLog.step("phase3_webauthn_login", "signed sig=\(assertionResp.response.signature.count)B")
 
         // Step 6: ssh-keygen.
         let sshPubKey = SSHPubKey.generateEd25519AuthorizedKeys(comment: "vvterm-1.10-phase3")

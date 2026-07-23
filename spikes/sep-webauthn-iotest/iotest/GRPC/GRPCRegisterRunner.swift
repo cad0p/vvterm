@@ -247,6 +247,7 @@ final class GRPCRegisterRunner: ObservableObject {
         // for passwordless login verify (login.go:268). It's a base64url-
         // encoded byte string in the proto (UserEntity.id is a string).
         let userHandle = Data(base64URLEncoded: webauthnCC.user.id) ?? Data(webauthnCC.user.id.utf8)
+        GRPCRegisterLog.step("create_register_challenge", "got challenge userHandle=\(userHandle.count)B user.id=\(webauthnCC.user.id.prefix(16))")
         appendLog("[4/6] Got register challenge (\(challenge.count) bytes, rpID=\(rpID), userHandle=\(userHandle.count)B)")
         try await setStep(4, .done, "challenge \(challenge.count)B, rpID=\(rpID)")
 
