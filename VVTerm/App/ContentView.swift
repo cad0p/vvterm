@@ -30,7 +30,7 @@ struct ContentView: View {
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
     // Republishes the hosted detail pane's command actions as scene focus
     // values so the menu commands (Cmd+T/W, tab nav, splits) can reach them.
-    @StateObject private var commandBridge = MacShellCommandBridge.shared
+    @StateObject private var commandBridge = MacShellCommandBridge()
     #endif
 
     @State private var selectedWorkspace: Workspace?
@@ -42,19 +42,22 @@ struct ContentView: View {
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
 
-    /// Whether the selected server is connected
-    private var isSelectedServerConnected: Bool {
+    /// Whether the selected server has an open terminal/file surface.
+    private var selectedServerHasOpenConnectionSurface: Bool {
         guard let selected = selectedServer else { return false }
-        return tabManager.connectedServerIds.contains(selected.id)
+        return hasOpenConnectionSurface(for: selected.id)
     }
 
-    /// Whether we have any connected servers
-    private var hasConnectedServers: Bool {
-        !tabManager.connectedServerIds.isEmpty
+    /// Whether any server has an open terminal/file surface.
+    private var hasOpenConnectionSurfaces: Bool {
+        tabManager.tabsByServer.values.contains { !$0.isEmpty }
+            || fileTabs.tabsByServer.values.contains { !$0.isEmpty }
+            || !tabManager.connectedServerIds.isEmpty
     }
 
     private var canUseZenMode: Bool {
-        selectedServer != nil && isSelectedServerConnected
+        guard let selected = selectedServer else { return false }
+        return tabManager.connectedServerIds.contains(selected.id)
     }
 
     private var effectiveZenModeEnabled: Bool {
@@ -90,8 +93,8 @@ struct ContentView: View {
     private var detailContent: some View {
         if let server = selectedServer {
             // A server is selected
-            if isSelectedServerConnected {
-                // Server is connected - show its terminal container
+            if selectedServerHasOpenConnectionSurface {
+                // Server has an open connection surface - show its container
                 ConnectionTerminalContainer(
                     tabManager: tabManager,
                     fileTabManager: fileTabs,
@@ -100,21 +103,24 @@ struct ContentView: View {
                     server: server,
                     isZenModeEnabled: $isZenModeEnabled,
                     isSidebarVisible: isSidebarVisible,
-                    onToggleSidebar: toggleSidebarInZenMode
+                    onToggleSidebar: toggleSidebarInZenMode,
+                    onOpenSettings: nil,
+                    onLeaveRoute: nil,
+                    onDisconnectRoute: nil
                 )
                 .id(server.id) // Ensure isolation per server
-            } else if !hasConnectedServers {
-                // Not connected to any server - can connect freely
+            } else if !hasOpenConnectionSurfaces {
+                // No open connection surfaces - can connect freely
                 ServerConnectEmptyState(server: server) {
                     connectToServer(server)
                 }
             } else if storeManager.isPro {
-                // Pro user already connected to other servers - can connect to more
+                // Pro user already has other open connection surfaces - can connect to more
                 ServerConnectEmptyState(server: server) {
                     connectToServer(server)
                 }
             } else {
-                // Free user already connected to different server - show upgrade
+                // Free user already has another open connection surface - show upgrade
                 MultiConnectionUpgradeEmptyState(server: server)
             }
         } else {
@@ -123,11 +129,24 @@ struct ContentView: View {
         }
     }
 
+    private func hasOpenConnectionSurface(for serverId: UUID) -> Bool {
+        !tabManager.tabs(for: serverId).isEmpty
+            || !fileTabs.tabs(for: serverId).isEmpty
+            || tabManager.connectedServerIds.contains(serverId)
+    }
+
     private func connectToServer(_ server: Server) {
-        Task { @MainActor in
+        Task {
             guard await AppLockManager.shared.ensureServerUnlocked(server) else { return }
-            tabManager.selectedViewByServer[server.id] = ViewTabConfigurationManager.shared.effectiveDefaultTab()
-            tabManager.connectedServerIds.insert(server.id)
+            do {
+                let tab = try await tabManager.openTab(for: server)
+                await MainActor.run {
+                    tabManager.selectedViewByServer[server.id] = ViewTabConfigurationManager.shared.effectiveDefaultTab()
+                    tabManager.selectedTabByServer[server.id] = tab.id
+                }
+            } catch {
+                // No-op: user cancelled biometric auth or the tab limit blocked the open.
+            }
         }
     }
 
@@ -277,6 +296,7 @@ struct ContentView: View {
             .environmentObject(terminalAccessoryPreferencesManager)
             .environmentObject(appLockManager)
             .environmentObject(storeManager)
+            .environmentObject(commandBridge)
             .environment(\.locale, locale)
             .environment(\.privacyModeEnabled, privacyModeEnabled)
     }
@@ -285,7 +305,6 @@ struct ContentView: View {
     var body: some View {
         #if os(macOS)
         macShellContent
-            .proUpgradePresentation(isPresented: $engagementTracker.shouldShowProIntro, source: .postFirstConnection)
             .onChange(of: engagementTracker.reviewRequestToken) { _ in
                 requestReview()
             }
@@ -336,13 +355,16 @@ private struct MainWindowChromeBridge: NSViewRepresentable {
         view.applyIfPossible()
     }
 
-    private func configure(_ window: NSWindow, title: String, backgroundColor: Color) {
+    private static func configure(_ window: NSWindow, title: String, backgroundColor: Color) {
         let nsBackgroundColor = NSColor(backgroundColor)
         if window.title != title {
             window.title = title
         }
         window.backgroundColor = nsBackgroundColor
-        window.titleVisibility = .hidden
+        window.titleVisibility = title.isEmpty ? .hidden : .visible
+        if title.isEmpty {
+            window.subtitle = ""
+        }
         window.titlebarAppearsTransparent = true
         // Keep the content area interactive. Enabling background dragging here
         // causes terminal clicks and drag-to-select gestures to start moving the window.
@@ -374,11 +396,7 @@ private struct MainWindowChromeBridge: NSViewRepresentable {
 
         func applyIfPossible() {
             guard let window else { return }
-            MainWindowChromeBridge(
-                windowTitle: windowTitle,
-                backgroundColor: backgroundColor
-            )
-            .configure(
+            MainWindowChromeBridge.configure(
                 window,
                 title: windowTitle,
                 backgroundColor: backgroundColor

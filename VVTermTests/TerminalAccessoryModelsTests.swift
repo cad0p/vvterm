@@ -22,6 +22,16 @@ struct TerminalAccessoryModelsTests {
     }
 
     @Test
+    func defaultAccessoryProfileIncludesTabNavigationKey() {
+        #expect(TerminalAccessoryProfile.defaultActiveItems.contains(.system(.tab)))
+    }
+
+    @Test
+    func systemAccessoryActionsIncludeShiftTabAlternative() {
+        #expect(TerminalAccessoryProfile.availableSystemActions.contains(.shiftTab))
+    }
+
+    @Test
     func normalizedDeletedSnippetClearsPayload() {
         let deletedAt = Date(timeIntervalSince1970: 1000)
         let profile = TerminalAccessoryProfile(

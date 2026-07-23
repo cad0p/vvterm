@@ -4,14 +4,18 @@
 //
 
 import SwiftUI
-#if os(macOS)
-import AppKit
+#if os(iOS)
+import WidgetKit
 #endif
 
 @main
 struct VVTermApp: App {
     init() {
         TerminalDefaults.applyIfNeeded()
+        #if os(iOS)
+        VVTermLauncherWidgetRefresh.refreshIfNeeded()
+        AnalyticsTracker.shared.prepareAppleAdsAttribution()
+        #endif
     }
 
     #if os(macOS)
@@ -22,6 +26,7 @@ struct VVTermApp: App {
 
     #if os(iOS)
     @StateObject private var ghosttyApp = Ghostty.App(autoStart: false)
+    @StateObject private var screenAwakeCoordinator = TerminalScreenAwakeCoordinator()
     #else
     @StateObject private var ghosttyApp = Ghostty.App()
     #endif
@@ -44,9 +49,20 @@ struct VVTermApp: App {
     @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
     @AppStorage(TerminalDefaults.cursorStyleKey) private var terminalCursorStyle = TerminalDefaults.defaultCursorStyle.rawValue
     @AppStorage(TerminalDefaults.cursorBlinkKey) private var terminalCursorBlink = TerminalDefaults.defaultCursorBlink
+    #if os(macOS)
+    @AppStorage(TerminalDefaults.optionAsAltModeKey) private var terminalOptionAsAltMode = TerminalOptionAsAltMode.none.rawValue
+    #endif
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
+
+    private var terminalOptionAsAltReloadToken: String {
+        #if os(macOS)
+        terminalOptionAsAltMode
+        #else
+        ""
+        #endif
+    }
 
     private var activeCustomThemeVersionToken: String {
         let activeThemes = terminalThemeManager.customThemes.filter { !$0.isDeleted }
@@ -67,6 +83,97 @@ struct VVTermApp: App {
         return "\(darkVersion)"
     }
 
+    #if os(iOS) && DEBUG
+    private var usesTerminalKeyboardUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-keyboard-harness")
+    }
+
+    private var usesTerminalReconnectUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-reconnect-harness")
+    }
+
+    private var usesTerminalScreenAwakeUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-screen-awake-harness")
+    }
+
+    private var usesNoticePresentationUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-harness")
+    }
+
+    private var usesStatsStorageUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-stats-storage-harness")
+    }
+
+    private var usesStatsCardsLayoutUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-stats-cards-layout-harness")
+    }
+
+    private var usesTerminalZenModeUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-zen-mode-harness")
+    }
+    #endif
+
+    #if os(iOS)
+    @ViewBuilder
+    private var iOSRootContent: some View {
+        #if DEBUG
+        if usesNoticePresentationUITestHarness {
+            NoticePresentationUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesStatsCardsLayoutUITestHarness {
+            StatsCardsLayoutUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTerminalZenModeUITestHarness {
+            TerminalZenModeUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesStatsStorageUITestHarness {
+            StatsStorageUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTerminalScreenAwakeUITestHarness {
+            TerminalScreenAwakeUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTerminalReconnectUITestHarness {
+            TerminalReconnectUITestHarness()
+                .environmentObject(ghosttyApp)
+                .environmentObject(terminalThemeManager)
+                .environmentObject(terminalAccessoryPreferencesManager)
+                .modifier(AppearanceModifier())
+        } else if usesTerminalKeyboardUITestHarness {
+            TerminalKeyboardUITestHarness()
+                .environmentObject(ghosttyApp)
+                .environmentObject(terminalThemeManager)
+                .environmentObject(terminalAccessoryPreferencesManager)
+                .modifier(AppearanceModifier())
+        } else {
+            iOSAppContent
+        }
+        #else
+        iOSAppContent
+        #endif
+    }
+
+    private var iOSAppContent: some View {
+        iOSContentView(
+            fileTabs: remoteFileTabManager,
+            fileBrowser: remoteFileBrowserStore
+        )
+            .environmentObject(ghosttyApp)
+            .environmentObject(terminalThemeManager)
+            .environmentObject(terminalAccessoryPreferencesManager)
+            .modifier(AppearanceModifier())
+            .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalCursorStyle)\(terminalCursorBlink)\(terminalOptionAsAltReloadToken)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
+                ghosttyApp.reloadConfig()
+            }
+            .sheet(isPresented: .init(
+                get: { !hasSeenWelcome },
+                set: { if !$0 { hasSeenWelcome = true } }
+            )) {
+                WelcomeView(hasSeenWelcome: $hasSeenWelcome)
+                    .adaptiveSoftScrollEdges()
+            }
+    }
+    #endif
+
     var body: some Scene {
         WindowGroup("", id: "main") {
             let appLocale = AppLanguage(rawValue: appLanguage)?.locale ?? Locale.current
@@ -74,24 +181,8 @@ struct VVTermApp: App {
                 NoticeAppHost {
                     Group {
                         #if os(iOS)
-                        iOSContentView(
-                            fileTabs: remoteFileTabManager,
-                            fileBrowser: remoteFileBrowserStore
-                        )
-                            .environmentObject(ghosttyApp)
-                            .environmentObject(terminalThemeManager)
-                            .environmentObject(terminalAccessoryPreferencesManager)
-                            .modifier(AppearanceModifier())
-                            .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalCursorStyle)\(terminalCursorBlink)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
-                                ghosttyApp.reloadConfig()
-                            }
-                            .sheet(isPresented: .init(
-                                get: { !hasSeenWelcome },
-                                set: { if !$0 { hasSeenWelcome = true } }
-                            )) {
-                                WelcomeView(hasSeenWelcome: $hasSeenWelcome)
-                                    .adaptiveSoftScrollEdges()
-                            }
+                        iOSRootContent
+                            .environmentObject(screenAwakeCoordinator)
                         #else
                         ContentView(
                             fileTabs: remoteFileTabManager,
@@ -101,7 +192,7 @@ struct VVTermApp: App {
                             .environmentObject(terminalThemeManager)
                             .environmentObject(terminalAccessoryPreferencesManager)
                             .modifier(AppearanceModifier())
-                            .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalCursorStyle)\(terminalCursorBlink)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
+                            .task(id: "\(terminalFontName)\(terminalFontSize)\(terminalCursorStyle)\(terminalCursorBlink)\(terminalOptionAsAltReloadToken)\(terminalThemeName)\(terminalThemeNameLight)\(usePerAppearanceTheme)\(activeCustomThemeVersionToken)") {
                                 ghosttyApp.reloadConfig()
                             }
                             .sheet(isPresented: .init(
@@ -139,11 +230,25 @@ struct VVTermApp: App {
     }
 }
 
+#if os(iOS)
+private enum VVTermLauncherWidgetRefresh {
+    private static let renderingRevision = 1
+    private static let renderingRevisionKey = "launcherWidgetRenderingRevision"
+
+    static func refreshIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.integer(forKey: renderingRevisionKey) < renderingRevision else { return }
+
+        WidgetCenter.shared.reloadTimelines(ofKind: VVTermWidgetKind.launcher)
+        defaults.set(renderingRevision, forKey: renderingRevisionKey)
+    }
+}
+#endif
+
 private extension VVTermApp {
     static func makeRemoteFileBrowserStore() -> RemoteFileBrowserStore {
         let adapter = SSHSFTPAdapter(borrowedClientProvider: { serverId in
-            ConnectionSessionManager.shared.sharedStatsClient(for: serverId)
-                ?? TerminalTabManager.shared.sharedStatsClient(for: serverId)
+            TerminalTabManager.shared.sharedStatsClient(for: serverId)
         })
 
         return RemoteFileBrowserStore(
@@ -152,16 +257,6 @@ private extension VVTermApp {
                 ServerManager.shared.servers.first { $0.id == serverId }
             },
             workingDirectoryProvider: { serverId in
-                if let selectedSessionId = ConnectionSessionManager.shared.selectedSessionByServer[serverId],
-                   let path = ConnectionSessionManager.shared.workingDirectory(for: selectedSessionId) {
-                    return path
-                }
-
-                if let anySession = ConnectionSessionManager.shared.sessions.first(where: { $0.serverId == serverId }),
-                   let path = ConnectionSessionManager.shared.workingDirectory(for: anySession.id) {
-                    return path
-                }
-
                 if let selectedTab = TerminalTabManager.shared.selectedTab(for: serverId),
                    let path = TerminalTabManager.shared.workingDirectory(for: selectedTab.focusedPaneId) {
                     return path
@@ -177,204 +272,3 @@ private extension VVTermApp {
         )
     }
 }
-
-// MARK: - macOS App Delegate
-
-#if os(macOS)
-struct VVTermCommands: Commands {
-    @Environment(\.openWindow) private var openWindow
-    @FocusedValue(\.serverViewTabActions) private var serverViewTabActions
-    @FocusedValue(\.openLocalSSHDiscovery) private var openLocalSSHDiscovery
-    @FocusedValue(\.terminalSplitActions) private var terminalSplitActions
-
-    var body: some Commands {
-        CommandGroup(replacing: .appInfo) {
-            Button("About VVTerm") {
-                AboutWindowController.shared.show()
-            }
-        }
-
-        CommandGroup(replacing: .newItem) {
-            Button("New Window") {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            .keyboardShortcut("n", modifiers: .command)
-
-            Divider()
-
-            Button("New Tab") {
-                serverViewTabActions?.openNew()
-            }
-            .keyboardShortcut("t", modifiers: .command)
-            .disabled(serverViewTabActions == nil)
-
-            Button(String(localized: "Discover Local Devices...")) {
-                openLocalSSHDiscovery?()
-            }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
-            .disabled(openLocalSSHDiscovery == nil)
-
-            Button("Close Tab") {
-                serverViewTabActions?.closeSelected()
-            }
-            .keyboardShortcut("w", modifiers: .command)
-            .disabled(serverViewTabActions == nil)
-        }
-
-        CommandGroup(replacing: .appSettings) {
-            Button("Settings...") {
-                SettingsWindowManager.shared.show()
-            }
-            .keyboardShortcut(",", modifiers: .command)
-        }
-
-        CommandGroup(after: .windowArrangement) {
-            Button("Previous Tab") {
-                serverViewTabActions?.selectPrevious()
-            }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
-            .disabled(serverViewTabActions == nil)
-
-            Button("Next Tab") {
-                serverViewTabActions?.selectNext()
-            }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
-            .disabled(serverViewTabActions == nil)
-
-            Divider()
-
-            ForEach(1...9, id: \.self) { number in
-                Button("Tab \(number)") {
-                    serverViewTabActions?.selectIndex(number - 1)
-                }
-                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
-                .disabled(serverViewTabActions == nil)
-            }
-        }
-
-        // Split commands (Pro feature)
-        SplitCommands()
-    }
-}
-
-class AppDelegate: NSObject, NSApplicationDelegate {
-    private var lastForegroundSyncAt: Date = .distantPast
-    private let foregroundSyncMinimumInterval: TimeInterval = 20
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Subscribe to CloudKit changes
-        Task {
-            await CloudKitManager.shared.subscribeToChanges()
-        }
-        NSApplication.shared.registerForRemoteNotifications()
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        guard SyncSettings.isEnabled else { return }
-
-        let now = Date()
-        guard now.timeIntervalSince(lastForegroundSyncAt) >= foregroundSyncMinimumInterval else { return }
-        lastForegroundSyncAt = now
-
-        Task {
-            await ServerManager.shared.loadData()
-        }
-    }
-
-    func applicationDidResignActive(_ notification: Notification) {
-        Task { @MainActor in
-            AppLockManager.shared.lockIfNeededForBackground()
-        }
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        // Close all connections synchronously to ensure cleanup before exit
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            ConnectionSessionManager.shared.disconnectAll()
-            semaphore.signal()
-        }
-        // Wait up to 2 seconds for cleanup
-        _ = semaphore.wait(timeout: .now() + 2)
-    }
-
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false // Keep running in menu bar
-    }
-
-    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
-        guard SyncSettings.isEnabled else { return }
-        Task {
-            await ServerManager.shared.loadData()
-        }
-    }
-}
-#else
-// MARK: - iOS App Delegate
-
-class AppDelegate: NSObject, UIApplicationDelegate {
-    private var lastForegroundSyncAt: Date = .distantPast
-    private let foregroundSyncMinimumInterval: TimeInterval = 20
-
-    func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
-    ) -> Bool {
-        // Subscribe to CloudKit changes
-        Task {
-            await CloudKitManager.shared.subscribeToChanges()
-        }
-        application.registerForRemoteNotifications()
-
-        return true
-    }
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        guard SyncSettings.isEnabled else { return }
-
-        let now = Date()
-        guard now.timeIntervalSince(lastForegroundSyncAt) >= foregroundSyncMinimumInterval else { return }
-        lastForegroundSyncAt = now
-
-        Task {
-            await ServerManager.shared.loadData()
-        }
-    }
-
-    func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        guard SyncSettings.isEnabled else {
-            completionHandler(.noData)
-            return
-        }
-
-        Task {
-            await ServerManager.shared.loadData()
-            completionHandler(.newData)
-        }
-    }
-
-    func applicationWillTerminate(_ application: UIApplication) {
-        // Close all connections synchronously to ensure cleanup before exit
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            ConnectionSessionManager.shared.disconnectAll()
-            semaphore.signal()
-        }
-        // Wait up to 2 seconds for cleanup
-        _ = semaphore.wait(timeout: .now() + 2)
-    }
-
-    // Handle app going to background - suspend connections to save resources
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        Task { @MainActor in
-            await ConnectionSessionManager.shared.suspendAllForBackground()
-            AppLockManager.shared.lockIfNeededForBackground()
-        }
-    }
-}
-#endif

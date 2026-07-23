@@ -7,6 +7,7 @@ enum PendingCloudKitEntity: String, Codable {
     case terminalTheme
     case terminalThemePreference
     case terminalAccessoryProfile
+    case statsPreferences
 }
 
 enum PendingCloudKitOperation: String, Codable {
@@ -24,6 +25,7 @@ struct PendingCloudKitMutation: Codable, Identifiable {
     var terminalTheme: TerminalTheme?
     var terminalThemePreference: TerminalThemePreference?
     var terminalAccessoryProfile: TerminalAccessoryProfile?
+    var statsPreferences: StatsPreferences? = nil
     let createdAt: Date
     var retryCount: Int
     var nextRetryAt: Date?
@@ -220,6 +222,26 @@ struct PendingCloudKitMutation: Codable, Identifiable {
         )
     }
 
+    static func statsPreferencesUpsert(_ preferences: StatsPreferences) -> PendingCloudKitMutation {
+        PendingCloudKitMutation(
+            id: UUID(),
+            entity: .statsPreferences,
+            operation: .upsert,
+            entityKey: StatsPreferences.recordName,
+            server: nil,
+            workspace: nil,
+            terminalTheme: nil,
+            terminalThemePreference: nil,
+            terminalAccessoryProfile: nil,
+            statsPreferences: preferences,
+            createdAt: Date(),
+            retryCount: 0,
+            nextRetryAt: nil,
+            lastErrorCode: nil,
+            lastErrorDescription: nil
+        )
+    }
+
     var operationPriority: Int {
         switch operation {
         case .upsert: return 0
@@ -234,6 +256,7 @@ struct PendingCloudKitMutation: Codable, Identifiable {
         case .terminalTheme: return 2
         case .terminalThemePreference: return 3
         case .terminalAccessoryProfile: return 4
+        case .statsPreferences: return 5
         }
     }
 
@@ -245,6 +268,7 @@ struct PendingCloudKitMutation: Codable, Identifiable {
         case .terminalTheme: kind = "terminal theme"
         case .terminalThemePreference: kind = "terminal theme preference"
         case .terminalAccessoryProfile: kind = "terminal accessory profile"
+        case .statsPreferences: kind = "stats preferences"
         }
 
         let op: String
@@ -263,11 +287,13 @@ struct PendingCloudKitMutation: Codable, Identifiable {
         case (.terminalTheme, .upsert): return 2
         case (.terminalThemePreference, .upsert): return 3
         case (.terminalAccessoryProfile, .upsert): return 4
-        case (.server, .delete): return 5
-        case (.workspace, .delete): return 6
-        case (.terminalTheme, .delete): return 7
-        case (.terminalThemePreference, .delete): return 8
-        case (.terminalAccessoryProfile, .delete): return 9
+        case (.statsPreferences, .upsert): return 5
+        case (.server, .delete): return 6
+        case (.workspace, .delete): return 7
+        case (.terminalTheme, .delete): return 8
+        case (.terminalThemePreference, .delete): return 9
+        case (.terminalAccessoryProfile, .delete): return 10
+        case (.statsPreferences, .delete): return 11
         }
     }
 
