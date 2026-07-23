@@ -15,6 +15,14 @@
 		D10000010000000000000004 /* HeadlessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000004 /* HeadlessView.swift */; };
 		D10000010000000000000005 /* SSHPubKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000005 /* SSHPubKey.swift */; };
 		D10000010000000000000006 /* headless_id.txt in Resources */ = {isa = PBXBuildFile; fileRef = D10000100000000000000006 /* headless_id.txt */; };
+		E10000010000000000000001 /* iotest_mfa.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000001 /* iotest_mfa.pb.swift */; };
+		E10000010000000000000002 /* GRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000002 /* GRPCClient.swift */; };
+		E10000010000000000000003 /* GRPCTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000003 /* GRPCTransport.swift */; };
+		E10000010000000000000004 /* TLSKeyPair.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000004 /* TLSKeyPair.swift */; };
+		E10000010000000000000005 /* GRPCRegisterRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000005 /* GRPCRegisterRunner.swift */; };
+		E10000010000000000000006 /* iotest_mfa.proto in Resources */ = {isa = PBXBuildFile; fileRef = E10000100000000000000006 /* iotest_mfa.proto */; };
+		F10000010000000000000001 /* FullFlowRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000100000000000000001 /* FullFlowRunner.swift */; };
+		F10000010000000000000002 /* FullFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000100000000000000002 /* FullFlowView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +37,14 @@
 		D10000100000000000000004 /* HeadlessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessView.swift; sourceTree = "<group>"; };
 		D10000100000000000000005 /* SSHPubKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHPubKey.swift; sourceTree = "<group>"; };
 		D10000100000000000000006 /* headless_id.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = headless_id.txt; sourceTree = "<group>"; };
+		E10000100000000000000001 /* iotest_mfa.pb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iotest_mfa.pb.swift; sourceTree = "<group>"; };
+		E10000100000000000000002 /* GRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRPCClient.swift; sourceTree = "<group>"; };
+		E10000100000000000000003 /* GRPCTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRPCTransport.swift; sourceTree = "<group>"; };
+		E10000100000000000000004 /* TLSKeyPair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TLSKeyPair.swift; sourceTree = "<group>"; };
+		E10000100000000000000005 /* GRPCRegisterRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GRPCRegisterRunner.swift; sourceTree = "<group>"; };
+		E10000100000000000000006 /* iotest_mfa.proto */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.protobuf; path = iotest_mfa.proto; sourceTree = "<group>"; };
+		F10000100000000000000001 /* FullFlowRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullFlowRunner.swift; sourceTree = "<group>"; };
+		F10000100000000000000002 /* FullFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullFlowView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,6 +52,13 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10000300000000000000001 /* NIOCore in Frameworks */,
+				E10000300000000000000002 /* NIOHTTP1 in Frameworks */,
+				E10000300000000000000003 /* NIOPosix in Frameworks */,
+				E10000300000000000000004 /* NIOHTTP2 in Frameworks */,
+				E10000300000000000000005 /* NIOHPACK in Frameworks */,
+				E10000300000000000000006 /* NIOTransportServices in Frameworks */,
+				E10000300000000000000007 /* SwiftProtobuf in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +88,8 @@
 				A10000400000000000000003 /* App */,
 				A10000400000000000000004 /* WebAuthnProbe */,
 				D10000400000000000000001 /* HeadlessBootstrap */,
+				E10000400000000000000001 /* GRPC */,
+				F10000400000000000000001 /* FullFlow */,
 				A10000400000000000000005 /* Resources */,
 			);
 			path = iotest;
@@ -94,6 +119,28 @@
 				D10000100000000000000006 /* headless_id.txt */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		E10000400000000000000001 /* GRPC */ = {
+			isa = PBXGroup;
+			children = (
+				E10000100000000000000001 /* iotest_mfa.pb.swift */,
+				E10000100000000000000002 /* GRPCClient.swift */,
+				E10000100000000000000003 /* GRPCTransport.swift */,
+				E10000100000000000000004 /* TLSKeyPair.swift */,
+				E10000100000000000000005 /* GRPCRegisterRunner.swift */,
+				E10000100000000000000006 /* iotest_mfa.proto */,
+			);
+			path = GRPC;
+			sourceTree = "<group>";
+		};
+		F10000400000000000000001 /* FullFlow */ = {
+			isa = PBXGroup;
+			children = (
+				F10000100000000000000001 /* FullFlowRunner.swift */,
+				F10000100000000000000002 /* FullFlowView.swift */,
+			);
+			path = FullFlow;
 			sourceTree = "<group>";
 		};
 		D10000400000000000000001 /* HeadlessBootstrap */ = {
@@ -132,6 +179,15 @@
 			dependencies = (
 			);
 			name = iotest;
+			packageProductDependencies = (
+				E10000500000000000000001 /* NIOCore */,
+				E10000500000000000000002 /* NIOHTTP1 */,
+				E10000500000000000000003 /* NIOPosix */,
+				E10000500000000000000004 /* NIOHTTP2 */,
+				E10000500000000000000005 /* NIOHPACK */,
+				E10000500000000000000006 /* NIOTransportServices */,
+				E10000500000000000000007 /* SwiftProtobuf */,
+			);
 			productName = iotest;
 			productReference = A10000200000000000000000 /* iotest.app */;
 			productType = "com.apple.product-type.application";
@@ -163,6 +219,12 @@
 			productRefGroup = A10000400000000000000002 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				E10000800000000000000001 /* XCRemoteSwiftPackageReference "swift-nio" */,
+				E10000800000000000000002 /* XCRemoteSwiftPackageReference "swift-nio-http2" */,
+				E10000800000000000000003 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */,
+				E10000800000000000000004 /* XCRemoteSwiftPackageReference "swift-protobuf" */,
+			);
 			targets = (
 				A10000500000000000000000 /* iotest */,
 			);
@@ -175,6 +237,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D10000010000000000000006 /* headless_id.txt in Resources */,
+				E10000010000000000000006 /* iotest_mfa.proto in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -193,6 +256,13 @@
 				D10000010000000000000003 /* HeadlessRunner.swift in Sources */,
 				D10000010000000000000004 /* HeadlessView.swift in Sources */,
 				D10000010000000000000005 /* SSHPubKey.swift in Sources */,
+				E10000010000000000000001 /* iotest_mfa.pb.swift in Sources */,
+				E10000010000000000000002 /* GRPCClient.swift in Sources */,
+				E10000010000000000000003 /* GRPCTransport.swift in Sources */,
+				E10000010000000000000004 /* TLSKeyPair.swift in Sources */,
+				E10000010000000000000005 /* GRPCRegisterRunner.swift in Sources */,
+				F10000010000000000000001 /* FullFlowRunner.swift in Sources */,
+				F10000010000000000000002 /* FullFlowView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -346,6 +416,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.iotest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_SPMPACKAGES = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -375,6 +446,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.iotest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_SPMPACKAGES = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -402,6 +474,79 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E10000800000000000000001 /* XCRemoteSwiftPackageReference "swift-nio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.65.0;
+			};
+		};
+		E10000800000000000000002 /* XCRemoteSwiftPackageReference "swift-nio-http2" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio-http2.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.34.0;
+			};
+		};
+		E10000800000000000000003 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio-transport-services.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.21.0;
+			};
+		};
+		E10000800000000000000004 /* XCRemoteSwiftPackageReference "swift-protobuf" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-protobuf.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.25.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E10000500000000000000001 /* NIOCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000001 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOCore;
+		};
+		E10000500000000000000002 /* NIOHTTP1 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000001 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOHTTP1;
+		};
+		E10000500000000000000003 /* NIOPosix */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000001 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOPosix;
+		};
+		E10000500000000000000004 /* NIOHTTP2 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000002 /* XCRemoteSwiftPackageReference "swift-nio-http2" */;
+			productName = NIOHTTP2;
+		};
+		E10000500000000000000005 /* NIOHPACK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000002 /* XCRemoteSwiftPackageReference "swift-nio-http2" */;
+			productName = NIOHPACK;
+		};
+		E10000500000000000000006 /* NIOTransportServices */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000003 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */;
+			productName = NIOTransportServices;
+		};
+		E10000500000000000000007 /* SwiftProtobuf */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E10000800000000000000004 /* XCRemoteSwiftPackageReference "swift-protobuf" */;
+			productName = SwiftProtobuf;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A10000800000000000000000 /* Project object */;
 }
