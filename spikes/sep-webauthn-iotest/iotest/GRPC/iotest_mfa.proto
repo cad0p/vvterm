@@ -41,9 +41,8 @@ enum DeviceUsage {
 enum DeviceType {
   DEVICE_TYPE_UNSPECIFIED = 0;
   DEVICE_TYPE_TOTP = 1;
-  DEVICE_TYPE_WEBAUTHN = 2;
-  DEVICE_TYPE_SSO = 3;
-  DEVICE_TYPE_BROWSER = 4;
+  reserved 2; // DEVICE_TYPE_U2F (removed in Teleport; WEBAUTHN covers U2F/CTAP1/CTAP2/platform)
+  DEVICE_TYPE_WEBAUTHN = 3;
 }
 
 // ── WebAuthn types (from legacy/types/webauthn/webauthn.proto) ──

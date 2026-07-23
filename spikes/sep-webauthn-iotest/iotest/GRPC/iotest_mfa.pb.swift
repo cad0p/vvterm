@@ -131,9 +131,8 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
   typealias RawValue = Int
   case unspecified // = 0
   case totp // = 1
-  case webauthn // = 2
-  case sso // = 3
-  case browser // = 4
+  // 2 is reserved (was DEVICE_TYPE_U2F, removed; WEBAUTHN covers U2F/CTAP1/CTAP2/platform).
+  case webauthn // = 3
   case UNRECOGNIZED(Int)
 
   init() {
@@ -144,9 +143,7 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     switch rawValue {
     case 0: self = .unspecified
     case 1: self = .totp
-    case 2: self = .webauthn
-    case 3: self = .sso
-    case 4: self = .browser
+    case 3: self = .webauthn
     default: self = .UNRECOGNIZED(rawValue)
     }
   }
@@ -155,9 +152,7 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     switch self {
     case .unspecified: return 0
     case .totp: return 1
-    case .webauthn: return 2
-    case .sso: return 3
-    case .browser: return 4
+    case .webauthn: return 3
     case .UNRECOGNIZED(let i): return i
     }
   }
@@ -167,8 +162,6 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     .unspecified,
     .totp,
     .webauthn,
-    .sso,
-    .browser,
   ]
 
 }
@@ -795,9 +788,7 @@ extension Proto_DeviceType: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     0: .same(proto: "DEVICE_TYPE_UNSPECIFIED"),
     1: .same(proto: "DEVICE_TYPE_TOTP"),
-    2: .same(proto: "DEVICE_TYPE_WEBAUTHN"),
-    3: .same(proto: "DEVICE_TYPE_SSO"),
-    4: .same(proto: "DEVICE_TYPE_BROWSER"),
+    3: .same(proto: "DEVICE_TYPE_WEBAUTHN"),
   ]
 }
 
