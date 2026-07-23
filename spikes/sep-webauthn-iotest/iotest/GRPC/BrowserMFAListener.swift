@@ -40,6 +40,7 @@ import Foundation
 import OSLog
 import CryptoKit
 import Network
+import SwiftProtobuf
 
 // MARK: - Log markers
 
