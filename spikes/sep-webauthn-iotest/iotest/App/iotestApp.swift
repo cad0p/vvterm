@@ -8,13 +8,15 @@
 //  Built for the iOS Simulator smoke test (CI); the device run proves the
 //  ceremony.
 //
-//  Session 1.9 — added the "Headless" tab. The app now has two screens:
-//    - Probe:    the 1.6a scaffolding probe (PublicKeyCredential exists,
-//                platform authenticator available, JS round-trip).
-//    - Headless: the 1.9 headless bootstrap (ephemeral keypair →
-//                headlessAuthenticationID → blocking POST → Safari approval
-//                → cert). Device-only; CI asserts the plumbing compiles +
-//                the ID derivation matches a Go fixture.
+//  Session 1.9 — added the "Headless" tab.
+//  Session 1.10 — added the "Full Flow" tab (cert → gRPC → SEP-key → login).
+//
+//  The app now has three screens:
+//    - Probe:     the 1.6a scaffolding probe.
+//    - Headless:  the 1.9 headless bootstrap (standalone).
+//    - Full Flow: the 1.10 full chain (Phase 1 reuses Headless, Phase 2 is
+//                 the gRPC SEP-key registration, Phase 3 is passwordless
+//                 login with the registered key).
 //
 
 import SwiftUI
@@ -28,6 +30,8 @@ struct iotestApp: App {
                     .tabItem { Label("Probe", systemImage: "stethoscope") }
                 HeadlessView()
                     .tabItem { Label("Headless", systemImage: "key.fill") }
+                FullFlowView()
+                    .tabItem { Label("Full Flow", systemImage: "link.badge.plus") }
             }
             .onAppear {
                 // Run the headless ID self-check on launch so CI can grep
