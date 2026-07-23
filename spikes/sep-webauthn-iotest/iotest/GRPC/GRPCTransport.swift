@@ -65,6 +65,21 @@ enum GRPCTLSOptions {
         // Client cert (mTLS).
         let secIdentity = try buildSecIdentity(certPEM: clientCertPEM, privateKey: privateKey)
         sec_protocol_options_set_local_identity(secOpts, secIdentity)
+
+        // Diagnostic: log server trust verification + client cert challenge.
+        // The verify block fires after the TLS handshake's server-cert step;
+        // the challenge block fires if the server requests a client cert.
+        sec_protocol_options_set_verify_block(secOpts, { _, sec_trust, complete in
+            let trust = sec_trust_copy_ref(sec_trust).takeRetainedValue()
+            var error: CFError?
+            let result = SecTrustEvaluateWithError(trust, &error)
+            GRPCRegisterLog.step("tls_verify", "server trust result=\(result) error=\(error?.localizedDescription ?? "none")")
+            complete(result)
+        }, .global())
+        sec_protocol_options_set_challenge_block(secOpts, { _, complete in
+            GRPCRegisterLog.step("tls_challenge", "server requested client cert — presenting identity")
+            complete(secIdentity)
+        }, .global())
         return tlsOpts
     }
 
