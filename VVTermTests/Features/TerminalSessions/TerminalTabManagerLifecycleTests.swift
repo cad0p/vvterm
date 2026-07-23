@@ -1243,6 +1243,15 @@ struct TerminalTabManagerLifecycleTests {
                 Issue.record("Expected three-pane split layout")
                 return
             }
+            let bottomRightPane = threePaneTab.focusedPaneId
+
+            manager.focusPane(in: staleTab, paneId: staleTab.rootPaneId)
+            #expect(!manager.canPerformSplitCommand(.selectAbove, in: staleTab))
+            #expect(!manager.canPerformSplitCommand(.selectBelow, in: staleTab))
+            #expect(manager.performSplitCommand(.selectAbove, in: staleTab) == .unavailable)
+            #expect(manager.performSplitCommand(.selectBelow, in: staleTab) == .unavailable)
+            #expect(manager.tabs(for: staleTab.serverId).first?.focusedPaneId == staleTab.rootPaneId)
+            manager.focusPane(in: staleTab, paneId: bottomRightPane)
 
             #expect(manager.performSplitCommand(.selectLeft, in: staleTab) == .performed)
             #expect(manager.tabs(for: staleTab.serverId).first?.focusedPaneId == staleTab.rootPaneId)

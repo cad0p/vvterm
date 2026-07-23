@@ -38,6 +38,14 @@ nonisolated struct TerminalSplitShortcutModifiers: OptionSet, Sendable {
     static let alternate = Self(rawValue: 1 << 3)
 }
 
+nonisolated enum TerminalSplitShortcutKey: Equatable, Sendable {
+    case character(String)
+    case upArrow
+    case downArrow
+    case leftArrow
+    case rightArrow
+}
+
 nonisolated enum TerminalSplitShortcutRouting {
     static let upArrow = "\u{F700}"
     static let downArrow = "\u{F701}"
@@ -48,41 +56,62 @@ nonisolated enum TerminalSplitShortcutRouting {
         for input: String,
         modifiers: TerminalSplitShortcutModifiers
     ) -> TerminalSplitCommand? {
-        let normalizedInput = input.lowercased()
+        command(for: key(for: input), modifiers: modifiers)
+    }
 
-        switch (normalizedInput, modifiers) {
-        case ("d", [.command]):
+    nonisolated static func command(
+        for key: TerminalSplitShortcutKey,
+        modifiers: TerminalSplitShortcutModifiers
+    ) -> TerminalSplitCommand? {
+        switch (key, modifiers) {
+        case (.character("d"), [.command]):
             return .splitRight
-        case ("d", [.command, .shift]):
+        case (.character("d"), [.command, .shift]):
             return .splitDown
-        case ("w", [.command]):
+        case (.character("w"), [.command]):
             return .closeFocusedPane
-        case ("\r", [.command, .shift]), ("\n", [.command, .shift]):
+        case (.character("\r"), [.command, .shift]),
+             (.character("\n"), [.command, .shift]):
             return .toggleZoom
-        case ("[", [.command]):
+        case (.character("["), [.command]):
             return .selectPrevious
-        case ("]", [.command]):
+        case (.character("]"), [.command]):
             return .selectNext
-        case (upArrow, [.command, .alternate]):
+        case (.upArrow, [.command, .alternate]):
             return .selectAbove
-        case (downArrow, [.command, .alternate]):
+        case (.downArrow, [.command, .alternate]):
             return .selectBelow
-        case (leftArrow, [.command, .alternate]):
+        case (.leftArrow, [.command, .alternate]):
             return .selectLeft
-        case (rightArrow, [.command, .alternate]):
+        case (.rightArrow, [.command, .alternate]):
             return .selectRight
-        case ("=", [.command, .control]):
+        case (.character("="), [.command, .control]):
             return .equalize
-        case (upArrow, [.command, .control]):
+        case (.upArrow, [.command, .control]):
             return .moveDividerUp
-        case (downArrow, [.command, .control]):
+        case (.downArrow, [.command, .control]):
             return .moveDividerDown
-        case (leftArrow, [.command, .control]):
+        case (.leftArrow, [.command, .control]):
             return .moveDividerLeft
-        case (rightArrow, [.command, .control]):
+        case (.rightArrow, [.command, .control]):
             return .moveDividerRight
         default:
             return nil
+        }
+    }
+
+    private nonisolated static func key(for input: String) -> TerminalSplitShortcutKey {
+        switch input {
+        case upArrow, "UIKeyInputUpArrow":
+            return .upArrow
+        case downArrow, "UIKeyInputDownArrow":
+            return .downArrow
+        case leftArrow, "UIKeyInputLeftArrow":
+            return .leftArrow
+        case rightArrow, "UIKeyInputRightArrow":
+            return .rightArrow
+        default:
+            return .character(input.lowercased())
         }
     }
 }

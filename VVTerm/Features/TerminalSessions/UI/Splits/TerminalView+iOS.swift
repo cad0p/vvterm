@@ -556,7 +556,6 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
 
         let paneStillExists = TerminalTabManager.shared.paneStates[coordinator.paneId] != nil
         if paneStillExists {
-            terminalView.onPaneKeyboardShortcut = nil
             coordinator.preservePane = true
             return
         }

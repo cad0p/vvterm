@@ -33,6 +33,7 @@ struct ServerTerminalRoute: View {
     @State private var isRouteVisible = false
     @State private var screenAwakeRequestID = UUID()
     @State private var presentedRouteSheet: PresentedRouteSheet?
+    @State private var isTerminalChildModalPresented = false
     @State private var showingTabLimitAlert = false
     @State private var showingFileTabLimitAlert = false
     @SceneStorage("vvterm.zenMode.ios") private var isZenModeEnabled = false
@@ -217,6 +218,9 @@ struct ServerTerminalRoute: View {
             }
             .onChange(of: keepScreenAwakeEnabled) { _ in
                 updateTerminalRouteActivation()
+            }
+            .onPreferenceChange(TerminalRouteModalPresentationPreferenceKey.self) {
+                updateTerminalChildModalPresentation($0)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { notification in
                 handleSceneDidActivate(notification)
@@ -416,7 +420,19 @@ struct ServerTerminalRoute: View {
     }
 
     private var keyboardPresentationOwnership: TerminalKeyboardRouteActivationPolicy.PresentationOwnership {
-        presentedRouteSheet == nil ? .terminal : .routeModal
+        presentedRouteSheet == nil && !isTerminalChildModalPresented
+            ? .terminal
+            : .routeModal
+    }
+
+    private func updateTerminalChildModalPresentation(_ isPresented: Bool) {
+        guard isTerminalChildModalPresented != isPresented else { return }
+        isTerminalChildModalPresented = isPresented
+        if isPresented {
+            keyboardCoordinator.deactivateInputImmediately(reason: .routeModal)
+        } else {
+            updateTerminalRouteActivation()
+        }
     }
 
     private var screenAwakeSceneIsInBackground: Bool {

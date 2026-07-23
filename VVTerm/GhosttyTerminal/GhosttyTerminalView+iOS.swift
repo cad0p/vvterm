@@ -4263,10 +4263,7 @@ class GhosttyTerminalView: UIView {
 
     private func handleCommandShortcut(_ key: UIKey) -> Bool {
         guard key.modifierFlags.contains(.command) else { return false }
-        if let action = terminalSplitCommand(
-            input: key.charactersIgnoringModifiers,
-            modifiers: key.modifierFlags
-        ) {
+        if let action = terminalSplitCommand(for: key) {
             onPaneKeyboardShortcut?(action)
             return true
         }
@@ -4291,6 +4288,34 @@ class GhosttyTerminalView: UIView {
         default:
             return false
         }
+    }
+
+    private func terminalSplitCommand(for key: UIKey) -> TerminalSplitCommand? {
+        let physicalArrow: TerminalSplitShortcutKey?
+        switch key.keyCode {
+        case .keyboardUpArrow:
+            physicalArrow = .upArrow
+        case .keyboardDownArrow:
+            physicalArrow = .downArrow
+        case .keyboardLeftArrow:
+            physicalArrow = .leftArrow
+        case .keyboardRightArrow:
+            physicalArrow = .rightArrow
+        default:
+            physicalArrow = nil
+        }
+
+        if let physicalArrow,
+           let command = TerminalSplitShortcutRouting.command(
+               for: physicalArrow,
+               modifiers: key.modifierFlags.terminalSplitShortcutModifiers
+           ) {
+            return command
+        }
+        return terminalSplitCommand(
+            input: key.charactersIgnoringModifiers,
+            modifiers: key.modifierFlags
+        )
     }
 
     private func terminalSplitCommand(

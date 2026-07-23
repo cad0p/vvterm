@@ -9,6 +9,9 @@ struct ServerSidebarView: View {
 
     @ObservedObject private var storeManager = StoreManager.shared
     @ObservedObject private var tabManager = TerminalTabManager.shared
+    #if os(macOS)
+    @EnvironmentObject private var commandBridge: MacShellCommandBridge
+    #endif
 
     @State private var showingWorkspaceSwitcher = false
     @State private var showingAddServer = false
@@ -354,10 +357,10 @@ struct ServerSidebarView: View {
         // focusedValue above can't reach the scene Commands. Register the action
         // on the shell command bridge too; ContentView republishes it.
         .onAppear {
-            MacShellCommandBridge.shared.openLocalDiscovery = { showingLocalDiscovery = true }
+            commandBridge.openLocalDiscovery = { showingLocalDiscovery = true }
         }
         .onDisappear {
-            MacShellCommandBridge.shared.openLocalDiscovery = nil
+            commandBridge.openLocalDiscovery = nil
         }
         #endif
         .lockedItemAlert(

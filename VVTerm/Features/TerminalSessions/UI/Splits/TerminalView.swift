@@ -100,15 +100,11 @@ struct TerminalTabView: View {
             terminalRegistryVersion: tabManager.terminalRegistryVersion,
             terminalProvider: { tabManager.getTerminal(for: $0) }
         )
-        .alert("Close this terminal?", isPresented: $showingCloseConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Close", role: .destructive) {
-                closeCurrentPane()
-            }
-            .keyboardShortcut(.defaultAction)
-        } message: {
-            Text("The remote connection will be terminated.")
-        }
+        .terminalCloseConfirmationAlert(
+            isPresented: $showingCloseConfirmation,
+            message: String(localized: "The remote connection will be terminated."),
+            onClose: closeCurrentPane
+        )
         .alert("Voice Input Unavailable", isPresented: $showingPermissionError) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -145,6 +141,9 @@ struct TerminalTabView: View {
     }
 
     private func requestClosePane() {
+        #if os(iOS)
+        tabManager.keyboardCoordinator.deactivateInputImmediately(reason: .routeModal)
+        #endif
         showingCloseConfirmation = true
     }
 

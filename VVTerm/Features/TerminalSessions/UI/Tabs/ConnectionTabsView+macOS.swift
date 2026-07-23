@@ -141,7 +141,7 @@ extension ConnectionTerminalContainer {
             .onAppear { activateToolbarBridge(); updateCommandBridge() }
             .onDisappear {
                 MacToolbarBridge.shared.deactivate(ownerId: server.id.uuidString)
-                MacShellCommandBridge.shared.clear(ownerId: server.id.uuidString)
+                commandBridge.clear(ownerId: server.id.uuidString)
             }
             .onChange(of: selectedView) { _ in activateToolbarBridge(); updateCommandBridge() }
             .onChange(of: shouldShowViewPicker) { _ in activateToolbarBridge() }
@@ -243,10 +243,9 @@ extension ConnectionTerminalContainer {
     /// Publishes this server's keyboard-command actions to the command bridge,
     /// which ContentView republishes as scene focus values for the menu commands.
     private func updateCommandBridge() {
-        MacShellCommandBridge.shared.update(
-            ownerId: server.id.uuidString,
-            serverViewTabActions: serverViewTabActions(),
-            splitActions: TerminalSplitActions(
+        let splitActions: TerminalSplitActions?
+        if selectedView == ConnectionViewTab.terminal.id {
+            splitActions = TerminalSplitActions(
                 perform: performSplitCommand,
                 isEnabled: { command in
                     guard let selectedTab else { return false }
@@ -256,9 +255,17 @@ extension ConnectionTerminalContainer {
                     guard let selectedTab else { return false }
                     return tabManager.isSplitZoomed(in: selectedTab)
                 }
-            ),
+            )
+        } else {
+            splitActions = nil
+        }
+
+        commandBridge.update(
+            ownerId: server.id.uuidString,
+            serverViewTabActions: serverViewTabActions(),
+            splitActions: splitActions,
             activeServerId: server.id,
-            activePaneId: selectedTab?.focusedPaneId
+            activePaneId: splitActions == nil ? nil : selectedTab?.focusedPaneId
         )
     }
 

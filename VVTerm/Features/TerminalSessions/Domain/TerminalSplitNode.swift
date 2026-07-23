@@ -319,7 +319,9 @@ indirect enum TerminalSplitNode: Equatable, Codable {
         return movingNearestDivider(
             near: paneId,
             splitDirection: direction.splitDirection,
-            ratioDelta: direction.ratioSign * step
+            wholeLayoutStep: step,
+            ratioSign: direction.ratioSign,
+            containerScale: 1
         ).node
     }
 
@@ -336,7 +338,9 @@ indirect enum TerminalSplitNode: Equatable, Codable {
     private func movingNearestDivider(
         near paneId: UUID,
         splitDirection: TerminalSplitDirection,
-        ratioDelta: Double
+        wholeLayoutStep: Double,
+        ratioSign: Double,
+        containerScale: Double
     ) -> (node: TerminalSplitNode?, found: Bool) {
         switch self {
         case .leaf:
@@ -344,10 +348,20 @@ indirect enum TerminalSplitNode: Equatable, Codable {
         case .split(let split):
             let paneIsInLeft = split.left.findPane(paneId)
             let child = paneIsInLeft ? split.left : split.right
+            let childScale: Double
+            if split.direction == splitDirection {
+                childScale = containerScale * (
+                    paneIsInLeft ? split.ratio : 1 - split.ratio
+                )
+            } else {
+                childScale = containerScale
+            }
             let childResult = child.movingNearestDivider(
                 near: paneId,
                 splitDirection: splitDirection,
-                ratioDelta: ratioDelta
+                wholeLayoutStep: wholeLayoutStep,
+                ratioSign: ratioSign,
+                containerScale: childScale
             )
 
             if childResult.found, let updatedChild = childResult.node {
@@ -363,6 +377,13 @@ indirect enum TerminalSplitNode: Equatable, Codable {
             }
 
             guard split.direction == splitDirection else { return (nil, false) }
+            guard containerScale.isFinite,
+                  containerScale > 0,
+                  split.ratio.isFinite else {
+                return (nil, false)
+            }
+            let ratioDelta = ratioSign * wholeLayoutStep / containerScale
+            guard ratioDelta.isFinite else { return (nil, false) }
             return (withUpdatedRatio(split.ratio + ratioDelta), true)
         }
     }
@@ -455,7 +476,7 @@ private struct NeighborScore: Comparable {
     ) {
         switch direction {
         case .above:
-            guard candidate.midY < source.midY else { return nil }
+            guard candidate.maxY <= source.minY else { return nil }
             primaryGap = max(0, source.minY - candidate.maxY)
             perpendicularGap = Self.intervalGap(
                 source.minX...source.maxX,
@@ -464,7 +485,7 @@ private struct NeighborScore: Comparable {
             perpendicularCenterDistance = abs(source.midX - candidate.midX)
             primaryCenterDistance = source.midY - candidate.midY
         case .below:
-            guard candidate.midY > source.midY else { return nil }
+            guard candidate.minY >= source.maxY else { return nil }
             primaryGap = max(0, candidate.minY - source.maxY)
             perpendicularGap = Self.intervalGap(
                 source.minX...source.maxX,
@@ -473,7 +494,7 @@ private struct NeighborScore: Comparable {
             perpendicularCenterDistance = abs(source.midX - candidate.midX)
             primaryCenterDistance = candidate.midY - source.midY
         case .left:
-            guard candidate.midX < source.midX else { return nil }
+            guard candidate.maxX <= source.minX else { return nil }
             primaryGap = max(0, source.minX - candidate.maxX)
             perpendicularGap = Self.intervalGap(
                 source.minY...source.maxY,
@@ -482,7 +503,7 @@ private struct NeighborScore: Comparable {
             perpendicularCenterDistance = abs(source.midY - candidate.midY)
             primaryCenterDistance = source.midX - candidate.midX
         case .right:
-            guard candidate.midX > source.midX else { return nil }
+            guard candidate.minX >= source.maxX else { return nil }
             primaryGap = max(0, candidate.minX - source.maxX)
             perpendicularGap = Self.intervalGap(
                 source.minY...source.maxY,

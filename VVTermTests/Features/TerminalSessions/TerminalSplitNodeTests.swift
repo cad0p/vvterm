@@ -74,6 +74,8 @@ final class TerminalSplitNodeTests: XCTestCase {
         XCTAssertEqual(layout.neighboringPane(from: c, direction: .above), b)
         XCTAssertNil(layout.neighboringPane(from: b, direction: .above))
         XCTAssertNil(layout.neighboringPane(from: c, direction: .right))
+        XCTAssertNil(layout.neighboringPane(from: a, direction: .above))
+        XCTAssertNil(layout.neighboringPane(from: a, direction: .below))
     }
 
     func testDividerMovementTargetsNearestCompatibleAncestor() throws {
@@ -115,6 +117,34 @@ final class TerminalSplitNodeTests: XCTestCase {
         XCTAssertEqual(split.ratio, 0.9, accuracy: 0.0001)
         XCTAssertFalse(layout.hasDivider(near: left, direction: .up))
         XCTAssertNil(layout.movingDivider(near: left, direction: .up))
+    }
+
+    func testNestedDividerMovementUsesWholeLayoutStep() throws {
+        let a = UUID()
+        let b = UUID()
+        let c = UUID()
+        let layout = TerminalSplitNode.split(.init(
+            direction: .horizontal,
+            ratio: 0.5,
+            left: .leaf(paneId: a),
+            right: .split(.init(
+                direction: .horizontal,
+                ratio: 0.5,
+                left: .leaf(paneId: b),
+                right: .leaf(paneId: c)
+            ))
+        ))
+
+        let moved = try XCTUnwrap(
+            layout.movingDivider(near: c, direction: .left, step: 0.05)
+        )
+        guard case .split(let root) = moved,
+              case .split(let nested) = root.right else {
+            return XCTFail("Expected nested horizontal layout")
+        }
+
+        XCTAssertEqual(root.ratio, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(nested.ratio, 0.4, accuracy: 0.0001)
     }
 
     private func makeThreePaneLayout() -> (TerminalSplitNode, UUID, UUID, UUID) {

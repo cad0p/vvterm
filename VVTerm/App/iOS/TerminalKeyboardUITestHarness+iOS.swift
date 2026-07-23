@@ -80,6 +80,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var lastPaneShortcutAction = "none"
     @State private var paneFocusActionCount = 0
     @State private var showingPaneCloseConfirmation = false
+    @State private var lastPaneCloseDialogAction = "none"
     @Environment(\.scenePhase) private var scenePhase
 
     private var preservesTerminalSize: Bool {
@@ -136,7 +137,7 @@ struct TerminalKeyboardUITestHarness: View {
                         paneShortcutActionCount += 1
                         lastPaneShortcutAction = String(describing: action)
                         if action == .closeFocusedPane {
-                            showingPaneCloseConfirmation = true
+                            requestPaneCloseConfirmation()
                         }
                     },
                     onPaneFocus: {
@@ -244,6 +245,11 @@ struct TerminalKeyboardUITestHarness: View {
                         Text("More")
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.menu")
+
+                    Button("Close Alert") {
+                        requestPaneCloseConfirmation()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.closeAlert")
                 }
 
                 HStack(spacing: 8) {
@@ -399,11 +405,18 @@ struct TerminalKeyboardUITestHarness: View {
             .padding(8)
         }
         .background(Color.black)
-        .alert("Close this terminal?", isPresented: $showingPaneCloseConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Close", role: .destructive) {}
-        } message: {
-            Text("The SSH connection will be terminated.")
+        .terminalCloseConfirmationAlert(
+            isPresented: $showingPaneCloseConfirmation,
+            message: String(localized: "The SSH connection will be terminated."),
+            onCancel: {
+                lastPaneCloseDialogAction = "cancel"
+            },
+            onClose: {
+                lastPaneCloseDialogAction = "close"
+            }
+        )
+        .onChange(of: showingPaneCloseConfirmation) { _ in
+            applyRouteActivation(.foregroundActive)
         }
         .sheet(isPresented: $showingSettings, onDismiss: {
             applyRouteActivation(.foregroundActive)
@@ -547,6 +560,7 @@ struct TerminalKeyboardUITestHarness: View {
             + " paneShortcutActions=\(paneShortcutActionCount)"
             + " lastPaneShortcutAction=\(lastPaneShortcutAction)"
             + " paneFocusActions=\(paneFocusActionCount)"
+            + " lastPaneCloseDialogAction=\(lastPaneCloseDialogAction)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
     }
 
@@ -622,6 +636,12 @@ struct TerminalKeyboardUITestHarness: View {
         showingSettings = true
     }
 
+    private func requestPaneCloseConfirmation() {
+        TerminalTabManager.shared.keyboardCoordinator
+            .deactivateInputImmediately(reason: .routeModal)
+        showingPaneCloseConfirmation = true
+    }
+
     private func showFindInput() {
         terminalView?.showFindNavigator()
     }
@@ -633,7 +653,7 @@ struct TerminalKeyboardUITestHarness: View {
     ) {
         let manager = TerminalTabManager.shared
         let presentationOwnership: TerminalKeyboardRouteActivationPolicy.PresentationOwnership =
-            showingSettings ? .routeModal : .terminal
+            showingSettings || showingPaneCloseConfirmation ? .routeModal : .terminal
         switch TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: showsTerminal,

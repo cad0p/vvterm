@@ -861,18 +861,17 @@ final class TerminalKeyboardUITests: XCTestCase {
         wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
 
         let commands: [(key: String, modifiers: XCUIElement.KeyModifierFlags, action: String)] = [
-            (XCUIKeyboardKey.return.rawValue, [.command, .shift], "toggleZoom"),
-            ("[", [.command], "selectPrevious"),
-            ("]", [.command], "selectNext"),
             (XCUIKeyboardKey.upArrow.rawValue, [.command, .option], "selectAbove"),
             (XCUIKeyboardKey.downArrow.rawValue, [.command, .option], "selectBelow"),
             (XCUIKeyboardKey.leftArrow.rawValue, [.command, .option], "selectLeft"),
             (XCUIKeyboardKey.rightArrow.rawValue, [.command, .option], "selectRight"),
-            ("=", [.command, .control], "equalize"),
             (XCUIKeyboardKey.upArrow.rawValue, [.command, .control], "moveDividerUp"),
             (XCUIKeyboardKey.downArrow.rawValue, [.command, .control], "moveDividerDown"),
             (XCUIKeyboardKey.leftArrow.rawValue, [.command, .control], "moveDividerLeft"),
             (XCUIKeyboardKey.rightArrow.rawValue, [.command, .control], "moveDividerRight"),
+            ("[", [.command], "selectPrevious"),
+            ("]", [.command], "selectNext"),
+            ("=", [.command, .control], "equalize"),
         ]
 
         for (index, command) in commands.enumerated() {
@@ -893,15 +892,134 @@ final class TerminalKeyboardUITests: XCTestCase {
         }
 
         app.typeKey("w", modifierFlags: .command)
-        wait(for: diagnostics, labelContaining: "paneShortcutActions=15", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(for: diagnostics, labelContaining: "paneShortcutActions=14", timeout: 5, diagnostics: diagnosticsText(in: app))
         wait(for: diagnostics, labelContaining: "lastPaneShortcutAction=closeFocusedPane", timeout: 5, diagnostics: diagnosticsText(in: app))
         let confirmation = app.alerts["Close this terminal?"]
         XCTAssertTrue(
             confirmation.waitForExistence(timeout: 5),
             "Cmd-W did not request the existing focused-pane close confirmation. \(diagnosticsText(in: app))"
         )
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        confirmation.buttons["Close"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "lastPaneCloseDialogAction=close",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        XCTAssertFalse(
+            confirmation.exists,
+            "Close did not dismiss the confirmation"
+        )
+
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(
+            confirmation.waitForExistence(timeout: 5),
+            "Cmd-W did not reopen the focused-pane close confirmation. \(diagnosticsText(in: app))"
+        )
         confirmation.buttons["Cancel"].tap()
+        wait(for: diagnostics, labelContaining: "lastPaneCloseDialogAction=cancel", timeout: 5, diagnostics: diagnosticsText(in: app))
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
         wait(for: diagnostics, labelContaining: "inputHex=none", timeout: 5, diagnostics: diagnosticsText(in: app))
+    }
+
+    @MainActor
+    func testPaneCloseAlertRestoresTerminalFocusAfterCancel() throws {
+        let app = launchKeyboardHarness(simulatesKeyboardFrames: true)
+        let terminal = waitForTerminal(in: app)
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        let closeAlertButton = app.buttons["vvterm.keyboardTest.closeAlert"]
+        let confirmation = app.alerts["Close this terminal?"]
+
+        terminal.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        XCTAssertTrue(
+            closeAlertButton.waitForExistence(timeout: 5),
+            diagnosticsText(in: app)
+        )
+        closeAlertButton.tap()
+        XCTAssertTrue(
+            confirmation.waitForExistence(timeout: 5),
+            "Close confirmation did not appear. \(diagnosticsText(in: app))"
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=false",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+
+        confirmation.buttons["Close"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "lastPaneCloseDialogAction=close",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        XCTAssertFalse(
+            confirmation.exists,
+            "Close did not dismiss the confirmation"
+        )
+
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        closeAlertButton.tap()
+        XCTAssertTrue(
+            confirmation.waitForExistence(timeout: 5),
+            "Close confirmation did not reopen. \(diagnosticsText(in: app))"
+        )
+
+        confirmation.buttons["Cancel"].tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "lastPaneCloseDialogAction=cancel",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "softwareInputActive=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
+        wait(
+            for: diagnostics,
+            labelContaining: "imeProxyFirstResponder=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
     }
 
     @MainActor

@@ -15,14 +15,11 @@ extension ConnectionTerminalContainer {
             } message: {
                 Text(disconnectAlertMessage)
             }
-            .alert("Close this terminal?", isPresented: $showingPaneCloseConfirmation) {
-                Button("Cancel", role: .cancel) {}
-                Button("Close", role: .destructive) {
-                    closeFocusedPaneConfirmed()
-                }
-            } message: {
-                Text("The SSH connection will be terminated.")
-            }
+            .terminalCloseConfirmationAlert(
+                isPresented: $showingPaneCloseConfirmation,
+                message: String(localized: "The SSH connection will be terminated."),
+                onClose: closeFocusedPaneConfirmed
+            )
             .sheet(item: $serverToEdit) { editingServer in
                 NavigationStack {
                     ServerFormSheet(

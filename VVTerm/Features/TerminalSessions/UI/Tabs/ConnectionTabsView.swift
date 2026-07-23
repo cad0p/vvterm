@@ -21,6 +21,9 @@ struct ConnectionTerminalContainer: View {
     let onDisconnectRoute: (() -> Void)?
 
     @EnvironmentObject var ghosttyApp: Ghostty.App
+    #if os(macOS)
+    @EnvironmentObject var commandBridge: MacShellCommandBridge
+    #endif
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
 
@@ -499,6 +502,9 @@ struct ConnectionTerminalContainer: View {
     /// matching the in-pane close button's confirmation.
     func requestCloseFocusedPane() {
         guard selectedTab != nil else { return }
+        #if os(iOS)
+        tabManager.keyboardCoordinator.deactivateInputImmediately(reason: .routeModal)
+        #endif
         showingPaneCloseConfirmation = true
     }
 

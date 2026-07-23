@@ -30,7 +30,7 @@ struct ContentView: View {
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
     // Republishes the hosted detail pane's command actions as scene focus
     // values so the menu commands (Cmd+T/W, tab nav, splits) can reach them.
-    @StateObject private var commandBridge = MacShellCommandBridge.shared
+    @StateObject private var commandBridge = MacShellCommandBridge()
     #endif
 
     @State private var selectedWorkspace: Workspace?
@@ -296,6 +296,7 @@ struct ContentView: View {
             .environmentObject(terminalAccessoryPreferencesManager)
             .environmentObject(appLockManager)
             .environmentObject(storeManager)
+            .environmentObject(commandBridge)
             .environment(\.locale, locale)
             .environment(\.privacyModeEnabled, privacyModeEnabled)
     }

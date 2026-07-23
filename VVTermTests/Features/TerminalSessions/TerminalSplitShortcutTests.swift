@@ -21,6 +21,16 @@ struct TerminalSplitShortcutTests {
     }
 
     @Test
+    func recognizesUIKitNamedAndPhysicalArrowInputs() {
+        #expect(command(for: "UIKeyInputUpArrow", modifiers: [.command, .alternate]) == .selectAbove)
+        #expect(command(for: "UIKeyInputDownArrow", modifiers: [.command, .alternate]) == .selectBelow)
+        #expect(command(for: "UIKeyInputLeftArrow", modifiers: [.command, .control]) == .moveDividerLeft)
+        #expect(command(for: "UIKeyInputRightArrow", modifiers: [.command, .control]) == .moveDividerRight)
+        #expect(command(for: .upArrow, modifiers: [.command, .alternate]) == .selectAbove)
+        #expect(command(for: .downArrow, modifiers: [.command, .control]) == .moveDividerDown)
+    }
+
+    @Test
     func recognizesResizeCommands() {
         #expect(command(for: "=", modifiers: [.command, .control]) == .equalize)
         #expect(command(for: TerminalSplitShortcutRouting.upArrow, modifiers: [.command, .control]) == .moveDividerUp)
@@ -44,5 +54,12 @@ struct TerminalSplitShortcutTests {
         modifiers: TerminalSplitShortcutModifiers
     ) -> TerminalSplitCommand? {
         TerminalSplitShortcutRouting.command(for: input, modifiers: modifiers)
+    }
+
+    private func command(
+        for key: TerminalSplitShortcutKey,
+        modifiers: TerminalSplitShortcutModifiers
+    ) -> TerminalSplitCommand? {
+        TerminalSplitShortcutRouting.command(for: key, modifiers: modifiers)
     }
 }
