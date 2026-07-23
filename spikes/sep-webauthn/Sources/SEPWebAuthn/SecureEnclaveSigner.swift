@@ -27,8 +27,10 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
     public let label = "sep"
 
     /// Store the SecKey by credentialID so we can sign without re-querying
-    /// the keychain. (We also persist via `kSecAttrIsPermanent`, so the key
-    /// survives process restarts, but the spike is single-process.)
+    /// the keychain on every call. Keys are persisted via
+    /// `kSecAttrIsPermanent:true` + `kSecAttrApplicationLabel: credentialID`,
+    /// so they survive app relaunch; `loadKey(credentialID:)` reloads them
+    /// into this cache after a relaunch.
     private var keys: [Data: SecKey] = [:]
     private let queue = DispatchQueue(label: "sep-webauthn.sep-signer")
 
@@ -77,17 +79,16 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
             kSecAttrKeySizeInBits as String:     256,
             kSecAttrTokenID as String:           kSecAttrTokenIDSecureEnclave,
             kSecPrivateKeyAttrs as String: [
-                // kSecAttrIsPermanent:false — keep the key in-memory only,
-                // NOT persisted to the keychain. A persistent SEP key
-                // (kSecAttrIsPermanent:true, like Teleport's register.m uses)
-                // requires the binary to be signed with a keychain-access-groups
-                // entitlement; a `swift build` debug CLI is ad-hoc signed and
-                // gets errSecMissingEntitlement (-34018) on key creation.
-                // The spike is single-process and caches the SecKey in
-                // `self.keys[credentialID]`, so transient is sufficient.
-                // Production (session 2.2) will use kSecAttrIsPermanent:true
-                // with a proper app signature.
-                kSecAttrIsPermanent as String:       false,
+                // kSecAttrIsPermanent:true — persist the SEP key to the
+                // keychain so it survives app relaunch. Paired with
+                // kSecAttrApplicationLabel (set to the credentialID) so the
+                // key can be reloaded by credentialID in a later session
+                // (see loadKey). The iotest app target is properly signed
+                // (unlike the ad-hoc `swift build` CLI), so the keychain-
+                // access-groups entitlement is present. This is the
+                // production gating mode (session 2.2).
+                kSecAttrIsPermanent as String:       true,
+                kSecAttrApplicationLabel as String:  credentialID,
                 kSecAttrAccessControl as String:     access,
             ] as [String: Any],
         ]
@@ -123,7 +124,13 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
     }
 
     public func sign(message: Data, credentialID: Data) throws -> Data {
-        let key: SecKey? = queue.sync { keys[credentialID] }
+        var key: SecKey? = queue.sync { keys[credentialID] }
+        // If the in-memory cache misses (e.g. app relaunched), try loading
+        // the persistent SEP key from the keychain by its application label
+        // (= credentialID). Throws keyNotFound if it's not there either.
+        if key == nil {
+            key = try loadKey(credentialID: credentialID)
+        }
         guard let key else { throw SignerError.keyNotFound }
 
         // Mirror authenticate.m:55-59 — pre-hash the message with SHA-256,
@@ -153,5 +160,36 @@ public final class SecureEnclaveSigner: WebAuthnSigner {
                 "SecKeyCreateSignature failed: \(msg)")
         }
         return signature as Data
+    }
+
+    /// Load a persistent SEP key from the keychain by its credentialID
+    /// (= kSecAttrApplicationLabel, set at creation time). Used when the
+    /// in-memory cache misses after an app relaunch, so Phase 3 can re-use
+    /// a key registered in a previous session without re-running Phase 1+2.
+    /// Caches the loaded SecKey in `self.keys` so subsequent signs skip the
+    /// keychain lookup. Returns nil if no key with that credentialID exists.
+    @discardableResult
+    public func loadKey(credentialID: Data) throws -> SecKey? {
+        // Check the cache first (cheap).
+        if let cached = queue.sync(execute: { keys[credentialID] }) {
+            return cached
+        }
+        let query: [String: Any] = [
+            kSecClass as String:               kSecClassKey,
+            kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrTokenID as String:        kSecAttrTokenIDSecureEnclave,
+            kSecAttrApplicationLabel as String: credentialID,
+            kSecReturnRef as String:          true,
+            kSecMatchLimit as String:         kSecMatchLimitOne,
+        ]
+        var ref: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &ref)
+        guard status == errSecSuccess, let secKey = ref else {
+            // errSecItemNotFound → no key with that credentialID; return nil
+            // (not a throw — the caller decides whether that's an error).
+            return nil
+        }
+        queue.sync { keys[credentialID] = secKey as! SecKey }
+        return secKey as! SecKey
     }
 }

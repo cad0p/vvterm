@@ -41,6 +41,12 @@ MARKER_PREFIX="[IOTEST]"
 # Session 1.9 adds the headless_id_fixture_match marker — validates the
 # HeadlessID.compute() port matches the Go-generated fixture. The
 # headless_id_fixture_computed marker logs the computed value for debugging.
+# Session 1.11 adds the browser_mfa_types_compiled marker — proves the
+# Browser MFA proto types (BrowserMFAChallenge, BrowserMFAResponse,
+# CreateAuthenticateChallengeRequest.browser_mfa_tsh_redirect_url) + the
+# BrowserMFAListener + BrowserMFACeremony compile. The ceremony itself can't
+# run on the simulator (no real cluster + no Safari loopback in CI), but
+# the types must compile.
 REQUIRED_MARKERS=(
     "app_launched"
     "load_started"
@@ -49,6 +55,7 @@ REQUIRED_MARKERS=(
     "public_key_credential_exists=true"
     "platform_authenticator_available="
     "headless_id_fixture_match=true"
+    "browser_mfa_types_compiled=true"
 )
 
 echo "==> Config"
