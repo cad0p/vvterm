@@ -17,6 +17,9 @@
 		D1A7B0C12EAB100100A00002 /* MoshBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = D1A7B0C12EAB100100A00012 /* MoshBootstrap */; };
 		D2C4F00131AA100100B00001 /* Cloudflared in Frameworks */ = {isa = PBXBuildFile; productRef = D2C4F00131AA100100B00011 /* Cloudflared */; };
 		E7C4A10031BB100100C00001 /* Umami in Frameworks */ = {isa = PBXBuildFile; productRef = E7C4A10031BB100100C00011 /* Umami */; };
+		E8A1E70031C1000100E00001 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
+		E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00012 /* ETBootstrap */; };
+		E8A1E70031C1000100E00003 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -137,6 +140,8 @@
 				D2C4F00131AA100100B00001 /* Cloudflared in Frameworks */,
 				D1A7B0C12EAB100100A00001 /* MoshCore in Frameworks */,
 				D1A7B0C12EAB100100A00002 /* MoshBootstrap in Frameworks */,
+				E8A1E70031C1000100E00001 /* ETSession in Frameworks */,
+				E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */,
 				E7C4A10031BB100100C00001 /* Umami in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -145,6 +150,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E8A1E70031C1000100E00003 /* ETSession in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -242,6 +248,8 @@
 				D2C4F00131AA100100B00011 /* Cloudflared */,
 				D1A7B0C12EAB100100A00011 /* MoshCore */,
 				D1A7B0C12EAB100100A00012 /* MoshBootstrap */,
+				E8A1E70031C1000100E00011 /* ETSession */,
+				E8A1E70031C1000100E00012 /* ETBootstrap */,
 				E7C4A10031BB100100C00011 /* Umami */,
 			);
 			productName = VVTerm;
@@ -266,6 +274,7 @@
 			);
 			name = VVTermTests;
 			packageProductDependencies = (
+				E8A1E70031C1000100E00011 /* ETSession */,
 			);
 			productName = VVTermTests;
 			productReference = CC8312922F0CD84E006804BF /* VVTermTests.xctest */;
@@ -347,6 +356,7 @@
 				8BEE7D9B1BB9C3D15D55C283 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */,
 				D1A7B0C12EAB100100A00021 /* XCRemoteSwiftPackageReference "swift-mosh" */,
+				E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */,
 				E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -447,21 +457,16 @@
 		537AC15AFBCABBBF98C1A867 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "$(LIVE_ACTIVITY_CODE_SIGN_IDENTITY)";
-				CODE_SIGN_STYLE = "$(LIVE_ACTIVITY_CODE_SIGN_STYLE)";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VVTermLiveActivity/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LIVE_ACTIVITY_CODE_SIGN_IDENTITY = "";
-				LIVE_ACTIVITY_CODE_SIGN_STYLE = Automatic;
-				LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER = "";
-				MARKETING_VERSION = 2.4;
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.liveactivity;
+				MARKETING_VERSION = 2.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTerm.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "$(LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
@@ -475,12 +480,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VVTermLiveActivity/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 2.4;
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm.liveactivity;
+				MARKETING_VERSION = 2.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTerm.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -501,7 +506,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
@@ -565,7 +570,7 @@
 					"$(SRCROOT)/Vendor/libssh2/macos/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"-lghostty",
 					"-lssh2",
@@ -609,7 +614,7 @@
 					QuartzCore,
 				);
 				OTHER_MTLFLAGS = "-Wno-c++17-extensions";
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				"PRODUCT_NAME[sdk=macosx*]" = VVTerm;
 				REGISTER_APP_GROUPS = YES;
@@ -639,12 +644,10 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "VVTerm-iOS/VVTerm.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "VVTerm-iOS/VVTerm.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "VVTerm-macOS/VVTerm.entitlements";
-				CODE_SIGN_IDENTITY = "$(APP_CODE_SIGN_IDENTITY)";
-				CODE_SIGN_STYLE = "$(APP_CODE_SIGN_STYLE)";
-				PROVISIONING_PROFILE_SPECIFIER = "$(APP_PROVISIONING_PROFILE_SPECIFIER)";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
@@ -708,7 +711,7 @@
 					"$(SRCROOT)/Vendor/libssh2/macos/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.9;
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"-lghostty",
 					"-lssh2",
@@ -752,7 +755,7 @@
 					QuartzCore,
 				);
 				OTHER_MTLFLAGS = "-Wno-c++17-extensions";
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvterm;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				"PRODUCT_NAME[sdk=macosx*]" = VVTerm;
 				REGISTER_APP_GROUPS = YES;
@@ -810,7 +813,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -875,7 +878,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -890,12 +893,6 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				APP_CODE_SIGN_IDENTITY = "";
-				APP_CODE_SIGN_STYLE = Automatic;
-				APP_PROVISIONING_PROFILE_SPECIFIER = "";
-				LIVE_ACTIVITY_CODE_SIGN_IDENTITY = "";
-				LIVE_ACTIVITY_CODE_SIGN_STYLE = Automatic;
-				LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
@@ -908,7 +905,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				GENERATE_INFOPLIST_FILE = YES;
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(SRCROOT)/Vendor/libghostty/ios/include",
@@ -924,8 +921,8 @@
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermTests;
+				MARKETING_VERSION = 2.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTermTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -947,7 +944,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				GENERATE_INFOPLIST_FILE = YES;
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(SRCROOT)/Vendor/libghostty/ios/include",
@@ -963,8 +960,8 @@
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermTests;
+				MARKETING_VERSION = 2.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTermTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -985,12 +982,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermUITests;
+				MARKETING_VERSION = 2.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTermUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -1011,12 +1008,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UH66Q8ZAYG;
+				DEVELOPMENT_TEAM = QW4U57CXJX;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 2.4;
-				PRODUCT_BUNDLE_IDENTIFIER = it.pcad.vvtermUITests;
+				MARKETING_VERSION = 2.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.vivy.VivyTermUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -1103,7 +1100,7 @@
 			repositoryURL = "https://github.com/wiedymi/swift-mosh";
 			requirement = {
 				kind = exactVersion;
-				version = 0.1.6;
+				version = 0.1.8;
 			};
 		};
 		D2C4F00131AA100100B00021 /* XCRemoteSwiftPackageReference "swift-cloudflared" */ = {
@@ -1120,6 +1117,14 @@
 			requirement = {
 				branch = main;
 				kind = branch;
+			};
+		};
+		E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/wiedymi/swift-et";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.5;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1164,6 +1169,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */;
 			productName = Umami;
+		};
+		E8A1E70031C1000100E00011 /* ETSession */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */;
+			productName = ETSession;
+		};
+		E8A1E70031C1000100E00012 /* ETBootstrap */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */;
+			productName = ETBootstrap;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

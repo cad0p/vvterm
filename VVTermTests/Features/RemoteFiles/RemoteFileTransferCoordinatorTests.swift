@@ -60,6 +60,61 @@ struct RemoteFileTransferCoordinatorTests {
         #expect(deduped.map(\.path) == ["/tmp/a.txt", "/tmp/b.txt"])
     }
 
+    @Test
+    func cancelledUploadStopsBeforeWritingRemoteData() async {
+        let store = RemoteFileBrowserStore(defaults: makeDefaults())
+        let service = RecordingRemoteFileService(directoryContents: [:])
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vvterm-cancelled-upload-\(UUID().uuidString).txt")
+        try? Data("cancel me".utf8).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let gate = AsyncStream<Void>.makeStream()
+        let task = Task {
+            for await _ in gate.stream { break }
+            try await store.uploadItem(
+                at: localURL,
+                to: "/tmp",
+                using: service
+            )
+        }
+
+        task.cancel()
+        gate.continuation.yield()
+        gate.continuation.finish()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+        #expect(service.operations.isEmpty)
+    }
+
+    @Test
+    func uploadReportsCurrentFileBeforeCompletingIt() async throws {
+        let store = RemoteFileBrowserStore(defaults: makeDefaults())
+        let service = RecordingRemoteFileService(directoryContents: [:])
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vvterm-upload-progress-\(UUID().uuidString).txt")
+        try Data("upload me".utf8).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        var progress: [RemoteFileBrowserStore.TransferProgress] = []
+        let tracker = RemoteFileBrowserStore.TransferProgressTracker(
+            totalUnitCount: 1,
+            onProgress: { progress.append($0) }
+        )
+
+        try await store.uploadItem(
+            at: localURL,
+            to: "/tmp",
+            using: service,
+            progressTracker: tracker
+        )
+
+        #expect(progress.map(\.completedUnitCount) == [0, 1])
+        #expect(progress.map(\.currentItemName) == [localURL.lastPathComponent, localURL.lastPathComponent])
+    }
+
     private func makeEntry(name: String, path: String, type: RemoteFileType = .file) -> RemoteFileEntry {
         RemoteFileEntry(
             name: name,
@@ -84,6 +139,7 @@ private final class RecordingRemoteFileService: RemoteFileService {
     enum Operation: Equatable {
         case deleteFile(String)
         case deleteDirectory(String)
+        case upload(String)
     }
 
     let directoryContents: [String: [RemoteFileEntry]]
@@ -116,7 +172,9 @@ private final class RecordingRemoteFileService: RemoteFileService {
         to remotePath: String,
         permissions: Int32,
         strategy: SSHUploadStrategy
-    ) async throws {}
+    ) async throws {
+        operations.append(.upload(RemoteFilePath.normalize(remotePath)))
+    }
 
     func createDirectory(at path: String, permissions: Int32) async throws {}
 

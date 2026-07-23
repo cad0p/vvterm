@@ -113,7 +113,7 @@ struct SyncSettingsView: View {
                     HStack {
                         Text("Container")
                         Spacer()
-                        Text(String(localized: "iCloud.it.pcad.vvterm"))
+                        Text(String(localized: "iCloud.app.vivy.VivyTerm"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

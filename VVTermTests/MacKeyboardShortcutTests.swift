@@ -78,5 +78,79 @@ struct MacKeyboardShortcutTests {
             ) == false
         )
     }
+
+    @Test
+    func terminalZoomShortcutsUsePhysicalMainAndKeypadKeys() {
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.equal.keyCode!,
+            characters: "+",
+            modifiers: .command,
+            isFirstResponder: true
+        ) == .zoomIn)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.equal.keyCode!,
+            characters: "=",
+            modifiers: .command,
+            isFirstResponder: true
+        ) == .zoomIn)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.equal.keyCode!,
+            characters: "+",
+            modifiers: [.command, .shift],
+            isFirstResponder: true
+        ) == .zoomIn)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.minus.keyCode!,
+            characters: "-",
+            modifiers: .command,
+            isFirstResponder: true
+        ) == .zoomOut)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.numpadAdd.keyCode!,
+            characters: "+",
+            modifiers: [.command, .numericPad],
+            isFirstResponder: true
+        ) == .zoomIn)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.numpadSubtract.keyCode!,
+            characters: "-",
+            modifiers: [.command, .numericPad],
+            isFirstResponder: true
+        ) == .zoomOut)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.digit0.keyCode!,
+            characters: "0",
+            modifiers: .command,
+            isFirstResponder: true
+        ) == .reset)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.numpad0.keyCode!,
+            characters: "0",
+            modifiers: [.command, .numericPad],
+            isFirstResponder: true
+        ) == .reset)
+    }
+
+    @Test
+    func terminalZoomShortcutsRequireFocusedTerminalAndExactCommandModifiers() {
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.equal.keyCode!,
+            characters: "+",
+            modifiers: [.command, .shift],
+            isFirstResponder: false
+        ) == nil)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.minus.keyCode!,
+            characters: "_",
+            modifiers: [.command, .shift],
+            isFirstResponder: true
+        ) == nil)
+        #expect(MacTerminalShortcutRouting.zoomAction(
+            keyCode: Ghostty.Input.Key.minus.keyCode!,
+            characters: "-",
+            modifiers: [.command, .option],
+            isFirstResponder: true
+        ) == nil)
+    }
 }
 #endif

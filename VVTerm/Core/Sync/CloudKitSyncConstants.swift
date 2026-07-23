@@ -2,7 +2,7 @@ import Foundation
 
 enum CloudKitSyncConstants {
     static let appPrefix = "com.vivy.vvterm"
-    static let cloudKitContainerIdentifier = "iCloud.it.pcad.vvterm"
+    static let cloudKitContainerIdentifier = "iCloud.app.vivy.VivyTerm"
     static let recordZoneName = "VVTermZone"
     static let databaseSubscriptionID = "database-changes"
 
@@ -18,6 +18,7 @@ enum CloudKitSyncConstants {
     static let terminalUsePerAppearanceThemeKey = "terminalUsePerAppearanceTheme"
     static let terminalThemePreferenceUpdatedAtKey = "terminalThemePreferenceUpdatedAt"
     static let terminalAccessoryProfileStorageKey = "terminalAccessoryProfileV1"
+    static let statsPreferencesStorageKey = "statsPreferencesV1"
 
     static func changeTokenKey(for zoneName: String = recordZoneName) -> String {
         "\(appPrefix).cloudkit.\(zoneName).token"

@@ -25,7 +25,7 @@
         <key>NSExtensionAttributes</key>
         <dict>
             <key>NSExtensionWidgetKind</key>
-            <string>it.pcad.vvterm.liveactivity</string>
+            <string>app.vivy.VivyTerm.liveactivity</string>
             <key>NSSupportsLiveActivities</key>
             <true/>
         </dict>
