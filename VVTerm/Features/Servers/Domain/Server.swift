@@ -220,6 +220,15 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    init(from decoder: Decoder) throws {
+        // Fall back to .password for unknown raw values so old clients that
+        // encounter a future auth method (added after this build was compiled)
+        // don't crash — they decode to the safe default instead.
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        self = AuthMethod(rawValue: raw) ?? .password
+    }
+
     var displayName: String {
         switch self {
         case .password: return String(localized: "Password")
