@@ -50,11 +50,6 @@ final class FixtureTests: XCTestCase {
 
     // MARK: - helpers
 
-    private func loadFixture(_ name: String) throws -> Data {
-        let url = url(forFixture: name)
-        return try Data(contentsOf: url)
-    }
-
     private func fixtureBaseURL() -> URL {
         // This test file lives at VVTermTests/Features/Teleport/SEPWebAuthn/.
         // Fixtures live at spikes/sep-webauthn/fixtures/expected/ (relative to
