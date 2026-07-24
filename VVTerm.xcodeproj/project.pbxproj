@@ -1016,13 +1016,13 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = UH66Q8ZAYG;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS[sdk=iphoneos*] = (
+				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(SRCROOT)/Vendor/libghostty/ios/include",
 				);
-				HEADER_SEARCH_PATHS[sdk=iphonesimulator*] = (
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(SRCROOT)/Vendor/libghostty/ios-simulator/include",
 				);
-				HEADER_SEARCH_PATHS[sdk=macosx*] = (
+				"HEADER_SEARCH_PATHS[sdk=macosx*]" = (
 					"$(SRCROOT)/Vendor/libghostty/include",
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
@@ -1051,13 +1051,13 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = UH66Q8ZAYG;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS[sdk=iphoneos*] = (
+				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(SRCROOT)/Vendor/libghostty/ios/include",
 				);
-				HEADER_SEARCH_PATHS[sdk=iphonesimulator*] = (
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(SRCROOT)/Vendor/libghostty/ios-simulator/include",
 				);
-				HEADER_SEARCH_PATHS[sdk=macosx*] = (
+				"HEADER_SEARCH_PATHS[sdk=macosx*]" = (
 					"$(SRCROOT)/Vendor/libghostty/include",
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
