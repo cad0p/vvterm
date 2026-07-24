@@ -752,6 +752,14 @@ extension TerminalAccessoryProfile {
     }
 
     func normalized() -> TerminalAccessoryProfile {
+        // Capture whether the source layout had any items at all before
+        // normalization filters/dedupes them. The default-layout fallback
+        // below should only fire for a genuinely empty/corrupt profile (no
+        // authored items), not for a profile whose items were all filtered out
+        // (e.g. references to deleted custom actions) — in that case the empty
+        // result is the user's intent and must be preserved.
+        let sourceHadItems = !layout.activeItems.isEmpty
+
         var customActionsByID: [UUID: TerminalAccessoryCustomAction] = [:]
         for action in customActions {
             let normalizedAction = action.normalized()
@@ -804,7 +812,18 @@ extension TerminalAccessoryProfile {
             normalizedItems = Array(normalizedItems.prefix(Self.maxActiveItems))
         }
 
-        if normalizedItems.count < Self.minActiveItems {
+        // Only fall back to the full default layout when the source layout was
+        // empty/corrupt (no authored items). Preserving an explicit, small
+        // user-authored list — e.g. deduplicated `[escape, tab]`, or a list
+        // whose only items referenced deleted custom actions — must not be
+        // replaced wholesale by the 15-item default.
+        //
+        // `minActiveItems` is retained as the documented floor the UI enforces
+        // for *authoring* (see TerminalAccessoryCustomizationView), but it is
+        // not applied here: doing so would silently discard a user's explicit
+        // short list during normalization/sync, which is the bug
+        // TerminalAccessoryProfileTests exercises.
+        if normalizedItems.isEmpty && !sourceHadItems {
             normalizedItems = Self.defaultActiveItems
         }
 
