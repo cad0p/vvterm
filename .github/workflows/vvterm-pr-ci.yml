@@ -1,0 +1,116 @@
+# VVTerm PR CI — build + unit/UI tests on iOS Simulator.
+#
+# Runs on every PR to main. Builds the VVTerm app for iOS Simulator
+# (no signing required) and runs the unit + UI test targets.
+#
+# What this verifies (CI-able, no device):
+#   - the VVTerm app compiles for iOS Simulator
+#   - VVTermTests (unit) pass — including the Teleport domain/readiness/
+#     device-name/Codable tests
+#   - VVTermUITests pass — including the Teleport mock-coordinator test
+#     matrices (bootstrap/registration/login/readiness, Face ID outcomes)
+#   - XCTAttachment screenshots are uploaded as artifacts for visual review
+#
+# What this does NOT verify (device-only):
+#   - real Face ID prompts (simulator has no Secure Enclave)
+#   - real Teleport server connectivity
+#   - real Safari/ASWebAuthenticationSession ceremonies
+#
+# The mock coordinators + mock SEP signer cover the failure-matrix UX in
+# the simulator. The device smoke test (per the 2.2 prompt's runtime
+# verification checklist item 6) is the final confidence check.
+#
+# See:
+#   2026-07-23-strategy-b-session2.2-teleport-ui-design.md (CI strategy)
+
+name: VVTerm PR CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.0'
+
+      - name: Show tool versions
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios | head -5
+
+      - name: Build for iOS Simulator
+        run: |
+          set -euo pipefail
+
+          # Build the app target for the iOS Simulator destination.
+          # CODE_SIGNING_ALLOWED=NO — simulator builds don't sign.
+          # This catches compile errors across the whole app (including
+          # the Teleport feature) without the cost of a full archive.
+          xcodebuild build \
+            -scheme VVTerm \
+            -configuration Debug \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/build.log"
+
+      - name: Run unit + UI tests
+        run: |
+          set -euo pipefail
+
+          # Run both test targets (VVTermTests + VVTermUITests) on a
+          # simulator. The VVTerm scheme's TestAction includes both.
+          # -parallel-testing-enabled speeds up the UI tests where possible.
+          # resultBundlePath produces an .xcresult for the test summary.
+          xcodebuild test \
+            -scheme VVTerm \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 16,OS=latest" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -parallel-testing-enabled \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log"
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+
+      - name: Upload XCTAttachment screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-screenshots
+          path: |
+            ${{ runner.temp }}/DerivedData/Logs/Test/Attachments
+          if-no-files-found: ignore
