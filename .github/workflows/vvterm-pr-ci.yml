@@ -1,13 +1,47 @@
 # VVTerm PR CI — build + unit/UI tests on iOS Simulator (parallel jobs).
 #
-# Runs on every PR to main. Three jobs:
-#   1. build      — compiles the VVTerm app for iOS Simulator (no signing)
-#   2. unit-tests — runs VVTermTests (fast, pure logic)
-#   3. ui-tests   — runs VVTermUITests (slower, launches app on simulator)
+# Runs on every PR to main. Jobs:
+#   1. build       — compiles the VVTerm app for iOS Simulator (no signing),
+#                    then uploads the compiled products as an artifact so the
+#                    fan-out ui-tests shards skip recompilation.
+#   2. unit-tests  — runs VVTermTests (fast, pure logic).
+#   3. ui-tests    — matrix of N parallel shard jobs, each downloading the
+#                    build artifact and running a subset of VVTermUITests via
+#                    -only-testing:. fail-fast is disabled so one failing shard
+#                    does not cancel the others.
 #
 # Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
 # feedback (unit tests finish in ~2 min) and isolates UI test failures/hangs
 # (which can be slow) from blocking unit test results.
+#
+# Build-once-fanout architecture:
+#   - The `build` job compiles the app once and uploads Build/Products and
+#     Build/Intermediates.noindex from DerivedData.
+#   - Each `ui-tests` shard downloads that artifact into the same
+#     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
+#     app and skips compilation. Each shard then runs only its assigned tests
+#     via `-only-testing:Target/Class/method,...`.
+#   - Shard split is balanced via LPT bin-packing of measured per-method
+#     runtimes (max shard ~288s vs the old serialized 30-55m).
+#
+# Runner / toolchain:
+#   - All jobs run on `xcode-27` (macOS 26 + Xcode 27 public-preview, arm64).
+#     `xcode-27-xlarge` was tried first but is blocked by an account
+#     spending-limit gate; `xcode-27` uses the same Xcode 27 image without the
+#     billing gate, and the 7-shard fan-out compensates for the smaller
+#     per-runner core count.
+#   - The image defaults to Xcode 27, so no setup-xcode step is needed.
+#   - The xcode-27 preview image does NOT ship the Metal toolchain, which
+#     mlx-swift Cmlx shaders + libghostty's Metal renderer require. Each job
+#     runs `xcodebuild -downloadComponent MetalToolchain` before building.
+#   - SPM cache key is namespaced `xcode27-spm-` to match the new toolchain.
+#   - After restoring the SPM/DerivedData cache, a step removes the stale
+#     ModuleCache.noindex (PCM) directory. When the runner image updates, SDK
+#     header mtimes change and restored .pcm files become stale, producing
+#     `fatal error: file '...AvailabilityVersions.h' has been modified since
+#     the module file '...pcm' was built`. The PCM rebuild is cheap and
+#     deterministic; this keeps SourcePackages + build products cached while
+#     avoiding stale-PCM build failures.
 #
 # What this verifies (CI-able, no device):
 #   - the VVTerm app compiles for iOS Simulator
@@ -45,7 +79,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 25
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -56,29 +90,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.3'
-
       - name: Cache SPM packages + DerivedData
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
             ${{ runner.temp }}/DerivedData
-          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-xcode26.3-spm-
+            ${{ runner.os }}-xcode27-spm-
+
+      - name: Clear stale PCM module cache
+        # Remove the Clang module cache so restored .pcm files from an older
+        # runner image don't trigger "file has been modified since the module
+        # file was built" errors. The rebuild is cheap and deterministic.
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain,
+        # which mlx-swift's Cmlx Metal shaders and libghostty's Metal renderer
+        # require. Download it on first use (cached via SPM cache key below so
+        # subsequent runs skip the download).
+        run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Build for iOS Simulator
         run: |
           set -euo pipefail
 
           # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
-          # is arm64-only. iPhone 16 doesn't exist as a concrete simulator on Xcode 26.3
-          # (only the abstract "OS:latest" entry, which fails to match). iPhone 17 exists
-          # as a concrete simulator; arch=arm64 selects the arm64 slice (not x86_64).
+          # is arm64-only. iPhone 17 exists as a concrete simulator on the iOS 27.0
+          # runtime shipped with Xcode 27; arch=arm64 selects the arm64 slice.
           xcodebuild build \
             -scheme VVTerm \
             -configuration Debug \
@@ -86,6 +127,19 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/build.log"
+
+      - name: Upload build products
+        # Upload the compiled products so the ui-tests shards can skip
+        # recompilation. Both Build/Products (the .app + test bundles) and
+        # Build/Intermediates.noindex (build intermediates) are needed for
+        # `xcodebuild test` to reuse the build without recompiling.
+        uses: actions/upload-artifact@v4
+        with:
+          name: vvterm-build
+          path: |
+            ${{ runner.temp }}/DerivedData/Build/Products
+            ${{ runner.temp }}/DerivedData/Build/Intermediates.noindex
+          retention-days: 1
 
       - name: Upload build log on failure
         if: failure()
@@ -96,7 +150,7 @@ jobs:
           if-no-files-found: ignore
 
   unit-tests:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     needs: build
     env:
@@ -108,20 +162,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.3'
-
       - name: Cache SPM packages + DerivedData
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
             ${{ runner.temp }}/DerivedData
-          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-xcode26.3-spm-
+            ${{ runner.os }}-xcode27-spm-
+
+      - name: Clear stale PCM module cache
+        # Remove the Clang module cache so restored .pcm files from an older
+        # runner image don't trigger "file has been modified since the module
+        # file was built" errors. The rebuild is cheap and deterministic.
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain.
+        # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
+        run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Run unit tests (VVTermTests)
         run: |
@@ -150,11 +210,34 @@ jobs:
           if-no-files-found: ignore
 
   ui-tests:
-    runs-on: macos-26
-    timeout-minutes: 30
+    runs-on: xcode-27
+    timeout-minutes: 20
     needs: build
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # 7 shards balanced via LPT bin-packing of measured per-method
+          # runtimes (CI run 30069836793). Max shard ~288s, min ~263s.
+          # Each entry's `only-testing` is a comma-separated list of
+          # Target/Class/method (or Target/Class for whole-class) — no spaces.
+          - name: notice-outlier
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/TerminalScreenAwakeUITests"
+          - name: keyboard-a
+            only-testing: "VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/VVTermUITestsLaunchTests,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesBottomSheet"
+          - name: keyboard-b
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/VVTermUITests,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild"
+          - name: keyboard-c
+            only-testing: "VVTermUITests/StatsStorageUITests,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect"
+          - name: keyboard-d
+            only-testing: "VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalZenModeUITests,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath"
+          - name: keyboard-e
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/StatsAppearancePresentationUITests,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/NoticePresentationUITests/testInitialConnectionSheetYieldsToTmuxSelectionSheet"
+          - name: keyboard-f
+            only-testing: "VVTermUITests/StatsCardsLayoutUITests,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure"
 
     steps:
       - name: Checkout
@@ -162,35 +245,51 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.3'
-
-      - name: Cache SPM packages + DerivedData
+      - name: Cache SPM packages
+        # Cache only SourcePackages (not DerivedData) — each shard downloads
+        # the build artifact from the build job into $RUNNER_TEMP/DerivedData.
         uses: actions/cache@v4
         with:
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
-            ${{ runner.temp }}/DerivedData
-          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-xcode26.3-spm-
+            ${{ runner.os }}-xcode27-spm-
 
-      - name: Run UI tests (VVTermUITests)
+      - name: Download build products
+        # Download the compiled products from the build job into the same
+        # -derivedDataPath the build used, so `xcodebuild test` finds the
+        # prebuilt app and skips recompilation.
+        uses: actions/download-artifact@v4
+        with:
+          name: vvterm-build
+          path: ${{ runner.temp }}/DerivedData
+
+      - name: Clear stale PCM module cache
+        # Remove the Clang module cache so restored .pcm files from an older
+        # runner image don't trigger "file has been modified since the module
+        # file was built" errors. The rebuild is cheap and deterministic.
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain.
+        # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Run UI tests (shard ${{ matrix.shard.name }})
         run: |
           set -euo pipefail
 
-          # Run ONLY the VVTermUITests target — slower, launches the app on the simulator.
-          # Uses the VVTerm scheme (which includes both test targets) but filters to VVTermUITests
-          # via -only-testing.
+          # Run only this shard's tests via -only-testing:.
+          # The value is a comma-separated list of Target/Class/method
+          # (or Target/Class for a whole class). The prebuilt app is reused
+          # from the downloaded build artifact — no recompilation.
           xcodebuild test \
             -scheme VVTerm \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            -only-testing:VVTermUITests \
+            -only-testing:${{ matrix.shard.only-testing }} \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
@@ -199,7 +298,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-test-results
+          name: ui-test-results-${{ matrix.shard.name }}
           path: |
             ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
@@ -209,7 +308,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-test-screenshots
+          name: ui-test-screenshots-${{ matrix.shard.name }}
           path: |
             ${{ runner.temp }}/DerivedData/Logs/Test/Attachments
           if-no-files-found: ignore
