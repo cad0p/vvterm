@@ -88,6 +88,23 @@ protocol TeleportKeyRingStoring: AnyObject {
     /// Required by the server's passwordless login verify path.
     func registeredUserHandle(for clusterId: UUID) -> Data?
 
+    /// The ed25519 private key (OpenSSH PEM format) paired with the live
+    /// cert, or nil if none. Stored in the keychain (NOT UserDefaults —
+    /// the private key is secret). The coordinators store this alongside
+    /// the cert at Phase 1 (bootstrap) and Phase 3 (login); the SSHClient
+    /// cert seam fetches it to feed `libssh2_userauth_publickey_frommemory`.
+    ///
+    /// The key is per-device (NOT CloudKit-synced) — like the SEP key, each
+    /// device generates its own ed25519 keypair when it bootstraps. A server
+    /// that arrives via iCloud on a fresh device has no private key until the
+    /// user completes the per-device setup.
+    func liveEd25519PrivateKey(for clusterId: UUID) -> Data?
+
+    /// Store the ed25519 private key (OpenSSH PEM bytes) for a cluster.
+    /// Called by the bootstrap/login coordinators when a cert is issued.
+    /// Overwrites any prior key. NOT synced to iCloud (per-device).
+    func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws
+
     /// Clear all credential state for a cluster (metadata only — the SEP key
     /// itself is removed via `SecureEnclaveSigner.deleteKey`, which the
     /// coordinator calls separately). Used when the user deletes the MFA
@@ -243,8 +260,69 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         return data
     }
 
+    // MARK: - ed25519 SSH private key (keychain)
+
+    /// The keychain service + account scheme for the per-cluster ed25519
+    /// private key. The private key is stored in the keychain (not
+    /// UserDefaults) because it's secret. NOT CloudKit-synced — each device
+    /// generates its own keypair at bootstrap.
+    ///
+    /// Format: service = `app.vivy.vvterm` (same as KeychainManager),
+    /// account = `vvterm.teleport.sshkey.<clusterId>`. The clusterId is the
+    /// `Server.id` (Teleport clusters are stored as Server records).
+    private static let sshKeyService = "app.vivy.vvterm"
+    private static func sshKeyAccount(for clusterId: UUID) -> String {
+        "vvterm.teleport.sshkey.\(clusterId.uuidString)"
+    }
+
+    func liveEd25519PrivateKey(for clusterId: UUID) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.sshKeyService,
+            kSecAttrAccount as String: Self.sshKeyAccount(for: clusterId),
+            kSecReturnData as String: kCFBooleanTrue as Any,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess else {
+            if status != errSecItemNotFound {
+                logger.error("loadEd25519PrivateKey SecItemCopyMatching: OSStatus \(status)")
+            }
+            return nil
+        }
+        return item as? Data
+    }
+
+    func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
+        let account = Self.sshKeyAccount(for: clusterId)
+        let baseQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.sshKeyService,
+            kSecAttrAccount as String: account
+        ]
+        // Delete any prior key first (idempotent).
+        SecItemDelete(baseQuery as CFDictionary)
+        var attributes = baseQuery
+        attributes[kSecValueData as String] = pemData
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            logger.error("storeEd25519PrivateKey SecItemAdd: OSStatus \(status)")
+            throw KeychainError.unhandled(status)
+        }
+        logger.info("stored ed25519 private key for cluster \(clusterId.uuidString, privacy: .public)")
+    }
+
     func clear(for clusterId: UUID) {
         credentials.removeValue(forKey: clusterId)
+        // Also delete the ed25519 private key from the keychain.
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.sshKeyService,
+            kSecAttrAccount as String: Self.sshKeyAccount(for: clusterId)
+        ]
+        SecItemDelete(query as CFDictionary)
         save()
         logger.info("cleared credentials for cluster \(clusterId.uuidString, privacy: .public)")
     }
