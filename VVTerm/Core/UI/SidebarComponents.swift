@@ -10,9 +10,14 @@ struct ServerRow: View {
     var onMove: ((Server) -> Void)? = nil
     var onConnect: ((Server) -> Void)? = nil
     var onLockedTap: (() -> Void)? = nil
+    /// Called when a non-ready Teleport server is tapped. The caller opens
+    /// the appropriate setup sheet (bootstrap/registration/login) based on
+    /// the readiness state. If nil, the tap falls through to `onSelect`.
+    var onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil
 
     @ObservedObject private var tabManager = TerminalTabManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var keyRing = TeleportKeyRing.shared
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
@@ -20,6 +25,19 @@ struct ServerRow: View {
 
     private var isLocked: Bool {
         serverManager.isServerLocked(server)
+    }
+
+    /// The derived Teleport readiness for this server. Only computed for
+    /// Teleport servers (`.faceIDTeleport`); non-Teleport servers return nil
+    /// and the existing tab-count badge is unchanged.
+    private var teleportReadiness: TeleportDeviceReadiness? {
+        guard server.authMethod == .faceIDTeleport else { return nil }
+        return keyRing.readiness(for: server.id)
+    }
+
+    /// Whether this Teleport server needs setup (any non-ready state).
+    private var needsTeleportSetup: Bool {
+        teleportReadiness?.needsSetup == true
     }
 
     private var tabCount: Int {
@@ -56,6 +74,8 @@ struct ServerRow: View {
             .onTapGesture {
                 if isLocked {
                     onLockedTap?()
+                } else if needsTeleportSetup, let readiness = teleportReadiness, let onTeleportSetup {
+                    onTeleportSetup(server, readiness)
                 } else {
                     onSelect()
                 }
@@ -151,6 +171,8 @@ struct ServerRow: View {
 
             if isLocked {
                 LockedBadge()
+            } else if needsTeleportSetup, let readiness = teleportReadiness {
+                readinessBadge(readiness)
             } else if tabCount > 0 {
                 HStack(spacing: 4) {
                     Image(systemName: "terminal")
@@ -172,6 +194,36 @@ struct ServerRow: View {
         if isSelected {
             RoundedRectangle(cornerRadius: 6)
                 .fill(selectionFillColor)
+        }
+    }
+
+    // MARK: - Teleport Readiness Badge
+
+    /// The readiness pill for non-ready Teleport servers (design doc mockup B).
+    ///   - `needsBootstrap` / `needsRegistration` → amber "Setup" pill
+    ///     (`lock.rotation` icon)
+    ///   - `needsLogin` → blue "Sign in" pill
+    ///   - `ready` → no badge (the caller doesn't call this for ready state)
+    @ViewBuilder
+    private func readinessBadge(_ readiness: TeleportDeviceReadiness) -> some View {
+        switch readiness {
+        case .ready:
+            // Ready Teleport servers behave like normal SSH servers — show
+            // the tab count (or nothing if no tabs).
+            if tabCount > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("\(tabCount)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .foregroundStyle(sessionIndicatorColor)
+            }
+        case .needsBootstrap, .needsRegistration:
+            PillBadge(text: String(localized: "Setup"), color: .orange)
+        case .needsLogin:
+            PillBadge(text: String(localized: "Sign in"), color: .blue)
         }
     }
 }

@@ -88,9 +88,15 @@ enum TeleportBootstrapError: Error, Equatable {
 /// `state`). The blocking POST runs on a background URLSession task; the
 /// coordinator awaits it without blocking the main thread.
 @MainActor
-protocol TeleportBootstrapCoordinating: AnyObject {
+protocol TeleportBootstrapCoordinating: AnyObject, ObservableObject {
     /// The current state. SwiftUI views observe this to drive the sheet UI.
     var state: TeleportBootstrapState { get }
+
+    /// The Phase-1 result (cert PEM + TLS keypair + cluster CA bundle).
+    /// Set on `.success`; consumed by the registration coordinator via the
+    /// bootstrap view's `onSuccess` callback. Exposed on the protocol so the
+    /// UI layer can read it without casting to the concrete type.
+    var lastBootstrapResult: TeleportBootstrapCoordinator.BootstrapResult? { get }
 
     /// Begin a Phase 1 bootstrap for the given cluster.
     /// - Parameter cluster: the Teleport cluster config (host, username, etc.)

@@ -90,7 +90,7 @@ enum TeleportRegistrationError: Error, Equatable {
 /// signer blocks on `SecKeyCreateSignature`, which must be on the main thread
 /// for the biometric prompt).
 @MainActor
-protocol TeleportRegistrationCoordinating: AnyObject {
+protocol TeleportRegistrationCoordinating: AnyObject, ObservableObject {
     /// The current state. SwiftUI views observe this to drive the sheet UI.
     var state: TeleportRegistrationState { get }
 
