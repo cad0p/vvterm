@@ -1,7 +1,71 @@
-# VVTerm PR CI — build + unit/UI tests on iOS Simulator.
+# VVTerm PR CI — build + unit/UI tests on iOS Simulator (parallel jobs).
 #
-# Runs on every PR to main. Builds the VVTerm app for iOS Simulator
-# (no signing required) and runs the unit + UI test targets.
+# Runs on every PR to main. Jobs:
+#   1. build       — compiles the VVTerm app for iOS Simulator (no signing),
+#                    then uploads the compiled products as an artifact so the
+#                    fan-out ui-tests shards skip recompilation.
+#   2. unit-tests  — runs VVTermTests (fast, pure logic). Downloads the
+#                    build artifact so it reuses the prebuilt app + SPM deps
+#                    and only compiles the VVTermTests target.
+#   3. ui-tests    — matrix of 4 parallel shard jobs, each downloading the
+#                    build artifact and running a subset of VVTermUITests via
+#                    -only-testing:. fail-fast is disabled so one failing shard
+#                    does not cancel the others.
+#
+# Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
+# feedback (unit tests finish first) and isolates UI test failures/hangs
+# (which can be slow) from blocking unit test results.
+#
+# Concurrency-cap-aware shard count:
+#   - GitHub Actions caps this repo at 5 concurrent jobs. With build(1) +
+#     unit-tests(1) + 4 ui-tests = 6 jobs total, the build runs first alone,
+#     then the 5 test-phase jobs (4 UI + 1 unit) all fit within the cap with
+#     ZERO queueing. The previous 7-shard design overflowed to 9 jobs and
+#     queued 2-3 shards for ~8m.
+#   - 4 UI shards + unit-tests is preferred over 5 UI shards (dropping
+#     unit-tests) because: (a) unit-tests provides the fast feedback signal
+#     essential for the session-2.3 PR, (b) unit-tests runs in parallel and
+#     does not gate the UI shards, (c) the wall-time difference is small.
+#
+# Build-once-fanout architecture:
+#   - The `build` job compiles the app once and uploads Build/Products and
+#     Build/Intermediates.noindex from DerivedData.
+#   - Each `ui-tests` shard downloads that artifact into the same
+#     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
+#     app and skips compilation. Each shard then runs only its assigned tests
+#     via `-only-testing:Target/Class/method,...`.
+#   - The `unit-tests` job downloads the same artifact, so it reuses the
+#     prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
+#     target (fast), then runs the 577 tests (~7s).
+#   - Shard split is balanced via LPT bin-packing of measured per-method
+#     runtimes from CI run 30069836793 (serialized) calibrated against the
+#     measured 7-shard totals from run 30092781079. All 56 UI test methods
+#     are distributed across 4 shards with max balance diff ~1s (raw est).
+#     Projected max shard ~15.6m (test-step) vs the old 7-shard max ~9.6m,
+#     but 4 shards fit the cap with zero queueing vs 7 shards queueing ~8m.
+#
+# Runner / toolchain:
+#   - All jobs run on `xcode-27` (macOS 26 + Xcode 27 public-preview, arm64).
+#     `xcode-27-xlarge` was tried first but is blocked by an account
+#     spending-limit gate; `xcode-27` uses the same Xcode 27 image without the
+#     billing gate, and the 4-shard fan-out compensates for the smaller
+#     per-runner core count.
+#   - The image defaults to Xcode 27, so no setup-xcode step is needed.
+#   - The xcode-27 preview image does NOT ship the Metal toolchain, which
+#     mlx-swift Cmlx shaders + libghostty's Metal renderer require. Each job
+#     runs `xcodebuild -downloadComponent MetalToolchain` before building.
+#     The download takes ~20s per job; caching it across jobs is not practical
+#     because it installs into the Xcode toolchain directory (part of the
+#     runner image, not a user-cacheable path). The SPM cache key already
+#     captures the toolchain version via the `xcode27-spm-` prefix.
+#   - SPM cache key is namespaced `xcode27-spm-` to match the new toolchain.
+#   - After restoring the SPM/DerivedData cache, a step removes the stale
+#     ModuleCache.noindex (PCM) directory. When the runner image updates, SDK
+#     header mtimes change and restored .pcm files become stale, producing
+#     `fatal error: file '...AvailabilityVersions.h' has been modified since
+#     the module file '...pcm' was built`. The PCM rebuild is cheap and
+#     deterministic; this keeps SourcePackages + build products cached while
+#     avoiding stale-PCM build failures.
 #
 # What this verifies (CI-able, no device):
 #   - the VVTerm app compiles for iOS Simulator
@@ -38,9 +102,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    runs-on: macos-26
-    timeout-minutes: 40
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 25
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -50,55 +114,120 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.3'
-
-      - name: Show tool versions
-        run: |
-          set -euo pipefail
-          xcodebuild -version
-          xcrun simctl list runtimes | grep -i ios | head -5
-
       - name: Cache SPM packages + DerivedData
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
             ${{ runner.temp }}/DerivedData
-          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-xcode26.3-spm-
+            ${{ runner.os }}-xcode27-spm-
+
+      - name: Clear stale PCM module cache
+        # Remove the Clang module cache so restored .pcm files from an older
+        # runner image don't trigger "file has been modified since the module
+        # file was built" errors. The rebuild is cheap and deterministic.
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain,
+        # which mlx-swift's Cmlx Metal shaders and libghostty's Metal renderer
+        # require. Download it on first use (cached via SPM cache key below so
+        # subsequent runs skip the download).
+        run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Build for iOS Simulator
         run: |
           set -euo pipefail
 
-          # Build the app target for the iOS Simulator destination.
-          # CODE_SIGNING_ALLOWED=NO — simulator builds don't sign.
-          # This catches compile errors across the whole app (including
-          # the Teleport feature) without the cost of a full archive.
+          # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
+          # is arm64-only. iPhone 17 exists as a concrete simulator on the iOS 27.0
+          # runtime shipped with Xcode 27; arch=arm64 selects the arm64 slice.
           xcodebuild build \
             -scheme VVTerm \
             -configuration Debug \
-            -destination "generic/platform=iOS Simulator" \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/build.log"
 
-      - name: Run unit + UI tests
+      - name: Upload build products
+        # Upload the compiled products so the ui-tests shards can skip
+        # recompilation. Both Build/Products (the .app + test bundles) and
+        # Build/Intermediates.noindex (build intermediates) are needed for
+        # `xcodebuild test` to reuse the build without recompiling.
+        uses: actions/upload-artifact@v4
+        with:
+          name: vvterm-build
+          path: |
+            ${{ runner.temp }}/DerivedData/Build/Products
+            ${{ runner.temp }}/DerivedData/Build/Intermediates.noindex
+          retention-days: 1
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+
+  unit-tests:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    needs: build
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache SPM packages
+        # Cache only SourcePackages (not DerivedData) — this job downloads
+        # the build artifact from the build job into $RUNNER_TEMP/DerivedData,
+        # mirroring the ui-tests shards.
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode27-spm-
+
+      - name: Download build products
+        # Download the compiled products from the build job into the same
+        # -derivedDataPath the build used, so `xcodebuild test` finds the
+        # prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
+        # target (fast), then runs the 577 tests (~7s).
+        uses: actions/download-artifact@v4
+        with:
+          name: vvterm-build
+          path: ${{ runner.temp }}/DerivedData
+
+      - name: Clear stale PCM module cache
+        # Remove the Clang module cache so restored .pcm files from an older
+        # runner image don't trigger "file has been modified since the module
+        # file was built" errors. The rebuild is cheap and deterministic.
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain.
+        # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Run unit tests (VVTermTests)
         run: |
           set -euo pipefail
 
-          # Run both test targets (VVTermTests + VVTermUITests) on a
-          # simulator. The VVTerm scheme's TestAction includes both.
-          # -parallel-testing-enabled speeds up the UI tests where possible.
-          # resultBundlePath produces an .xcresult for the test summary.
+          # Run ONLY the VVTermTests target (unit tests) — fast, pure logic.
+          # The VVTermUnitTests scheme is scoped to VVTermTests only.
           xcodebuild test \
-            -scheme VVTerm \
+            -scheme VVTermUnitTests \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 16,OS=latest" \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -parallel-testing-enabled \
@@ -109,10 +238,103 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: unit-test-results
           path: |
             ${{ runner.temp }}/TestResults.xcresult
-            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+
+  ui-tests:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    needs: build
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # 4 shards balanced via LPT bin-packing of measured per-method
+          # runtimes (CI run 30069836793, calibrated against the 7-shard
+          # totals from run 30092781079). 4 UI shards + unit-tests = 5 test
+          # jobs, fitting GitHub's 5-concurrent-macOS-job cap with ZERO
+          # queueing. Each shard: ~53s setup + ~880s tests ≈ 15.6m.
+          # Shard 1 holds the 226s testConcurrentOperationsStackAboveBottomToolbar
+          # outlier (hard floor) paired with the smallest other tests.
+          # Each entry's `only-testing` is a comma-separated list of
+          # Target/Class/method (or Target/Class for whole-class) — no spaces.
+          - name: notice-outlier
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/StatsAppearancePresentationUITests,VVTermUITests/VVTermUITests/testLaunchPerformance"
+          - name: keyboard-a
+            only-testing: "VVTermUITests/StatsStorageUITests,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TerminalScreenAwakeUITests,VVTermUITests/VVTermUITestsLaunchTests"
+          - name: keyboard-b
+            only-testing: "VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalZenModeUITests,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/NoticePresentationUITests/testInitialConnectionSheetYieldsToTmuxSelectionSheet"
+          - name: keyboard-c
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesBottomSheet,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/VVTermUITests/testExample"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache SPM packages
+        # Cache only SourcePackages (not DerivedData) — each shard downloads
+        # the build artifact from the build job into $RUNNER_TEMP/DerivedData.
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode27-spm-
+
+      - name: Download build products
+        # Download the compiled products from the build job into the same
+        # -derivedDataPath the build used, so `xcodebuild test` finds the
+        # prebuilt app and skips recompilation.
+        uses: actions/download-artifact@v4
+        with:
+          name: vvterm-build
+          path: ${{ runner.temp }}/DerivedData
+
+      - name: Clear stale PCM module cache
+        # Remove the Clang module cache so restored .pcm files from an older
+        # runner image don't trigger "file has been modified since the module
+        # file was built" errors. The rebuild is cheap and deterministic.
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain.
+        # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Run UI tests (shard ${{ matrix.shard.name }})
+        run: |
+          set -euo pipefail
+
+          # Run only this shard's tests via -only-testing:.
+          # The value is a comma-separated list of Target/Class/method
+          # (or Target/Class for a whole class). The prebuilt app is reused
+          # from the downloaded build artifact — no recompilation.
+          xcodebuild test \
+            -scheme VVTerm \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -only-testing:${{ matrix.shard.only-testing }} \
+            -parallel-testing-enabled \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log"
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-results-${{ matrix.shard.name }}
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
           if-no-files-found: ignore
 
@@ -120,7 +342,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-test-screenshots
+          name: ui-test-screenshots-${{ matrix.shard.name }}
           path: |
             ${{ runner.temp }}/DerivedData/Logs/Test/Attachments
           if-no-files-found: ignore
