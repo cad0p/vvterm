@@ -158,17 +158,22 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/build.log"
 
+      - name: Archive build products
+        # Tar Build/Products + Build/Intermediates.noindex into a single
+        # archive. actions/upload-artifact does NOT preserve symlinks inside
+        # .app bundles (Frameworks symlinks, etc.), which breaks
+        # `test-without-building` ("Cannot launch simulated executable: no
+        # file found at .../VVTerm.app"). Tar preserves symlinks + permissions.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/DerivedData/Build"
+          tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" Products Intermediates.noindex
+
       - name: Upload build products
-        # Upload the compiled products so the test jobs can skip
-        # recompilation. Build/Products includes the .app, the .xctest
-        # bundles, and the .xctestrun manifest; Build/Intermediates.noindex
-        # holds the build intermediates needed for incremental reuse.
         uses: actions/upload-artifact@v4
         with:
           name: vvterm-build
-          path: |
-            ${{ runner.temp }}/DerivedData/Build/Products
-            ${{ runner.temp }}/DerivedData/Build/Intermediates.noindex
+          path: ${{ runner.temp }}/vvterm-build.tar.gz
           retention-days: 1
 
       - name: Upload build log on failure
@@ -204,14 +209,19 @@ jobs:
             ${{ runner.os }}-xcode27-spm-
 
       - name: Download build products
-        # Download the compiled products from the build job into the same
-        # -derivedDataPath the build used, so `xcodebuild test` finds the
-        # prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
-        # target (fast), then runs the 577 tests (~7s).
+        # Download the tarball from the build job and extract it into the
+        # same -derivedDataPath the build used. Tar preserves the symlinks
+        # inside .app bundles that actions/download-artifact would flatten.
         uses: actions/download-artifact@v4
         with:
           name: vvterm-build
-          path: ${{ runner.temp }}/DerivedData
+          path: ${{ runner.temp }}
+
+      - name: Extract build products
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
+          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
@@ -228,21 +238,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # test-without-building: run the prebuilt VVTermTests.xctest from
-          # the build artifact with ZERO compilation. The build job used
-          # `build-for-testing -scheme VVTerm` which generates VVTerm.xctestrun
-          # (referencing both VVTermTests + VVTermUITests bundles);
+          # test-without-building with -xctestrun: run the prebuilt
+          # VVTermTests.xctest from the build artifact with ZERO compilation.
+          # The build job's `build-for-testing -scheme VVTerm` generates a
+          # <Scheme>_iphonesimulator<arch>.xctestrun manifest in Build/Products/.
+          # -xctestrun is more robust than -scheme (which searches the build
+          # root and is sensitive to DerivedData state) because the manifest
+          # uses __TESTROOT__/__TESTHOST__ placeholder paths that xcodebuild
+          # expands relative to the manifest's location.
           # -only-testing:VVTermTests restricts execution to the unit tests.
-          #
-          # This drops unit-tests from ~19m (recompiling Cmlx) to ~3m
-          # (download + ~7s tests). Previously `test -scheme VVTermUnitTests`
-          # recompiled Cmlx because the scheme differed from the build job's
-          # `-scheme VVTerm`, causing xcodebuild to re-plan the dependency graph.
+          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
+          echo "Using xctestrun manifest: $XCRUN"
           xcodebuild test-without-building \
-            -scheme VVTerm \
-            -configuration Debug \
+            -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:VVTermTests \
             -parallel-testing-enabled \
@@ -305,13 +314,19 @@ jobs:
             ${{ runner.os }}-xcode27-spm-
 
       - name: Download build products
-        # Download the compiled products from the build job into the same
-        # -derivedDataPath the build used, so `xcodebuild test` finds the
-        # prebuilt app and skips recompilation.
+        # Download the tarball from the build job and extract it into the
+        # same -derivedDataPath the build used. Tar preserves the symlinks
+        # inside .app bundles that actions/download-artifact would flatten.
         uses: actions/download-artifact@v4
         with:
           name: vvterm-build
-          path: ${{ runner.temp }}/DerivedData
+          path: ${{ runner.temp }}
+
+      - name: Extract build products
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
+          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
@@ -328,15 +343,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Run only this shard's tests via -only-testing:.
-          # The value is a comma-separated list of Target/Class/method
-          # (or Target/Class for a whole class). The prebuilt app is reused
-          # from the downloaded build artifact — no recompilation.
-          xcodebuild test \
-            -scheme VVTerm \
-            -configuration Debug \
+          # test-without-building with -xctestrun: run the prebuilt
+          # VVTermUITests.xctest from the build artifact with ZERO compilation.
+          # Previously `test -scheme VVTerm` recompiled because xcodebuild
+          # re-validates the dependency graph even when the artifact is present.
+          # -only-testing: restricts execution to this shard's tests.
+          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
+          echo "Using xctestrun manifest: $XCRUN"
+          xcodebuild test-without-building \
+            -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:${{ matrix.shard.only-testing }} \
             -parallel-testing-enabled \
