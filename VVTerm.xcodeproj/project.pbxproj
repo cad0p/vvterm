@@ -25,21 +25,6 @@
 		D3F1A0003100100AB00000003 /* NIOHTTP2 in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000013 /* NIOHTTP2 */; };
 		D3F1A0003100100AB00000004 /* NIOTransportServices in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000014 /* NIOTransportServices */; };
 		D3F1A0003100100AB00000005 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000015 /* SwiftProtobuf */; };
-		D4A000000000000000000001 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 1853ABB6CF8195DF93B55895 /* ZIPFoundation */; };
-		D4A000000000000000000002 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = CC8312B12F0CD850006804BF /* MLX */; };
-		D4A000000000000000000003 /* MLXNN in Frameworks */ = {isa = PBXBuildFile; productRef = CC8312B22F0CD851006804BF /* MLXNN */; };
-		D4A000000000000000000004 /* MLXFFT in Frameworks */ = {isa = PBXBuildFile; productRef = CC8312B32F0CD852006804BF /* MLXFFT */; };
-		D4A000000000000000000005 /* Cloudflared in Frameworks */ = {isa = PBXBuildFile; productRef = D2C4F00131AA100100B00011 /* Cloudflared */; };
-		D4A000000000000000000006 /* MoshCore in Frameworks */ = {isa = PBXBuildFile; productRef = D1A7B0C12EAB100100A00011 /* MoshCore */; };
-		D4A000000000000000000007 /* MoshBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = D1A7B0C12EAB100100A00012 /* MoshBootstrap */; };
-		D4A000000000000000000008 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
-		D4A000000000000000000009 /* ETBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00012 /* ETBootstrap */; };
-		D4A00000000000000000000A /* Umami in Frameworks */ = {isa = PBXBuildFile; productRef = E7C4A10031BB100100C00011 /* Umami */; };
-		D4A00000000000000000000B /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000011 /* NIOCore */; };
-		D4A00000000000000000000C /* NIOHTTP1 in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000012 /* NIOHTTP1 */; };
-		D4A00000000000000000000D /* NIOHTTP2 in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000013 /* NIOHTTP2 */; };
-		D4A00000000000000000000E /* NIOTransportServices in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000014 /* NIOTransportServices */; };
-		D4A00000000000000000000F /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000015 /* SwiftProtobuf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -183,21 +168,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D4A000000000000000000001 /* ZIPFoundation in Frameworks */,
-				D4A000000000000000000002 /* MLX in Frameworks */,
-				D4A000000000000000000003 /* MLXNN in Frameworks */,
-				D4A000000000000000000004 /* MLXFFT in Frameworks */,
-				D4A000000000000000000005 /* Cloudflared in Frameworks */,
-				D4A000000000000000000006 /* MoshCore in Frameworks */,
-				D4A000000000000000000007 /* MoshBootstrap in Frameworks */,
-				D4A000000000000000000008 /* ETSession in Frameworks */,
-				D4A000000000000000000009 /* ETBootstrap in Frameworks */,
-				D4A00000000000000000000A /* Umami in Frameworks */,
-				D4A00000000000000000000B /* NIOCore in Frameworks */,
-				D4A00000000000000000000C /* NIOHTTP1 in Frameworks */,
-				D4A00000000000000000000D /* NIOHTTP2 in Frameworks */,
-				D4A00000000000000000000E /* NIOTransportServices in Frameworks */,
-				D4A00000000000000000000F /* SwiftProtobuf in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -343,21 +313,6 @@
 			);
 			name = VVTermUITests;
 			packageProductDependencies = (
-				1853ABB6CF8195DF93B55895 /* ZIPFoundation */,
-				CC8312B12F0CD850006804BF /* MLX */,
-				CC8312B22F0CD851006804BF /* MLXNN */,
-				CC8312B32F0CD852006804BF /* MLXFFT */,
-				D2C4F00131AA100100B00011 /* Cloudflared */,
-				D1A7B0C12EAB100100A00011 /* MoshCore */,
-				D1A7B0C12EAB100100A00012 /* MoshBootstrap */,
-				E8A1E70031C1000100E00011 /* ETSession */,
-				E8A1E70031C1000100E00012 /* ETBootstrap */,
-				E7C4A10031BB100100C00011 /* Umami */,
-				D3F1A0003100100AB00000011 /* NIOCore */,
-				D3F1A0003100100AB00000012 /* NIOHTTP1 */,
-				D3F1A0003100100AB00000013 /* NIOHTTP2 */,
-				D3F1A0003100100AB00000014 /* NIOTransportServices */,
-				D3F1A0003100100AB00000015 /* SwiftProtobuf */,
 			);
 			productName = VVTermUITests;
 			productReference = CC83129C2F0CD84E006804BF /* VVTermUITests.xctest */;
