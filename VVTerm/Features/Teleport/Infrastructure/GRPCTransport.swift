@@ -287,7 +287,7 @@ final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendab
     }
 
     func channelActive(context: ChannelHandlerContext) {
-        GRPCTransportLog.logger.info("conn_active channel active for \(host, privacy: .public)")
+        GRPCTransportLog.logger.info("conn_active channel active for \(self.host, privacy: .public)")
         context.fireChannelActive()
     }
 
@@ -297,7 +297,7 @@ final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendab
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        GRPCTransportLog.logger.info("conn_inactive channel closed for \(host, privacy: .public)")
+        GRPCTransportLog.logger.info("conn_inactive channel closed for \(self.host, privacy: .public)")
         context.fireChannelInactive()
     }
 }

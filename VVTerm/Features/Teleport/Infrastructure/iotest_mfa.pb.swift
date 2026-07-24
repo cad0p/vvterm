@@ -7,6 +7,18 @@
 //
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
+//
+// NOTE: hand-modified — added `nonisolated` to the `SwiftProtobuf.Message`/
+// `_MessageImplementationBase`/`_ProtoNameProviding` conformance extensions on
+// all `Proto_*` message types. Under Swift 6 `InferIsolatedConformances` +
+// `default-isolation=MainActor`, these conformances (which inherit
+// `Equatable`/`Hashable` via `SwiftProtobuf.Message`) were inferred as
+// `@MainActor`-isolated, which violates the `Sendable` requirement on those
+// protocols. Marking the extensions `nonisolated` keeps the conformances (and
+// the synthesized `==`/`hash(into:)`) nonisolated so `Sendable` is satisfied.
+// The file is generated but committed (not regenerated in CI), so this hand-
+// edit is acceptable; if `protoc` is rerun, reapply `nonisolated` to each
+// `extension Proto_*: SwiftProtobuf.Message, ...` declaration.
 
 /// Minimal standalone proto for the session 1.10/1.11 spike.
 /// Defines ONLY the messages needed for the gRPC calls:
@@ -792,7 +804,7 @@ extension Proto_DeviceType: SwiftProtobuf._ProtoNameProviding {
   ]
 }
 
-extension Proto_ContextUser: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_ContextUser: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ContextUser"
   static let _protobuf_nameMap = SwiftProtobuf._NameMap()
 
@@ -811,7 +823,7 @@ extension Proto_ContextUser: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
   }
 }
 
-extension Proto_Passwordless: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_Passwordless: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Passwordless"
   static let _protobuf_nameMap = SwiftProtobuf._NameMap()
 
@@ -830,7 +842,7 @@ extension Proto_Passwordless: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
   }
 }
 
-extension Proto_ChallengeExtensions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_ChallengeExtensions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ChallengeExtensions"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "scope"),
@@ -862,7 +874,7 @@ extension Proto_ChallengeExtensions: SwiftProtobuf.Message, SwiftProtobuf._Messa
   }
 }
 
-extension Proto_CredentialAssertion: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CredentialAssertion: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialAssertion"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "public_key"),
@@ -898,7 +910,7 @@ extension Proto_CredentialAssertion: SwiftProtobuf.Message, SwiftProtobuf._Messa
   }
 }
 
-extension Proto_PublicKeyCredentialRequestOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_PublicKeyCredentialRequestOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PublicKeyCredentialRequestOptions"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "challenge"),
@@ -954,7 +966,7 @@ extension Proto_PublicKeyCredentialRequestOptions: SwiftProtobuf.Message, SwiftP
   }
 }
 
-extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialDescriptor"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "type"),
@@ -998,7 +1010,7 @@ extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._Mess
   }
 }
 
-extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialAssertionResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     5: .same(proto: "id"),
@@ -1052,7 +1064,7 @@ extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobu
   }
 }
 
-extension Proto_AuthenticatorAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_AuthenticatorAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AuthenticatorAssertionResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "client_data_json"),
@@ -1102,7 +1114,7 @@ extension Proto_AuthenticatorAssertionResponse: SwiftProtobuf.Message, SwiftProt
   }
 }
 
-extension Proto_CredentialCreation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CredentialCreation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialCreation"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "public_key"),
@@ -1138,7 +1150,7 @@ extension Proto_CredentialCreation: SwiftProtobuf.Message, SwiftProtobuf._Messag
   }
 }
 
-extension Proto_PublicKeyCredentialCreationOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_PublicKeyCredentialCreationOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PublicKeyCredentialCreationOptions"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "challenge"),
@@ -1198,7 +1210,7 @@ extension Proto_PublicKeyCredentialCreationOptions: SwiftProtobuf.Message, Swift
   }
 }
 
-extension Proto_RelyingPartyEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_RelyingPartyEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RelyingPartyEntity"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "id"),
@@ -1236,7 +1248,7 @@ extension Proto_RelyingPartyEntity: SwiftProtobuf.Message, SwiftProtobuf._Messag
   }
 }
 
-extension Proto_UserEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_UserEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".UserEntity"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "id"),
@@ -1280,7 +1292,7 @@ extension Proto_UserEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImpleme
   }
 }
 
-extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CredentialCreationResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     5: .same(proto: "id"),
@@ -1334,7 +1346,7 @@ extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf
   }
 }
 
-extension Proto_AuthenticatorAttestationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_AuthenticatorAttestationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AuthenticatorAttestationResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "client_data_json"),
@@ -1372,7 +1384,7 @@ extension Proto_AuthenticatorAttestationResponse: SwiftProtobuf.Message, SwiftPr
   }
 }
 
-extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateChallenge"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     2: .same(proto: "totp"),
@@ -1426,7 +1438,7 @@ extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._
   }
 }
 
-extension Proto_TOTPChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_TOTPChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".TOTPChallenge"
   static let _protobuf_nameMap = SwiftProtobuf._NameMap()
 
@@ -1447,7 +1459,7 @@ extension Proto_TOTPChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
 
 // MARK: - Browser MFA (session 1.11)
 
-extension Proto_BrowserMFAChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_BrowserMFAChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".BrowserMFAChallenge"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "request_id"),
@@ -1479,7 +1491,7 @@ extension Proto_BrowserMFAChallenge: SwiftProtobuf.Message, SwiftProtobuf._Messa
   }
 }
 
-extension Proto_BrowserMFAResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_BrowserMFAResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".BrowserMFAResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "request_id"),
@@ -1521,7 +1533,7 @@ extension Proto_BrowserMFAResponse: SwiftProtobuf.Message, SwiftProtobuf._Messag
   }
 }
 
-extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     2: .same(proto: "totp"),
@@ -1609,7 +1621,7 @@ extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._M
   }
 }
 
-extension Proto_TOTPResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_TOTPResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".TOTPResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "code"),
@@ -1641,7 +1653,7 @@ extension Proto_TOTPResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
   }
 }
 
-extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CreateAuthenticateChallengeRequest"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     3: .standard(proto: "context_user"),
@@ -1723,7 +1735,7 @@ extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, Swift
   }
 }
 
-extension Proto_CreateRegisterChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_CreateRegisterChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CreateRegisterChallengeRequest"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "token_id"),
@@ -1777,7 +1789,7 @@ extension Proto_CreateRegisterChallengeRequest: SwiftProtobuf.Message, SwiftProt
   }
 }
 
-extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MFARegisterChallenge"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     3: .same(proto: "webauthn"),
@@ -1825,7 +1837,7 @@ extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftProtobuf._Mess
   }
 }
 
-extension Proto_MFARegisterResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_MFARegisterResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MFARegisterResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     3: .same(proto: "webauthn"),
@@ -1873,7 +1885,7 @@ extension Proto_MFARegisterResponse: SwiftProtobuf.Message, SwiftProtobuf._Messa
   }
 }
 
-extension Proto_AddMFADeviceSyncRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_AddMFADeviceSyncRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncRequest"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .standard(proto: "token_id"),
@@ -1933,7 +1945,7 @@ extension Proto_AddMFADeviceSyncRequest: SwiftProtobuf.Message, SwiftProtobuf._M
   }
 }
 
-extension Proto_AddMFADeviceSyncResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Proto_AddMFADeviceSyncResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncResponse"
   static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
     1: .same(proto: "device"),
