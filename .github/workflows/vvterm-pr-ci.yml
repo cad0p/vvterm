@@ -137,14 +137,20 @@ jobs:
         # subsequent runs skip the download).
         run: xcodebuild -downloadComponent MetalToolchain
 
-      - name: Build for iOS Simulator
+      - name: Build for iOS Simulator (build-for-testing)
         run: |
           set -euo pipefail
 
+          # build-for-testing (not build) so the artifact includes the test
+          # bundles (VVTermTests.xctest + VVTermUITests.xctest) and the
+          # .xctestrun manifest. This lets unit-tests use
+          # `test-without-building` (zero compilation) and lets ui-tests
+          # shards reuse the prebuilt app + test bundles.
+          #
           # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
           # is arm64-only. iPhone 17 exists as a concrete simulator on the iOS 27.0
           # runtime shipped with Xcode 27; arch=arm64 selects the arm64 slice.
-          xcodebuild build \
+          xcodebuild build-for-testing \
             -scheme VVTerm \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
@@ -153,10 +159,10 @@ jobs:
             | tee "$RUNNER_TEMP/build.log"
 
       - name: Upload build products
-        # Upload the compiled products so the ui-tests shards can skip
-        # recompilation. Both Build/Products (the .app + test bundles) and
-        # Build/Intermediates.noindex (build intermediates) are needed for
-        # `xcodebuild test` to reuse the build without recompiling.
+        # Upload the compiled products so the test jobs can skip
+        # recompilation. Build/Products includes the .app, the .xctest
+        # bundles, and the .xctestrun manifest; Build/Intermediates.noindex
+        # holds the build intermediates needed for incremental reuse.
         uses: actions/upload-artifact@v4
         with:
           name: vvterm-build
@@ -222,14 +228,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Run ONLY the VVTermTests target (unit tests) — fast, pure logic.
-          # The VVTermUnitTests scheme is scoped to VVTermTests only.
-          xcodebuild test \
-            -scheme VVTermUnitTests \
+          # test-without-building: run the prebuilt VVTermTests.xctest from
+          # the build artifact with ZERO compilation. The build job used
+          # `build-for-testing -scheme VVTerm` which generates VVTerm.xctestrun
+          # (referencing both VVTermTests + VVTermUITests bundles);
+          # -only-testing:VVTermTests restricts execution to the unit tests.
+          #
+          # This drops unit-tests from ~19m (recompiling Cmlx) to ~3m
+          # (download + ~7s tests). Previously `test -scheme VVTermUnitTests`
+          # recompiled Cmlx because the scheme differed from the build job's
+          # `-scheme VVTerm`, causing xcodebuild to re-plan the dependency graph.
+          xcodebuild test-without-building \
+            -scheme VVTerm \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -only-testing:VVTermTests \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
