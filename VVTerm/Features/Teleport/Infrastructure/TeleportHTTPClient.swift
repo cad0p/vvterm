@@ -193,7 +193,7 @@ struct TeleportHTTPClient {
         }
         let challenge = Data(base64URLEncoded: assertion.publicKey.challenge)
             ?? Data(assertion.publicKey.challenge.utf8)
-        let rpID = assertion.publicKey.rpID ?? baseURL.host ?? ""
+        let rpID = assertion.publicKey.rpId ?? baseURL.host ?? ""
         return LoginBeginResult(challenge: challenge, rpID: rpID)
     }
 
