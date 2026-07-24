@@ -362,6 +362,9 @@ actor RemoteMoshServerLease {
     private let terminate: Terminate
     private var state: State = .bootstrapping
     private var cleanupWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    #if DEBUG
+    private var cleanupPendingWaiters: [CheckedContinuation<Void, Never>] = []
+    #endif
 
     init(terminate: @escaping Terminate) {
         self.terminate = terminate
@@ -392,6 +395,7 @@ actor RemoteMoshServerLease {
         switch state {
         case .bootstrapping:
             state = .cleanupPending
+            resumeCleanupPendingWaiters()
             await waitUntilCleaned()
         case .cleanupPending, .cleaning:
             await waitUntilCleaned()
@@ -406,6 +410,17 @@ actor RemoteMoshServerLease {
     func cleanupIsPendingForTesting() -> Bool {
         if case .cleanupPending = state { return true }
         return false
+    }
+
+    /// Suspends until the lease has entered the `.cleanupPending` state (i.e.
+    /// `cleanup()` was called while bootstrapping and is now waiting for the
+    /// server PID). Replaces `Task.yield()` polling in tests, which is
+    /// unreliable under Swift 6.2's executor changes.
+    func waitForCleanupPendingForTesting() async {
+        if case .cleanupPending = state { return }
+        await withCheckedContinuation { continuation in
+            cleanupPendingWaiters.append(continuation)
+        }
     }
     #endif
 
@@ -443,4 +458,12 @@ actor RemoteMoshServerLease {
         cleanupWaiters.removeAll(keepingCapacity: false)
         waiters.forEach { $0.resume() }
     }
+
+    #if DEBUG
+    private func resumeCleanupPendingWaiters() {
+        let waiters = cleanupPendingWaiters
+        cleanupPendingWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+    }
+    #endif
 }
