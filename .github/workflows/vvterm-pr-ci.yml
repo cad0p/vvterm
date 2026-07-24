@@ -138,23 +138,23 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Build for iOS Simulator
-        env:
-          # Workaround for Xcode 27 beta Clang dependency scanning bug:
-          # disabling explicit module build avoids the flaky
-          # 'Clang dependency scanning failure' on the VVTermUITests target.
-          SWIFT_DISABLE_EXPLICIT_MODULE_BUILD: YES
         run: |
           set -euo pipefail
 
           # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
           # is arm64-only. iPhone 17 exists as a concrete simulator on the iOS 27.0
           # runtime shipped with Xcode 27; arch=arm64 selects the arm64 slice.
+          #
+          # Workaround for Xcode 27 beta Clang dependency scanning bug:
+          # SWIFT_ENABLE_EXPLICIT_MODULES=NO disables the explicit module
+          # build that triggers the flaky 'Clang dependency scanning failure'.
           xcodebuild build \
             -scheme VVTerm \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/build.log"
 
       - name: Upload build products
@@ -224,14 +224,12 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Run unit tests (VVTermTests)
-        env:
-          # Workaround for Xcode 27 beta Clang dependency scanning bug.
-          SWIFT_DISABLE_EXPLICIT_MODULE_BUILD: YES
         run: |
           set -euo pipefail
 
           # Run ONLY the VVTermTests target (unit tests) — fast, pure logic.
           # The VVTermUnitTests scheme is scoped to VVTermTests only.
+          # Workaround for Xcode 27 beta Clang dependency scanning bug.
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \
@@ -240,6 +238,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/test.log"
 
       - name: Upload test results on failure
@@ -318,9 +317,6 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Run UI tests (shard ${{ matrix.shard.name }})
-        env:
-          # Workaround for Xcode 27 beta Clang dependency scanning bug.
-          SWIFT_DISABLE_EXPLICIT_MODULE_BUILD: YES
         run: |
           set -euo pipefail
 
@@ -328,6 +324,7 @@ jobs:
           # The value is a comma-separated list of Target/Class/method
           # (or Target/Class for a whole class). The prebuilt app is reused
           # from the downloaded build artifact — no recompilation.
+          # Workaround for Xcode 27 beta Clang dependency scanning bug.
           xcodebuild test \
             -scheme VVTerm \
             -configuration Debug \
@@ -337,6 +334,7 @@ jobs:
             -only-testing:${{ matrix.shard.only-testing }} \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/test.log"
 
       - name: Upload test results on failure
