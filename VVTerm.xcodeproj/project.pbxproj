@@ -20,6 +20,11 @@
 		E8A1E70031C1000100E00001 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
 		E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00012 /* ETBootstrap */; };
 		E8A1E70031C1000100E00003 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
+		D3F1A0003100100AB00000001 /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000011 /* NIOCore */; };
+		D3F1A0003100100AB00000002 /* NIOHTTP1 in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000012 /* NIOHTTP1 */; };
+		D3F1A0003100100AB00000003 /* NIOHTTP2 in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000013 /* NIOHTTP2 */; };
+		D3F1A0003100100AB00000004 /* NIOTransportServices in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000014 /* NIOTransportServices */; };
+		D3F1A0003100100AB00000005 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000015 /* SwiftProtobuf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -143,6 +148,11 @@
 				E8A1E70031C1000100E00001 /* ETSession in Frameworks */,
 				E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */,
 				E7C4A10031BB100100C00001 /* Umami in Frameworks */,
+				D3F1A0003100100AB00000001 /* NIOCore in Frameworks */,
+				D3F1A0003100100AB00000002 /* NIOHTTP1 in Frameworks */,
+				D3F1A0003100100AB00000003 /* NIOHTTP2 in Frameworks */,
+				D3F1A0003100100AB00000004 /* NIOTransportServices in Frameworks */,
+				D3F1A0003100100AB00000005 /* SwiftProtobuf in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,6 +261,11 @@
 				E8A1E70031C1000100E00011 /* ETSession */,
 				E8A1E70031C1000100E00012 /* ETBootstrap */,
 				E7C4A10031BB100100C00011 /* Umami */,
+				D3F1A0003100100AB00000011 /* NIOCore */,
+				D3F1A0003100100AB00000012 /* NIOHTTP1 */,
+				D3F1A0003100100AB00000013 /* NIOHTTP2 */,
+				D3F1A0003100100AB00000014 /* NIOTransportServices */,
+				D3F1A0003100100AB00000015 /* SwiftProtobuf */,
 			);
 			productName = VVTerm;
 			productReference = CC83127E2F0CD84D006804BF /* VVTerm.app */;
@@ -358,6 +373,10 @@
 				D1A7B0C12EAB100100A00021 /* XCRemoteSwiftPackageReference "swift-mosh" */,
 				E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */,
 				E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */,
+				D3F1A0003100100AB00000021 /* XCRemoteSwiftPackageReference "swift-nio" */,
+				D3F1A0003100100AB00000022 /* XCRemoteSwiftPackageReference "swift-nio-http2" */,
+				D3F1A0003100100AB00000023 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */,
+				D3F1A0003100100AB00000024 /* XCRemoteSwiftPackageReference "swift-protobuf" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CC83127F2F0CD84D006804BF /* Products */;
@@ -1140,6 +1159,38 @@
 				version = 0.1.5;
 			};
 		};
+		D3F1A0003100100AB00000021 /* XCRemoteSwiftPackageReference "swift-nio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.65.0;
+			};
+		};
+		D3F1A0003100100AB00000022 /* XCRemoteSwiftPackageReference "swift-nio-http2" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio-http2.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.34.0;
+			};
+		};
+		D3F1A0003100100AB00000023 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio-transport-services.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.21.0;
+			};
+		};
+		D3F1A0003100100AB00000024 /* XCRemoteSwiftPackageReference "swift-protobuf" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-protobuf.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.25.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1192,6 +1243,31 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E8A1E70031C1000100E00021 /* XCRemoteSwiftPackageReference "swift-et" */;
 			productName = ETBootstrap;
+		};
+		D3F1A0003100100AB00000011 /* NIOCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D3F1A0003100100AB00000021 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOCore;
+		};
+		D3F1A0003100100AB00000012 /* NIOHTTP1 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D3F1A0003100100AB00000021 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOHTTP1;
+		};
+		D3F1A0003100100AB00000013 /* NIOHTTP2 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D3F1A0003100100AB00000022 /* XCRemoteSwiftPackageReference "swift-nio-http2" */;
+			productName = NIOHTTP2;
+		};
+		D3F1A0003100100AB00000014 /* NIOTransportServices */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D3F1A0003100100AB00000023 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */;
+			productName = NIOTransportServices;
+		};
+		D3F1A0003100100AB00000015 /* SwiftProtobuf */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D3F1A0003100100AB00000024 /* XCRemoteSwiftPackageReference "swift-protobuf" */;
+			productName = SwiftProtobuf;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
