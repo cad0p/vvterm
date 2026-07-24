@@ -19,7 +19,7 @@ final class ConnectionSessionManager: ObservableObject {
 
     @Published var sessions: [ConnectionSession] = [] {
         didSet {
-            LiveActivityManager.shared.refresh(with: sessions)
+            LiveActivityManager.shared.refresh(with: sessions.map(\.connectionState))
             schedulePersist()
         }
     }
@@ -450,8 +450,7 @@ final class ConnectionSessionManager: ObservableObject {
 
         if notingSessionEnd {
             EngagementTracker.shared.noteTerminalSessionEnded(
-                otherTerminalsActive: !activeSessions.isEmpty,
-                isPro: StoreManager.shared.isPro
+                otherTerminalsActive: !activeSessions.isEmpty
             )
         }
 
@@ -670,28 +669,40 @@ final class ConnectionSessionManager: ObservableObject {
         fallbackReason: MoshFallbackReason? = nil,
         skipTmuxLifecycle: Bool = false
     ) {
+        // FIXME: upstream-sync — SSHShellRegistry.register now requires a
+        // startToken and returns RegisterResult (.accepted/.stale) instead of
+        // a struct with staleIncomingShell/replacedShell. The fork's callers
+        // (SSHTerminalWrapper) don't thread a startToken, so we retrieve the
+        // in-flight token captured by tryBeginShellStart. A stale registration
+        // closes+disconnects the incoming shell, preserving prior behavior.
+        guard let startToken = shellRegistry.connectionStartToken(for: sessionId) else {
+            logger.warning("Ignoring shell registration for session \(sessionId.uuidString, privacy: .public) with no in-flight start token")
+            Task.detached(priority: .utility) { [client, shellId] in
+                await client.closeShell(shellId)
+                await client.disconnect()
+            }
+            return
+        }
         let registerResult = shellRegistry.register(
             client: client,
             shellId: shellId,
+            startToken: startToken,
             for: sessionId,
             serverId: serverId,
             transport: transport,
             fallbackReason: fallbackReason
         )
 
-        if let stale = registerResult.staleIncomingShell {
+        switch registerResult {
+        case .stale:
             logger.warning("Ignoring stale shell registration for session \(sessionId.uuidString, privacy: .public)")
-            Task.detached(priority: .utility) { [client = stale.client, shellId = stale.shellId] in
+            Task.detached(priority: .utility) { [client, shellId] in
                 await client.closeShell(shellId)
                 await client.disconnect()
             }
             return
-        }
-
-        if let replaced = registerResult.replacedShell {
-            Task.detached { [client = replaced.client, shellId = replaced.shellId] in
-                await client.closeShell(shellId)
-            }
+        case .accepted:
+            break
         }
 
         setTransport(transport, fallbackReason: fallbackReason, for: sessionId)
@@ -757,7 +768,8 @@ final class ConnectionSessionManager: ObservableObject {
     }
 
     func finishShellStart(for sessionId: UUID, client: SSHClient) {
-        shellRegistry.finishStart(for: sessionId, client: client)
+        guard let startToken = shellRegistry.connectionStartToken(for: sessionId) else { return }
+        shellRegistry.finishStart(for: sessionId, client: client, startToken: startToken)
     }
 
     func isShellStartInFlight(for sessionId: UUID) -> Bool {
@@ -1300,11 +1312,11 @@ extension ConnectionSessionManager {
     }
 
     func resolveTmuxAttachPrompt(sessionId: UUID, selection: TmuxAttachSelection) {
-        tmuxResolver.resolvePrompt(entityId: sessionId, selection: selection, setPrompt: setTmuxAttachPrompt)
+        tmuxResolver.resolvePrompt(requestId: sessionId, selection: selection, setPrompt: setTmuxAttachPrompt)
     }
 
     func cancelTmuxAttachPrompt(sessionId: UUID) {
-        tmuxResolver.cancelPrompt(entityId: sessionId, setPrompt: setTmuxAttachPrompt)
+        tmuxResolver.cancelPrompt(requestId: sessionId, setPrompt: setTmuxAttachPrompt)
     }
 
     private func currentTmuxStatus(for sessionId: UUID) -> TmuxStatus {
@@ -1320,16 +1332,17 @@ extension ConnectionSessionManager {
         for serverId: UUID,
         sessionId: UUID,
         selection: TmuxAttachSelection,
-        using client: SSHClient
+        using client: SSHClient,
+        backend: RemoteTmuxBackend
     ) async {
-        var cleanupSet = tmuxCleanupServers
-        await tmuxResolver.runCleanupIfNeeded(
-            serverId: serverId,
-            cleanupSet: &cleanupSet,
-            managedNames: tmuxSessionNamesToKeep(for: serverId, sessionId: sessionId, selection: selection),
-            using: client
+        guard tmuxCleanupServers.insert(serverId).inserted else { return }
+        await RemoteTmuxManager.shared.cleanupLegacySessions(using: client, backend: backend)
+        await RemoteTmuxManager.shared.cleanupDetachedSessions(
+            deviceId: DeviceIdentity.id,
+            keeping: tmuxSessionNamesToKeep(for: serverId, sessionId: sessionId, selection: selection),
+            using: client,
+            backend: backend
         )
-        tmuxCleanupServers = cleanupSet
     }
 
     private func prepareActiveTmuxSession(
@@ -1368,7 +1381,11 @@ extension ConnectionSessionManager {
                 backend: backend
             )
         case .attachExisting(let sessionName):
-            return RemoteTmuxManager.shared.attachExistingCommand(sessionName: sessionName, backend: backend)
+            return RemoteTmuxManager.shared.attachExistingCommand(
+                sessionName: sessionName,
+                ownership: tmuxResolver.sessionOwnership[sessionId] ?? .external,
+                backend: backend
+            )
         }
     }
 
@@ -1393,7 +1410,7 @@ extension ConnectionSessionManager {
             return
         }
 
-        guard let backend = await RemoteTmuxManager.shared.tmuxBackend(using: client) else {
+        guard let backend = await RemoteTmuxManager.shared.tmuxAvailability(using: client).backend else {
             await MainActor.run {
                 self.disableTmuxAttachment(for: sessionId, status: .missing)
             }
@@ -1402,11 +1419,11 @@ extension ConnectionSessionManager {
 
         let selection = immediateTmuxSelection(for: sessionId)
 
-        await runTmuxCleanupIfNeeded(for: serverId, sessionId: sessionId, selection: selection, using: client)
+        await runTmuxCleanupIfNeeded(for: serverId, sessionId: sessionId, selection: selection, using: client, backend: backend)
         await prepareActiveTmuxSession(for: sessionId, using: client, backend: backend)
 
         let workingDirectory = await resolveTmuxWorkingDirectory(for: sessionId, using: client)
-        guard let rebuilt = tmuxResolver.buildAttachExecCommand(
+        guard let command = tmuxStartupCommand(
             for: sessionId,
             selection: selection,
             workingDirectory: workingDirectory,
@@ -1415,7 +1432,7 @@ extension ConnectionSessionManager {
             return
         }
 
-        await RemoteTmuxManager.shared.sendScript(rebuilt, using: client, shellId: shellId)
+        try? await RemoteTmuxManager.shared.sendScript(command, using: client, shellId: shellId)
     }
 
     func tmuxStartupPlan(
@@ -1433,14 +1450,30 @@ extension ConnectionSessionManager {
             return (nil, true)
         }
 
-        guard let backend = await RemoteTmuxManager.shared.tmuxBackend(using: client) else {
+        guard let backend = await RemoteTmuxManager.shared.tmuxAvailability(using: client).backend else {
             disableTmuxAttachment(for: sessionId, status: .missing)
             return (nil, true)
         }
 
-        let selection = await tmuxResolver.resolveSelection(
-            for: sessionId, serverId: serverId, client: client, setPrompt: setTmuxAttachPrompt
-        )
+        // FIXME: upstream-sync — TmuxAttachResolver.resolveSelection now requires
+        // backend/requestId/validateOwner and is throwing. The fork's
+        // tmuxStartupPlan stays non-throwing (caller expects a tuple), so errors
+        // are swallowed as .skipTmux. validateOwner is a no-op; ownership
+        // validation should be wired through a startToken in a follow-up.
+        let selection: TmuxAttachSelection
+        do {
+            selection = try await tmuxResolver.resolveSelection(
+                for: sessionId,
+                serverId: serverId,
+                client: client,
+                backend: backend,
+                requestId: UUID(),
+                validateOwner: { },
+                setPrompt: setTmuxAttachPrompt
+            )
+        } catch {
+            selection = .skipTmux
+        }
         tmuxResolver.updateAttachmentState(for: sessionId, selection: selection, setPrompt: setTmuxAttachPrompt)
 
         if case .skipTmux = selection {
@@ -1448,7 +1481,7 @@ extension ConnectionSessionManager {
             return (nil, true)
         }
 
-        await runTmuxCleanupIfNeeded(for: serverId, sessionId: sessionId, selection: selection, using: client)
+        await runTmuxCleanupIfNeeded(for: serverId, sessionId: sessionId, selection: selection, using: client, backend: backend)
         await prepareActiveTmuxSession(for: sessionId, using: client, backend: backend)
 
         let workingDirectory = await resolveTmuxWorkingDirectory(for: sessionId, using: client)
@@ -1484,14 +1517,14 @@ extension ConnectionSessionManager {
             terminalType: terminalType,
             backend: backend
         )
-        await RemoteTmuxManager.shared.sendScript(script, using: registration.client, shellId: registration.shellId)
+        try? await RemoteTmuxManager.shared.sendScript(script, using: registration.client, shellId: registration.shellId)
 
         Task { [weak self] in
             guard let self else { return }
             for _ in 0..<6 {
                 try? await Task.sleep(for: .seconds(2))
-                let available = await RemoteTmuxManager.shared.isTmuxAvailable(using: registration.client)
-                if available {
+                let availability = await RemoteTmuxManager.shared.tmuxAvailability(using: registration.client)
+                if availability.backend != nil {
                     await MainActor.run {
                         self.tmuxResolver.sessionNames[sessionId] = sessionName
                         self.tmuxResolver.sessionOwnership[sessionId] = .managed

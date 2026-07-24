@@ -2144,6 +2144,16 @@ class GhosttyTerminalView: UIView {
         keyboardFocusPolicy.shouldRestoreOnReconnect
     }
 
+    /// Marks this terminal to reclaim keyboard focus on the next reconnect,
+    /// without becoming first responder immediately (used on background pause).
+    /// FIXME: upstream-sync — restored for ConnectionSessionManager.pauseCachedTerminalsForBackground;
+    /// the old keyboardFocusPolicy.markForReconnect() was folded into
+    /// automaticTyping(restoreOnReconnect:) by the upstream sync.
+    func markKeyboardFocusForReconnect() {
+        guard keyboardFocusPolicy.allowsAutomaticFocus else { return }
+        _ = keyboardFocusPolicy.requestFocus(for: .initialActivation)
+    }
+
     var allowsAutomaticKeyboardFocus: Bool {
         keyboardFocusPolicy.allowsAutomaticFocus && !isFindNavigatorActive
     }
