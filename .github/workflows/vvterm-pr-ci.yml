@@ -137,18 +137,20 @@ jobs:
         # subsequent runs skip the download).
         run: xcodebuild -downloadComponent MetalToolchain
 
-      - name: Build for iOS Simulator
+      - name: Build for iOS Simulator (build-for-testing)
         run: |
           set -euo pipefail
 
+          # build-for-testing (not build) so the artifact includes the test
+          # bundles (VVTermTests.xctest + VVTermUITests.xctest) and the
+          # .xctestrun manifest. This lets unit-tests use
+          # `test-without-building` (zero compilation) and lets ui-tests
+          # shards reuse the prebuilt app + test bundles.
+          #
           # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
           # is arm64-only. iPhone 17 exists as a concrete simulator on the iOS 27.0
           # runtime shipped with Xcode 27; arch=arm64 selects the arm64 slice.
-          #
-          # Workaround for Xcode 27 beta Clang dependency scanning bug:
-          # SWIFT_ENABLE_EXPLICIT_MODULES=NO disables the explicit module
-          # build that triggers the flaky 'Clang dependency scanning failure'.
-          xcodebuild build \
+          xcodebuild build-for-testing \
             -scheme VVTerm \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
@@ -157,17 +159,22 @@ jobs:
             SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/build.log"
 
+      - name: Archive build products
+        # Tar Build/Products + Build/Intermediates.noindex into a single
+        # archive. actions/upload-artifact does NOT preserve symlinks inside
+        # .app bundles (Frameworks symlinks, etc.), which breaks
+        # `test-without-building` ("Cannot launch simulated executable: no
+        # file found at .../VVTerm.app"). Tar preserves symlinks + permissions.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/DerivedData/Build"
+          tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" Products Intermediates.noindex
+
       - name: Upload build products
-        # Upload the compiled products so the ui-tests shards can skip
-        # recompilation. Both Build/Products (the .app + test bundles) and
-        # Build/Intermediates.noindex (build intermediates) are needed for
-        # `xcodebuild test` to reuse the build without recompiling.
         uses: actions/upload-artifact@v4
         with:
           name: vvterm-build
-          path: |
-            ${{ runner.temp }}/DerivedData/Build/Products
-            ${{ runner.temp }}/DerivedData/Build/Intermediates.noindex
+          path: ${{ runner.temp }}/vvterm-build.tar.gz
           retention-days: 1
 
       - name: Upload build log on failure
@@ -203,14 +210,19 @@ jobs:
             ${{ runner.os }}-xcode27-spm-
 
       - name: Download build products
-        # Download the compiled products from the build job into the same
-        # -derivedDataPath the build used, so `xcodebuild test` finds the
-        # prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
-        # target (fast), then runs the 577 tests (~7s).
+        # Download the tarball from the build job and extract it into the
+        # same -derivedDataPath the build used. Tar preserves the symlinks
+        # inside .app bundles that actions/download-artifact would flatten.
         uses: actions/download-artifact@v4
         with:
           name: vvterm-build
-          path: ${{ runner.temp }}/DerivedData
+          path: ${{ runner.temp }}
+
+      - name: Extract build products
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
+          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
@@ -227,9 +239,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Run ONLY the VVTermTests target (unit tests) — fast, pure logic.
+          # `test -scheme VVTermUnitTests` (NOT test-without-building).
+          # test-without-building crashes on Xcode 27 due to a duplicate-symbol
+          # conflict: the test bundle and app host both statically link
+          # SwiftProtobuf, and `test-without-building` loads both into the
+          # same process → "Class ... is implemented in both" → crash before
+          # tests connect. This is an Xcode 27-specific regression (Xcode 26
+          # doesn't exhibit it). The regular `test` command builds+runs in a
+          # mode that uses the app's copy, avoiding the conflict.
+          #
+          # The build artifact (tar + extract) IS still reused: xcodebuild finds
+          # the prebuilt app + Cmlx in the extracted DerivedData and skips
+          # recompiling them, compiling only the VVTermTests target (~3m).
           # The VVTermUnitTests scheme is scoped to VVTermTests only.
-          # Workaround for Xcode 27 beta Clang dependency scanning bug.
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \
@@ -297,13 +319,19 @@ jobs:
             ${{ runner.os }}-xcode27-spm-
 
       - name: Download build products
-        # Download the compiled products from the build job into the same
-        # -derivedDataPath the build used, so `xcodebuild test` finds the
-        # prebuilt app and skips recompilation.
+        # Download the tarball from the build job and extract it into the
+        # same -derivedDataPath the build used. Tar preserves the symlinks
+        # inside .app bundles that actions/download-artifact would flatten.
         uses: actions/download-artifact@v4
         with:
           name: vvterm-build
-          path: ${{ runner.temp }}/DerivedData
+          path: ${{ runner.temp }}
+
+      - name: Extract build products
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
+          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
@@ -320,16 +348,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Run only this shard's tests via -only-testing:.
-          # The value is a comma-separated list of Target/Class/method
-          # (or Target/Class for a whole class). The prebuilt app is reused
-          # from the downloaded build artifact — no recompilation.
-          # Workaround for Xcode 27 beta Clang dependency scanning bug.
-          xcodebuild test \
-            -scheme VVTerm \
-            -configuration Debug \
+          # test-without-building with -xctestrun: run the prebuilt
+          # VVTermUITests.xctest from the build artifact with ZERO compilation.
+          # Previously `test -scheme VVTerm` recompiled because xcodebuild
+          # re-validates the dependency graph even when the artifact is present.
+          # -only-testing: restricts execution to this shard's tests.
+          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
+          echo "Using xctestrun manifest: $XCRUN"
+          xcodebuild test-without-building \
+            -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:${{ matrix.shard.only-testing }} \
             -parallel-testing-enabled \
