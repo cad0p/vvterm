@@ -247,7 +247,7 @@ final class TeleportLoginUITests: XCTestCase {
         attachScreenshot(named: "login-mock-signer-load-after-create")
     }
 
-    func testMockSEPKeySigner_cancelledOutcome_loadKeyReturnsNil() async {
+    func testMockSEPKeySigner_cancelledOutcome_loadKeyReturnsNil() async throws {
         // After a .cancelled createKey (which threw), loadKey returns nil —
         // the key was never created. This mirrors the real signer's
         // errSecItemNotFound → nil behavior.
