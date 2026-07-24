@@ -193,12 +193,8 @@ final class RemoteFileTabManager: ObservableObject {
     }
 
     func disconnect(serverId: UUID) {
-        guard let selectedId = selectedTabByServer[serverId],
-              !tabs(for: serverId).contains(where: { $0.id == selectedId }) else {
-            return
-        }
-
-        selectedTabByServer[serverId] = tabs(for: serverId).first?.id
+        tabsByServer.removeValue(forKey: serverId)
+        selectedTabByServer.removeValue(forKey: serverId)
     }
 
     private func currentTabIndex(for serverId: UUID, in serverTabs: [RemoteFileTab]) -> Int {

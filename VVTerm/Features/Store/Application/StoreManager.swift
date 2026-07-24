@@ -88,9 +88,6 @@ final class StoreManager: ObservableObject {
         activePaywallSource = source
         hasPresentedPaywallThisLaunch = true
         EngagementTracker.shared.notePaywallPresented()
-        if source == .postFirstConnection {
-            EngagementTracker.shared.markProIntroShown()
-        }
         AnalyticsTracker.shared.trackPaywallViewed(source: source.rawValue)
     }
 
@@ -232,7 +229,25 @@ final class StoreManager: ObservableObject {
 
     private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
         switch result {
-        case .unverified:
+        case .unverified(let unverifiedValue, let verificationError):
+            if let transaction = unverifiedValue as? Transaction {
+                logger.error(
+                    """
+                    StoreKit transaction verification failed for product \
+                    \(transaction.productID, privacy: .public), transaction \
+                    \(String(transaction.id), privacy: .public): \
+                    \(String(describing: verificationError), privacy: .public)
+                    """
+                )
+            } else {
+                logger.error(
+                    """
+                    StoreKit verification failed for \
+                    \(String(describing: T.self), privacy: .public): \
+                    \(String(describing: verificationError), privacy: .public)
+                    """
+                )
+            }
             throw StoreError.verificationFailed
         case .verified(let safe):
             return safe
@@ -312,10 +327,6 @@ final class StoreManager: ObservableObject {
     private func applySuccessfulPurchase(of product: Product) {
         lastPurchasedProductId = product.id
         purchaseState = .purchased
-        AnalyticsTracker.shared.trackPurchase(
-            source: activePaywallSource.rawValue,
-            productId: product.id
-        )
         AnalyticsTracker.shared.trackPurchaseSucceeded(
             source: activePaywallSource.rawValue,
             productId: product.id

@@ -21,6 +21,17 @@ extension RemoteFileBrowserStore {
         }
 
         @MainActor
+        func reportCurrentItem(_ currentItemName: String) {
+            onProgress?(
+                TransferProgress(
+                    completedUnitCount: min(completedUnitCount, totalUnitCount),
+                    totalUnitCount: totalUnitCount,
+                    currentItemName: currentItemName
+                )
+            )
+        }
+
+        @MainActor
         func advance(currentItemName: String) {
             completedUnitCount += 1
             onProgress?(
@@ -216,16 +227,61 @@ extension RemoteFileBrowserStore {
         let destinationDirectory = RemoteFilePath.normalize(directoryPath)
         let urls = plans.map(\.sourceURL)
         try await withSecurityScopedAccess(to: urls) {
+            try Task.checkCancellation()
             let progressTracker = TransferProgressTracker(
                 totalUnitCount: try await countLocalTransferUnits(at: urls),
                 onProgress: onProgress
             )
             try await withRemoteFileService(for: server) { [self] service in
                 for plan in plans {
+                    try Task.checkCancellation()
                     try await self.uploadItem(
                         at: plan.sourceURL,
                         to: destinationDirectory,
                         remoteName: plan.remoteName,
+                        using: service,
+                        progressTracker: progressTracker
+                    )
+                }
+            }
+        }
+
+        clearViewer(for: tab)
+        await refresh(server: server, tab: tab)
+    }
+
+    func uploadFilesResolvingConflicts(
+        at urls: [URL],
+        to directoryPath: String,
+        in tab: RemoteFileTab,
+        server: Server,
+        onProgress: (@MainActor @Sendable (TransferProgress) -> Void)? = nil
+    ) async throws {
+        guard tab.serverId == server.id else {
+            throw RemoteFileBrowserError.disconnected
+        }
+
+        let destinationDirectory = RemoteFilePath.normalize(directoryPath)
+        try await withSecurityScopedAccess(to: urls) {
+            try Task.checkCancellation()
+            let progressTracker = TransferProgressTracker(
+                totalUnitCount: try await countLocalTransferUnits(at: urls),
+                onProgress: onProgress
+            )
+
+            try await withRemoteFileService(for: server) { [self] service in
+                let candidates = try await localUploadPlanCandidates(
+                    at: urls,
+                    in: destinationDirectory,
+                    using: service
+                )
+
+                for candidate in candidates {
+                    try Task.checkCancellation()
+                    try await uploadItem(
+                        at: candidate.sourceURL,
+                        to: destinationDirectory,
+                        remoteName: candidate.suggestedName ?? candidate.originalName,
                         using: service,
                         progressTracker: progressTracker
                     )
@@ -245,32 +301,45 @@ extension RemoteFileBrowserStore {
         let destinationDirectory = RemoteFilePath.normalize(directoryPath)
         return try await withSecurityScopedAccess(to: urls) {
             try await withRemoteFileService(for: server) { service in
-                var reservedNames: Set<String> = []
-                var candidates: [LocalUploadPlanCandidate] = []
-
-                for url in urls {
-                    let itemInfo = try await self.localItemInfo(at: url)
-                    let originalName = itemInfo.name
-                    let resolution = try await self.conflictResolver.resolveName(
-                        for: originalName,
-                        in: destinationDirectory,
-                        policy: .keepBoth,
-                        using: service,
-                        reservedNames: &reservedNames
-                    )
-                    candidates.append(
-                        LocalUploadPlanCandidate(
-                            sourceURL: url,
-                            originalName: originalName,
-                            existingEntry: resolution.existingEntry,
-                            suggestedName: resolution.hasConflict ? resolution.resolvedName : nil
-                        )
-                    )
-                }
-
-                return candidates
+                try await self.localUploadPlanCandidates(
+                    at: urls,
+                    in: destinationDirectory,
+                    using: service
+                )
             }
         }
+    }
+
+    func localUploadPlanCandidates(
+        at urls: [URL],
+        in destinationDirectory: String,
+        using service: any RemoteFileService
+    ) async throws -> [LocalUploadPlanCandidate] {
+        var reservedNames: Set<String> = []
+        var candidates: [LocalUploadPlanCandidate] = []
+
+        for url in urls {
+            try Task.checkCancellation()
+            let itemInfo = try await localItemInfo(at: url)
+            let originalName = itemInfo.name
+            let resolution = try await conflictResolver.resolveName(
+                for: originalName,
+                in: destinationDirectory,
+                policy: .keepBoth,
+                using: service,
+                reservedNames: &reservedNames
+            )
+            candidates.append(
+                LocalUploadPlanCandidate(
+                    sourceURL: url,
+                    originalName: originalName,
+                    existingEntry: resolution.existingEntry,
+                    suggestedName: resolution.hasConflict ? resolution.resolvedName : nil
+                )
+            )
+        }
+
+        return candidates
     }
 
     func copyEntries(
@@ -422,9 +491,11 @@ extension RemoteFileBrowserStore {
         using client: any RemoteFileService,
         progressTracker: TransferProgressTracker? = nil
     ) async throws {
+        try Task.checkCancellation()
         let itemInfo = try await localItemInfo(at: localURL)
         let targetName = remoteName ?? itemInfo.name
         let remotePath = RemoteFilePath.appending(targetName, to: remoteDirectoryPath)
+        progressTracker?.reportCurrentItem(targetName)
 
         if itemInfo.isDirectory {
             try await ensureRemoteDirectoryExists(
@@ -435,6 +506,7 @@ extension RemoteFileBrowserStore {
             progressTracker?.advance(currentItemName: targetName)
             let children = try await localDirectoryContents(at: localURL)
             for child in children {
+                try Task.checkCancellation()
                 try await uploadItem(
                     at: child,
                     to: remotePath,
@@ -446,7 +518,9 @@ extension RemoteFileBrowserStore {
         }
 
         let data = try await loadLocalFileData(from: localURL)
+        try Task.checkCancellation()
         try await client.upload(data, to: remotePath, permissions: Int32(0o644), strategy: .automatic)
+        try Task.checkCancellation()
         progressTracker?.advance(currentItemName: targetName)
     }
 

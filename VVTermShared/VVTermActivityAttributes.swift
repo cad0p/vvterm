@@ -4,7 +4,7 @@ import Foundation
 import ActivityKit
 
 @available(iOS 16.1, *)
-enum VVTermLiveActivityStatus: String, Codable, Hashable {
+nonisolated enum VVTermLiveActivityStatus: String, Codable, Hashable {
     case connected
     case connecting
     case reconnecting
@@ -25,7 +25,7 @@ enum VVTermLiveActivityStatus: String, Codable, Hashable {
 }
 
 @available(iOS 16.1, *)
-struct VVTermActivityAttributes: ActivityAttributes {
+nonisolated struct VVTermActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         var status: VVTermLiveActivityStatus
         var activeCount: Int

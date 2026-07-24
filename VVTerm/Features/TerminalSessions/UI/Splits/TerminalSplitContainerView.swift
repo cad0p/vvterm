@@ -2,8 +2,11 @@
 //  TerminalSplitContainerView.swift
 //  VVTerm
 //
-//  Split menu commands and focused values for terminal splits (macOS only)
+//  Split menu commands and focused values for terminal splits
 //
+
+import Foundation
+import SwiftUI
 
 struct ServerViewTabActions {
     let openNew: () -> Void
@@ -14,71 +17,13 @@ struct ServerViewTabActions {
     let selectIndex: (Int) -> Void
 }
 
-#if os(macOS)
-import SwiftUI
-import AppKit
-
-// MARK: - Split Menu Commands
-
-struct SplitCommands: Commands {
-    @FocusedValue(\.activeServerId) var activeServerId
-    @FocusedValue(\.activePaneId) var activePaneId
-    @FocusedValue(\.terminalSplitActions) var splitActions
-    @FocusedValue(\.toggleZenMode) var toggleZenMode
-    @FocusedValue(\.isZenModeEnabled) var isZenModeEnabled
-
-    var body: some Commands {
-        CommandMenu("Terminal") {
-            Button(isZenModeEnabled == true ? String(localized: "Exit Zen Mode") : String(localized: "Enter Zen Mode")) {
-                toggleZenMode?()
-            }
-            .keyboardShortcut("z", modifiers: [.command, .control])
-            .disabled(toggleZenMode == nil)
-
-            Divider()
-
-            Group {
-                Button("Split Right") {
-                    splitActions?.splitHorizontal()
-                }
-                .keyboardShortcut("d", modifiers: [.command])
-                .disabled(!canSplit)
-
-                Button("Split Down") {
-                    splitActions?.splitVertical()
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(!canSplit)
-
-                Divider()
-
-                Button("Close Pane") {
-                    splitActions?.closePane()
-                }
-                .keyboardShortcut("w", modifiers: [.command, .shift])
-                .disabled(!hasActivePane)
-            }
-        }
-    }
-
-    private var canSplit: Bool {
-        return splitActions != nil && activePaneId != nil
-    }
-
-    private var hasActivePane: Bool {
-        activePaneId != nil && splitActions != nil
-    }
-}
-
 // MARK: - Split Actions
 
 /// Actions that can be performed on a terminal split layout
 struct TerminalSplitActions {
-    let splitHorizontal: () -> Void
-    let splitVertical: () -> Void
-    let splitLeft: () -> Void
-    let splitUp: () -> Void
-    let closePane: () -> Void
+    let perform: (TerminalSplitCommand) -> Void
+    let isEnabled: (TerminalSplitCommand) -> Bool
+    let isZoomed: () -> Bool
 }
 
 // MARK: - Focused Values
@@ -154,6 +99,119 @@ extension FocusedValues {
     var isZenModeEnabled: Bool? {
         get { self[ZenModeEnabledKey.self] }
         set { self[ZenModeEnabledKey.self] = newValue }
+    }
+}
+
+#if os(macOS)
+import AppKit
+
+// MARK: - Split Menu Commands
+
+struct SplitCommands: Commands {
+    @FocusedValue(\.terminalSplitActions) var splitActions
+    @FocusedValue(\.toggleZenMode) var toggleZenMode
+    @FocusedValue(\.isZenModeEnabled) var isZenModeEnabled
+
+    var body: some Commands {
+        CommandMenu("Terminal") {
+            Button(isZenModeEnabled == true ? String(localized: "Exit Zen Mode") : String(localized: "Enter Zen Mode")) {
+                toggleZenMode?()
+            }
+            .keyboardShortcut("z", modifiers: [.command, .control])
+            .disabled(toggleZenMode == nil)
+
+            Divider()
+
+            Group {
+                Button("Split Right") {
+                    perform(.splitRight)
+                }
+                .keyboardShortcut("d", modifiers: [.command])
+                .disabled(!isEnabled(.splitRight))
+
+                Button("Split Down") {
+                    perform(.splitDown)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!isEnabled(.splitDown))
+
+                Divider()
+
+                Button("Close Pane") {
+                    perform(.closeFocusedPane)
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .disabled(!isEnabled(.closeFocusedPane))
+            }
+        }
+
+        CommandGroup(after: .windowArrangement) {
+            Divider()
+
+            Button(splitActions?.isZoomed() == true ? "Unzoom Split" : "Zoom Split") {
+                perform(.toggleZoom)
+            }
+            .keyboardShortcut(.return, modifiers: [.command, .shift])
+            .disabled(!isEnabled(.toggleZoom))
+
+            Button("Select Previous Split") {
+                perform(.selectPrevious)
+            }
+            .keyboardShortcut("[", modifiers: [.command])
+            .disabled(!isEnabled(.selectPrevious))
+
+            Button("Select Next Split") {
+                perform(.selectNext)
+            }
+            .keyboardShortcut("]", modifiers: [.command])
+            .disabled(!isEnabled(.selectNext))
+
+            Menu("Select Split") {
+                Button("Select Split Above") { perform(.selectAbove) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                    .disabled(!isEnabled(.selectAbove))
+                Button("Select Split Below") { perform(.selectBelow) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                    .disabled(!isEnabled(.selectBelow))
+                Button("Select Split Left") { perform(.selectLeft) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                    .disabled(!isEnabled(.selectLeft))
+                Button("Select Split Right") { perform(.selectRight) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                    .disabled(!isEnabled(.selectRight))
+            }
+            .disabled(splitActions == nil)
+
+            Menu("Resize Split") {
+                Button("Equalize Splits") { perform(.equalize) }
+                    .keyboardShortcut("=", modifiers: [.command, .control])
+                    .disabled(!isEnabled(.equalize))
+
+                Divider()
+
+                Button("Move Divider Up") { perform(.moveDividerUp) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                    .disabled(!isEnabled(.moveDividerUp))
+                Button("Move Divider Down") { perform(.moveDividerDown) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+                    .disabled(!isEnabled(.moveDividerDown))
+                Button("Move Divider Left") { perform(.moveDividerLeft) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                    .disabled(!isEnabled(.moveDividerLeft))
+                Button("Move Divider Right") { perform(.moveDividerRight) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                    .disabled(!isEnabled(.moveDividerRight))
+            }
+            .disabled(splitActions == nil)
+        }
+    }
+
+    private func perform(_ command: TerminalSplitCommand) {
+        splitActions?.perform(command)
+    }
+
+    private func isEnabled(_ command: TerminalSplitCommand) -> Bool {
+        splitActions?.isEnabled(command) == true
     }
 }
 
