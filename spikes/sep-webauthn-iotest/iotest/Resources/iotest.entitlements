@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Associated Domains for WKWebView WebAuthn (session 1.7). -->
+	<!-- WKWebView requires the app to declare webcredentials:<RP-ID> for -->
+	<!-- the platform authenticator (iCloud-Keychain passkey) to invoke -->
+	<!-- Face ID during a navigator.credentials.get() ceremony. Without -->
+	<!-- this entitlement, credentials.get() throws NotAllowedError. -->
+	<!-- -->
+	<!-- The ?mode=developer suffix allows testing with a developer-signed -->
+	<!-- build (direct Xcode install) before the AASA file is fully -->
+	<!-- propagated. The AASA file at -->
+	<!-- https://teleport.pcad.it/.well-known/apple-app-site-association -->
+	<!-- must list this app's Team ID + bundle ID under webcredentials.apps -->
+	<!-- for the association to validate. -->
+	<!-- -->
+	<!-- NOTE: teleport.pcad.it currently returns 404 for the AASA file -->
+	<!-- (verified 2026-07-22). This is a prerequisite for the ceremony to -->
+	<!-- work — see the session 1.7 results doc. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>webcredentials:teleport.pcad.it?mode=developer</string>
+	</array>
+</dict>
+</plist>

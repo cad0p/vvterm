@@ -61,6 +61,14 @@ enum ProbeLog {
     static func jsError(_ message: String) {
         logger.error("[IOTEST] js_error=\(message, privacy: .public)")
     }
+
+    // Ceremony scaffolding (session 1.7) — validates the ceremony JS strings
+    // parse without a syntax error. CI-able; the actual ceremony is device-only.
+    // Two separate markers (login + privilege) so the CI can assert each
+    // independently. The smoke test greps for both.
+    static func ceremonyJSSyntaxOK(name: String, ok: Bool) {
+        logger.notice("[IOTEST] ceremony_js_syntax_ok name=\(name, privacy: .public) ok=\(ok ? "true" : "false")")
+    }
 }
 
 /// The probe script injected into the page. Stores results in window globals
@@ -125,19 +133,39 @@ struct ProbeState {
 @MainActor
 final class WebAuthnProbeModel: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var state = ProbeState()
-    private var webView: WKWebView?
+    /// The shared webview. Created eagerly on init so it's available
+    /// regardless of which tab (Probe or Ceremony) appears first. Exposed
+    /// (read-only) so the Ceremony screen can inject JS into the same
+    /// page context the probe already loaded.
+    private(set) var webView: WKWebView?
+    /// The target URL. Exposed so the Ceremony screen can show it.
+    let targetURL = URL(string: "https://teleport.pcad.it/web/login")!
     private var pollCount = 0
     private let maxPolls = 50  // 50 × 200ms = 10s timeout for the async probe
 
-    func makeWebView() -> WKWebView {
+    override init() {
+        super.init()
+        // Create the webview eagerly so both tabs can use it immediately.
         let config = WKWebViewConfiguration()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         // Allow inspection of the JS context (simulator/dev only).
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = self
-        self.webView = webView
-        return webView
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = self
+        self.webView = wv
+    }
+
+    /// Returns the shared webview for UIViewRepresentable. Creates it if
+    /// it doesn't exist (defensive — init should have created it).
+    func makeWebView() -> WKWebView {
+        if let webView { return webView }
+        let config = WKWebViewConfiguration()
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = self
+        self.webView = wv
+        return wv
     }
 
     func load(url: URL) {
@@ -263,6 +291,59 @@ final class WebAuthnProbeModel: NSObject, ObservableObject, WKNavigationDelegate
             let capsJSON = (try? JSONSerialization.data(withJSONObject: caps)) ?? Data()
             let capsString = String(data: capsJSON, encoding: .utf8) ?? "{}"
             ProbeLog.clientCapabilities(capsString)
+        }
+
+        // ── Ceremony scaffolding check (session 1.7) ────────────────────
+        // Validate that the ceremony JS strings (loginJS, privilegeJS) are
+        // syntactically valid by attempting to parse them with `new Function`.
+        // This catches JS syntax errors in CI without needing a device. The
+        // actual ceremony (Face ID, login, privilege token) is device-only.
+        // The check runs after the probe so the page is fully loaded.
+        self.checkCeremonyJSSyntax()
+    }
+
+    /// Validate the ceremony JS strings parse without a syntax error.
+    /// Emits `ceremony_js_syntax_ok=true|false` markers the CI greps for.
+    ///
+    /// Approach: inject each ceremony source wrapped in a function
+    /// definition (`var __check = function() { <source> };`). This parses
+    /// the source as a function body (catching syntax errors) but does NOT
+    /// call the function, so the IIFE body doesn't execute. We use
+    /// `evaluateJavaScript`'s error callback to detect parse errors.
+    ///
+    /// We can't use `new Function(src)` or `eval(src)` because Teleport's
+    /// CSP is `script-src 'self'` (blocks `unsafe-eval`) — this was caught
+    /// by the 1.7 CI run (#29953261600, first attempt).
+    func checkCeremonyJSSyntax() {
+        guard let webView else { return }
+        checkOneJSSyntax(webView: webView, name: "login", source: loginJS)
+        checkOneJSSyntax(webView: webView, name: "privilege", source: privilegeJS)
+    }
+
+    /// Check one JS source for syntax errors by wrapping it in a function
+    /// definition and injecting via evaluateJavaScript. If the source has a
+    /// syntax error, the error callback fires and we emit a failure marker.
+    private func checkOneJSSyntax(webView: WKWebView, name: String, source: String) {
+        // Wrap the source in a function body. The source is an IIFE
+        // `(function(){...})();` — wrapping it makes `function(){ (function(){...})(); }`
+        // which is valid syntax. The IIFE doesn't execute because we only
+        // define the function, not call it.
+        // We append a trailing `; 0;` so evaluateJavaScript returns a value
+        // (0) on success, confirming the injection worked.
+        let wrapped = "var __iotestCheck_\(name) = function() { \(source) }; 0;"
+        webView.evaluateJavaScript(wrapped) { result, error in
+            if let error {
+                // A syntax error in the source surfaces here.
+                ProbeLog.ceremonyJSSyntaxOK(name: name, ok: false)
+                ProbeLog.jsError("ceremony_\(name)_js: \(error.localizedDescription)")
+                self.appendLog("Ceremony \(name) JS syntax FAILED: \(error.localizedDescription)")
+                return
+            }
+            // Success — the source parsed without error.
+            ProbeLog.ceremonyJSSyntaxOK(name: name, ok: true)
+            self.appendLog("Ceremony \(name) JS syntax OK")
+            // Clean up the global we created.
+            webView.evaluateJavaScript("delete window.__iotestCheck_\(name)") { _, _ in }
         }
     }
 

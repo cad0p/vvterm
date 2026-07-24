@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# SEP-WebAuthn IoTest — iOS Simulator smoke test for the 1.6a WKWebView
-# scaffolding. Boots a simulator, builds + installs + launches the iotest
-# app, captures the unified log, and asserts the expected probe markers.
+# SEP-WebAuthn IoTest — iOS Simulator smoke test for the WKWebView
+# scaffolding + ceremony JS syntax check. Boots a simulator, builds +
+# installs + launches the iotest app, captures the unified log, and asserts
+# the expected probe markers.
 #
 # What this proves (CI-able, no device required):
 #   - the iotest app builds for iOS Simulator
@@ -10,18 +11,21 @@
 #   - window.PublicKeyCredential is exposed in the webview JS context
 #   - isUserVerifyingPlatformAuthenticatorAvailable() returns a value
 #   - evaluateJavaScript round-trips a value back to Swift
+#   - the ceremony JS (loginJS, privilegeJS) parses without a syntax error
+#     (session 1.7 — catches JS shape bugs before the device run)
 #
-# What this does NOT prove (device-only, session 1.6a/1.6b):
+# What this does NOT prove (device-only, session 1.7):
 #   - the Face ID prompt appears on the WebAuthn ceremony
 #   - passwordless login completes against teleport.pcad.it
 #   - privilege-token re-auth works
+#   - the privilege token is extractable via JS
 #   - SEP-key creation with .biometryAny (simulator has no Secure Enclave)
 #
 # See:
 #   spikes/sep-webauthn-iotest/README.md
 #   spikes/sep-webauthn-iotest/scripts/simulator-smoke.sh
 #   personal/github/cad0p/Goldmine/open-source/github/vvterm/
-#     2026-07-21-strategy-b-session1.6-device-de-risk-prompt.md
+#     2026-07-22-strategy-b-session1.7-wkwebview-ceremony-prompt.md
 
 name: SEP-WebAuthn IoTest (simulator)
 

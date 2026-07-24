@@ -12,9 +12,7 @@ import SwiftUI
 import WebKit
 
 struct ProbeView: View {
-    @StateObject private var model = WebAuthnProbeModel()
-
-    private let targetURL = URL(string: "https://teleport.pcad.it/web/login")!
+    @ObservedObject var model: WebAuthnProbeModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,7 +20,7 @@ struct ProbeView: View {
             HStack {
                 Text("Target:")
                     .font(.caption).foregroundStyle(.secondary)
-                Text(targetURL.absoluteString)
+                Text(model.targetURL.absoluteString)
                     .font(.caption).monospaced()
                     .lineLimit(1).truncationMode(.middle)
                 Spacer()
@@ -67,7 +65,11 @@ struct ProbeView: View {
         .ignoresSafeArea(.container, edges: .bottom)
         .onAppear {
             ProbeLog.appLaunched()
-            model.load(url: targetURL)
+            // Only load if not already loaded (the Ceremony tab may have
+            // triggered it, or we may be re-appearing after a tab switch).
+            if model.state.loadState == "idle" {
+                model.load(url: model.targetURL)
+            }
         }
     }
 
@@ -93,5 +95,5 @@ struct WebViewRepresentable: UIViewRepresentable {
 }
 
 #Preview {
-    ProbeView()
+    ProbeView(model: WebAuthnProbeModel())
 }
