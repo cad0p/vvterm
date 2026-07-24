@@ -4,7 +4,9 @@
 #   1. build       — compiles the VVTerm app for iOS Simulator (no signing),
 #                    then uploads the compiled products as an artifact so the
 #                    fan-out ui-tests shards skip recompilation.
-#   2. unit-tests  — runs VVTermTests (fast, pure logic).
+#   2. unit-tests  — runs VVTermTests (fast, pure logic). Downloads the
+#                    build artifact so it reuses the prebuilt app + SPM deps
+#                    and only compiles the VVTermTests target.
 #   3. ui-tests    — matrix of 4 parallel shard jobs, each downloading the
 #                    build artifact and running a subset of VVTermUITests via
 #                    -only-testing:. fail-fast is disabled so one failing shard
@@ -32,6 +34,9 @@
 #     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
 #     app and skips compilation. Each shard then runs only its assigned tests
 #     via `-only-testing:Target/Class/method,...`.
+#   - The `unit-tests` job downloads the same artifact, so it reuses the
+#     prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
+#     target (fast), then runs the 577 tests (~7s).
 #   - Shard split is balanced via LPT bin-packing of measured per-method
 #     runtimes from CI run 30069836793 (serialized) calibrated against the
 #     measured 7-shard totals from run 30092781079. All 56 UI test methods
@@ -181,15 +186,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache SPM packages + DerivedData
+      - name: Cache SPM packages
+        # Cache only SourcePackages (not DerivedData) — this job downloads
+        # the build artifact from the build job into $RUNNER_TEMP/DerivedData,
+        # mirroring the ui-tests shards.
         uses: actions/cache@v4
         with:
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
-            ${{ runner.temp }}/DerivedData
+          path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
           key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-xcode27-spm-
+
+      - name: Download build products
+        # Download the compiled products from the build job into the same
+        # -derivedDataPath the build used, so `xcodebuild test` finds the
+        # prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
+        # target (fast), then runs the 577 tests (~7s).
+        uses: actions/download-artifact@v4
+        with:
+          name: vvterm-build
+          path: ${{ runner.temp }}/DerivedData
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
