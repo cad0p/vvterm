@@ -1,34 +1,51 @@
 import Foundation
 
-struct SSHShellRegistry {
-    struct Registration: Sendable {
+nonisolated struct SSHShellRegistry {
+    nonisolated struct StartToken: Hashable, Sendable {
+        let id: UUID
+
+        init(id: UUID = UUID()) {
+            self.id = id
+        }
+    }
+
+    nonisolated struct Registration: Sendable {
         let serverId: UUID
         let client: SSHClient
         let shellId: UUID
+        let startToken: StartToken
         let transport: ShellTransport
         let fallbackReason: MoshFallbackReason?
+        let fallbackDiagnostics: MoshFallbackDiagnostics?
     }
 
-    struct StartContext: Sendable {
+    nonisolated struct StartContext: Sendable {
+        let token: StartToken
         let startedAt: Date
         let client: SSHClient
         let serverId: UUID
     }
 
-    struct RegisterResult: Sendable {
-        let accepted: Bool
-        let staleIncomingShell: (client: SSHClient, shellId: UUID)?
-        let replacedShell: (client: SSHClient, shellId: UUID)?
+    nonisolated enum RegisterResult: Sendable, Equatable {
+        case accepted
+        case stale
     }
 
-    struct StartResult: Sendable {
-        let started: Bool
+    nonisolated struct StartResult: Sendable {
+        let token: StartToken?
         let staleContext: StartContext?
+
+        var started: Bool { token != nil }
     }
 
-    struct InFlightResult: Sendable {
+    nonisolated struct InFlightResult: Sendable {
         let inFlight: Bool
         let staleContext: StartContext?
+    }
+
+    nonisolated struct DrainResult: Sendable {
+        let registrations: [Registration]
+        let pendingStarts: [StartContext]
     }
 
     private(set) var registrations: [UUID: Registration] = [:]
@@ -42,18 +59,19 @@ struct SSHShellRegistry {
     mutating func register(
         client: SSHClient,
         shellId: UUID,
+        startToken: StartToken,
         for entityId: UUID,
         serverId: UUID,
         transport: ShellTransport,
-        fallbackReason: MoshFallbackReason?
+        fallbackReason: MoshFallbackReason?,
+        fallbackDiagnostics: MoshFallbackDiagnostics? = nil
     ) -> RegisterResult {
-        if let context = startsInFlight[entityId],
-           ObjectIdentifier(context.client) != ObjectIdentifier(client) {
-            return RegisterResult(
-                accepted: false,
-                staleIncomingShell: (client: client, shellId: shellId),
-                replacedShell: nil
-            )
+        guard let context = startsInFlight[entityId],
+              ObjectIdentifier(context.client) == ObjectIdentifier(client),
+              context.token == startToken,
+              context.serverId == serverId,
+              registrations[entityId] == nil else {
+            return .stale
         }
 
         startsInFlight.removeValue(forKey: entityId)
@@ -61,15 +79,13 @@ struct SSHShellRegistry {
             serverId: serverId,
             client: client,
             shellId: shellId,
+            startToken: startToken,
             transport: transport,
-            fallbackReason: fallbackReason
+            fallbackReason: fallbackReason,
+            fallbackDiagnostics: fallbackDiagnostics
         )
-        let replaced = registrations.updateValue(newRegistration, forKey: entityId)
-        return RegisterResult(
-            accepted: true,
-            staleIncomingShell: nil,
-            replacedShell: replaced.map { (client: $0.client, shellId: $0.shellId) }
-        )
+        registrations[entityId] = newRegistration
+        return .accepted
     }
 
     mutating func unregister(for entityId: UUID) -> (registration: Registration?, pendingStart: StartContext?) {
@@ -85,33 +101,42 @@ struct SSHShellRegistry {
         now: Date = Date()
     ) -> StartResult {
         if registrations[entityId] != nil {
-            return StartResult(started: false, staleContext: nil)
+            return StartResult(token: nil, staleContext: nil)
         }
 
         if let context = startsInFlight[entityId] {
             if now.timeIntervalSince(context.startedAt) < staleThreshold {
-                return StartResult(started: false, staleContext: nil)
+                return StartResult(token: nil, staleContext: nil)
             }
             startsInFlight.removeValue(forKey: entityId)
-            startsInFlight[entityId] = StartContext(
+            let replacement = StartContext(
+                token: StartToken(),
                 startedAt: now,
                 client: client,
                 serverId: serverId
             )
-            return StartResult(started: true, staleContext: context)
+            startsInFlight[entityId] = replacement
+            return StartResult(token: replacement.token, staleContext: context)
         }
 
-        startsInFlight[entityId] = StartContext(
+        let context = StartContext(
+            token: StartToken(),
             startedAt: now,
             client: client,
             serverId: serverId
         )
-        return StartResult(started: true, staleContext: nil)
+        startsInFlight[entityId] = context
+        return StartResult(token: context.token, staleContext: nil)
     }
 
-    mutating func finishStart(for entityId: UUID, client: SSHClient) {
+    mutating func finishStart(
+        for entityId: UUID,
+        client: SSHClient,
+        startToken: StartToken
+    ) {
         guard let context = startsInFlight[entityId] else { return }
         guard ObjectIdentifier(context.client) == ObjectIdentifier(client) else { return }
+        guard context.token == startToken else { return }
         startsInFlight.removeValue(forKey: entityId)
     }
 
@@ -136,8 +161,39 @@ struct SSHShellRegistry {
         registrations[entityId]?.shellId
     }
 
+    func owns(client: SSHClient, shellId: UUID, for entityId: UUID) -> Bool {
+        guard let registration = registrations[entityId] else { return false }
+        return ObjectIdentifier(registration.client) == ObjectIdentifier(client)
+            && registration.shellId == shellId
+    }
+
+    func ownsConnection(
+        client: SSHClient,
+        startToken: StartToken,
+        for entityId: UUID
+    ) -> Bool {
+        let identifier = ObjectIdentifier(client)
+        if let registration = registrations[entityId] {
+            return ObjectIdentifier(registration.client) == identifier
+                && registration.startToken == startToken
+        }
+        if let context = startsInFlight[entityId] {
+            return ObjectIdentifier(context.client) == identifier
+                && context.token == startToken
+        }
+        return false
+    }
+
     func client(for entityId: UUID) -> SSHClient? {
         registrations[entityId]?.client
+    }
+
+    func connectionStartToken(for entityId: UUID) -> StartToken? {
+        registrations[entityId]?.startToken ?? startsInFlight[entityId]?.token
+    }
+
+    func owns(startToken: StartToken, for entityId: UUID) -> Bool {
+        connectionStartToken(for: entityId) == startToken
     }
 
     func hasOtherRegistrations(using client: SSHClient, excluding entityId: UUID) -> Bool {
@@ -169,8 +225,17 @@ struct SSHShellRegistry {
         startsInFlight.values.first(where: { $0.serverId == serverId })?.client
     }
 
-    mutating func removeAll() {
+    mutating func drain() -> DrainResult {
+        let result = DrainResult(
+            registrations: Array(registrations.values),
+            pendingStarts: Array(startsInFlight.values)
+        )
         registrations.removeAll()
         startsInFlight.removeAll()
+        return result
+    }
+
+    mutating func removeAll() {
+        _ = drain()
     }
 }

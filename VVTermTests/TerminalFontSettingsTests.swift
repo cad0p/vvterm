@@ -22,7 +22,7 @@ struct TerminalFontSettingsTests {
         // resolve to "Menlo" on macOS.
         #expect(TerminalDefaults.defaultFontName == "Menlo")
         #else
-        throw Skip("macOS-only fresh default source check")
+        return
         #endif
     }
 
@@ -31,7 +31,7 @@ struct TerminalFontSettingsTests {
         #if os(macOS)
         #expect(TerminalDefaults.defaultFontSize == 12.0)
         #else
-        throw Skip("macOS-only default font size check")
+        return
         #endif
     }
 
@@ -117,7 +117,7 @@ struct TerminalFontSettingsTests {
         #expect(fallbacks.contains("Apple SD Gothic Neo"))
         #expect(fallbacks.contains("JetBrainsMono Nerd Font"))
         #else
-        throw Skip("macOS-only fallback family check")
+        return
         #endif
     }
 
@@ -129,7 +129,7 @@ struct TerminalFontSettingsTests {
         #expect(TerminalDefaults.defaultFontName != "Apple SD Gothic Neo")
         #expect(TerminalDefaults.defaultFontName != "JetBrainsMono Nerd Font")
         #else
-        throw Skip("macOS-only primary vs fallback check")
+        return
         #endif
     }
 }

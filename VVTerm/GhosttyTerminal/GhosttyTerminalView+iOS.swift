@@ -14,10 +14,60 @@ import IOSurface
 import CoreImage
 import GameController
 
+enum TerminalSurfaceGeometryUpdate: Equatable {
+    case apply
+    case preserveCurrentGrid
+}
+
+enum TerminalSurfaceGeometryPolicy {
+    static func update(
+        renderingIsPaused: Bool,
+        preservesForegroundKeyboardGrid: Bool,
+        currentSize: CGSize,
+        proposedSize: CGSize
+    ) -> TerminalSurfaceGeometryUpdate {
+        if renderingIsPaused {
+            return .preserveCurrentGrid
+        }
+        if preservesForegroundKeyboardGrid,
+           abs(proposedSize.width - currentSize.width) < 0.5,
+           proposedSize.height > currentSize.height + 0.5 {
+            return .preserveCurrentGrid
+        }
+        return .apply
+    }
+}
+
 private struct IMEProxySnapshot: Equatable {
     var text: String
     var selectedRange: NSRange
     var markedRange: NSRange?
+}
+
+struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
+    var windowAttached: Bool
+    var windowIsKey: Bool
+    var sceneActivationState: String
+    var isFirstResponder: Bool
+    var isSoftwareInputActive: Bool
+    var keyboardLayoutFrame: CGRect? = nil
+    var screenFrame: CGRect? = nil
+
+    var lifecycleDescription: String {
+        [
+            "windowAttached=\(windowAttached)",
+            "keyWindow=\(windowIsKey)",
+            "scene=\(sceneActivationState)",
+            "firstResponder=\(isFirstResponder)",
+            "softwareInput=\(isSoftwareInputActive)",
+            "keyboardLayoutFrame=\(keyboardLayoutFrame?.debugDescription ?? "nil")",
+        ].joined(separator: " ")
+    }
+}
+
+private enum TerminalEditMenuPresentation {
+    case selection
+    case pointerContext
 }
 
 private extension UIViewController {
@@ -68,6 +118,79 @@ struct TerminalFindNavigatorLifecycle {
 }
 
 @MainActor
+private func makeTerminalZoomKeyCommands(action: Selector) -> [UIKeyCommand] {
+    let shortcuts: [(input: String, modifiers: UIKeyModifierFlags)] = [
+        ("=", .command),
+        ("=", [.command, .shift]),
+        ("+", .command),
+        ("+", [.command, .shift]),
+        ("-", .command),
+        ("0", .command),
+    ]
+
+    return shortcuts.map { shortcut in
+        let command = UIKeyCommand(
+            input: shortcut.input,
+            modifierFlags: shortcut.modifiers,
+            action: action
+        )
+        if #available(iOS 15.0, *) {
+            command.wantsPriorityOverSystemBehavior = true
+            command.allowsAutomaticLocalization = false
+            command.allowsAutomaticMirroring = false
+        }
+        return command
+    }
+}
+
+@MainActor
+private func makeTerminalSplitKeyCommands(action: Selector) -> [UIKeyCommand] {
+    let shortcuts: [(input: String, modifiers: UIKeyModifierFlags, title: String)] = [
+        ("d", .command, String(localized: "Split Right")),
+        ("d", [.command, .shift], String(localized: "Split Down")),
+        ("w", .command, String(localized: "Close Pane")),
+        ("\r", [.command, .shift], String(localized: "Zoom Split")),
+        ("[", .command, String(localized: "Select Previous Split")),
+        ("]", .command, String(localized: "Select Next Split")),
+        (UIKeyCommand.inputUpArrow, [.command, .alternate], String(localized: "Select Split Above")),
+        (UIKeyCommand.inputDownArrow, [.command, .alternate], String(localized: "Select Split Below")),
+        (UIKeyCommand.inputLeftArrow, [.command, .alternate], String(localized: "Select Split Left")),
+        (UIKeyCommand.inputRightArrow, [.command, .alternate], String(localized: "Select Split Right")),
+        ("=", [.command, .control], String(localized: "Equalize Splits")),
+        (UIKeyCommand.inputUpArrow, [.command, .control], String(localized: "Move Divider Up")),
+        (UIKeyCommand.inputDownArrow, [.command, .control], String(localized: "Move Divider Down")),
+        (UIKeyCommand.inputLeftArrow, [.command, .control], String(localized: "Move Divider Left")),
+        (UIKeyCommand.inputRightArrow, [.command, .control], String(localized: "Move Divider Right")),
+    ]
+
+    return shortcuts.map { shortcut in
+        let command = UIKeyCommand(
+            input: shortcut.input,
+            modifierFlags: shortcut.modifiers,
+            action: action
+        )
+        command.discoverabilityTitle = shortcut.title
+        if #available(iOS 15.0, *) {
+            command.wantsPriorityOverSystemBehavior = true
+            command.allowsAutomaticLocalization = false
+            command.allowsAutomaticMirroring = false
+        }
+        return command
+    }
+}
+
+private extension UIKeyModifierFlags {
+    var terminalSplitShortcutModifiers: TerminalSplitShortcutModifiers {
+        var result: TerminalSplitShortcutModifiers = []
+        if contains(.command) { result.insert(.command) }
+        if contains(.shift) { result.insert(.shift) }
+        if contains(.control) { result.insert(.control) }
+        if contains(.alternate) { result.insert(.alternate) }
+        return result
+    }
+}
+
+@MainActor
 private final class TerminalIMEProxyTextView: UIView, UITextInput {
     weak var terminalOwner: GhosttyTerminalView?
     /// Local mirror of recently typed input. Committed text stays in the document after
@@ -98,7 +221,10 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     var isDictationSessionActive: Bool { dictationSessionOrigin != nil }
 
-    static let dictationLogger = Logger.forCategory("Dictation")
+    // Per-keystroke IME tracing floods the console; opt in only while debugging dictation.
+    static let dictationLogger: Logger = Foundation.ProcessInfo.processInfo.environment["VVTERM_DICTATION_LOG"] != nil
+        ? Logger.forCategory("Dictation")
+        : Logger(.disabled)
 
     private var currentPrimaryLanguage: String {
         textInputMode?.primaryLanguage ?? "nil"
@@ -106,6 +232,22 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     private lazy var terminalNavigationCommands: [UIKeyCommand] = Self.makeTerminalNavigationCommands(
         action: #selector(handleTerminalNavigationCommand(_:))
     )
+    private lazy var terminalZoomCommands = makeTerminalZoomKeyCommands(
+        action: #selector(handleTerminalZoomCommand(_:))
+    )
+    private lazy var terminalSplitCommands = makeTerminalSplitKeyCommands(
+        action: #selector(handleTerminalSplitCommand(_:))
+    )
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clearSystemInputAssistant()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        clearSystemInputAssistant()
+    }
 
     private static let terminalNavigationInputs: [String] = [
         UIKeyCommand.inputEscape,
@@ -164,12 +306,17 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         set { }
     }
 
+    override var inputView: UIView? {
+        get { terminalOwner?.resolvedInputView() }
+        set { }
+    }
+
     override var textInputContextIdentifier: String? {
         terminalOwner?.currentTextInputContextIdentifier
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        terminalNavigationCommands + (super.keyCommands ?? [])
+        terminalSplitCommands + terminalNavigationCommands + terminalZoomCommands + (super.keyCommands ?? [])
     }
 
     var keyboardType: UIKeyboardType {
@@ -180,6 +327,11 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     var keyboardAppearance: UIKeyboardAppearance {
         get { terminalOwner?.resolvedKeyboardAppearance ?? .default }
         set { }
+    }
+
+    private func clearSystemInputAssistant() {
+        inputAssistantItem.leadingBarButtonGroups = []
+        inputAssistantItem.trailingBarButtonGroups = []
     }
 
     var autocorrectionType: UITextAutocorrectionType {
@@ -229,18 +381,23 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     override func becomeFirstResponder() -> Bool {
+        terminalOwner?.logKeyboardLifecycle("imeProxy.become.begin")
         let result = super.becomeFirstResponder()
         terminalOwner?.imeProxyFocusDidChange(isFocused: result || isFirstResponder)
+        terminalOwner?.logKeyboardLifecycle("imeProxy.become.end", result: result)
         return result
     }
 
     override func resignFirstResponder() -> Bool {
+        terminalOwner?.logKeyboardLifecycle("imeProxy.resign.begin")
         guard canResignFirstResponder else {
             terminalOwner?.imeProxyFocusDidChange(isFocused: isFirstResponder)
+            terminalOwner?.logKeyboardLifecycle("imeProxy.resign.blocked", result: false)
             return false
         }
         let result = super.resignFirstResponder()
         terminalOwner?.imeProxyFocusDidChange(isFocused: isFirstResponder)
+        terminalOwner?.logKeyboardLifecycle("imeProxy.resign.end", result: result)
         return result
     }
 
@@ -507,7 +664,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
         Self.dictationLogger.debug("setMarkedText text=\(markedText ?? "nil", privacy: .public) sel=\(selectedRange.location),\(selectedRange.length) mode=\(self.currentPrimaryLanguage, privacy: .public) session=\(self.dictationSessionOrigin?.rawValue ?? "none", privacy: .public)")
-        terminalOwner?.discardPendingSystemTextInputHardwareKey()
+        terminalOwner?.cancelHardwareKeyRepeatForIMEComposition()
         performDocumentEdit {
             let normalized = markedText?.precomposedStringWithCanonicalMapping ?? ""
             let nsText = documentBuffer as NSString
@@ -760,6 +917,16 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
         terminalOwner?.handleIMEProxyNavigationCommand(sender)
     }
 
+    @objc
+    private func handleTerminalZoomCommand(_ sender: UIKeyCommand) {
+        terminalOwner?.handleTerminalZoomCommand(sender)
+    }
+
+    @objc
+    private func handleTerminalSplitCommand(_ sender: UIKeyCommand) {
+        terminalOwner?.handleTerminalSplitCommand(sender)
+    }
+
     private func notifyTextInputStateDidChange() {
         terminalOwner?.syncTextInputModelFromIMEProxy()
     }
@@ -810,7 +977,13 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     private static func makeTerminalNavigationCommands(action: Selector) -> [UIKeyCommand] {
         terminalNavigationInputs.flatMap { input in
-            terminalNavigationModifierCombinations.map { modifiers in
+            terminalNavigationModifierCombinations.compactMap { modifiers in
+                guard TerminalSplitShortcutRouting.command(
+                    for: input,
+                    modifiers: modifiers.terminalSplitShortcutModifiers
+                ) == nil else {
+                    return nil
+                }
                 let command = UIKeyCommand(input: input, modifierFlags: modifiers, action: action)
                 if #available(iOS 15.0, *) {
                     command.wantsPriorityOverSystemBehavior = true
@@ -860,8 +1033,18 @@ class GhosttyTerminalView: UIView {
     /// In custom I/O mode (SSH), the embedder should send a window-change.
     var onResize: ((Int, Int) -> Void)?
 
+    /// Optional UI-layer observer used by the opt-in keyboard viewport policy.
+    /// It is called only when the rendered cursor rect changes.
+    var onKeyboardAvoidanceCursorRectChange: ((CGRect) -> Void)?
+    private var keyboardAvoidancePreservedSurfaceSize: CGSize?
+    private var keyboardAvoidanceReferenceSurfaceSize: CGSize?
+    private var tracksKeyboardAvoidanceReferenceSize = false
+
     /// Callback invoked when a pinch gesture requests terminal pane zoom.
     var onZoomAction: ((TerminalZoomAction) -> TerminalZoomResult?)?
+
+    /// App-owned pane actions invoked by iPad hardware-keyboard shortcuts.
+    var onPaneKeyboardShortcut: ((TerminalSplitCommand) -> Void)?
 
     /// Per-surface presentation overrides used to preserve pane zoom across global config reloads.
     private(set) var surfacePresentationOverrides: TerminalPresentationOverrides = .empty
@@ -892,22 +1075,45 @@ class GhosttyTerminalView: UIView {
 
     /// Optional app-level paste interceptor used for rich clipboard routing.
     var richPasteInterceptor: ((GhosttyTerminalView) -> Bool)?
+
+    /// Optional pane/session actions exposed in the iPad pointer contextual menu.
+    var terminalContextMenuActions: TerminalContextMenuActions?
+
     private var didSignalReady = false
+    private var readonly = false
 
     /// Prevent rendering when the view is offscreen or being torn down.
     private var isShuttingDown = false
     private var isPaused = false
+    private var preservesForegroundKeyboardGrid = false
+    #if DEBUG
+    private var keyboardUITestSurfaceFocused = false
+    private var keyboardUITestGridResizeCount = 0
+    #endif
     private var customIORedrawScheduled = false
     private var keyRepeatTimer: DispatchSourceTimer?
-    private var repeatingHardwareKey: UIKey?
-    private var repeatingFallbackKey: Ghostty.Input.Key?
-    private var repeatingFallbackModifiers: UIKeyModifierFlags = []
-    private var repeatingKeyCode: UInt16?
+    private var hardwareKeyRepeatState = TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>()
+    #if DEBUG
+    private var keyboardUITestUsesManualHardwareKeyRepeatClock = false
+    #endif
 
     /// Track last surface size in pixels to avoid redundant resize/draw work.
     private var lastPixelSize: CGSize = .zero
     private var lastContentScale: CGFloat = 0
     private var lastReportedGrid: (cols: Int, rows: Int) = (0, 0)
+
+    var currentTerminalGridSize: (cols: Int, rows: Int)? {
+        guard let size = terminalSize() else { return nil }
+        let cols = Int(size.columns)
+        let rows = Int(size.rows)
+        guard cols > 0, rows > 0 else { return nil }
+        return (cols, rows)
+    }
+
+    var currentTerminalPixelSize: TerminalPixelSize? {
+        TerminalPixelSize(size: lastPixelSize)
+    }
+    private var lastKeyboardAvoidanceCursorRect: CGRect?
     /// Cell size in points for row-to-pixel conversion
     var cellSize: CGSize = .zero
 
@@ -915,6 +1121,11 @@ class GhosttyTerminalView: UIView {
     var scrollbar: Ghostty.Action.Scrollbar?
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm", category: "GhosttyTerminal")
+    private static let keyboardLifecycleLoggingEnabled = DebugLogConfiguration.isEnabled("keyboard")
+    private static let keyboardLifecycleLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
+        category: "TerminalKeyboardInput"
+    )
 
     private var isSelecting = false
     private var isScrolling = false
@@ -952,6 +1163,29 @@ class GhosttyTerminalView: UIView {
     }
     private let touchSelectionOverlay = TerminalTouchSelectionOverlayView()
     private let touchSelectionLoupe = TerminalTouchSelectionLoupeView()
+    private lazy var directTouchTapRecognizer: UITapGestureRecognizer = {
+        let recognizer = UITapGestureRecognizer(
+            target: self,
+            action: #selector(handleDirectTouchTap(_:))
+        )
+        recognizer.numberOfTapsRequired = 1
+        recognizer.numberOfTouchesRequired = 1
+        recognizer.cancelsTouchesInView = false
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
+        return recognizer
+    }()
+    private lazy var directTouchLongPressExclusionRecognizer: UILongPressGestureRecognizer = {
+        let recognizer = UILongPressGestureRecognizer(target: nil, action: nil)
+        recognizer.minimumPressDuration = 0.2
+        recognizer.cancelsTouchesInView = false
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
+        recognizer.delegate = self
+        return recognizer
+    }()
     private lazy var selectionRecognizer: UILongPressGestureRecognizer = {
         let recognizer = UILongPressGestureRecognizer(
             target: self,
@@ -960,6 +1194,9 @@ class GhosttyTerminalView: UIView {
         recognizer.minimumPressDuration = 0.2
         recognizer.allowableMovement = 8
         recognizer.cancelsTouchesInView = true
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
         return recognizer
     }()
 
@@ -969,6 +1206,9 @@ class GhosttyTerminalView: UIView {
             action: #selector(handleDoubleTap(_:))
         )
         recognizer.numberOfTapsRequired = 2
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
         return recognizer
     }()
 
@@ -978,6 +1218,9 @@ class GhosttyTerminalView: UIView {
             action: #selector(handleTripleTap(_:))
         )
         recognizer.numberOfTapsRequired = 3
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
         return recognizer
     }()
 
@@ -997,6 +1240,9 @@ class GhosttyTerminalView: UIView {
         }
         return recognizer
     }()
+    private lazy var pointerHoverRecognizer: UIHoverGestureRecognizer = {
+        UIHoverGestureRecognizer(target: self, action: #selector(handlePointerHover(_:)))
+    }()
     private lazy var pinchRecognizer: UIPinchGestureRecognizer = {
         let recognizer = UIPinchGestureRecognizer(
             target: self,
@@ -1011,15 +1257,23 @@ class GhosttyTerminalView: UIView {
     private lazy var selectionStartHandleRecognizer: UIPanGestureRecognizer = {
         let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handleSelectionHandlePan(_:)))
         recognizer.maximumNumberOfTouches = 1
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
         return recognizer
     }()
     private lazy var selectionEndHandleRecognizer: UIPanGestureRecognizer = {
         let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handleSelectionHandlePan(_:)))
         recognizer.maximumNumberOfTouches = 1
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue)
+        ]
         return recognizer
     }()
 
     private var editMenuInteraction: UIEditMenuInteraction?
+    private var editMenuPresentation: TerminalEditMenuPresentation = .selection
+    private var activePointerButton: TerminalPointerButton?
 
     /// Observer for config reload notifications
     private var configReloadObserver: NSObjectProtocol?
@@ -1051,10 +1305,9 @@ class GhosttyTerminalView: UIView {
         }
         return textView
     }()
-    private var hardwarePressesSentToGhostty: Set<UInt16> = []
-    private var fallbackHardwarePressKeys: [UInt16: Ghostty.Input.Key] = [:]
-    private var fallbackHardwarePressModifiers: [UInt16: UIKeyModifierFlags] = [:]
+    private var hardwarePressesSentToGhostty: [UInt16: Ghostty.Input.KeyEvent] = [:]
     private var systemTextInputPresses: Set<UInt16> = []
+    private var terminalAltOptionKeyCodes: Set<UInt16> = []
 
     fileprivate struct HardwarePressResult {
         var forwardedToSystem: Set<UIPress> = []
@@ -1093,6 +1346,7 @@ class GhosttyTerminalView: UIView {
             ghostty_surface_refresh(surface)
             ghostty_surface_draw(surface)
             self.markIOSurfaceLayersForDisplay()
+            self.notifyKeyboardAvoidanceCursorRectIfNeeded()
         }
     }
 
@@ -1119,9 +1373,15 @@ class GhosttyTerminalView: UIView {
         // Use a reasonable default size if frame is zero
         let initialFrame = frame.width > 0 && frame.height > 0 ? frame : CGRect(x: 0, y: 0, width: 800, height: 600)
         super.init(frame: initialFrame)
+        // The default guide collapses undocked/floating keyboards to the
+        // bottom safe area. Track their real frame so stale docked geometry
+        // can be rejected during floating/full transitions.
+        keyboardLayoutGuide.followsUndockedKeyboard = true
 
-        // Set content scale factor for retina rendering (important before surface creation)
-        self.contentScaleFactor = UIScreen.main.scale
+        // Set content scale factor for retina rendering (important before surface
+        // creation). Avoid UIScreen.main (stale instance risk on iOS 26); the
+        // window's screen scale is applied again in didMoveToWindow.
+        self.contentScaleFactor = max(UITraitCollection.current.displayScale, 1)
 
         setupSurface()
         addSubview(imeProxyTextView)
@@ -1139,7 +1399,7 @@ class GhosttyTerminalView: UIView {
             nativeFindOverlay.frame = bounds
             addSubview(nativeFindOverlay)
         }
-        if usesAppOwnedTouchSelection {
+        if allowsHostTextSelection, usesAppOwnedTouchSelection {
             touchSelectionOverlay.frame = bounds
             touchSelectionOverlay.isHidden = true
             addSubview(touchSelectionOverlay)
@@ -1150,6 +1410,7 @@ class GhosttyTerminalView: UIView {
         }
 
         // Setup gesture recognizers with delegate for simultaneous recognition
+        directTouchTapRecognizer.delegate = self
         scrollRecognizer.delegate = self
         pinchRecognizer.delegate = self
         if usesAppOwnedTouchSelection {
@@ -1163,9 +1424,20 @@ class GhosttyTerminalView: UIView {
         if usesAppOwnedTouchSelection {
             // Triple tap should require double tap to fail first
             doubleTapRecognizer.require(toFail: tripleTapRecognizer)
+            directTouchTapRecognizer.require(toFail: scrollRecognizer)
+            directTouchTapRecognizer.require(toFail: selectionRecognizer)
+            directTouchTapRecognizer.require(toFail: doubleTapRecognizer)
+        } else {
+            if !usesNativeTouchSelection {
+                directTouchTapRecognizer.require(toFail: scrollRecognizer)
+            }
+            directTouchTapRecognizer.require(toFail: directTouchLongPressExclusionRecognizer)
+            addGestureRecognizer(directTouchLongPressExclusionRecognizer)
         }
 
+        addGestureRecognizer(directTouchTapRecognizer)
         addGestureRecognizer(scrollRecognizer)
+        addGestureRecognizer(pointerHoverRecognizer)
         addGestureRecognizer(pinchRecognizer)
         if usesAppOwnedTouchSelection {
             addGestureRecognizer(selectionRecognizer)
@@ -1194,7 +1466,9 @@ class GhosttyTerminalView: UIView {
         fatalError("init(coder:) not supported")
     }
 
-    deinit {
+    isolated deinit {
+        cancelTrackedHardwareInput()
+        stopSelectionAutoscroll()
         for observer in hardwareKeyboardObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -1213,9 +1487,11 @@ class GhosttyTerminalView: UIView {
     /// Explicitly cleanup the terminal before removal from view hierarchy.
     /// Call this in dismantleUIView to ensure proper cleanup.
     func cleanup() {
+        cancelTrackedHardwareInput()
         isShuttingDown = true
         isPaused = true
         stopMomentumScrolling()
+        stopSelectionAutoscroll()
         zoomIndicatorHideWorkItem?.cancel()
         zoomIndicatorHideWorkItem = nil
 
@@ -1237,7 +1513,14 @@ class GhosttyTerminalView: UIView {
         onPwdChange = nil
         onProgressReport = nil
         onResize = nil
-        onKeyboardBrowseModeChange = nil
+        onKeyboardAvoidanceCursorRectChange = nil
+        onPaneKeyboardShortcut = nil
+        keyboardAvoidancePreservedSurfaceSize = nil
+        keyboardAvoidanceReferenceSurfaceSize = nil
+        tracksKeyboardAvoidanceReferenceSize = false
+        onWindowAttachmentChange = nil
+        onTerminalDirectTouch = nil
+        onKeyboardAccessoryHideRequested = nil
         onFindNavigatorVisibilityChange = nil
         richPasteInterceptor = nil
         writeCallback = nil
@@ -1245,7 +1528,7 @@ class GhosttyTerminalView: UIView {
         // Stop rendering/input callbacks and mark the surface as not visible.
         if let cSurface = surface?.unsafeCValue {
             ghostty_surface_set_write_callback(cSurface, nil, nil)
-            ghostty_surface_set_focus(cSurface, false)
+            setSurfaceFocus(false)
             ghostty_surface_set_occlusion(cSurface, false)
         }
 
@@ -1262,12 +1545,20 @@ class GhosttyTerminalView: UIView {
     }
 
     /// Pause rendering and input without destroying the surface.
-    func pauseRendering() {
+    var isRenderingPaused: Bool {
+        isPaused
+    }
+
+    func pauseRendering(preservingForegroundKeyboardGrid: Bool = false) {
         guard !isShuttingDown else { return }
+        cancelTrackedHardwareInput()
+        if preservingForegroundKeyboardGrid {
+            preservesForegroundKeyboardGrid = true
+        }
         isPaused = true
 
         if let surface = surface?.unsafeCValue {
-            ghostty_surface_set_focus(surface, false)
+            setSurfaceFocus(false)
             ghostty_surface_set_occlusion(surface, false)
         }
     }
@@ -1279,10 +1570,49 @@ class GhosttyTerminalView: UIView {
 
         if let surface = surface?.unsafeCValue {
             ghostty_surface_set_occlusion(surface, true)
+            // Pausing explicitly clears Ghostty's focus without resigning the
+            // UIKit text-input owner. Restore that live ownership on resume;
+            // the native Find navigator keeps its own responder and must not
+            // make the terminal report focus.
+            setSurfaceFocus(isTerminalTextInputActive && !isFindNavigatorActive)
         }
 
-        sizeDidChange(bounds.size)
+        if preservesForegroundKeyboardGrid {
+            // The software keyboard temporarily leaves the layout while the
+            // app is backgrounded. Keep the last terminal grid until UIKit
+            // restores its final foreground geometry instead of sending an
+            // intermediate full-height PTY resize to an idle Mosh session.
+            redrawPreservingSurfaceSize()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isPaused else { return }
+                self.redrawPreservingSurfaceSize()
+            }
+        } else {
+            sizeDidChange(bounds.size)
+            requestRender()
+        }
+    }
+
+    private func redrawPreservingSurfaceSize() {
+        guard !isShuttingDown, !isPaused else { return }
+        guard let surface = surface?.unsafeCValue else { return }
+        let surfaceSize = renderedSurfaceSize
+        guard surfaceSize.width > 0, surfaceSize.height > 0 else { return }
+
+        updateContentScaleIfNeeded()
+        configureIOSurfaceLayers(size: surfaceSize)
+        ghostty_surface_refresh(surface)
+        ghostty_surface_draw(surface)
+        markIOSurfaceLayersForDisplay()
         requestRender()
+    }
+
+    private func setSurfaceFocus(_ isFocused: Bool) {
+        guard let surface = surface?.unsafeCValue else { return }
+        ghostty_surface_set_focus(surface, isFocused)
+        #if DEBUG
+        keyboardUITestSurfaceFocused = isFocused
+        #endif
     }
 
     // MARK: - Layer Type
@@ -1320,7 +1650,7 @@ class GhosttyTerminalView: UIView {
 
     private func handleCurrentInputModeDidChange() {
         guard !isShuttingDown else { return }
-        TerminalIMEProxyTextView.dictationLogger.log("inputModeDidChange primary=\(self.currentIMEPrimaryLanguage ?? "nil", privacy: .public) proxyFirstResponder=\(self.imeProxyTextView.isFirstResponder) session=\(self.imeProxyTextView.isDictationSessionActive)")
+        TerminalIMEProxyTextView.dictationLogger.log("inputModeDidChange primary=\(self.currentIMEPrimaryLanguage ?? "nil", privacy: .public) terminalFirstResponder=\(self.isTerminalTextInputActive) session=\(self.imeProxyTextView.isDictationSessionActive)")
         if isDictationInputModeActive {
             // Entering dictation. Invalidating the session or reloading input views here
             // would terminate dictation immediately after it starts.
@@ -1335,13 +1665,10 @@ class GhosttyTerminalView: UIView {
             return
         }
         invalidateLocalTextInputSession()
-        if hasHardwareKeyboardAttached {
-            focusForHardwareKeyboardIfNeeded()
-        }
-        guard imeProxyTextView.isFirstResponder, isTextInputSessionEligible else { return }
+        guard isTerminalTextInputActive, isTextInputSessionEligible else { return }
         Task { @MainActor [weak self] in
             guard let self, !self.isShuttingDown else { return }
-            self.imeProxyTextView.reloadInputViews()
+            self.reloadTerminalInputViewsIfActive()
         }
     }
 
@@ -1393,17 +1720,32 @@ class GhosttyTerminalView: UIView {
     /// Without proper sublayer configuration, Ghostty's setSurfaceCallback will discard all frames.
     func sizeDidChange(_ size: CGSize) {
         if isShuttingDown { return }
+        let currentSurfaceSize = renderedSurfaceSize
+        guard TerminalSurfaceGeometryPolicy.update(
+            renderingIsPaused: isPaused,
+            preservesForegroundKeyboardGrid: preservesForegroundKeyboardGrid,
+            currentSize: currentSurfaceSize,
+            proposedSize: size
+        ) == .apply else {
+            return
+        }
+        preservesForegroundKeyboardGrid = false
         guard let surface = surface?.unsafeCValue else { return }
-        guard size.width > 0 && size.height > 0 else { return }
+        let surfaceSize = keyboardAvoidancePreservedSurfaceSize ?? size
+        guard surfaceSize.width > 0 && surfaceSize.height > 0 else { return }
 
         updateContentScaleIfNeeded()
-        configureIOSurfaceLayers(size: size)
+        configureIOSurfaceLayers(size: surfaceSize)
 
         let scale = self.contentScaleFactor
-        let pixelWidth = floor(size.width * scale)
-        let pixelHeight = floor(size.height * scale)
+        let pixelWidth = floor(surfaceSize.width * scale)
+        let pixelHeight = floor(surfaceSize.height * scale)
         guard pixelWidth > 0 && pixelHeight > 0 else { return }
         let pixelSize = CGSize(width: pixelWidth, height: pixelHeight)
+
+        if tracksKeyboardAvoidanceReferenceSize {
+            updateKeyboardAvoidanceReferenceSize(surfaceSize)
+        }
 
         let sizeChanged = pixelSize != lastPixelSize || scale != lastContentScale
         if sizeChanged {
@@ -1422,6 +1764,7 @@ class GhosttyTerminalView: UIView {
         if !isPaused {
             ghostty_surface_refresh(surface)
             ghostty_surface_draw(surface)
+            notifyKeyboardAvoidanceCursorRectIfNeeded()
             if usesNativeTouchSelection {
                 refreshNativeSelectionSnapshot()
             }
@@ -1451,8 +1794,10 @@ class GhosttyTerminalView: UIView {
         let cols = Int(size.columns)
         let rows = Int(size.rows)
         guard cols > 0, rows > 0 else { return }
-        guard cols != lastReportedGrid.cols || rows != lastReportedGrid.rows else { return }
         lastReportedGrid = (cols, rows)
+        #if DEBUG
+        keyboardUITestGridResizeCount += 1
+        #endif
         onResize?(cols, rows)
     }
 
@@ -1578,15 +1923,13 @@ class GhosttyTerminalView: UIView {
     }
 
     fileprivate func imeProxyFocusDidChange(isFocused: Bool) {
-        if let surface = surface?.unsafeCValue {
-            ghostty_surface_set_focus(surface, isFocused)
-        }
+        setSurfaceFocus(isFocused)
         if isFocused {
             updateHardwareKeyboardState(reloadInputViewsIfNeeded: true)
         } else {
             imeProxyTextView.endDictationSession(commit: true)
             invalidateLocalTextInputSession()
-            stopKeyRepeat()
+            cancelTrackedHardwareInput()
         }
     }
 
@@ -1678,6 +2021,66 @@ class GhosttyTerminalView: UIView {
         )
     }
 
+    func keyboardAvoidanceCursorRect() -> CGRect {
+        textInputCaretRect(for: textInputModel.cursorIndex)
+    }
+
+    func setKeyboardAvoidanceSizePreservationEnabled(_ isEnabled: Bool) {
+        if isEnabled {
+            guard keyboardAvoidancePreservedSurfaceSize == nil else { return }
+            tracksKeyboardAvoidanceReferenceSize = false
+            keyboardAvoidancePreservedSurfaceSize = keyboardAvoidanceReferenceSurfaceSize
+                ?? renderedSurfaceSize
+            if let preservedSize = keyboardAvoidancePreservedSurfaceSize {
+                sizeDidChange(preservedSize)
+            }
+        } else {
+            tracksKeyboardAvoidanceReferenceSize = true
+            keyboardAvoidancePreservedSurfaceSize = nil
+            sizeDidChange(bounds.size)
+        }
+    }
+
+    func disableKeyboardAvoidanceSizePreservation() {
+        tracksKeyboardAvoidanceReferenceSize = false
+        keyboardAvoidanceReferenceSurfaceSize = nil
+        guard keyboardAvoidancePreservedSurfaceSize != nil else { return }
+        keyboardAvoidancePreservedSurfaceSize = nil
+        sizeDidChange(bounds.size)
+    }
+
+    func keyboardAvoidanceTerminalRect() -> CGRect {
+        CGRect(origin: .zero, size: keyboardAvoidancePreservedSurfaceSize ?? bounds.size)
+    }
+
+    private var renderedSurfaceSize: CGSize {
+        let scale = lastContentScale > 0 ? lastContentScale : contentScaleFactor
+        let size = CGSize(
+            width: scale > 0 ? lastPixelSize.width / scale : 0,
+            height: scale > 0 ? lastPixelSize.height / scale : 0
+        )
+        return size.width > 0 && size.height > 0 ? size : bounds.size
+    }
+
+    private func updateKeyboardAvoidanceReferenceSize(_ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        guard let reference = keyboardAvoidanceReferenceSurfaceSize else {
+            keyboardAvoidanceReferenceSurfaceSize = size
+            return
+        }
+        if abs(reference.width - size.width) >= 0.5 || size.height > reference.height {
+            keyboardAvoidanceReferenceSurfaceSize = size
+        }
+    }
+
+    private func notifyKeyboardAvoidanceCursorRectIfNeeded() {
+        guard let onKeyboardAvoidanceCursorRectChange else { return }
+        let cursorRect = keyboardAvoidanceCursorRect()
+        guard cursorRect != lastKeyboardAvoidanceCursorRect else { return }
+        lastKeyboardAvoidanceCursorRect = cursorRect
+        onKeyboardAvoidanceCursorRectChange(cursorRect)
+    }
+
     // MARK: - UIView Overrides
 
     override var canBecomeFirstResponder: Bool {
@@ -1693,12 +2096,49 @@ class GhosttyTerminalView: UIView {
         return UIApplication.shared.applicationState == .active
     }
 
-    var acceptsTerminalInput = true
+    var acceptsTerminalInput = true {
+        didSet {
+            if !acceptsTerminalInput {
+                cancelTrackedHardwareInput()
+            }
+        }
+    }
     private var keyboardFocusPolicy = TerminalKeyboardFocusPolicy()
     private var suppressDirectTouchKeyboardFocusUntil = Date.distantPast
+    private var suppressAccessoryForMissingSoftwareKeyboard = false
+    private let hiddenKeyboardInputView: UIView = {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 0))
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.heightAnchor.constraint(equalToConstant: 0).isActive = true
+        return view
+    }()
+    #if DEBUG
+    private enum KeyboardUITestSoftwareKeyboardFailure: Equatable {
+        case none
+        case untilSessionRebuild
+    }
+
+    private var keyboardHideRequestCount = 0
+    private var keyboardInputSessionRebuildCount = 0
+    private var keyboardUITestHardwareKeyboardOverride: Bool?
+    private var keyboardUITestSoftwareKeyboardFailure = KeyboardUITestSoftwareKeyboardFailure.none
+    #endif
+    var onWindowAttachmentChange: ((Bool) -> Void)?
+    /// Reports terminal touches; isFocusTap is true for the plain
+    /// tap-to-focus gesture, which also restores a user-hidden keyboard.
+    var onTerminalDirectTouch: ((_ isFocusTap: Bool) -> Void)?
     var onKeyboardBrowseModeChange: ((Bool) -> Void)?
+    var onKeyboardAccessoryHideRequested: (() -> Void)?
     var onFindNavigatorVisibilityChange: ((Bool) -> Void)?
     private var findNavigatorLifecycle = TerminalFindNavigatorLifecycle()
+
+    var isFindNavigatorVisible: Bool {
+        isFindNavigatorActive
+    }
+
+    var isHardwareKeyboardAttached: Bool {
+        hasHardwareKeyboardAttached
+    }
 
     var shouldRestoreKeyboardFocusOnReconnect: Bool {
         keyboardFocusPolicy.shouldRestoreOnReconnect
@@ -1712,8 +2152,66 @@ class GhosttyTerminalView: UIView {
         keyboardFocusPolicy.isBrowsing
     }
 
-    var isFindNavigatorVisible: Bool {
-        isFindNavigatorActive
+    func keyboardCoordinatorDiagnosticSnapshot() -> TerminalKeyboardCoordinatorDiagnosticSnapshot {
+        let keyboardLayoutFrame: CGRect?
+        let screenFrame: CGRect?
+        if let window {
+            let frameInWindow = convert(keyboardLayoutGuide.layoutFrame, to: window)
+            keyboardLayoutFrame = window.convert(
+                frameInWindow,
+                to: window.screen.coordinateSpace
+            )
+            screenFrame = window.screen.bounds
+        } else {
+            keyboardLayoutFrame = nil
+            screenFrame = nil
+        }
+        return TerminalKeyboardCoordinatorDiagnosticSnapshot(
+            windowAttached: window != nil,
+            windowIsKey: window?.isKeyWindow == true,
+            sceneActivationState: window?.windowScene.map { String(describing: $0.activationState) } ?? "nil",
+            isFirstResponder: isFirstResponder,
+            isSoftwareInputActive: isKeyboardTextInputActive,
+            keyboardLayoutFrame: keyboardLayoutFrame,
+            screenFrame: screenFrame
+        )
+    }
+
+    private func keyboardLifecycleDescription() -> String {
+        let snapshot = keyboardCoordinatorDiagnosticSnapshot()
+        return [
+            "terminal=\(ObjectIdentifier(self))",
+            "inputResponder=\(ObjectIdentifier(imeProxyTextView))",
+            "window=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil")",
+            snapshot.lifecycleDescription,
+            "viewFirstResponder=\(super.isFirstResponder)",
+            "canBecome=\(imeProxyTextView.canBecomeFirstResponder)",
+            "canResign=\(imeProxyTextView.canResignFirstResponder)",
+            "hardware=\(hasHardwareKeyboardAttached)",
+            "forced=\(keyboardFocusPolicy.forcesSoftwareKeyboardPresentation)",
+            "browse=\(keyboardFocusPolicy.isBrowsing)",
+            "softwareSuppressed=\(shouldSuppressSoftwareKeyboard)",
+            "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
+            "accessoryAttached=\(keyboardToolbar?.window != nil)",
+            "inputView=\(shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")",
+            "language=\(imeProxyTextView.textInputMode?.primaryLanguage ?? "nil")",
+            "layoutFrame=\(keyboardLayoutGuide.layoutFrame.debugDescription)",
+            "bounds=\(bounds.debugDescription)",
+            "safeArea=\(safeAreaInsets)",
+            "grid=\(lastReportedGrid.cols)x\(lastReportedGrid.rows)",
+        ].joined(separator: " ")
+    }
+
+    fileprivate func logKeyboardLifecycle(
+        _ event: String,
+        result: Bool? = nil,
+        detail: String = ""
+    ) {
+        guard Self.keyboardLifecycleLoggingEnabled else { return }
+        let resultDescription = result.map(String.init) ?? "none"
+        Self.keyboardLifecycleLogger.info(
+            "event=\(event, privacy: .public) result=\(resultDescription, privacy: .public) detail=\(detail, privacy: .public) \(self.keyboardLifecycleDescription(), privacy: .public)"
+        )
     }
 
     private var isFindNavigatorActive: Bool {
@@ -1730,22 +2228,77 @@ class GhosttyTerminalView: UIView {
         canRouteTerminalInput
     }
 
-    func markKeyboardFocusForReconnect() {
-        keyboardFocusPolicy.markForReconnect()
+    private var isTerminalTextInputActive: Bool {
+        isKeyboardTextInputActive || super.isFirstResponder
     }
 
-    func clearKeyboardFocusForReconnect() {
-        keyboardFocusPolicy.clearReconnect()
+    private var isKeyboardTextInputActive: Bool {
+        imeProxyTextView.isFirstResponder
+    }
+
+    private func reloadTerminalInputViewsIfActive() {
+        if super.isFirstResponder {
+            reloadInputViews()
+        }
+        if imeProxyTextView.isFirstResponder {
+            imeProxyTextView.reloadInputViews()
+        }
+    }
+
+    @discardableResult
+    func acquireTerminalInput() -> Bool {
+        requestKeyboardFocus(for: .initialActivation)
+    }
+
+    @discardableResult
+    func forceSoftwareKeyboardInput() -> Bool {
+        requestKeyboardFocus(for: .explicitUserRequest)
     }
 
     @discardableResult
     func requestKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
+        let reasonDescription = String(describing: reason)
+        logKeyboardLifecycle("focus.request.begin", detail: "reason=\(reasonDescription)")
+        guard prepareKeyboardFocus(for: reason) else {
+            logKeyboardLifecycle("focus.request.rejected", result: false, detail: "reason=\(reasonDescription)")
+            return false
+        }
+        notifyKeyboardBrowseModeChange()
+        let result = becomeFirstResponder()
+        logKeyboardLifecycle("focus.request.end", result: result, detail: "reason=\(reasonDescription)")
+        return result
+    }
+
+    private func prepareKeyboardFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
         guard !isFindNavigatorActive else { return false }
+        if reason != .hardwareKeyboard {
+            refreshHardwareKeyboardAttachmentFromSystem()
+        }
         guard keyboardFocusPolicy.requestFocus(for: reason) else { return false }
         clearNativeSelectionStateForTerminalInput()
-        notifyKeyboardBrowseModeChange()
-        _ = becomeFirstResponder()
         return true
+    }
+
+    func dismissKeyboardForUser(suppressDirectTouchRefocus: Bool = false) {
+        keyboardFocusPolicy.dismissForUser()
+        notifyKeyboardBrowseModeChange()
+        if suppressDirectTouchRefocus {
+            suppressDirectTouchKeyboardFocusUntil = Date().addingTimeInterval(0.35)
+        }
+        if !isTerminalTextInputActive {
+            _ = focusTerminalInputWithoutShowingSoftwareKeyboard()
+        } else {
+            reloadTerminalInputViewsIfActive()
+        }
+    }
+
+    @discardableResult
+    func focusTerminalInputWithoutShowingSoftwareKeyboard() -> Bool {
+        guard !isFindNavigatorActive else { return false }
+        refreshHardwareKeyboardAttachmentFromSystem()
+        clearNativeSelectionStateForTerminalInput()
+        notifyKeyboardBrowseModeChange()
+        return becomeFirstResponder()
     }
 
     @discardableResult
@@ -1753,8 +2306,9 @@ class GhosttyTerminalView: UIView {
         guard isNativeSelectionTextInputContext else { return true }
         guard !isFindNavigatorActive else { return false }
 
-        nativeSelectionInteractionActive = false
-        return requestKeyboardFocus(for: .explicitUserRequest)
+        clearNativeSelectionStateForTerminalInput()
+        notifyDirectTouchOnTerminal()
+        return true
     }
 
     private func clearNativeSelectionStateForTerminalInput() {
@@ -1775,28 +2329,27 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    @discardableResult
-    func requestKeyboardFocus() -> Bool {
-        requestKeyboardFocus(for: .explicitUserRequest)
-    }
+    func releaseTerminalInput() {
+        // A forced leave must always end the input session; an active
+        // unexpected-resign suppression window would otherwise refuse it and
+        // keep the accessory bar alive across navigation.
+        suppressUnexpectedIMEProxyResignUntil = 0
 
-    func dismissKeyboardForUser(suppressDirectTouchRefocus: Bool = false) {
-        if hasHardwareKeyboardAttached {
-            focusForHardwareKeyboardIfNeeded()
-            return
-        }
-        keyboardFocusPolicy.dismissForUser()
-        notifyKeyboardBrowseModeChange()
-        if suppressDirectTouchRefocus {
-            // Tapping the dismiss button can leak one direct-touch event through to the
-            // terminal view underneath. Suppress immediate touch-driven refocus briefly
-            // so the software keyboard stays dismissed on handheld devices.
-            suppressDirectTouchKeyboardFocusUntil = Date().addingTimeInterval(0.35)
-        }
+        let previous = allowIMEProxyProgrammaticResign
+        allowIMEProxyProgrammaticResign = true
+        defer { allowIMEProxyProgrammaticResign = previous }
+
         _ = resignFirstResponder()
     }
 
     func dismissKeyboardFromToolbar() {
+        #if DEBUG
+        keyboardHideRequestCount += 1
+        #endif
+        // Publish the user's intent while the accessory is still mounted. The
+        // route can then install its Keyboard/Voice recovery controls before
+        // UIKit tears down the input view hierarchy.
+        onKeyboardAccessoryHideRequested?()
         dismissKeyboardForUser(suppressDirectTouchRefocus: true)
     }
 
@@ -1807,18 +2360,49 @@ class GhosttyTerminalView: UIView {
         return Date() >= suppressDirectTouchKeyboardFocusUntil
     }
 
+    func setTerminalInputAccessorySuppressed(_ suppressed: Bool) {
+        guard suppressAccessoryForMissingSoftwareKeyboard != suppressed else { return }
+        suppressAccessoryForMissingSoftwareKeyboard = suppressed
+        reloadTerminalInputViewsIfActive()
+        logKeyboardLifecycle("accessory.suppression.changed", detail: "suppressed=\(suppressed)")
+    }
+
     private func notifyKeyboardBrowseModeChange() {
         onKeyboardBrowseModeChange?(keyboardFocusPolicy.isBrowsing)
-        if imeProxyTextView.isFirstResponder {
-            imeProxyTextView.reloadInputViews()
+        reloadTerminalInputViewsIfActive()
+    }
+
+    /// Tears the input session down and rebuilds it across runloop turns.
+    /// A same-tick resign/become pair is coalesced by UIKit into "nothing
+    /// changed" and cannot revive a dead keyboard scene (iOS 26 "No scene
+    /// exists for this identity"); the responder-free turn gives InputUI a
+    /// real session boundary before the coordinator requests reacquisition.
+    func releaseTerminalInputForReacquisition(completion: @escaping () -> Void) {
+        #if DEBUG
+        keyboardInputSessionRebuildCount += 1
+        #endif
+        logKeyboardLifecycle("session.rebuild.begin")
+        releaseTerminalInput()
+        #if DEBUG
+        if keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild {
+            keyboardUITestSoftwareKeyboardFailure = .none
         }
-        if super.isFirstResponder {
-            reloadInputViews()
+        #endif
+        logKeyboardLifecycle("session.rebuild.released")
+        DispatchQueue.main.async { [weak self] in
+            self?.logKeyboardLifecycle("session.rebuild.readyForReacquisition")
+            completion()
         }
     }
 
-    private func notifyFindNavigatorVisibilityChange() {
-        onFindNavigatorVisibilityChange?(isFindNavigatorVisible)
+    private func notifyFindNavigatorVisibilityChange(_ visibilityOverride: Bool? = nil) {
+        onFindNavigatorVisibilityChange?(visibilityOverride ?? isFindNavigatorVisible)
+    }
+
+    private func notifyDirectTouchOnTerminal(isFocusTap: Bool = false) {
+        guard !isFindNavigatorActive else { return }
+        terminalContextMenuActions?.focus()
+        onTerminalDirectTouch?(isFocusTap)
     }
 
     override var textInputContextIdentifier: String? {
@@ -1826,16 +2410,15 @@ class GhosttyTerminalView: UIView {
     }
 
     override var isFirstResponder: Bool {
-        super.isFirstResponder || imeProxyTextView.isFirstResponder
+        isTerminalTextInputActive
     }
 
     override func becomeFirstResponder() -> Bool {
         guard isTextInputSessionEligible else { return false }
-        if usesNativeTouchSelection,
-           (prefersNativeSelectionFirstResponder || nativeSelectionInteractionActive || nativeSelectedRange != nil) {
+        if prefersNativeSelectionFirstResponder {
             let result = super.becomeFirstResponder()
-            if let surface = surface?.unsafeCValue {
-                ghostty_surface_set_focus(surface, result || super.isFirstResponder)
+            if result || super.isFirstResponder {
+                imeProxyFocusDidChange(isFocused: true)
             }
             return result
         }
@@ -1861,10 +2444,7 @@ class GhosttyTerminalView: UIView {
         }
         let ownResult = super.isFirstResponder ? super.resignFirstResponder() : true
         if (proxyResult && ownResult) || !isTextInputSessionEligible {
-            if let surface = surface?.unsafeCValue {
-                ghostty_surface_set_focus(surface, false)
-            }
-            stopKeyRepeat()
+            imeProxyFocusDidChange(isFocused: false)
             pendingSystemTextInputHardwareKeys.removeAll()
         }
         return (proxyResult && ownResult) || !isTextInputSessionEligible
@@ -1891,16 +2471,19 @@ class GhosttyTerminalView: UIView {
         super.didMoveToWindow()
 
         let isVisible = (window != nil)
+        if !isVisible {
+            cancelTrackedHardwareInput()
+        }
         isPaused = !isVisible
         if let surface = surface?.unsafeCValue {
             ghostty_surface_set_occlusion(surface, isVisible)
         }
+        onWindowAttachmentChange?(isVisible)
+        logKeyboardLifecycle("terminal.didMoveToWindow", detail: "attached=\(isVisible)")
 
         if isVisible {
             updateHardwareKeyboardState(reloadInputViewsIfNeeded: true)
             sizeDidChange(frame.size)
-            // Note: becomeFirstResponder is now handled by SSHTerminalWrapper.updateUIView
-            // based on isActive flag to avoid keyboard showing when terminal is hidden
             requestRender()
         }
     }
@@ -1957,45 +2540,83 @@ class GhosttyTerminalView: UIView {
         hardwareKeyboardObservers.removeAll()
     }
 
+    private func refreshHardwareKeyboardAttachmentFromSystem() {
+        let hasHardwareKeyboard = detectedHardwareKeyboardAttached
+        _ = setHardwareKeyboardAttached(hasHardwareKeyboard)
+    }
+
     private func updateHardwareKeyboardState(reloadInputViewsIfNeeded: Bool) {
-        let hasHardwareKeyboard = GCKeyboard.coalesced != nil
-        let didChange = hasHardwareKeyboard != hasHardwareKeyboardAttached
-        hasHardwareKeyboardAttached = hasHardwareKeyboard
+        let hasHardwareKeyboard = detectedHardwareKeyboardAttached
+        let didChange = setHardwareKeyboardAttached(hasHardwareKeyboard)
+        if didChange {
+            logKeyboardLifecycle(
+                "hardware.changed",
+                detail: "attached=\(hasHardwareKeyboard) vendor=\(GCKeyboard.coalesced?.vendorName ?? "nil")"
+            )
+        }
+        if didChange {
+            notifyKeyboardBrowseModeChange()
+        }
         if hasHardwareKeyboard {
             focusForHardwareKeyboardIfNeeded()
         } else if didChange {
-            if imeProxyTextView.isFirstResponder, isTextInputSessionEligible, !isFindNavigatorActive {
-                _ = requestKeyboardFocus(for: .explicitUserRequest)
+            if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
+                _ = requestKeyboardFocus(for: .initialActivation)
             } else {
-                notifyKeyboardBrowseModeChange()
+                reloadTerminalInputViewsIfActive()
             }
         }
-        if reloadInputViewsIfNeeded, imeProxyTextView.isFirstResponder, isTextInputSessionEligible {
-            imeProxyTextView.reloadInputViews()
+        if reloadInputViewsIfNeeded, isTerminalTextInputActive, isTextInputSessionEligible {
+            reloadTerminalInputViewsIfActive()
         }
     }
 
+    @discardableResult
+    private func setHardwareKeyboardAttached(_ attached: Bool) -> Bool {
+        guard attached != hasHardwareKeyboardAttached else { return false }
+        if !attached {
+            cancelTrackedHardwareInput()
+        }
+        hasHardwareKeyboardAttached = attached
+        return true
+    }
+
     private func markHardwareKeyboardDetectedFromKeyPress() {
+        #if DEBUG
+        if keyboardUITestHardwareKeyboardOverride == false { return }
+        #endif
         guard !hasHardwareKeyboardAttached else { return }
         hasHardwareKeyboardAttached = true
         focusForHardwareKeyboardIfNeeded()
-        if imeProxyTextView.isFirstResponder, isTextInputSessionEligible {
-            imeProxyTextView.reloadInputViews()
+        if isTerminalTextInputActive, isTextInputSessionEligible {
+            reloadTerminalInputViewsIfActive()
         }
     }
 
     private func focusForHardwareKeyboardIfNeeded() {
         guard hasHardwareKeyboardAttached, isTextInputSessionEligible, !isFindNavigatorActive else { return }
-        guard keyboardFocusPolicy.isBrowsing || !imeProxyTextView.isFirstResponder else {
+        guard keyboardFocusPolicy.isBrowsing || !isTerminalTextInputActive else {
             return
         }
         _ = requestKeyboardFocus(for: .hardwareKeyboard)
+    }
+
+    private var detectedHardwareKeyboardAttached: Bool {
+        #if DEBUG
+        if let keyboardUITestHardwareKeyboardOverride {
+            return keyboardUITestHardwareKeyboardOverride
+        }
+        #endif
+        return GCKeyboard.coalesced != nil
     }
 
     // MARK: - Touch Input
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
+        if handleIndirectPointerTouchesBegan(touches, event: event) {
+            return
+        }
         let location = touches.first?.location(in: self)
         if usesNativeTouchSelection, nativeSelectionInteractionActive {
             return
@@ -2006,6 +2627,7 @@ class GhosttyTerminalView: UIView {
             }
             clearNativeSelectionStateForTerminalInput()
             guard shouldAutoFocusKeyboard(for: touches) else { return }
+            notifyDirectTouchOnTerminal(isFocusTap: true)
             requestKeyboardFocus(for: .directTouch)
             return
         }
@@ -2018,22 +2640,48 @@ class GhosttyTerminalView: UIView {
         if let location, isPointOnTouchSelectionHandle(location) {
             return
         }
-        // Tap just focuses keyboard - no mouse events (avoids accidental selection)
-        guard shouldAutoFocusKeyboard(for: touches) else { return }
+        // Tap just focuses keyboard - no mouse events (avoids accidental selection).
+        notifyDirectTouchOnTerminal(isFocusTap: true)
         requestKeyboardFocus(for: .directTouch)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
+        if handleIndirectPointerTouchesMoved(touches, event: event) {
+            return
+        }
         // Pan gesture handles scrolling, long press handles selection
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
+        _ = handleIndirectPointerTouchesEnded(touches, event: event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
+        _ = handleIndirectPointerTouchesEnded(touches, event: event)
+    }
+
+    @objc private func handleDirectTouchTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let surface,
+              TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                  terminalMouseCaptured: surface.mouseCaptured,
+                  terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
+                  selectionInteractionActive: hasActiveSelectionInteraction(
+                      at: recognizer.location(in: self)
+                  )
+              ) else {
+            return
+        }
+
+        let position = ghosttyPoint(recognizer.location(in: self))
+        stopMomentumScrolling()
+        surface.sendMousePos(.init(x: position.x, y: position.y, mods: []))
+        surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        requestRender()
     }
 
     private func ghosttyPoint(_ location: CGPoint) -> CGPoint {
@@ -2041,10 +2689,123 @@ class GhosttyTerminalView: UIView {
         location
     }
 
+    private func firstIndirectPointerTouch(in touches: Set<UITouch>) -> UITouch? {
+        touches.first { $0.type == .indirectPointer }
+    }
+
+    private func pointerModifiers(from event: UIEvent?) -> Ghostty.Input.Mods {
+        TerminalPointerInputRoutingPolicy.ghosttyModifiers(from: event?.modifierFlags ?? [])
+    }
+
+    private func pointerButton(
+        from event: UIEvent?
+    ) -> TerminalPointerButton? {
+        TerminalPointerInputRoutingPolicy.pointerButton(
+            for: event?.buttonMask ?? [],
+            modifiers: event?.modifierFlags ?? []
+        )
+    }
+
+    private func sendPointerPosition(_ location: CGPoint, mods: Ghostty.Input.Mods) {
+        guard let surface else { return }
+        let pos = ghosttyPoint(location)
+        surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: mods))
+    }
+
+    @discardableResult
+    private func handleIndirectPointerTouchesBegan(_ touches: Set<UITouch>, event: UIEvent?) -> Bool {
+        guard let touch = firstIndirectPointerTouch(in: touches) else { return false }
+        guard canRouteTerminalInput, let surface else { return true }
+
+        focusForHardwareKeyboardIfNeeded()
+
+        let location = touch.location(in: self)
+        let mods = pointerModifiers(from: event)
+        sendPointerPosition(location, mods: mods)
+
+        guard let button = pointerButton(from: event) else {
+            requestRender()
+            return true
+        }
+
+        activePointerButton = button
+        if button == .left {
+            stopMomentumScrolling()
+            updateSelectionAutoscroll(location: location, mods: mods)
+        } else {
+            stopSelectionAutoscroll()
+        }
+        let handled = surface.sendMouseButton(.init(action: .press, button: button.ghosttyMouseButton, mods: mods))
+        requestRender()
+
+        if TerminalPointerInputRoutingPolicy.shouldShowHostContextMenu(
+            button: button,
+            terminalHandledButtonPress: handled,
+            terminalMouseCaptured: surface.mouseCaptured
+        ) {
+            showPointerContextMenu(at: location)
+        }
+
+        return true
+    }
+
+    @discardableResult
+    private func handleIndirectPointerTouchesMoved(_ touches: Set<UITouch>, event: UIEvent?) -> Bool {
+        guard let touch = firstIndirectPointerTouch(in: touches) else { return false }
+        guard canRouteTerminalInput else { return true }
+
+        let location = touch.location(in: self)
+        let mods = pointerModifiers(from: event)
+        sendPointerPosition(location, mods: mods)
+        if activePointerButton == .left {
+            updateSelectionAutoscroll(location: location, mods: mods)
+        }
+        requestRender()
+        return true
+    }
+
+    @discardableResult
+    private func handleIndirectPointerTouchesEnded(_ touches: Set<UITouch>, event: UIEvent?) -> Bool {
+        guard let touch = firstIndirectPointerTouch(in: touches) else { return false }
+        guard canRouteTerminalInput, let surface else {
+            activePointerButton = nil
+            stopSelectionAutoscroll()
+            return true
+        }
+
+        let mods = pointerModifiers(from: event)
+        sendPointerPosition(touch.location(in: self), mods: mods)
+        if let button = activePointerButton {
+            _ = surface.sendMouseButton(.init(action: .release, button: button.ghosttyMouseButton, mods: mods))
+        }
+        activePointerButton = nil
+        stopSelectionAutoscroll()
+        requestRender()
+        return true
+    }
+
+    @objc private func handlePointerHover(_ recognizer: UIHoverGestureRecognizer) {
+        guard canRouteTerminalInput, let surface else { return }
+        let mods = TerminalPointerInputRoutingPolicy.ghosttyModifiers(from: recognizer.modifierFlags)
+
+        switch recognizer.state {
+        case .began, .changed:
+            sendPointerPosition(recognizer.location(in: self), mods: mods)
+        case .ended, .cancelled, .failed:
+            surface.sendMousePos(.init(x: -1, y: -1, mods: mods))
+        default:
+            return
+        }
+
+        requestRender()
+    }
+
     // MARK: - Scroll Gesture
 
     /// Scroll speed multiplier for iOS touch scrolling
     private static let scrollMultiplier: Double = 1.5
+    private static let selectionAutoscrollEdgeInset: Double = 56
+    private static let selectionAutoscrollMaximumDelta: Double = 12
 
     /// Momentum deceleration rate (0.0-1.0, higher = slower deceleration)
     private static let momentumDeceleration: Double = 0.92
@@ -2056,9 +2817,13 @@ class GhosttyTerminalView: UIView {
     private var momentumDisplayLink: CADisplayLink?
     private var momentumVelocity: CGPoint = .zero
     private var momentumPhase: Ghostty.Input.Momentum = .none
+    private var selectionAutoscrollDisplayLink: CADisplayLink?
+    private var selectionAutoscrollLocation: CGPoint?
+    private var selectionAutoscrollMods: Ghostty.Input.Mods = []
 
     @objc private func handlePanGesture(_ recognizer: UIPanGestureRecognizer) {
         guard let surface = surface else { return }
+        guard shouldAllowActiveScrollGesture(recognizer) else { return }
         if isSelecting { return }
         if isPinchingTerminalZoom { return }
         if touchSelection != nil {
@@ -2102,6 +2867,81 @@ class GhosttyTerminalView: UIView {
         default:
             break
         }
+    }
+
+    private func updateSelectionAutoscroll(location: CGPoint, mods: Ghostty.Input.Mods) {
+        guard allowsHostTextSelection,
+              TerminalSelectionAutoscrollPolicy.decision(
+                locationY: Double(location.y),
+                viewportHeight: Double(bounds.height),
+                edgeInset: Self.selectionAutoscrollEdgeInset,
+                maximumScrollDelta: Self.selectionAutoscrollMaximumDelta
+              ) != nil else {
+            stopSelectionAutoscroll()
+            return
+        }
+
+        selectionAutoscrollLocation = location
+        selectionAutoscrollMods = mods
+        startSelectionAutoscrollIfNeeded()
+    }
+
+    private func startSelectionAutoscrollIfNeeded() {
+        guard selectionAutoscrollDisplayLink == nil else { return }
+        let displayLink = CADisplayLink(target: self, selector: #selector(selectionAutoscrollTick))
+        displayLink.add(to: .main, forMode: .common)
+        selectionAutoscrollDisplayLink = displayLink
+    }
+
+    private func stopSelectionAutoscroll() {
+        selectionAutoscrollDisplayLink?.invalidate()
+        selectionAutoscrollDisplayLink = nil
+        selectionAutoscrollLocation = nil
+        selectionAutoscrollMods = []
+    }
+
+    private func clampedSelectionAutoscrollLocation(_ location: CGPoint) -> CGPoint {
+        CGPoint(
+            x: min(max(location.x, 0), bounds.width),
+            y: min(max(location.y, 0), bounds.height)
+        )
+    }
+
+    @objc private func selectionAutoscrollTick() {
+        guard let surface,
+              let location = selectionAutoscrollLocation,
+              allowsHostTextSelection else {
+            stopSelectionAutoscroll()
+            return
+        }
+
+        guard let decision = TerminalSelectionAutoscrollPolicy.decision(
+            locationY: Double(location.y),
+            viewportHeight: Double(bounds.height),
+            edgeInset: Self.selectionAutoscrollEdgeInset,
+            maximumScrollDelta: Self.selectionAutoscrollMaximumDelta
+        ) else {
+            stopSelectionAutoscroll()
+            return
+        }
+
+        let clampedLocation = clampedSelectionAutoscrollLocation(location)
+        let pos = ghosttyPoint(clampedLocation)
+        let mousePos = Ghostty.Input.MousePosEvent(
+            x: pos.x,
+            y: pos.y,
+            mods: selectionAutoscrollMods
+        )
+        surface.sendMousePos(mousePos)
+        surface.sendMouseScroll(
+            Ghostty.Input.MouseScrollEvent(
+                x: 0,
+                y: decision.scrollDelta,
+                mods: Ghostty.Input.ScrollMods(precision: true, momentum: .none)
+            )
+        )
+        surface.sendMousePos(mousePos)
+        requestRender()
     }
 
     private func startMomentumScrolling(velocity: CGPoint) {
@@ -2388,6 +3228,7 @@ class GhosttyTerminalView: UIView {
     }
 
     private func selectedNativeSelectionText() -> String? {
+        guard allowsHostTextSelection else { return nil }
         guard let nativeSelectedRange, nativeSelectedRange.length > 0 else { return nil }
         return nativeSelectionSnapshot.text(in: nativeSelectedRange)
     }
@@ -2404,17 +3245,19 @@ class GhosttyTerminalView: UIView {
 
     @available(iOS 16.0, *)
     private func beginFindNavigatorPresentation(restoreTerminalFocus: Bool) {
+        logKeyboardLifecycle(
+            "find.begin",
+            detail: "restoreTerminalFocus=\(restoreTerminalFocus)"
+        )
         findNavigatorLifecycle.begin(restoreTerminalFocus: restoreTerminalFocus)
         notifyFindNavigatorVisibilityChange()
-        stopKeyRepeat()
+        cancelTrackedHardwareInput()
 
         if !super.isFirstResponder {
             _ = super.becomeFirstResponder()
         }
 
-        if let surface = surface?.unsafeCValue {
-            ghostty_surface_set_focus(surface, false)
-        }
+        setSurfaceFocus(false)
     }
 
     private func endFindNavigatorLifecycle() -> Bool {
@@ -2426,9 +3269,36 @@ class GhosttyTerminalView: UIView {
     }
 
     @available(iOS 16.0, *)
+    private func completeFindNavigatorDismissal() {
+        guard findNavigatorLifecycle.isActive else { return }
+        logKeyboardLifecycle("find.end.begin")
+        let shouldRestoreTerminalFocus = endFindNavigatorLifecycle()
+        nativeFindDecorations.removeAll()
+        nativeFindSession?.resetReportedResults()
+        nativeFindSession = nil
+        ghosttyFindReportedTotal = 0
+        ghosttyFindReportedSelectedIndex = nil
+        // UIFindInteraction can still report `isFindNavigatorVisible == true`
+        // from inside its didEnd callback. The lifecycle end is authoritative;
+        // publishing the stale UIKit value leaves the coordinator believing
+        // Find still owns input after the navigator has disappeared.
+        notifyFindNavigatorVisibilityChange(false)
+        endGhosttyFindSearchForNavigatorDismissal()
+        if shouldRestoreTerminalFocus {
+            DispatchQueue.main.async { [weak self] in
+                self?.notifyDirectTouchOnTerminal()
+            }
+        }
+        logKeyboardLifecycle(
+            "find.end.complete",
+            detail: "restoreTerminalFocus=\(shouldRestoreTerminalFocus)"
+        )
+    }
+
+    @available(iOS 16.0, *)
     private func presentFindNavigator(prefillingSelectedText: Bool = false) {
         guard let nativeFindInteraction else { return }
-        beginFindNavigatorPresentation(restoreTerminalFocus: imeProxyTextView.isFirstResponder)
+        beginFindNavigatorPresentation(restoreTerminalFocus: isTerminalTextInputActive)
         refreshNativeSelectionSnapshot()
         if prefillingSelectedText, let selectionText = normalizedSelectionMenuText() {
             nativeFindInteraction.searchText = selectionText
@@ -2446,8 +3316,12 @@ class GhosttyTerminalView: UIView {
     }
 
     func dismissFindNavigator() {
-        guard #available(iOS 16.0, *), nativeFindInteraction?.isFindNavigatorVisible == true else { return }
-        nativeFindInteraction?.dismissFindNavigator()
+        guard #available(iOS 16.0, *), isFindNavigatorActive else { return }
+        if nativeFindInteraction?.isFindNavigatorVisible == true {
+            nativeFindInteraction?.dismissFindNavigator()
+        } else if findNavigatorLifecycle.isActive {
+            completeFindNavigatorDismissal()
+        }
     }
 
     @MainActor
@@ -2519,7 +3393,7 @@ class GhosttyTerminalView: UIView {
             nativeFindSession?.applyExternalQuery(needle)
             applyStoredGhosttyFindResultsToNativeSession()
             if nativeFindInteraction?.isFindNavigatorVisible != true {
-                beginFindNavigatorPresentation(restoreTerminalFocus: imeProxyTextView.isFirstResponder)
+                beginFindNavigatorPresentation(restoreTerminalFocus: isTerminalTextInputActive)
                 nativeFindInteraction?.presentFindNavigator(showingReplace: false)
             }
         }
@@ -2560,7 +3434,14 @@ class GhosttyTerminalView: UIView {
     }
 
     private var usesNativeTouchSelection: Bool {
-        UIDevice.current.userInterfaceIdiom == .phone
+        #if DEBUG
+        if Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-native-find-navigator"
+        ) {
+            return true
+        }
+        #endif
+        return UIDevice.current.userInterfaceIdiom == .phone
     }
 
     private var usesAppOwnedTouchSelection: Bool {
@@ -2685,6 +3566,7 @@ class GhosttyTerminalView: UIView {
         touchSelectionSeed = nil
         touchSelection = nil
         touchSelectionLoupe.hideLoupe()
+        stopSelectionAutoscroll()
         isSelecting = false
     }
 
@@ -2777,6 +3659,8 @@ class GhosttyTerminalView: UIView {
     }
 
     private func currentSelectionText() -> String? {
+        guard allowsHostTextSelection else { return nil }
+
         if let nativeSelectionText = selectedNativeSelectionText() {
             return nativeSelectionText
         }
@@ -2787,6 +3671,7 @@ class GhosttyTerminalView: UIView {
     }
 
     private func touchSelectionText() -> String? {
+        guard allowsHostTextSelection else { return nil }
         guard let touchSelection,
               let surface = surface?.unsafeCValue else { return nil }
 
@@ -2892,7 +3777,7 @@ class GhosttyTerminalView: UIView {
 
     @available(iOS 16.0, *)
     private func nativeSelectionMenuElements() -> [UIMenuElement] {
-        let selectionText = normalizedSelectionMenuText()
+        let selectionText = allowsHostTextSelection ? normalizedSelectionMenuText() : nil
         var actions: [UIMenuElement] = []
 
         if selectionText != nil {
@@ -2905,7 +3790,7 @@ class GhosttyTerminalView: UIView {
             self?.paste(nil)
         })
 
-        if nativeSelectionSnapshot.length > 0 || selectionGridMetrics() != nil {
+        if allowsHostTextSelection, nativeSelectionSnapshot.length > 0 || selectionGridMetrics() != nil {
             actions.append(UIAction(title: String(localized: "Select All"), image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
                 self?.selectAll(nil)
             })
@@ -2921,6 +3806,8 @@ class GhosttyTerminalView: UIView {
     }
 
     private func selectAllVisibleText() {
+        guard allowsHostTextSelection else { return }
+
         if usesNativeTouchSelection {
             refreshNativeSelectionSnapshot()
             guard nativeSelectionSnapshot.length > 0 else { return }
@@ -2946,7 +3833,7 @@ class GhosttyTerminalView: UIView {
         let pos = ghosttyPoint(location)
 
         clearTouchSelection()
-        requestKeyboardFocus(for: .selectionGesture)
+        notifyDirectTouchOnTerminal()
 
         // Double-click to select word (no modifiers)
         surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
@@ -2958,7 +3845,8 @@ class GhosttyTerminalView: UIView {
 
         // Show edit menu after short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.showEditMenu(at: location)
+            guard let self, self.allowsHostTextSelection else { return }
+            self.showEditMenu(at: location)
         }
     }
 
@@ -2969,7 +3857,7 @@ class GhosttyTerminalView: UIView {
         let pos = ghosttyPoint(location)
 
         clearTouchSelection()
-        requestKeyboardFocus(for: .selectionGesture)
+        notifyDirectTouchOnTerminal()
 
         // Triple-click to select line
         surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
@@ -2981,12 +3869,20 @@ class GhosttyTerminalView: UIView {
 
         // Show edit menu after short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.showEditMenu(at: location)
+            guard let self, self.allowsHostTextSelection else { return }
+            self.showEditMenu(at: location)
         }
     }
 
     /// Long press + drag for custom selection
     @objc private func handleSelectionPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard allowsHostTextSelection else {
+            if recognizer.state == .began {
+                notifyDirectTouchOnTerminal()
+            }
+            return
+        }
+
         if usesAppOwnedTouchSelection {
             let location = recognizer.location(in: self)
 
@@ -2994,7 +3890,7 @@ class GhosttyTerminalView: UIView {
             case .began:
                 dismissEditMenuIfNeeded()
                 startTouchSelection(at: location)
-                requestKeyboardFocus(for: .selectionGesture)
+                notifyDirectTouchOnTerminal()
                 updateTouchSelectionLoupe(at: location)
             case .changed:
                 updateTouchSelection(at: location)
@@ -3003,6 +3899,7 @@ class GhosttyTerminalView: UIView {
                 updateTouchSelection(at: location)
                 finishTouchSelection()
             case .cancelled, .failed:
+                stopSelectionAutoscroll()
                 clearTouchSelection()
             default:
                 break
@@ -3017,19 +3914,23 @@ class GhosttyTerminalView: UIView {
         switch recognizer.state {
         case .began:
             isSelecting = true
-            requestKeyboardFocus(for: .selectionGesture)
+            stopMomentumScrolling()
+            notifyDirectTouchOnTerminal()
             // Start selection with click (no shift for initial position)
             surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
             surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+            updateSelectionAutoscroll(location: location, mods: [])
             requestRender()
         case .changed:
             // Drag to extend selection
             surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
+            updateSelectionAutoscroll(location: location, mods: [])
             requestRender()
         case .ended, .cancelled, .failed:
             surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
             surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
             isSelecting = false
+            stopSelectionAutoscroll()
             requestRender()
             showEditMenu(at: location)
         default:
@@ -3070,6 +3971,8 @@ class GhosttyTerminalView: UIView {
     }
 
     private func showEditMenu(at location: CGPoint) {
+        guard allowsHostTextSelection else { return }
+
         let hasGhosttySelection: Bool
         if let surface = surface?.unsafeCValue {
             hasGhosttySelection = ghostty_surface_has_selection(surface)
@@ -3079,13 +3982,116 @@ class GhosttyTerminalView: UIView {
         guard touchSelection != nil || hasGhosttySelection else {
             return
         }
+        editMenuPresentation = .selection
         let config = UIEditMenuConfiguration(identifier: nil, sourcePoint: location)
         editMenuInteraction?.presentEditMenu(with: config)
+    }
+
+    private func showPointerContextMenu(at location: CGPoint) {
+        dismissEditMenuIfNeeded()
+        editMenuPresentation = .pointerContext
+        let config = UIEditMenuConfiguration(identifier: nil, sourcePoint: location)
+        editMenuInteraction?.presentEditMenu(with: config)
+    }
+
+    private func focusPointerContextTarget() {
+        focusForHardwareKeyboardIfNeeded()
+        terminalContextMenuActions?.focus()
+    }
+
+    private func pointerContextMenuElements() -> [UIMenuElement] {
+        var actions: [UIMenuElement] = []
+
+        if let selectionText = currentSelectionText(), !selectionText.isEmpty {
+            actions.append(UIAction(title: String(localized: "Copy"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                self?.focusPointerContextTarget()
+                self?.copy(nil)
+            })
+        }
+
+        actions.append(UIAction(title: String(localized: "Paste"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+            self?.focusPointerContextTarget()
+            self?.paste(nil)
+        })
+
+        if let terminalContextMenuActions {
+            actions.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: String(localized: "Split Right"), image: UIImage(systemName: "rectangle.righthalf.inset.filled")) { [weak self] _ in
+                    self?.focusPointerContextTarget()
+                    terminalContextMenuActions.splitRight()
+                },
+                UIAction(title: String(localized: "Split Left"), image: UIImage(systemName: "rectangle.leadinghalf.inset.filled")) { [weak self] _ in
+                    self?.focusPointerContextTarget()
+                    terminalContextMenuActions.splitLeft()
+                },
+                UIAction(title: String(localized: "Split Down"), image: UIImage(systemName: "rectangle.bottomhalf.inset.filled")) { [weak self] _ in
+                    self?.focusPointerContextTarget()
+                    terminalContextMenuActions.splitDown()
+                },
+                UIAction(title: String(localized: "Split Up"), image: UIImage(systemName: "rectangle.tophalf.inset.filled")) { [weak self] _ in
+                    self?.focusPointerContextTarget()
+                    terminalContextMenuActions.splitUp()
+                }
+            ]))
+        }
+
+        actions.append(UIMenu(options: .displayInline, children: [
+            UIAction(title: String(localized: "Reset Terminal"), image: UIImage(systemName: "arrow.trianglehead.2.clockwise")) { [weak self] _ in
+                self?.focusPointerContextTarget()
+                self?.resetTerminalForReconnect()
+            },
+            UIAction(
+                title: String(localized: "Terminal Read-only"),
+                image: UIImage(systemName: "eye.fill"),
+                state: readonly ? .on : .off
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.focusPointerContextTarget()
+                if self.surface?.perform(action: "toggle_readonly") == true {
+                    self.readonly.toggle()
+                }
+            }
+        ]))
+
+        if terminalContextMenuActions != nil {
+            actions.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: String(localized: "Change Terminal Title..."), image: UIImage(systemName: "pencil")) { [weak self] _ in
+                    self?.presentTerminalTitleEditor()
+                }
+            ]))
+        }
+
+        return actions
+    }
+
+    private func presentTerminalTitleEditor() {
+        guard let terminalContextMenuActions else { return }
+        focusPointerContextTarget()
+
+        let alert = UIAlertController(
+            title: String(localized: "Change Terminal Title"),
+            message: String(localized: "Leave blank to restore the default."),
+            preferredStyle: .alert
+        )
+        alert.addTextField { textField in
+            textField.text = terminalContextMenuActions.currentTitle()
+            textField.clearButtonMode = .whileEditing
+            textField.autocapitalizationType = .none
+            textField.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .default) { _ in
+            let title = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            terminalContextMenuActions.setTitle(title.isEmpty ? nil : title)
+        })
+
+        nearestPresentingViewController()?.present(alert, animated: true)
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(copy(_:)):
+            guard allowsHostTextSelection else { return false }
             if let nativeSelectedRange, nativeSelectedRange.length > 0 {
                 return true
             }
@@ -3095,6 +4101,7 @@ class GhosttyTerminalView: UIView {
             guard let cSurface = surface?.unsafeCValue else { return false }
             return ghostty_surface_has_selection(cSurface)
         case #selector(selectAll(_:)):
+            guard allowsHostTextSelection else { return false }
             if usesNativeTouchSelection {
                 return nativeSelectionSnapshot.length > 0 || selectionGridMetrics() != nil
             }
@@ -3107,6 +4114,7 @@ class GhosttyTerminalView: UIView {
             }
             return false
         case #selector(useSelectionForFind(_:)):
+            guard allowsHostTextSelection else { return false }
             if usesNativeTouchSelection {
                 return normalizedSelectionMenuText() != nil
             }
@@ -3164,9 +4172,15 @@ class GhosttyTerminalView: UIView {
     // MARK: - Keyboard Input (Hardware Keyboard)
 
     override var keyCommands: [UIKeyCommand]? {
-        // Keep keyCommands nil; handle command shortcuts in pressesBegan.
-        return nil
+        terminalSplitCommands + terminalZoomCommands + (super.keyCommands ?? [])
     }
+
+    private lazy var terminalZoomCommands = makeTerminalZoomKeyCommands(
+        action: #selector(handleTerminalZoomCommand(_:))
+    )
+    private lazy var terminalSplitCommands = makeTerminalSplitKeyCommands(
+        action: #selector(handleTerminalSplitCommand(_:))
+    )
 
     fileprivate func handleIMEProxyNavigationCommand(_ command: UIKeyCommand) {
         guard canRouteTerminalInput else { return }
@@ -3177,6 +4191,36 @@ class GhosttyTerminalView: UIView {
         }
         let mods = Ghostty.Input.Mods(uiKeyModifiers: command.modifierFlags)
         sendToolbarKey(key, accumulatedMods: mods)
+    }
+
+    @objc
+    fileprivate func handleTerminalZoomCommand(_ command: UIKeyCommand) {
+        guard canRouteTerminalInput,
+              let input = command.input,
+              let key = TerminalZoomShortcutRouting.key(forCommandInput: input),
+              let action = TerminalZoomShortcutRouting.action(
+                  for: key,
+                  hasCommandModifier: command.modifierFlags.contains(.command),
+                  hasShiftModifier: command.modifierFlags.contains(.shift),
+                  hasControlModifier: command.modifierFlags.contains(.control),
+                  hasAlternateModifier: command.modifierFlags.contains(.alternate)
+              ) else {
+            return
+        }
+        performTerminalZoomAction(action)
+    }
+
+    @objc
+    fileprivate func handleTerminalSplitCommand(_ command: UIKeyCommand) {
+        guard canRouteTerminalInput,
+              let input = command.input,
+              let action = terminalSplitCommand(
+                  input: input,
+                  modifiers: command.modifierFlags
+              ) else {
+            return
+        }
+        onPaneKeyboardShortcut?(action)
     }
 
     private func handlePasteShortcut(_ key: UIKey) -> Bool {
@@ -3219,6 +4263,15 @@ class GhosttyTerminalView: UIView {
 
     private func handleCommandShortcut(_ key: UIKey) -> Bool {
         guard key.modifierFlags.contains(.command) else { return false }
+        if let action = terminalSplitCommand(for: key) {
+            onPaneKeyboardShortcut?(action)
+            return true
+        }
+        if let action = terminalZoomShortcutAction(for: key) {
+            performTerminalZoomAction(action)
+            return true
+        }
+
         let input = key.charactersIgnoringModifiers.lowercased()
         switch input {
         case "c":
@@ -3237,7 +4290,86 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    private func shouldRepeatHardwareKey(_ key: UIKey) -> Bool {
+    private func terminalSplitCommand(for key: UIKey) -> TerminalSplitCommand? {
+        let physicalArrow: TerminalSplitShortcutKey?
+        switch key.keyCode {
+        case .keyboardUpArrow:
+            physicalArrow = .upArrow
+        case .keyboardDownArrow:
+            physicalArrow = .downArrow
+        case .keyboardLeftArrow:
+            physicalArrow = .leftArrow
+        case .keyboardRightArrow:
+            physicalArrow = .rightArrow
+        default:
+            physicalArrow = nil
+        }
+
+        if let physicalArrow,
+           let command = TerminalSplitShortcutRouting.command(
+               for: physicalArrow,
+               modifiers: key.modifierFlags.terminalSplitShortcutModifiers
+           ) {
+            return command
+        }
+        return terminalSplitCommand(
+            input: key.charactersIgnoringModifiers,
+            modifiers: key.modifierFlags
+        )
+    }
+
+    private func terminalSplitCommand(
+        input: String,
+        modifiers: UIKeyModifierFlags
+    ) -> TerminalSplitCommand? {
+        // Caps Lock and UIKit's numeric-pad marker do not conflict with app
+        // shortcuts; this matches the existing terminal zoom routing.
+        return TerminalSplitShortcutRouting.command(
+            for: input,
+            modifiers: modifiers.terminalSplitShortcutModifiers
+        )
+    }
+
+    private func performTerminalZoomAction(_ action: TerminalZoomAction) {
+        if let result = onZoomAction?(action) {
+            showZoomIndicator(fontSize: result.effectiveFontSize)
+        }
+    }
+
+    private func terminalZoomShortcutAction(for key: UIKey) -> TerminalZoomAction? {
+        let physicalKey: TerminalZoomShortcutKey?
+        switch key.keyCode {
+        case .keyboardEqualSign:
+            physicalKey = .equal
+        case .keyboardHyphen:
+            physicalKey = .minus
+        case .keyboard0:
+            physicalKey = .zero
+        case .keypadPlus:
+            physicalKey = .keypadPlus
+        case .keypadHyphen:
+            physicalKey = .keypadMinus
+        case .keypad0:
+            physicalKey = .keypadZero
+        default:
+            physicalKey = key.characters == "-" ? .minus : nil
+        }
+
+        let shortcutKey = TerminalZoomShortcutRouting.resolvedKey(
+            physicalKey: physicalKey,
+            characters: key.characters
+        )
+        guard let shortcutKey else { return nil }
+        return TerminalZoomShortcutRouting.action(
+            for: shortcutKey,
+            hasCommandModifier: key.modifierFlags.contains(.command),
+            hasShiftModifier: key.modifierFlags.contains(.shift),
+            hasControlModifier: key.modifierFlags.contains(.control),
+            hasAlternateModifier: key.modifierFlags.contains(.alternate)
+        )
+    }
+
+    private func isRepeatableSpecialHardwareKey(_ key: UIKey) -> Bool {
         switch key.keyCode {
         case .keyboardDeleteOrBackspace,
              .keyboardDeleteForward,
@@ -3253,6 +4385,10 @@ class GhosttyTerminalView: UIView {
         default:
             return false
         }
+    }
+
+    private func isPrintableHardwareKeyEvent(_ event: Ghostty.Input.KeyEvent) -> Bool {
+        event.unshiftedCodepoint >= 0x20 || !(event.text?.isEmpty ?? true)
     }
 
     private func fallbackHardwareKey(for key: UIKey) -> Ghostty.Input.Key? {
@@ -3365,69 +4501,134 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    private func startKeyRepeat(for key: UIKey) {
-        guard shouldRepeatHardwareKey(key) else { return }
-        let blockedModifiers: UIKeyModifierFlags = [.command, .control, .alternate]
-        guard key.modifierFlags.intersection(blockedModifiers).isEmpty else { return }
-        stopKeyRepeat()
-        repeatingHardwareKey = key
-        repeatingFallbackKey = fallbackHardwareKey(for: key)
-        repeatingFallbackModifiers = key.modifierFlags
-        repeatingKeyCode = UInt16(key.keyCode.rawValue)
+    @discardableResult
+    private func registerHardwareKeyRepeat(
+        keyCode: UInt16,
+        source: TerminalHardwareKeyRepeatSource,
+        event: Ghostty.Input.KeyEvent,
+        isRepeatableSpecialKey: Bool,
+        modifiers: UIKeyModifierFlags,
+        hasActiveIMEComposition: Bool
+    ) -> TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Registration? {
+        guard TerminalHardwareKeyRepeatPolicy.shouldRepeat(
+            source: source,
+            isPrintableKey: isPrintableHardwareKeyEvent(event),
+            isRepeatableSpecialKey: isRepeatableSpecialKey,
+            hasControlModifier: modifiers.contains(.control),
+            hasAlternateModifier: modifiers.contains(.alternate),
+            hasCommandModifier: modifiers.contains(.command),
+            hasActiveIMEComposition: hasActiveIMEComposition
+        ) else {
+            return nil
+        }
+
+        let registration = hardwareKeyRepeatState.register(
+            keyCode: keyCode,
+            payload: event
+        )
+        if case .started(let active) = registration {
+            logKeyboardLifecycle(
+                "hardware.repeat.started",
+                detail: "keyCode=\(keyCode) source=\(source.lifecycleDescription)"
+            )
+            scheduleHardwareKeyRepeatTimer(token: active.token)
+        }
+        return registration
+    }
+
+    private func scheduleHardwareKeyRepeatTimer(token: UUID) {
+        stopHardwareKeyRepeatTimer()
+        #if DEBUG
+        guard !keyboardUITestUsesManualHardwareKeyRepeatClock else { return }
+        #endif
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 0.35, repeating: 0.05)
         timer.setEventHandler { [weak self] in
-            guard let self = self,
-                  let cSurface = self.surface?.unsafeCValue else { return }
-            guard self.canRouteTerminalInput else {
-                self.stopKeyRepeat()
-                return
-            }
-            if let repeatKey = self.repeatingHardwareKey,
-               self.sendDirectHardwareKeyEvent(
-                   repeatKey,
-                   action: GHOSTTY_ACTION_REPEAT,
-                   surface: cSurface
-               ) {
-                self.requestRender()
-                return
-            }
-            if let fallbackKey = self.repeatingFallbackKey,
-               let surface = self.surface {
-                surface.sendKeyEvent(
-                    self.fallbackHardwareEvent(
-                        key: fallbackKey,
-                        action: .repeat,
-                        modifiers: self.repeatingFallbackModifiers
-                    )
-                )
-            }
-            self.requestRender()
+            self?.handleHardwareKeyRepeatTick(token: token)
         }
         keyRepeatTimer = timer
         timer.resume()
     }
 
-    private func stopKeyRepeat() {
+    private func stopHardwareKeyRepeatTimer() {
         keyRepeatTimer?.cancel()
         keyRepeatTimer = nil
-        repeatingHardwareKey = nil
-        repeatingFallbackKey = nil
-        repeatingFallbackModifiers = []
-        repeatingKeyCode = nil
     }
 
-    private func ghosttyInputAction(_ action: ghostty_input_action_e) -> Ghostty.Input.Action {
-        switch action {
-        case GHOSTTY_ACTION_PRESS:
-            return .press
-        case GHOSTTY_ACTION_RELEASE:
-            return .release
-        case GHOSTTY_ACTION_REPEAT:
-            return .repeat
-        default:
-            return .press
+    private var activeHardwareKeyRepeat: TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Active? {
+        guard case .repeating(let active) = hardwareKeyRepeatState.phase else { return nil }
+        return active
+    }
+
+    private var canContinueHardwareKeyRepeat: Bool {
+        canRouteTerminalInput
+            && hasHardwareKeyboardAttached
+            && isTextInputSessionEligible
+            && isTerminalTextInputActive
+            && !isPaused
+            && !isShuttingDown
+    }
+
+    private func handleHardwareKeyRepeatTick(token: UUID) {
+        guard canContinueHardwareKeyRepeat else {
+            cancelTrackedHardwareInput()
+            return
         }
+        guard let active = hardwareKeyRepeatState.active(for: token), let surface else { return }
+        surface.sendKeyEvent(hardwareKeyEvent(active.payload, action: .repeat))
+        requestRender()
+    }
+
+    @discardableResult
+    private func endHardwareKeyRepeat(keyCode: UInt16) -> TerminalHardwareKeyRepeatState<Ghostty.Input.KeyEvent>.Active? {
+        guard let active = hardwareKeyRepeatState.end(keyCode: keyCode) else { return nil }
+        stopHardwareKeyRepeatTimer()
+        logKeyboardLifecycle("hardware.repeat.ended", detail: "keyCode=\(keyCode)")
+        return active
+    }
+
+    private func cancelTrackedHardwareInput() {
+        stopHardwareKeyRepeatTimer()
+        let active = hardwareKeyRepeatState.cancel()
+        if let active {
+            logKeyboardLifecycle("hardware.repeat.cancelled", detail: "keyCode=\(active.keyCode)")
+        }
+        var trackedPresses = hardwarePressesSentToGhostty
+        hardwarePressesSentToGhostty.removeAll()
+        systemTextInputPresses.removeAll()
+        terminalAltOptionKeyCodes.removeAll()
+        pendingSystemTextInputHardwareKeys.removeAll()
+
+        guard let surface else { return }
+        var didSendRelease = false
+        if let active {
+            trackedPresses.removeValue(forKey: active.keyCode)
+            surface.sendKeyEvent(hardwareKeyEvent(active.payload, action: .release))
+            didSendRelease = true
+        }
+        for event in trackedPresses.values {
+            surface.sendKeyEvent(hardwareKeyEvent(event, action: .release))
+            didSendRelease = true
+        }
+        if didSendRelease {
+            requestRender()
+        }
+    }
+
+    private func hardwareKeyEvent(
+        _ event: Ghostty.Input.KeyEvent,
+        action: Ghostty.Input.Action,
+        text: String? = nil
+    ) -> Ghostty.Input.KeyEvent {
+        Ghostty.Input.KeyEvent(
+            key: event.key,
+            action: action,
+            text: text ?? event.text,
+            composing: false,
+            mods: event.mods,
+            consumedMods: event.consumedMods,
+            unshiftedCodepoint: event.unshiftedCodepoint
+        )
     }
 
     private func fallbackHardwareEvent(
@@ -3454,26 +4655,137 @@ class GhosttyTerminalView: UIView {
         _ key: UIKey,
         action: ghostty_input_action_e,
         surface cSurface: ghostty_surface_t
-    ) -> Bool {
-        guard let event = Ghostty.Input.KeyEvent(uiKey: key, action: ghosttyInputAction(action))
-        else {
+    ) -> Ghostty.Input.KeyEvent? {
+        let ghosttyAction: Ghostty.Input.Action = switch action {
+        case GHOSTTY_ACTION_PRESS: .press
+        case GHOSTTY_ACTION_RELEASE: .release
+        case GHOSTTY_ACTION_REPEAT: .repeat
+        default: .press
+        }
+        guard let event = Ghostty.Input.KeyEvent(uiKey: key, action: ghosttyAction) else {
+            return nil
+        }
+        guard event.withCValue(execute: { cEvent in
+            ghostty_surface_key(cSurface, cEvent)
+        }) else { return nil }
+        return event
+    }
+
+    private func isTextInputModifierOnlyKey(_ key: UIKey) -> Bool {
+        switch key.keyCode {
+        case .keyboardLeftShift,
+             .keyboardRightShift,
+             .keyboardLeftAlt,
+             .keyboardRightAlt:
+            return key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty
+        default:
             return false
         }
-        return event.withCValue { cEvent in
-            ghostty_surface_key(cSurface, cEvent)
+    }
+
+    private func optionKeySide(for key: UIKey) -> TerminalOptionKeySide? {
+        switch key.keyCode {
+        case .keyboardLeftAlt: .left
+        case .keyboardRightAlt: .right
+        default: nil
         }
+    }
+
+    private func shouldUseOptionKeyAsTerminalAlt(_ key: UIKey) -> Bool {
+        guard let side = optionKeySide(for: key) else { return false }
+        return TerminalDefaults.optionAsAltMode().usesOptionKeyAsAlt(side)
+    }
+
+    private func usesActiveOptionKeyAsTerminalAlt(for key: UIKey) -> Bool {
+        guard key.modifierFlags.contains(.alternate) else { return false }
+        if optionKeySide(for: key) != nil {
+            return shouldUseOptionKeyAsTerminalAlt(key)
+        }
+        return !terminalAltOptionKeyCodes.isEmpty
+    }
+
+    @discardableResult
+    private func sendHardwarePressToGhostty(
+        _ key: UIKey,
+        keyCode: UInt16,
+        surface: Ghostty.Surface,
+        cSurface: ghostty_surface_t
+    ) -> Bool {
+        if let event = sendDirectHardwareKeyEvent(
+            key,
+            action: GHOSTTY_ACTION_PRESS,
+            surface: cSurface
+        ) {
+            hardwarePressesSentToGhostty[keyCode] = event
+            registerHardwareKeyRepeat(
+                keyCode: keyCode,
+                source: .directTerminal,
+                event: event,
+                isRepeatableSpecialKey: isRepeatableSpecialHardwareKey(key),
+                modifiers: key.modifierFlags,
+                hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
+            )
+            return true
+        }
+
+        guard let fallbackKey = fallbackHardwareKey(for: key) else {
+            return false
+        }
+
+        let event = fallbackHardwareEvent(
+            key: fallbackKey,
+            action: .press,
+            modifiers: key.modifierFlags
+        )
+        surface.sendKeyEvent(event)
+        hardwarePressesSentToGhostty[keyCode] = event
+        registerHardwareKeyRepeat(
+            keyCode: keyCode,
+            source: .directTerminal,
+            event: event,
+            isRepeatableSpecialKey: isRepeatableSpecialHardwareKey(key),
+            modifiers: key.modifierFlags,
+            hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
+        )
+        return true
     }
 
     private func shouldRoutePressToSystemTextInput(_ key: UIKey) -> Bool {
         let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
+        if key.keyCode == .keyboardDeleteOrBackspace,
+           TerminalHardwareTextInputRoutingPolicy.shouldRouteBackwardDeleteToSystemTextInput(
+               inputModeAllowsOneToOneText: TerminalHardwareTextInputRoutingPolicy
+                   .inputModeAllowsOneToOneHardwareText(
+                       imeProxyTextView.textInputMode?.primaryLanguage
+                   ),
+               hasLocalTextInputSession: hasLocalTextInputSession,
+               hasControlModifier: key.modifierFlags.contains(.control),
+               hasAlternateModifier: key.modifierFlags.contains(.alternate),
+               hasCommandModifier: key.modifierFlags.contains(.command)
+           ) {
+            return true
+        }
         return TerminalHardwareTextInputRoutingPolicy.shouldRoutePressToSystemTextInput(
             hasControlModifier: key.modifierFlags.contains(.control),
             hasAlternateModifier: key.modifierFlags.contains(.alternate),
+            usesAlternateModifierAsTerminalAlt: usesActiveOptionKeyAsTerminalAlt(for: key),
             hasCommandModifier: key.modifierFlags.contains(.command),
             hasActiveIMEComposition: textInputModel.hasActiveIMEComposition,
             isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock,
+            isTextInputModifierOnlyKey: isTextInputModifierOnlyKey(key),
             hasTerminalFallbackKey: fallbackHardwareKey(for: key) != nil,
             keyProducesText: keyProducesText
+        )
+    }
+
+    private func directlyRoutableHardwareText(for key: UIKey) -> String? {
+        TerminalHardwareTextInputRoutingPolicy.directlyRoutableText(
+            key.characters,
+            primaryLanguage: imeProxyTextView.textInputMode?.primaryLanguage,
+            hasControlModifier: key.modifierFlags.contains(.control),
+            hasAlternateModifier: key.modifierFlags.contains(.alternate),
+            hasCommandModifier: key.modifierFlags.contains(.command),
+            hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
         )
     }
 
@@ -3509,47 +4821,81 @@ class GhosttyTerminalView: UIView {
                 result.didHandleGhosttyInput = true
                 continue
             }
+            let keyCode = UInt16(key.keyCode.rawValue)
+            if shouldUseOptionKeyAsTerminalAlt(key) {
+                terminalAltOptionKeyCodes.insert(keyCode)
+            }
+            if let text = directlyRoutableHardwareText(for: key),
+               sendInterpretedHardwareKeyText(
+                   text,
+                   for: key,
+                   repeatSource: .layoutResolvedText
+               ) {
+                if hasLocalTextInputSession {
+                    invalidateLocalTextInputSession()
+                }
+                result.didHandleGhosttyInput = true
+                logKeyboardLifecycle(
+                    "hardware.press.handled",
+                    detail: "keyCode=\(keyCode) route=layoutResolved"
+                )
+                continue
+            }
             if shouldRoutePressToSystemTextInput(key) {
-                let keyCode = UInt16(key.keyCode.rawValue)
                 let keyProducesText = !(key.characters.isEmpty && key.charactersIgnoringModifiers.isEmpty)
                 systemTextInputPresses.insert(keyCode)
+                if TerminalHardwareTextInputRoutingPolicy.shouldMirrorSystemTextInputModifierPressToTerminal(
+                    isTextInputModifierOnlyKey: isTextInputModifierOnlyKey(key)
+                ) {
+                    // UIKit needs Shift/Option transitions to interpret the next text key, while
+                    // Ghostty still needs matching modifier press/release events.
+                    if sendHardwarePressToGhostty(
+                        key,
+                        keyCode: keyCode,
+                        surface: surface,
+                        cSurface: cSurface
+                    ) {
+                        result.didHandleGhosttyInput = true
+                    }
+                    result.forwardedToSystem.insert(press)
+                    continue
+                }
                 if TerminalHardwareTextInputRoutingPolicy.shouldRecordPendingInterpretedHardwareKey(
                     keyProducesText: keyProducesText,
                     hasControlModifier: key.modifierFlags.contains(.control),
                     hasAlternateModifier: key.modifierFlags.contains(.alternate),
                     hasCommandModifier: key.modifierFlags.contains(.command),
                     hasActiveIMEComposition: textInputModel.hasActiveIMEComposition,
-                    isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock
+                    isSystemTextInputToggleKey: key.keyCode == .keyboardCapsLock,
+                    inputModeAllowsOneToOneText: TerminalHardwareTextInputRoutingPolicy
+                        .inputModeAllowsOneToOneHardwareText(
+                            imeProxyTextView.textInputMode?.primaryLanguage
+                        )
                 ) {
                     pendingSystemTextInputHardwareKeys.append(key)
                 }
                 result.forwardedToSystem.insert(press)
+                logKeyboardLifecycle(
+                    "hardware.press.forwarded",
+                    detail: "keyCode=\(keyCode) route=systemText"
+                )
                 continue
             }
 
-            let keyCode = UInt16(key.keyCode.rawValue)
             if hasLocalTextInputSession {
                 invalidateLocalTextInputSession()
             }
-            if sendDirectHardwareKeyEvent(key, action: GHOSTTY_ACTION_PRESS, surface: cSurface) {
-                hardwarePressesSentToGhostty.insert(keyCode)
-                fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-                fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-                startKeyRepeat(for: key)
+            if sendHardwarePressToGhostty(
+                key,
+                keyCode: keyCode,
+                surface: surface,
+                cSurface: cSurface
+            ) {
                 result.didHandleGhosttyInput = true
-            } else if let fallbackKey = fallbackHardwareKey(for: key) {
-                surface.sendKeyEvent(
-                    fallbackHardwareEvent(
-                        key: fallbackKey,
-                        action: .press,
-                        modifiers: key.modifierFlags
-                    )
+                logKeyboardLifecycle(
+                    "hardware.press.handled",
+                    detail: "keyCode=\(keyCode) route=terminal"
                 )
-                hardwarePressesSentToGhostty.insert(keyCode)
-                fallbackHardwarePressKeys[keyCode] = fallbackKey
-                fallbackHardwarePressModifiers[keyCode] = key.modifierFlags
-                startKeyRepeat(for: key)
-                result.didHandleGhosttyInput = true
             }
         }
 
@@ -3557,7 +4903,7 @@ class GhosttyTerminalView: UIView {
     }
 
     fileprivate func processHardwarePressesEnded(_ presses: Set<UIPress>, event _: UIPressesEvent?) -> HardwarePressResult {
-        guard let surface = surface, let cSurface = surface.unsafeCValue else {
+        guard let surface else {
             return HardwarePressResult(forwardedToSystem: presses, didHandleGhosttyInput: false)
         }
         guard canRouteTerminalInput || !hardwarePressesSentToGhostty.isEmpty else {
@@ -3571,48 +4917,27 @@ class GhosttyTerminalView: UIView {
                 continue
             }
             let keyCode = UInt16(key.keyCode.rawValue)
-            guard hardwarePressesSentToGhostty.contains(keyCode) else {
-                fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-                fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-                systemTextInputPresses.remove(keyCode)
+            let shouldForwardToSystem = systemTextInputPresses.remove(keyCode) != nil
+            terminalAltOptionKeyCodes.remove(keyCode)
+            guard let pressedEvent = hardwarePressesSentToGhostty.removeValue(forKey: keyCode) else {
                 result.forwardedToSystem.insert(press)
                 continue
             }
-            hardwarePressesSentToGhostty.remove(keyCode)
-            if repeatingKeyCode == keyCode {
-                stopKeyRepeat()
-            }
-            let fallbackKey = fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-            let fallbackModifiers =
-                fallbackHardwarePressModifiers.removeValue(forKey: keyCode) ?? key.modifierFlags
-
-            if sendDirectHardwareKeyEvent(key, action: GHOSTTY_ACTION_RELEASE, surface: cSurface) {
-                result.didHandleGhosttyInput = true
-            } else if let fallbackKey {
-                surface.sendKeyEvent(
-                    fallbackHardwareEvent(
-                        key: fallbackKey,
-                        action: .release,
-                        modifiers: fallbackModifiers
-                    )
-                )
-                result.didHandleGhosttyInput = true
+            endHardwareKeyRepeat(keyCode: keyCode)
+            surface.sendKeyEvent(hardwareKeyEvent(pressedEvent, action: .release))
+            logKeyboardLifecycle("hardware.press.ended", detail: "keyCode=\(keyCode)")
+            result.didHandleGhosttyInput = true
+            if shouldForwardToSystem {
+                result.forwardedToSystem.insert(press)
             }
         }
 
         return result
     }
 
-    fileprivate func processHardwarePressesCancelled(_ presses: Set<UIPress>) {
-        for press in presses {
-            guard let key = press.key else { continue }
-            let keyCode = UInt16(key.keyCode.rawValue)
-            hardwarePressesSentToGhostty.remove(keyCode)
-            fallbackHardwarePressKeys.removeValue(forKey: keyCode)
-            fallbackHardwarePressModifiers.removeValue(forKey: keyCode)
-            systemTextInputPresses.remove(keyCode)
-        }
-        stopKeyRepeat()
+    fileprivate func processHardwarePressesCancelled(_: Set<UIPress>) {
+        logKeyboardLifecycle("hardware.press.cancelled")
+        cancelTrackedHardwareInput()
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -3714,6 +5039,9 @@ class GhosttyTerminalView: UIView {
 
     fileprivate func handleIMEProxyInsertText(_ text: String, fromIMEComposition: Bool = false) -> Bool {
         guard canRouteTerminalInput else { return true }
+        if fromIMEComposition {
+            cancelTrackedHardwareInput()
+        }
         if isNativeSelectionTextInputContext {
             clearNativeSelectionStateForTerminalInput()
         }
@@ -3735,6 +5063,9 @@ class GhosttyTerminalView: UIView {
            let key = consumePendingSystemTextInputHardwareKey(),
            sendInterpretedHardwareKeyText(normalized, for: key) {
             invalidateLocalTextInputSession()
+            return true
+        }
+        if !fromIMEComposition, updateActiveInterpretedHardwareKeyRepeat(text: normalized) {
             return true
         }
 
@@ -3886,13 +5217,14 @@ class GhosttyTerminalView: UIView {
         if invalidateLocalSession {
             invalidateLocalTextInputSession()
         }
+        let consumedMods = TerminalKeyInputModifierPolicy.consumedModifiers(for: mods)
         let press = Ghostty.Input.KeyEvent(
             key: key,
             action: .press,
             text: text,
             composing: false,
             mods: mods,
-            consumedMods: [],
+            consumedMods: consumedMods,
             unshiftedCodepoint: unshiftedCodepoint
         )
         surface.sendKeyEvent(press)
@@ -3902,7 +5234,7 @@ class GhosttyTerminalView: UIView {
             text: nil,
             composing: false,
             mods: mods,
-            consumedMods: [],
+            consumedMods: consumedMods,
             unshiftedCodepoint: unshiftedCodepoint
         )
         surface.sendKeyEvent(release)
@@ -4014,6 +5346,10 @@ class GhosttyTerminalView: UIView {
         forceRefresh()
     }
 
+    func updateReadonlyState(_ isReadonly: Bool) {
+        readonly = isReadonly
+    }
+
     private func configureIOSurfaceLayers() {
         configureIOSurfaceLayers(size: nil)
     }
@@ -4047,7 +5383,7 @@ class GhosttyTerminalView: UIView {
     }
 
     private func updateContentScaleIfNeeded() {
-        let targetScale = window?.screen.scale ?? UIScreen.main.scale
+        let targetScale = window?.screen.scale ?? max(traitCollection.displayScale, 1)
         if contentScaleFactor != targetScale {
             contentScaleFactor = targetScale
         }
@@ -4093,18 +5429,18 @@ class GhosttyTerminalView: UIView {
 
 extension GhosttyTerminalView: UITextInteractionDelegate {
     func interactionShouldBegin(_ interaction: UITextInteraction, at point: CGPoint) -> Bool {
-        guard usesNativeTouchSelection else { return false }
+        guard usesNativeTouchSelection, allowsHostTextSelection else { return false }
         prefersNativeSelectionFirstResponder = true
-        shouldRestoreIMEProxyFocusAfterNativeSelection = imeProxyTextView.isFirstResponder
+        shouldRestoreIMEProxyFocusAfterNativeSelection = isTerminalTextInputActive
         refreshNativeSelectionSnapshot()
         return nativeSelectionSnapshot.length > 0
     }
 
     func interactionWillBegin(_ interaction: UITextInteraction) {
         shouldRestoreIMEProxyFocusAfterNativeSelection = shouldRestoreIMEProxyFocusAfterNativeSelection
-            || imeProxyTextView.isFirstResponder
+            || isTerminalTextInputActive
         nativeSelectionInteractionActive = true
-        if !imeProxyTextView.isFirstResponder {
+        if !isTerminalTextInputActive {
             _ = becomeFirstResponder()
         }
         refreshNativeSelectionSnapshot()
@@ -4125,7 +5461,7 @@ extension GhosttyTerminalView: UITextInteractionDelegate {
                   !self.isFindNavigatorActive else {
                 return
             }
-            _ = self.imeProxyTextView.becomeFirstResponder()
+            _ = self.requestKeyboardFocus(for: .selectionGesture)
         }
     }
 }
@@ -4161,7 +5497,7 @@ extension GhosttyTerminalView: UIFindInteractionDelegate {
 
     func findInteraction(_ interaction: UIFindInteraction, didBegin session: UIFindSession) {
         if !findNavigatorLifecycle.isActive {
-            findNavigatorLifecycle.begin(restoreTerminalFocus: imeProxyTextView.isFirstResponder)
+            findNavigatorLifecycle.begin(restoreTerminalFocus: isTerminalTextInputActive)
         }
         refreshNativeSelectionSnapshot()
         applyStoredGhosttyFindResultsToNativeSession()
@@ -4169,20 +5505,7 @@ extension GhosttyTerminalView: UIFindInteractionDelegate {
     }
 
     func findInteraction(_ interaction: UIFindInteraction, didEnd session: UIFindSession) {
-        let shouldRestoreTerminalFocus = endFindNavigatorLifecycle()
-        nativeFindDecorations.removeAll()
-        nativeFindSession?.resetReportedResults()
-        nativeFindSession = nil
-        ghosttyFindReportedTotal = 0
-        ghosttyFindReportedSelectedIndex = nil
-        notifyFindNavigatorVisibilityChange()
-        endGhosttyFindSearchForNavigatorDismissal()
-        if shouldRestoreTerminalFocus {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isFindNavigatorActive else { return }
-                self.requestKeyboardFocus(for: .explicitUserRequest)
-            }
-        }
+        completeFindNavigatorDismissal()
     }
 }
 
@@ -4245,10 +5568,28 @@ extension GhosttyTerminalView: UITextSearching {
 
 extension GhosttyTerminalView: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if !usesAppOwnedTouchSelection,
+           gestureRecognizer == directTouchLongPressExclusionRecognizer {
+            return TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: surface?.mouseCaptured == true,
+                terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
+                selectionInteractionActive: false
+            )
+        }
+        if gestureRecognizer == directTouchTapRecognizer {
+            return TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+                terminalMouseCaptured: surface?.mouseCaptured == true,
+                terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
+                selectionInteractionActive: hasActiveSelectionInteraction(at: touch.location(in: self))
+            )
+        }
         if gestureRecognizer == pinchRecognizer {
             return canHandlePinchZoom
         }
         if gestureRecognizer == scrollRecognizer {
+            guard shouldAllowScrollGesture(gestureRecognizer, touchType: touch.type) else {
+                return false
+            }
             if usesNativeTouchSelection, nativeSelectionInteractionActive || nativeSelectedRange != nil {
                 return false
             }
@@ -4260,10 +5601,21 @@ extension GhosttyTerminalView: UIGestureRecognizerDelegate {
         return true
     }
 
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer == scrollRecognizer {
+            return shouldAllowScrollGesture(gestureRecognizer, touchType: .indirectPointer)
+        }
+
+        return true
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
+        if gestureRecognizer == directTouchTapRecognizer || otherGestureRecognizer == directTouchTapRecognizer {
+            return false
+        }
         if usesNativeTouchSelection,
            nativeSelectionInteractionActive || nativeSelectedRange != nil,
            gestureRecognizer == scrollRecognizer || otherGestureRecognizer == scrollRecognizer {
@@ -4290,6 +5642,48 @@ extension GhosttyTerminalView: UIGestureRecognizerDelegate {
     }
 }
 
+private extension GhosttyTerminalView {
+    var allowsHostTextSelection: Bool {
+        TerminalSelectionRoutingPolicy.shouldAllowHostSelection(
+            terminalMouseCaptured: surface?.mouseCaptured == true
+        )
+    }
+
+    func hasActiveSelectionInteraction(at point: CGPoint) -> Bool {
+        if usesNativeTouchSelection {
+            return nativeSelectionInteractionActive
+                || nativeSelectedRange != nil
+                || prefersNativeSelectionFirstResponder
+                || isPointOnNativeSelectionHandleHitArea(point)
+        }
+        if usesAppOwnedTouchSelection {
+            return isSelecting
+                || touchSelection != nil
+                || isPointOnTouchSelectionHandle(point)
+        }
+        return false
+    }
+
+    func shouldAllowScrollGesture(
+        _ gestureRecognizer: UIGestureRecognizer,
+        touchType: UITouch.TouchType
+    ) -> Bool {
+        TerminalPointerInputRoutingPolicy.shouldAllowScrollGesture(
+            isIndirectPointer: touchType == .indirectPointer,
+            isPointerButtonPressed: !gestureRecognizer.buttonMask.isEmpty,
+            hasActiveTerminalPointerButton: activePointerButton != nil
+        )
+    }
+
+    func shouldAllowActiveScrollGesture(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        TerminalPointerInputRoutingPolicy.shouldAllowScrollGesture(
+            isIndirectPointer: !gestureRecognizer.buttonMask.isEmpty || activePointerButton != nil,
+            isPointerButtonPressed: !gestureRecognizer.buttonMask.isEmpty,
+            hasActiveTerminalPointerButton: activePointerButton != nil
+        )
+    }
+}
+
 // MARK: - Edit Menu Interaction Delegate
 
 extension GhosttyTerminalView: UIEditMenuInteractionDelegate {
@@ -4298,6 +5692,10 @@ extension GhosttyTerminalView: UIEditMenuInteractionDelegate {
         menuFor configuration: UIEditMenuConfiguration,
         suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
+        if editMenuPresentation == .pointerContext {
+            return UIMenu(children: pointerContextMenuElements())
+        }
+
         var actions: [UIMenuElement] = []
 
         if let selectionText = currentSelectionText(), !selectionText.isEmpty {
@@ -4317,6 +5715,14 @@ extension GhosttyTerminalView: UIEditMenuInteractionDelegate {
         }
 
         return UIMenu(children: actions)
+    }
+
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        willDismissMenuFor configuration: UIEditMenuConfiguration,
+        animator: UIEditMenuInteractionAnimating
+    ) {
+        editMenuPresentation = .selection
     }
 }
 
@@ -4407,8 +5813,24 @@ extension GhosttyTerminalView {
         set { objc_setAssociatedObject(self, &Self.keyboardToolbarKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
     }
 
+    private var shouldSuppressSoftwareKeyboard: Bool {
+        keyboardFocusPolicy.shouldSuppressSoftwareKeyboard(
+            hasHardwareKeyboardAttached: hasHardwareKeyboardAttached
+        )
+    }
+
     private var shouldHideKeyboardAccessoryBar: Bool {
-        hasHardwareKeyboardAttached || keyboardFocusPolicy.isBrowsing
+        shouldSuppressSoftwareKeyboard
+            || suppressAccessoryForMissingSoftwareKeyboard
+    }
+
+    fileprivate func resolvedInputView() -> UIView? {
+        #if DEBUG
+        if keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild {
+            return hiddenKeyboardInputView
+        }
+        #endif
+        return shouldSuppressSoftwareKeyboard ? hiddenKeyboardInputView : nil
     }
 
     fileprivate func resolvedInputAccessoryView() -> UIView? {
@@ -4430,9 +5852,192 @@ extension GhosttyTerminalView {
         return keyboardToolbar
     }
 
+    func refreshTerminalInputAccessoryAppearance() {
+        keyboardToolbar?.refreshAppearance()
+    }
+
     override var inputAccessoryView: UIView? {
         resolvedInputAccessoryView()
     }
+
+    override var inputView: UIView? {
+        resolvedInputView()
+    }
+
+    #if DEBUG
+    func keyboardUITestDiagnostics(keyboardVisible: Bool, keyboardHeight: CGFloat) -> String {
+        let snapshot = keyboardCoordinatorDiagnosticSnapshot()
+        let accessoryAttached = keyboardToolbar?.window != nil
+        let accessoryAppearance = keyboardToolbar?.diagnosticBackgroundAppearance ?? "missing"
+        let keyboardHeightText = String(format: "%.1f", Double(keyboardHeight))
+        let size = terminalSize()
+        let inputViewMode = keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild
+            ? "testUnexpectedHidden"
+            : (shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")
+        return [
+            "windowAttached=\(snapshot.windowAttached)",
+            "keyWindow=\(snapshot.windowIsKey)",
+            "scene=\(snapshot.sceneActivationState)",
+            "terminalId=\(ObjectIdentifier(self))",
+            "inputResponderId=\(ObjectIdentifier(imeProxyTextView))",
+            "windowId=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil")",
+            "terminalFirstResponder=\(snapshot.isFirstResponder)",
+            "softwareInputActive=\(snapshot.isSoftwareInputActive)",
+            "imeProxyFirstResponder=\(imeProxyTextView.isFirstResponder)",
+            "viewFirstResponder=\(super.isFirstResponder)",
+            "keyboardVisible=\(keyboardVisible)",
+            "keyboardHeight=\(keyboardHeightText)",
+            "gridCols=\(size.map { String($0.columns) } ?? "0")",
+            "gridRows=\(size.map { String($0.rows) } ?? "0")",
+            "gridResizes=\(keyboardUITestGridResizeCount)",
+            "renderingPaused=\(isRenderingPaused)",
+            "surfaceFocused=\(keyboardUITestSurfaceFocused)",
+            "sizePreserved=\(keyboardAvoidancePreservedSurfaceSize != nil)",
+            "accessoryAttached=\(accessoryAttached)",
+            "accessoryAppearance=\(accessoryAppearance)",
+            "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
+            "accessoryHidden=\(shouldHideKeyboardAccessoryBar)",
+            "hardware=\(hasHardwareKeyboardAttached)",
+            "keyboardForced=\(keyboardFocusPolicy.forcesSoftwareKeyboardPresentation)",
+            "softwareKeyboardSuppressed=\(shouldSuppressSoftwareKeyboard)",
+            "inputViewMode=\(inputViewMode)",
+            "browse=\(keyboardFocusPolicy.isBrowsing)",
+            "find=\(isFindNavigatorActive)",
+            "eligible=\(isTextInputSessionEligible)",
+            "imeProxyCanBecome=\(imeProxyTextView.canBecomeFirstResponder)",
+            "imeComposing=\(textInputModel.hasActiveIMEComposition)",
+            "imeMarkedText=\(keyboardUITestToken(textInputModel.markedText))",
+            "imeModelText=\(keyboardUITestToken(textInputModel.text))",
+            "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
+            "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
+            "hideRequests=\(keyboardHideRequestCount)",
+            "inputRebuilds=\(keyboardInputSessionRebuildCount)"
+        ].joined(separator: " ")
+    }
+
+    func keyboardUITestMoveCursorToBottom() {
+        let lines = (0..<200).map { "line-\($0)" }.joined(separator: "\r\n") + "\r\n"
+        feedData(Data(lines.utf8))
+    }
+
+    func keyboardUITestSetMarkedText(_ text: String) {
+        guard !text.isEmpty else { return }
+        if !imeProxyTextView.isFirstResponder {
+            _ = requestKeyboardFocus(for: .initialActivation)
+        }
+        let selectedLocation = (text as NSString).length
+        imeProxyTextView.setMarkedText(
+            text,
+            selectedRange: NSRange(location: selectedLocation, length: 0)
+        )
+    }
+
+    func keyboardUITestBeginLayoutResolvedHardwareKeyRepeat(text: String, shifted: Bool) {
+        guard !text.isEmpty, let surface else { return }
+        keyboardUITestUsesManualHardwareKeyRepeatClock = true
+        cancelTrackedHardwareInput()
+
+        let keyCode = UInt16(UIKeyboardHIDUsage.keyboardH.rawValue)
+        let modifiers: UIKeyModifierFlags = shifted ? [.shift] : []
+        let ghosttyModifiers = Ghostty.Input.Mods(uiKeyModifiers: modifiers)
+        if shifted {
+            let shiftKeyCode = UInt16(UIKeyboardHIDUsage.keyboardLeftShift.rawValue)
+            let shiftEvent = Ghostty.Input.KeyEvent(
+                key: .shiftLeft,
+                action: .press,
+                mods: ghosttyModifiers,
+                consumedMods: ghosttyModifiers
+            )
+            surface.sendKeyEvent(shiftEvent)
+            hardwarePressesSentToGhostty[shiftKeyCode] = shiftEvent
+            systemTextInputPresses.insert(shiftKeyCode)
+        }
+        let sourceEvent = Ghostty.Input.KeyEvent(
+            key: .h,
+            action: .press,
+            text: text,
+            composing: false,
+            mods: ghosttyModifiers,
+            consumedMods: ghosttyModifiers,
+            unshiftedCodepoint: 0x68
+        )
+        _ = sendResolvedInterpretedHardwareKeyText(
+            text,
+            keyCode: keyCode,
+            modifiers: modifiers,
+            sourceEvent: sourceEvent,
+            repeatSource: .layoutResolvedText
+        )
+    }
+
+    func keyboardUITestFireHardwareKeyRepeat() {
+        guard let token = activeHardwareKeyRepeat?.token else { return }
+        handleHardwareKeyRepeatTick(token: token)
+    }
+
+    func keyboardUITestEndHardwareKeyRepeat() {
+        guard let active = activeHardwareKeyRepeat,
+              let ended = endHardwareKeyRepeat(keyCode: active.keyCode) else { return }
+        systemTextInputPresses.remove(ended.keyCode)
+        let pressedEvent = hardwarePressesSentToGhostty.removeValue(forKey: ended.keyCode)
+        surface?.sendKeyEvent(hardwareKeyEvent(pressedEvent ?? ended.payload, action: .release))
+        requestRender()
+    }
+
+    func keyboardUITestCancelHardwareKeyRepeat() {
+        cancelTrackedHardwareInput()
+    }
+
+    func keyboardUITestDeleteBackwardThroughIMEProxy() {
+        if !imeProxyTextView.isFirstResponder {
+            _ = requestKeyboardFocus(for: .initialActivation)
+        }
+        imeProxyTextView.deleteBackward()
+    }
+
+    func keyboardUITestCommitMarkedText() {
+        imeProxyTextView.unmarkText()
+    }
+
+    func keyboardUITestRequestHardwareKeyboardFocus() {
+        _ = requestKeyboardFocus(for: .hardwareKeyboard)
+    }
+
+    func keyboardUITestSetHardwareKeyboardAttached(_ attached: Bool) {
+        keyboardUITestHardwareKeyboardOverride = attached
+        _ = setHardwareKeyboardAttached(attached)
+        if attached {
+            focusForHardwareKeyboardIfNeeded()
+        } else if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
+            _ = requestKeyboardFocus(for: .initialActivation)
+        } else {
+            notifyKeyboardBrowseModeChange()
+        }
+        reloadTerminalInputViewsIfActive()
+    }
+
+    func keyboardUITestBeginUnexpectedSoftwareKeyboardLoss() {
+        keyboardUITestSoftwareKeyboardFailure = .untilSessionRebuild
+        reloadTerminalInputViewsIfActive()
+    }
+
+    private var keyboardUITestHardwareRepeatPhase: String {
+        switch hardwareKeyRepeatState.phase {
+        case .idle:
+            "idle"
+        case .repeating:
+            "repeating"
+        }
+    }
+
+    private func keyboardUITestToken(_ value: String) -> String {
+        guard !value.isEmpty else { return "empty" }
+        return value
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+    #endif
 
     private func handleToolbarKey(_ key: TerminalKey) {
         sendToolbarKey(key)
@@ -4646,6 +6251,14 @@ private class TerminalInputAccessoryView: UIInputView {
     private var keyRepeatTimer: DispatchSourceTimer?
     private var repeatingKey: TerminalKey?
 
+    #if DEBUG
+    var diagnosticBackgroundAppearance: String {
+        guard let color = backgroundEffectView?.backgroundColor else { return "missing" }
+        let resolved = color.resolvedColor(with: traitCollection)
+        return isDarkBackgroundColor(resolved) == true ? "dark" : "light"
+    }
+    #endif
+
     init(
         onKey: @escaping (TerminalKey) -> Void,
         onCustomAction: @escaping (TerminalAccessoryCustomAction) -> Void,
@@ -4656,7 +6269,10 @@ private class TerminalInputAccessoryView: UIInputView {
         self.onCustomAction = onCustomAction
         self.onVoice = onVoice
         self.onDismissKeyboard = onDismissKeyboard
-        super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 48), inputViewStyle: .keyboard)
+        // The system sizes UIInputView to the active keyboard width; the
+        // initial width is only a placeholder.
+        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 48), inputViewStyle: .keyboard)
+        accessibilityIdentifier = "vvterm.keyboard.accessory"
         setupView()
         observeThemeChanges()
         observeAccessoryProfileChanges()
@@ -4711,6 +6327,7 @@ private class TerminalInputAccessoryView: UIInputView {
             self?.onVoice?()
         }
         voice.accessibilityLabel = String(localized: "Voice input")
+        voice.accessibilityIdentifier = "vvterm.keyboard.accessory.voice"
         voiceButton = voice
         leadingStack.addArrangedSubview(voice)
 
@@ -4718,6 +6335,7 @@ private class TerminalInputAccessoryView: UIInputView {
             self?.onDismissKeyboard()
         }
         dismissKeyboard.accessibilityLabel = String(localized: "Hide keyboard")
+        dismissKeyboard.accessibilityIdentifier = "vvterm.keyboard.accessory.hide"
         dismissKeyboardButton = dismissKeyboard
         leadingStack.addArrangedSubview(dismissKeyboard)
 
@@ -4764,14 +6382,17 @@ private class TerminalInputAccessoryView: UIInputView {
             self?.ctrlActive.toggle()
             self?.updateModifierState()
         }
+        ctrl.accessibilityIdentifier = "vvterm.keyboard.accessory.modifier.ctrl"
         let alt = makeModifierButton(title: String(localized: "Alt")) { [weak self] in
             self?.altActive.toggle()
             self?.updateModifierState()
         }
+        alt.accessibilityIdentifier = "vvterm.keyboard.accessory.modifier.alt"
         let shift = makeModifierButton(title: String(localized: "Shift")) { [weak self] in
             self?.shiftActive.toggle()
             self?.updateModifierState()
         }
+        shift.accessibilityIdentifier = "vvterm.keyboard.accessory.modifier.shift"
         ctrlButton = ctrl
         altButton = alt
         shiftButton = shift
@@ -4815,6 +6436,11 @@ private class TerminalInputAccessoryView: UIInputView {
         backgroundEffectView.backgroundColor = backgroundColor
     }
 
+    func refreshAppearance() {
+        updateBackgroundEffect()
+        updateLeadingButtonsState()
+    }
+
     private func updateInterfaceStyle(for backgroundColor: UIColor) {
         if #available(iOS 13.0, *) {
             let resolved = backgroundColor.resolvedColor(with: traitCollection)
@@ -4833,14 +6459,20 @@ private class TerminalInputAccessoryView: UIInputView {
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            let luminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
-            return luminance < 0.55
+            return TerminalAccessoryAppearancePolicy.isDarkBackground(
+                red: red,
+                green: green,
+                blue: blue
+            )
         }
 
         if #available(iOS 13.0, *) {
             let ciColor = CIColor(color: color)
-            let luminance = (0.2126 * ciColor.red) + (0.7152 * ciColor.green) + (0.0722 * ciColor.blue)
-            return luminance < 0.55
+            return TerminalAccessoryAppearancePolicy.isDarkBackground(
+                red: ciColor.red,
+                green: ciColor.green,
+                blue: ciColor.blue
+            )
         }
 
         return nil
@@ -4898,6 +6530,7 @@ private class TerminalInputAccessoryView: UIInputView {
                 self?.updateModifierState()
             }
             button.accessibilityLabel = actionID.listTitle
+            button.accessibilityIdentifier = "vvterm.keyboard.accessory.system.\(actionID.rawValue)"
             commandButton = button
             updateModifierButton(button, isActive: commandActive)
             return button
@@ -4923,6 +6556,7 @@ private class TerminalInputAccessoryView: UIInputView {
         }
 
         button.accessibilityLabel = actionID.listTitle
+        button.accessibilityIdentifier = "vvterm.keyboard.accessory.system.\(actionID.rawValue)"
         return button
     }
 
@@ -4933,6 +6567,7 @@ private class TerminalInputAccessoryView: UIInputView {
             self?.sendCustomAction(action)
         }
         button.accessibilityLabel = action.title
+        button.accessibilityIdentifier = "vvterm.keyboard.accessory.custom.\(action.id.uuidString)"
         return button
     }
 
@@ -5365,19 +7000,43 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
         pendingSystemTextInputHardwareKeys.removeFirst()
     }
 
+    fileprivate func cancelHardwareKeyRepeatForIMEComposition() {
+        cancelTrackedHardwareInput()
+    }
+
     fileprivate func removeUnconsumedPendingSystemTextInputHardwareKeys(after pendingCount: Int) {
         guard pendingSystemTextInputHardwareKeys.count > pendingCount else { return }
         pendingSystemTextInputHardwareKeys.removeSubrange(pendingCount...)
     }
 
     @discardableResult
-    fileprivate func sendInterpretedHardwareKeyText(_ text: String, for key: UIKey) -> Bool {
-        guard canRouteTerminalInput, let surface else { return false }
+    fileprivate func sendInterpretedHardwareKeyText(
+        _ text: String,
+        for key: UIKey,
+        repeatSource: TerminalHardwareKeyRepeatSource = .systemInterpretedText
+    ) -> Bool {
         guard let sourceEvent = Ghostty.Input.KeyEvent(uiKey: key, action: .press) else {
             sendText(text)
             return true
         }
-        let keyCode = UInt16(key.keyCode.rawValue)
+        return sendResolvedInterpretedHardwareKeyText(
+            text,
+            keyCode: UInt16(key.keyCode.rawValue),
+            modifiers: key.modifierFlags,
+            sourceEvent: sourceEvent,
+            repeatSource: repeatSource
+        )
+    }
+
+    @discardableResult
+    private func sendResolvedInterpretedHardwareKeyText(
+        _ text: String,
+        keyCode: UInt16,
+        modifiers: UIKeyModifierFlags,
+        sourceEvent: Ghostty.Input.KeyEvent,
+        repeatSource: TerminalHardwareKeyRepeatSource
+    ) -> Bool {
+        guard canRouteTerminalInput, let surface else { return false }
         let interpretedEvent = Ghostty.Input.KeyEvent(
             key: sourceEvent.key,
             action: .press,
@@ -5387,10 +7046,37 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
             consumedMods: sourceEvent.consumedMods,
             unshiftedCodepoint: sourceEvent.unshiftedCodepoint
         )
+        let registration = registerHardwareKeyRepeat(
+            keyCode: keyCode,
+            source: repeatSource,
+            event: interpretedEvent,
+            isRepeatableSpecialKey: false,
+            modifiers: modifiers,
+            hasActiveIMEComposition: textInputModel.hasActiveIMEComposition
+        )
+        if case .updated? = registration {
+            hardwarePressesSentToGhostty[keyCode] = interpretedEvent
+            return true
+        }
+
         surface.sendKeyEvent(interpretedEvent)
-        hardwarePressesSentToGhostty.insert(keyCode)
-        systemTextInputPresses.remove(keyCode)
+        hardwarePressesSentToGhostty[keyCode] = interpretedEvent
         requestRender()
+        return true
+    }
+
+    private func updateActiveInterpretedHardwareKeyRepeat(text: String) -> Bool {
+        guard !text.isEmpty,
+              let active = activeHardwareKeyRepeat,
+              systemTextInputPresses.contains(active.keyCode) else {
+            return false
+        }
+        let event = hardwareKeyEvent(active.payload, action: .press, text: text)
+        hardwareKeyRepeatState.register(
+            keyCode: active.keyCode,
+            payload: event
+        )
+        hardwarePressesSentToGhostty[active.keyCode] = event
         return true
     }
 
@@ -5456,7 +7142,17 @@ extension GhosttyTerminalView: UIKeyInput, UITextInputTraits {
 extension GhosttyTerminalView: UITextInput {
     private var isNativeSelectionTextInputContext: Bool {
         usesNativeTouchSelection
-            && (nativeSelectionInteractionActive || nativeSelectedRange != nil || prefersNativeSelectionFirstResponder || isFindNavigatorActive)
+            && (
+                isFindNavigatorActive
+                    || (
+                        allowsHostTextSelection
+                            && (
+                                nativeSelectionInteractionActive
+                                    || nativeSelectedRange != nil
+                                    || prefersNativeSelectionFirstResponder
+                            )
+                    )
+            )
     }
 
     private var activeTextInputDocumentLength: Int {
@@ -5560,7 +7256,7 @@ extension GhosttyTerminalView: UITextInput {
         if isNativeSelectionTextInputContext {
             guard exitNativeSelectionTextInputContextForTerminalInput() else { return }
         }
-        discardPendingSystemTextInputHardwareKey()
+        cancelHardwareKeyRepeatForIMEComposition()
         applyTerminalTextInputEffects(
             textInputModel.handleSetMarkedText(
                 markedText,

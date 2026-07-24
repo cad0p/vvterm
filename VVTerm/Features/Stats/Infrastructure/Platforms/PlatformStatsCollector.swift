@@ -15,6 +15,86 @@ protocol PlatformStatsCollector: Sendable {
     /// - Parameter client: SSH client to execute commands
     /// - Returns: System info tuple
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int)
+
+    /// Get stable hardware details used by the system info sheet.
+    /// Platforms may return partial data; collectors should avoid throwing for missing optional probes.
+    func collectProfile(client: SSHClient) async throws -> HardwareProfile
+
+    /// Collect a fuller process list for detail sheets.
+    /// Periodic collectors may keep their process list capped for SSH/UI performance.
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo]
+
+    /// Loads health for one already-resolved physical device on demand.
+    /// Missing tools and unsupported devices are returned as capability states;
+    /// only transport failures and cancellation are thrown.
+    func collectStorageHealth(
+        client: SSHClient,
+        target: StorageHealthProbeTarget
+    ) async throws -> StorageDeviceHealthResult
+}
+
+struct VolumeCollectionMetadata: Equatable, Sendable {
+    let stableIdentifier: String?
+    let fileSystem: String
+}
+
+func parseBSDMountVolumeMetadata(_ output: String) -> [String: VolumeCollectionMetadata] {
+    var metadata: [String: VolumeCollectionMetadata] = [:]
+    for line in output.components(separatedBy: .newlines) {
+        guard let onRange = line.range(of: " on ") else { continue }
+
+        let source = line[..<onRange.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let mountedDescription = line[onRange.upperBound...]
+        let fileSystem: String
+        if let typeRange = mountedDescription.range(of: " type ") {
+            fileSystem = mountedDescription[typeRange.upperBound...]
+                .prefix { !$0.isWhitespace && $0 != "(" }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let optionsStart = mountedDescription.range(of: " (") {
+            fileSystem = mountedDescription[optionsStart.upperBound...]
+                .prefix { $0 != "," && $0 != ")" && !$0.isWhitespace }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            continue
+        }
+        guard !source.isEmpty, !fileSystem.isEmpty else { continue }
+        metadata[source] = VolumeCollectionMetadata(
+            stableIdentifier: nil,
+            fileSystem: fileSystem
+        )
+    }
+    return metadata
+}
+
+extension PlatformStatsCollector {
+    func collectProfile(client: SSHClient) async throws -> HardwareProfile {
+        let systemInfo = try await getSystemInfo(client: client)
+        return HardwareProfile(
+            hostname: systemInfo.hostname,
+            osInfo: systemInfo.osInfo,
+            architecture: "",
+            kernelVersion: "",
+            cpuModel: "",
+            cpuVendor: "",
+            cpuCores: systemInfo.cpuCores,
+            cpuThreads: systemInfo.cpuCores,
+            memoryTotal: 0,
+            gpus: [],
+            collectedAt: Date()
+        )
+    }
+
+    func collectProcesses(client: SSHClient, context: StatsCollectionContext) async throws -> [ProcessInfo] {
+        []
+    }
+
+    func collectStorageHealth(
+        client: SSHClient,
+        target: StorageHealthProbeTarget
+    ) async throws -> StorageDeviceHealthResult {
+        try await StorageHealthProbe.collect(client: client, target: target)
+    }
 }
 
 // MARK: - Stats Collection Context
@@ -25,6 +105,17 @@ final class StatsCollectionContext: @unchecked Sendable {
     var prevNetTx: UInt64 = 0
     var prevTimestamp: Date?
     var prevCpuValues: LinuxCpuValues?
+    var prevCpuCoreValues: [String: LinuxCpuValues] = [:]
+    private var previousProcessCPUTimeByPID: [Int: TimeInterval] = [:]
+    private var previousProcessTimestamp: Date?
+    private var lastPeriodicProcessesTimestamp: Date?
+    private var lastPeriodicProcesses: [ProcessInfo] = []
+    var lastGPUCollectionTimestamp: Date?
+    var lastGPUSamples: [GPUSample] = []
+    var lastDockerCollectionTimestamp: Date?
+    var lastDockerStats = DockerStats()
+    private var lastVolumeMetadataRefreshByPlatform: [VolumeIdentity.Platform: Date] = [:]
+    private var volumeMetadataByPlatform: [VolumeIdentity.Platform: [String: VolumeCollectionMetadata]] = [:]
 
     private let lock = NSLock()
 
@@ -40,6 +131,17 @@ final class StatsCollectionContext: @unchecked Sendable {
             prevNetTx = 0
             prevTimestamp = nil
             prevCpuValues = nil
+            prevCpuCoreValues = [:]
+            previousProcessCPUTimeByPID = [:]
+            previousProcessTimestamp = nil
+            lastPeriodicProcessesTimestamp = nil
+            lastPeriodicProcesses = []
+            lastGPUCollectionTimestamp = nil
+            lastGPUSamples = []
+            lastDockerCollectionTimestamp = nil
+            lastDockerStats = DockerStats()
+            lastVolumeMetadataRefreshByPlatform = [:]
+            volumeMetadataByPlatform = [:]
         }
     }
 
@@ -66,6 +168,152 @@ final class StatsCollectionContext: @unchecked Sendable {
     func getCpuValues() -> LinuxCpuValues? {
         withLock {
             prevCpuValues
+        }
+    }
+
+    func updateCpuCoreValues(_ values: [String: LinuxCpuValues]) {
+        withLock {
+            prevCpuCoreValues = values
+        }
+    }
+
+    func getCpuCoreValues() -> [String: LinuxCpuValues] {
+        withLock {
+            prevCpuCoreValues
+        }
+    }
+
+    /// Converts cumulative per-process CPU time into a share of total machine capacity.
+    /// The first snapshot seeds the interval and intentionally returns no percentages.
+    func processCPUPercentages(
+        cumulativeCPUTimeByPID: [Int: TimeInterval],
+        timestamp: Date,
+        logicalProcessorCount: Int
+    ) -> [Int: Double] {
+        withLock {
+            defer {
+                previousProcessCPUTimeByPID = cumulativeCPUTimeByPID
+                previousProcessTimestamp = timestamp
+            }
+
+            guard let previousProcessTimestamp else { return [:] }
+            let elapsed = timestamp.timeIntervalSince(previousProcessTimestamp)
+            guard elapsed >= 0.25 else { return [:] }
+
+            let capacity = elapsed * Double(max(logicalProcessorCount, 1))
+            guard capacity > 0 else { return [:] }
+
+            var percentages: [Int: Double] = [:]
+            for (pid, currentCPUTime) in cumulativeCPUTimeByPID {
+                guard let previousCPUTime = previousProcessCPUTimeByPID[pid],
+                      currentCPUTime >= previousCPUTime else {
+                    continue
+                }
+                let percent = (currentCPUTime - previousCPUTime) / capacity * 100
+                if percent.isFinite {
+                    percentages[pid] = min(max(percent, 0), 100)
+                }
+            }
+            return percentages
+        }
+    }
+
+    func shouldCollectPeriodicProcesses(now: Date = Date(), minimumInterval: TimeInterval) -> Bool {
+        withLock {
+            guard let lastPeriodicProcessesTimestamp else { return true }
+            return now.timeIntervalSince(lastPeriodicProcessesTimestamp) >= minimumInterval
+        }
+    }
+
+    func updatePeriodicProcesses(_ processes: [ProcessInfo], timestamp: Date = Date()) {
+        withLock {
+            lastPeriodicProcessesTimestamp = timestamp
+            if !processes.isEmpty {
+                lastPeriodicProcesses = processes
+            }
+        }
+    }
+
+    func getPeriodicProcesses() -> [ProcessInfo] {
+        withLock { lastPeriodicProcesses }
+    }
+
+    func shouldCollectGPU(now: Date = Date(), minimumInterval: TimeInterval = 5) -> Bool {
+        withLock {
+            guard let lastGPUCollectionTimestamp else { return true }
+            return now.timeIntervalSince(lastGPUCollectionTimestamp) >= minimumInterval
+        }
+    }
+
+    func markGPUCollected(at timestamp: Date = Date()) {
+        withLock {
+            lastGPUCollectionTimestamp = timestamp
+        }
+    }
+
+    func updateGPUSamples(_ samples: [GPUSample], timestamp: Date = Date()) {
+        withLock {
+            lastGPUCollectionTimestamp = timestamp
+            lastGPUSamples = samples
+        }
+    }
+
+    func getGPUSamples() -> [GPUSample] {
+        withLock {
+            lastGPUSamples
+        }
+    }
+
+    func shouldCollectDocker(now: Date = Date(), minimumInterval: TimeInterval = 10) -> Bool {
+        withLock {
+            guard let lastDockerCollectionTimestamp else { return true }
+            return now.timeIntervalSince(lastDockerCollectionTimestamp) >= minimumInterval
+        }
+    }
+
+    func updateDockerStats(_ stats: DockerStats, timestamp: Date = Date()) {
+        withLock {
+            lastDockerCollectionTimestamp = timestamp
+            lastDockerStats = stats
+        }
+    }
+
+    func getDockerStats() -> DockerStats {
+        withLock {
+            lastDockerStats
+        }
+    }
+
+    /// Claims a metadata refresh window before the caller suspends for SSH work.
+    /// This keeps the shared unchecked-Sendable context from launching duplicate
+    /// platform inventory probes if collection entry points overlap.
+    func beginVolumeMetadataRefresh(
+        for platform: VolumeIdentity.Platform,
+        now: Date = Date(),
+        minimumInterval: TimeInterval = 60
+    ) -> Bool {
+        withLock {
+            if let lastRefresh = lastVolumeMetadataRefreshByPlatform[platform],
+               now.timeIntervalSince(lastRefresh) < minimumInterval {
+                return false
+            }
+            lastVolumeMetadataRefreshByPlatform[platform] = now
+            return true
+        }
+    }
+
+    func updateVolumeMetadata(
+        _ metadata: [String: VolumeCollectionMetadata],
+        for platform: VolumeIdentity.Platform
+    ) {
+        withLock {
+            volumeMetadataByPlatform[platform] = metadata
+        }
+    }
+
+    func volumeMetadata(for platform: VolumeIdentity.Platform) -> [String: VolumeCollectionMetadata] {
+        withLock {
+            volumeMetadataByPlatform[platform] ?? [:]
         }
     }
 }

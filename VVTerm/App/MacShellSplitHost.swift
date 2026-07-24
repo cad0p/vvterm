@@ -96,44 +96,12 @@ final class ShellSplitViewController: NSSplitViewController {
     var onToggleSidebar: (() -> Void)?
     var isToolbarHidden = false
     private var didApplyInitialWidth = false
-    private var zenAccessory: NSTitlebarAccessoryViewController?
     private var bridgeObserver: AnyCancellable?
 
     /// Hide/show the window toolbar for zen mode.
     func updateToolbarHidden(_ hidden: Bool) {
         isToolbarHidden = hidden
         view.window?.toolbar?.isVisible = !hidden
-    }
-
-    /// In zen mode the server title/subtitle is shown as a plain (glass-free)
-    /// leading titlebar accessory. Toolbar items always get a glass capsule in
-    /// macOS 26, but a titlebar accessory view does not, so the title reads as
-    /// normal text aligned with the toolbar row.
-    private func updateZenAccessory() {
-        guard let window = view.window else { return }
-        let bridge = MacToolbarBridge.shared
-        let showZen = bridge.isActive && bridge.isZenMode
-        if showZen {
-            let root = ZenTitleAccessory(
-                icon: bridge.zenIcon,
-                title: bridge.zenTitle,
-                subtitle: bridge.zenSubtitle()
-            )
-            if let host = zenAccessory?.view as? NSHostingView<ZenTitleAccessory> {
-                host.rootView = root
-            } else {
-                let host = NSHostingView(rootView: root)
-                let accessory = NSTitlebarAccessoryViewController()
-                accessory.layoutAttribute = .leading
-                accessory.view = host
-                window.addTitlebarAccessoryViewController(accessory)
-                zenAccessory = accessory
-            }
-        } else if let zenAccessory,
-                  let index = window.titlebarAccessoryViewControllers.firstIndex(where: { $0 === zenAccessory }) {
-            window.removeTitlebarAccessoryViewController(at: index)
-            self.zenAccessory = nil
-        }
     }
 
     /// The system `.toggleSidebar` toolbar item targets this. Route it through
@@ -148,15 +116,30 @@ final class ShellSplitViewController: NSSplitViewController {
         }
     }
 
+    private func updateZenWindowTitle() {
+        guard let window = view.window else { return }
+        let bridge = MacToolbarBridge.shared
+        let shouldShowTitle = bridge.isActive && bridge.isZenMode && !bridge.zenTitle.isEmpty
+
+        if shouldShowTitle {
+            window.title = bridge.zenTitle
+            window.subtitle = bridge.zenSubtitle()
+            window.titleVisibility = .visible
+        } else {
+            window.subtitle = ""
+            window.titleVisibility = .hidden
+        }
+    }
+
     override func viewDidAppear() {
         super.viewDidAppear()
         installToolbarIfNeeded()
         if bridgeObserver == nil {
             bridgeObserver = MacToolbarBridge.shared.$revision
                 .receive(on: RunLoop.main)
-                .sink { [weak self] _ in self?.updateZenAccessory() }
-            updateZenAccessory()
+                .sink { [weak self] _ in self?.updateZenWindowTitle() }
         }
+        updateZenWindowTitle()
         guard !didApplyInitialWidth else { return }
         didApplyInitialWidth = true
         // Only set the initial position when autosave did not already restore one.
@@ -175,37 +158,6 @@ final class ShellSplitViewController: NSSplitViewController {
             window.toolbarStyle = .unified
         }
         window.toolbar?.isVisible = !isToolbarHidden
-    }
-}
-
-/// Plain (glass-free) server title + live subtitle for the zen titlebar
-/// accessory: server icon, name, and the focused tab/pane title or directory.
-struct ZenTitleAccessory: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        HStack(spacing: 7) {
-            if !icon.isEmpty {
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-        }
-        .padding(.horizontal, 8)
-        .fixedSize()
     }
 }
 #endif
