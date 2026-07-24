@@ -158,7 +158,9 @@ final class TeleportCredentialTests: XCTestCase {
     }
 
     func testCodableRoundTrip_stableAcrossMultipleEncodes() {
-        // Encoding twice produces identical bytes (deterministic encoding).
+        // Encoding twice produces semantically identical data (decoded
+        // objects are equal). JSONEncoder doesn't guarantee byte-for-byte
+        // identical output due to non-deterministic dictionary key ordering.
         let cred = TeleportCredential(
             clusterId: UUID(),
             credentialID: "id",
@@ -171,7 +173,9 @@ final class TeleportCredentialTests: XCTestCase {
         )
         let data1 = try! JSONEncoder().encode(cred)
         let data2 = try! JSONEncoder().encode(cred)
-        XCTAssertEqual(data1, data2)
+        let decoded1 = try! JSONDecoder().decode(TeleportCredential.self, from: data1)
+        let decoded2 = try! JSONDecoder().decode(TeleportCredential.self, from: data2)
+        XCTAssertEqual(decoded1, decoded2)
     }
 
     // MARK: - Hashable / Identifiable
