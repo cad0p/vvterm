@@ -238,22 +238,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          # test-without-building with -xctestrun: run the prebuilt
-          # VVTermTests.xctest from the build artifact with ZERO compilation.
-          # The build job's `build-for-testing -scheme VVTerm` generates a
-          # <Scheme>_iphonesimulator<arch>.xctestrun manifest in Build/Products/.
-          # -xctestrun is more robust than -scheme (which searches the build
-          # root and is sensitive to DerivedData state) because the manifest
-          # uses __TESTROOT__/__TESTHOST__ placeholder paths that xcodebuild
-          # expands relative to the manifest's location.
-          # -only-testing:VVTermTests restricts execution to the unit tests.
-          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
-          echo "Using xctestrun manifest: $XCRUN"
-          xcodebuild test-without-building \
-            -xctestrun "$XCRUN" \
+          # `test -scheme VVTermUnitTests` (NOT test-without-building).
+          # test-without-building crashes on Xcode 27 due to a duplicate-symbol
+          # conflict: the test bundle and app host both statically link
+          # SwiftProtobuf, and `test-without-building` loads both into the
+          # same process → "Class ... is implemented in both" → crash before
+          # tests connect. This is an Xcode 27-specific regression (Xcode 26
+          # doesn't exhibit it). The regular `test` command builds+runs in a
+          # mode that uses the app's copy, avoiding the conflict.
+          #
+          # The build artifact (tar + extract) IS still reused: xcodebuild finds
+          # the prebuilt app + Cmlx in the extracted DerivedData and skips
+          # recompiling them, compiling only the VVTermTests target (~3m).
+          # The VVTermUnitTests scheme is scoped to VVTermTests only.
+          xcodebuild test \
+            -scheme VVTermUnitTests \
+            -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            -only-testing:VVTermTests \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
