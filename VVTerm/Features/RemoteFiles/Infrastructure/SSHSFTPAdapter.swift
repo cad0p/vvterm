@@ -19,7 +19,8 @@ final class SSHSFTPAdapter {
 
     init(
         borrowedClientProvider: @escaping BorrowedClientProvider = { serverId in
-            TerminalTabManager.shared.sharedStatsClient(for: serverId)
+            ConnectionSessionManager.shared.sharedStatsClient(for: serverId)
+                ?? TerminalTabManager.shared.sharedStatsClient(for: serverId)
         }
     ) {
         self.borrowedClientProvider = borrowedClientProvider

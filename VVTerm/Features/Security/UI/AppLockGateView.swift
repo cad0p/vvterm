@@ -12,19 +12,15 @@ struct AppLockContainer<Content: View>: View {
     }
 
     var body: some View {
-        let shouldBlockContent = AppContentProtectionPolicy.shouldObscureContent(
-            sceneIsActive: scenePhase == .active,
-            fullAppLockEnabled: appLockManager.fullAppLockEnabled,
-            privacyModeEnabled: privacyModeEnabled,
-            isAppLocked: appLockManager.isAppLocked
-        )
+        let shouldObscureForInactiveScene = scenePhase != .active && (appLockManager.fullAppLockEnabled || privacyModeEnabled)
+        let shouldBlockContent = appLockManager.isAppLocked || shouldObscureForInactiveScene
 
         ZStack {
             content
                 .blur(radius: shouldBlockContent ? 6 : 0)
                 .allowsHitTesting(!shouldBlockContent)
 
-            if !appLockManager.isAppLocked, shouldBlockContent {
+            if !appLockManager.isAppLocked, shouldObscureForInactiveScene {
                 AppPrivacyShieldView()
                     .transition(.opacity)
                     .zIndex(9)
@@ -39,23 +35,19 @@ struct AppLockContainer<Content: View>: View {
         .animation(.easeInOut(duration: 0.15), value: appLockManager.isAppLocked)
         .animation(.easeInOut(duration: 0.15), value: scenePhase)
         .onAppear {
-            if scenePhase == .active {
-                handleActiveSceneAfterViewUpdate()
+            appLockManager.handleScenePhaseChange(scenePhase)
+            if appLockManager.fullAppLockEnabled {
+                Task {
+                    _ = await appLockManager.ensureAppUnlocked()
+                }
             }
         }
         .onChange(of: scenePhase) { newPhase in
-            guard newPhase == .active else { return }
-            handleActiveSceneAfterViewUpdate()
-        }
-    }
-
-    private func handleActiveSceneAfterViewUpdate() {
-        let manager = appLockManager
-        DispatchQueue.main.async {
-            manager.handleSceneActivation()
-            guard manager.fullAppLockEnabled else { return }
-            Task {
-                _ = await manager.ensureAppUnlocked()
+            appLockManager.handleScenePhaseChange(newPhase)
+            if newPhase == .active, appLockManager.fullAppLockEnabled {
+                Task {
+                    _ = await appLockManager.ensureAppUnlocked()
+                }
             }
         }
     }

@@ -32,18 +32,6 @@
                 <string>NSPrivacyCollectedDataPurposeAnalytics</string>
             </array>
         </dict>
-        <dict>
-            <key>NSPrivacyCollectedDataType</key>
-            <string>NSPrivacyCollectedDataTypeAdvertisingData</string>
-            <key>NSPrivacyCollectedDataTypeLinked</key>
-            <false/>
-            <key>NSPrivacyCollectedDataTypeTracking</key>
-            <false/>
-            <key>NSPrivacyCollectedDataTypePurposes</key>
-            <array>
-                <string>NSPrivacyCollectedDataPurposeAnalytics</string>
-            </array>
-        </dict>
     </array>
     <key>NSPrivacyAccessedAPITypes</key>
     <array>

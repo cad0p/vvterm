@@ -11,48 +11,14 @@
 import Foundation
 import SwiftUI
 import Combine
-import MoshCore
 import os.log
 
 #if os(macOS)
 import AppKit
 #endif
 
-enum TerminalRegistryPolicy {
-    static func shouldRemove(
-        registered: ObjectIdentifier,
-        dismantled: ObjectIdentifier
-    ) -> Bool {
-        registered == dismantled
-    }
-
-    static func attachmentToPublish(
-        registered: ObjectIdentifier?,
-        reporting: ObjectIdentifier,
-        currentAttachment: Bool
-    ) -> Bool? {
-        guard registered == reporting else { return nil }
-        return currentAttachment
-    }
-}
-
 @MainActor
 final class TerminalTabManager: ObservableObject {
-    nonisolated struct ReconnectPreparationToken: Equatable, Sendable {
-        let id: UUID
-        let paneId: UUID
-    }
-    private struct ConnectionCleanup {
-        let client: SSHClient
-        let task: Task<Void, Never>
-    }
-    private enum TmuxInstallOutcome: Sendable {
-        case installed(sessionName: String)
-        case unavailable
-        case missing
-        case indeterminate
-    }
-
     static let shared = TerminalTabManager()
 
     // MARK: - Published State
@@ -70,11 +36,7 @@ final class TerminalTabManager: ObservableObject {
         }
     }
 
-    /// Tabs temporarily presenting only their focused pane. The focused pane is
-    /// still derived from TerminalTab, and this presentation state is not persisted.
-    @Published private(set) var splitZoomedTabIds: Set<UUID> = []
-
-    /// Servers with at least one live terminal shell.
+    /// Servers that are currently "connected" (have at least one tab open)
     @Published var connectedServerIds: Set<UUID> = []
 
     /// Selected view type per server (stats/terminal)
@@ -87,30 +49,13 @@ final class TerminalTabManager: ObservableObject {
     /// Terminal views keyed by pane ID
     private var terminalViews: [UUID: GhosttyTerminalView] = [:]
     private var shellRegistry = SSHShellRegistry(staleThreshold: 120)
-    private var eternalTerminalRuntimes: [UUID: EternalTerminalRuntime] = [:]
-    private var eternalTerminalResumeStore: any EternalTerminalResumeStoring = EternalTerminalResumeStore.shared
-    private var moshResumeStore: any MoshResumeStoring = MoshResumeStore.shared
-    private var connectionCleanupsInFlight: [UUID: ConnectionCleanup] = [:]
-    private var reconnectPreparationsInFlight: [UUID: ReconnectPreparationToken] = [:]
     /// Server IDs with an in-flight tab-open request to avoid queued duplicates.
     private var tabOpensInFlight: Set<UUID> = []
 
     /// Pane state keyed by pane ID
-    @Published var paneStates: [UUID: TerminalPaneState] = [:] {
-        didSet {
-            LiveActivityManager.shared.refresh(
-                with: paneStates.values.map(\.connectionState)
-            )
-        }
-    }
+    @Published var paneStates: [UUID: TerminalPaneState] = [:]
     @Published private(set) var runtimeTitleByPane: [UUID: String] = [:]
     @Published private(set) var titleOverrideByPane: [UUID: String] = [:]
-    #if os(iOS)
-    @Published private(set) var terminalFindNavigatorVisibleByPane: [UUID: Bool] = [:]
-    @Published private(set) var terminalVoiceRecordingByPane: [UUID: Bool] = [:]
-    @Published private(set) var terminalPendingVoiceReturnByPane: [UUID: Bool] = [:]
-    let keyboardCoordinator = TerminalKeyboardCoordinator()
-    #endif
 
     @Published var tmuxAttachPrompt: TmuxAttachPrompt?
 
@@ -129,15 +74,7 @@ final class TerminalTabManager: ObservableObject {
     private var isRestoring = false
 
     private init() {
-        #if os(iOS)
-        keyboardCoordinator.terminalProvider = { [weak self] paneId in
-            self?.terminalViews[paneId]
-        }
-        #endif
         restoreSnapshot()
-        LiveActivityManager.shared.refresh(
-            with: paneStates.values.map(\.connectionState)
-        )
     }
 
     private func paneTmuxStatus(for paneId: UUID) -> TmuxStatus? {
@@ -145,12 +82,7 @@ final class TerminalTabManager: ObservableObject {
     }
 
     private func setPaneTmuxStatus(_ status: TmuxStatus, for paneId: UUID) {
-        guard let previousStatus = paneStates[paneId]?.tmuxStatus,
-              previousStatus != status else { return }
         paneStates[paneId]?.tmuxStatus = status
-        logger.info(
-            "Tmux status for pane \(paneId.uuidString, privacy: .public) changed from \(previousStatus.rawValue, privacy: .public) to \(status.rawValue, privacy: .public)"
-        )
     }
 
     private func paneWorkingDirectory(for paneId: UUID) -> String? {
@@ -175,12 +107,10 @@ final class TerminalTabManager: ObservableObject {
     private func setPaneTransport(
         _ transport: ShellTransport,
         fallbackReason: MoshFallbackReason?,
-        fallbackDiagnostics: MoshFallbackDiagnostics?,
         for paneId: UUID
     ) {
         paneStates[paneId]?.activeTransport = transport
         paneStates[paneId]?.moshFallbackReason = fallbackReason
-        paneStates[paneId]?.moshFallbackDiagnostics = fallbackDiagnostics
     }
 
     private func handleStaleShellStartContext(
@@ -191,10 +121,6 @@ final class TerminalTabManager: ObservableObject {
         guard let staleContext else { return }
 
         logger.warning("\(logMessage) \(paneId.uuidString, privacy: .public)")
-        tmuxResolver.cancelPrompt(
-            requestId: staleContext.token.id,
-            setPrompt: setTmuxAttachPrompt
-        )
         if !shellRegistry.hasClientReferences(staleContext.client) {
             Task.detached(priority: .utility) { [client = staleContext.client] in
                 await client.disconnect()
@@ -222,22 +148,6 @@ final class TerminalTabManager: ObservableObject {
         if StoreManager.shared.isPro { return true }
         let totalTabs = tabsByServer.values.flatMap { $0 }.count
         return totalTabs < FreeTierLimits.maxTabs
-    }
-
-    private func hasLiveTerminalShell(for serverId: UUID) -> Bool {
-        paneStates.contains { _, state in
-            state.serverId == serverId
-                && state.connectionState.isConnected
-                && (shellId(for: state.paneId) != nil || eternalTerminalRuntimes[state.paneId] != nil)
-        }
-    }
-
-    private func refreshConnectedServerState(for serverId: UUID) {
-        if hasLiveTerminalShell(for: serverId) {
-            connectedServerIds.insert(serverId)
-        } else {
-            connectedServerIds.remove(serverId)
-        }
     }
 
     /// Open a new tab for a server
@@ -281,165 +191,54 @@ final class TerminalTabManager: ObservableObject {
         // Select the new tab
         selectedTabByServer[server.id] = tab.id
 
+        // Mark server as connected
+        connectedServerIds.insert(server.id)
+
         logger.info("Opened new tab for \(server.name), pane: \(tab.rootPaneId)")
         return tab
     }
 
     /// Close a tab
     func closeTab(_ tab: TerminalTab) {
-        closeTab(tab, intent: .explicitClose)
-    }
-
-    private func closeTab(
-        _ tab: TerminalTab,
-        intent: TerminalTeardownIntent
-    ) {
-        guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
-            logger.warning("closeTab: tab not found \(tab.id.uuidString, privacy: .public)")
-            return
-        }
-
-        splitZoomedTabIds.remove(currentTab.id)
-
         // Clean up all panes in this tab
-        for paneId in currentTab.allPaneIds {
-            cleanupPane(paneId, intent: intent)
+        for paneId in tab.allPaneIds {
+            cleanupPane(paneId)
         }
 
         // Remove from tabs
-        if var serverTabs = tabsByServer[currentTab.serverId] {
-            let closingIndex = serverTabs.firstIndex { $0.id == currentTab.id }
-            serverTabs.removeAll { $0.id == currentTab.id }
+        if var serverTabs = tabsByServer[tab.serverId] {
+            let closingIndex = serverTabs.firstIndex { $0.id == tab.id }
+            serverTabs.removeAll { $0.id == tab.id }
+            tabsByServer[tab.serverId] = serverTabs
 
             // Select the closest neighbor when the selected tab is closed: the
             // tab that shifted into its slot, or the new last tab if it was last.
-            if serverTabs.isEmpty {
-                tabsByServer.removeValue(forKey: currentTab.serverId)
-                selectedTabByServer.removeValue(forKey: currentTab.serverId)
-            } else {
-                tabsByServer[currentTab.serverId] = serverTabs
-            }
-
-            if selectedTabByServer[currentTab.serverId] == currentTab.id {
+            if selectedTabByServer[tab.serverId] == tab.id {
                 if let closingIndex, !serverTabs.isEmpty {
-                    selectedTabByServer[currentTab.serverId] = serverTabs[min(closingIndex, serverTabs.count - 1)].id
+                    selectedTabByServer[tab.serverId] = serverTabs[min(closingIndex, serverTabs.count - 1)].id
                 } else {
-                    selectedTabByServer.removeValue(forKey: currentTab.serverId)
+                    selectedTabByServer[tab.serverId] = serverTabs.first?.id
                 }
             }
 
-            refreshConnectedServerState(for: currentTab.serverId)
+            // Note: Don't remove from connectedServerIds here
+            // User might still be viewing stats. Explicit disconnect handles that.
         }
 
         EngagementTracker.shared.noteTerminalSessionEnded(
-            otherTerminalsActive: hasConnectedPanes
+            otherTerminalsActive: hasConnectedPanes,
+            isPro: StoreManager.shared.isPro
         )
 
-        logger.info("Closed tab \(currentTab.id)")
+        logger.info("Closed tab \(tab.id)")
     }
 
     /// Close all tabs for a server
     func closeAllTabs(for serverId: UUID) {
-        closeAllTabs(for: serverId, intent: .explicitClose)
-    }
-
-    private func closeAllTabs(
-        for serverId: UUID,
-        intent: TerminalTeardownIntent
-    ) {
         let serverTabs = tabs(for: serverId)
         for tab in serverTabs {
-            closeTab(tab, intent: intent)
+            closeTab(tab)
         }
-    }
-
-    /// Disconnect all terminal tabs for a specific server.
-    func disconnectServer(_ serverId: UUID) {
-        closeAllTabs(for: serverId, intent: .explicitServerDisconnect)
-        tabsByServer.removeValue(forKey: serverId)
-        selectedTabByServer.removeValue(forKey: serverId)
-        selectedViewByServer.removeValue(forKey: serverId)
-        connectedServerIds.remove(serverId)
-        persistSnapshot()
-        logger.info("Disconnected all terminal tabs for server \(serverId.uuidString, privacy: .public)")
-    }
-
-    /// Disconnect every active terminal tab.
-    func disconnectAll() {
-        let serverIds = Set(tabsByServer.keys).union(connectedServerIds)
-        for serverId in serverIds {
-            disconnectServer(serverId)
-        }
-        connectedServerIds.removeAll()
-        persistSnapshot()
-        logger.info("Disconnected all terminal tabs")
-    }
-
-    /// Flushes reconnectable state and releases local runtime resources without
-    /// deleting tabs or terminating remote resumable sessions.
-    @discardableResult
-    func beginApplicationTermination() -> Task<Void, Never> {
-        persistTask?.cancel()
-        persistTask = nil
-        persistSnapshot()
-
-        let paneIds = Set(paneStates.keys)
-            .union(shellRegistry.startsInFlight.keys)
-            .union(eternalTerminalRuntimes.keys)
-
-        reconnectPreparationsInFlight.removeAll()
-        tabOpensInFlight.removeAll()
-        for paneId in paneIds {
-            detachTerminalRegistration(for: paneId)
-            if paneStates[paneId] != nil {
-                paneStates[paneId]?.disconnectReason = .transportEnded
-                paneStates[paneId]?.connectionState = .disconnected
-            }
-        }
-        connectedServerIds.removeAll()
-        runtimeTitleByPane.removeAll()
-
-        logger.info("Preserved terminal tabs while releasing application runtime state")
-        return Task { [weak self] in
-            guard let self else { return }
-            await self.prepareResumableSessionsForApplicationBackground()
-            for paneId in paneIds {
-                await self.unregisterSSHClient(for: paneId)
-                await self.unregisterEternalTerminalRuntime(for: paneId)
-            }
-        }
-    }
-
-    func beginReconnectPreparation(for paneId: UUID) -> ReconnectPreparationToken? {
-        guard paneStates[paneId] != nil,
-              reconnectPreparationsInFlight[paneId] == nil else {
-            return nil
-        }
-        let token = ReconnectPreparationToken(id: UUID(), paneId: paneId)
-        reconnectPreparationsInFlight[paneId] = token
-        return token
-    }
-
-    func isCurrentReconnectPreparation(_ token: ReconnectPreparationToken) -> Bool {
-        paneStates[token.paneId] != nil
-            && reconnectPreparationsInFlight[token.paneId] == token
-    }
-
-    func finishReconnectPreparation(_ token: ReconnectPreparationToken) {
-        guard reconnectPreparationsInFlight[token.paneId] == token else { return }
-        reconnectPreparationsInFlight.removeValue(forKey: token.paneId)
-    }
-
-    func invalidateReconnectPreparations(for serverId: UUID) {
-        // Keep route departure synchronous. Suspended preparation may finish
-        // its bounded wait, but cannot mutate the preserved pane afterward.
-        reconnectPreparationsInFlight = reconnectPreparationsInFlight.filter { paneId, _ in
-            paneStates[paneId]?.serverId != serverId
-        }
-    }
-
-    func clearMoshFallbackDiagnostics(for paneId: UUID) {
-        paneStates[paneId]?.moshFallbackDiagnostics = nil
     }
 
     // MARK: - Split Management
@@ -540,14 +339,6 @@ final class TerminalTabManager: ObservableObject {
 
     /// Close a pane within a tab
     func closePane(tab: TerminalTab, paneId: UUID) {
-        closePane(tab: tab, paneId: paneId, intent: .explicitClose)
-    }
-
-    private func closePane(
-        tab: TerminalTab,
-        paneId: UUID,
-        intent: TerminalTeardownIntent
-    ) {
         // Get current tab from manager (passed tab might be stale)
         guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
             logger.warning("closePane: tab not found")
@@ -567,7 +358,7 @@ final class TerminalTabManager: ObservableObject {
 
         // If this is the only pane, close the tab
         if currentTab.paneCount <= 1 {
-            closeTab(currentTab, intent: intent)
+            closeTab(currentTab)
             return
         }
 
@@ -597,8 +388,7 @@ final class TerminalTabManager: ObservableObject {
         updateTab(updatedTab)
 
         // Now clean up the pane (after layout is updated)
-        cleanupPane(paneId, intent: intent)
-        refreshConnectedServerState(for: tab.serverId)
+        cleanupPane(paneId)
         logger.info("Closed pane \(paneId)")
     }
 
@@ -608,329 +398,24 @@ final class TerminalTabManager: ObservableObject {
               let index = serverTabs.firstIndex(where: { $0.id == tab.id }) else { return }
         serverTabs[index] = tab
         tabsByServer[tab.serverId] = serverTabs
-        if !tab.hasSplits {
-            splitZoomedTabIds.remove(tab.id)
-        }
         updateTmuxFocus(for: tab)
-    }
-
-    func focusPane(in tab: TerminalTab, paneId: UUID) {
-        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
-              currentTab.allPaneIds.contains(paneId),
-              currentTab.focusedPaneId != paneId else {
-            return
-        }
-        currentTab.focusedPaneId = paneId
-        updateTab(currentTab)
-    }
-
-    func updateSplitRatio(
-        in tab: TerminalTab,
-        node: TerminalSplitNode,
-        ratio: Double
-    ) {
-        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
-              let currentLayout = currentTab.layout else {
-            return
-        }
-        currentTab.layout = currentLayout.replacingNode(
-            node,
-            with: node.withUpdatedRatio(ratio)
-        )
-        updateTab(currentTab)
-    }
-
-    func equalizeSplitLayout(in tab: TerminalTab) {
-        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
-              let currentLayout = currentTab.layout else {
-            return
-        }
-        currentTab.layout = currentLayout.equalized()
-        updateTab(currentTab)
-    }
-
-    func isSplitZoomed(in tab: TerminalTab) -> Bool {
-        guard splitZoomedTabIds.contains(tab.id),
-              let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
-            return false
-        }
-        return currentTab.hasSplits
-    }
-
-    func canPerformSplitCommand(
-        _ command: TerminalSplitCommand,
-        in tab: TerminalTab
-    ) -> Bool {
-        guard let currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
-              currentTab.allPaneIds.contains(currentTab.focusedPaneId) else {
-            return false
-        }
-
-        switch command {
-        case .splitRight, .splitDown, .closeFocusedPane:
-            return true
-        case .toggleZoom, .selectPrevious, .selectNext, .equalize:
-            return currentTab.hasSplits
-        case .selectAbove:
-            return currentTab.layout?.neighboringPane(
-                from: currentTab.focusedPaneId,
-                direction: .above
-            ) != nil
-        case .selectBelow:
-            return currentTab.layout?.neighboringPane(
-                from: currentTab.focusedPaneId,
-                direction: .below
-            ) != nil
-        case .selectLeft:
-            return currentTab.layout?.neighboringPane(
-                from: currentTab.focusedPaneId,
-                direction: .left
-            ) != nil
-        case .selectRight:
-            return currentTab.layout?.neighboringPane(
-                from: currentTab.focusedPaneId,
-                direction: .right
-            ) != nil
-        case .moveDividerUp:
-            return currentTab.layout?.hasDivider(
-                near: currentTab.focusedPaneId,
-                direction: .up
-            ) == true
-        case .moveDividerDown:
-            return currentTab.layout?.hasDivider(
-                near: currentTab.focusedPaneId,
-                direction: .down
-            ) == true
-        case .moveDividerLeft:
-            return currentTab.layout?.hasDivider(
-                near: currentTab.focusedPaneId,
-                direction: .left
-            ) == true
-        case .moveDividerRight:
-            return currentTab.layout?.hasDivider(
-                near: currentTab.focusedPaneId,
-                direction: .right
-            ) == true
-        }
-    }
-
-    @discardableResult
-    func performSplitCommand(
-        _ command: TerminalSplitCommand,
-        in tab: TerminalTab
-    ) -> TerminalSplitCommandOutcome {
-        guard canPerformSplitCommand(command, in: tab),
-              var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }) else {
-            return .unavailable
-        }
-
-        switch command {
-        case .splitRight:
-            guard StoreManager.shared.isPro else { return .requiresUpgrade }
-            return splitRight(tab: currentTab, paneId: currentTab.focusedPaneId) == nil
-                ? .unavailable
-                : .performed
-        case .splitDown:
-            guard StoreManager.shared.isPro else { return .requiresUpgrade }
-            return splitDown(tab: currentTab, paneId: currentTab.focusedPaneId) == nil
-                ? .unavailable
-                : .performed
-        case .closeFocusedPane:
-            return .requiresCloseConfirmation
-        case .toggleZoom:
-            if splitZoomedTabIds.contains(currentTab.id) {
-                splitZoomedTabIds.remove(currentTab.id)
-            } else {
-                splitZoomedTabIds.insert(currentTab.id)
-            }
-        case .selectPrevious:
-            guard let paneId = currentTab.layout?.pane(before: currentTab.focusedPaneId) else {
-                return .unavailable
-            }
-            currentTab.focusedPaneId = paneId
-            updateTab(currentTab)
-        case .selectNext:
-            guard let paneId = currentTab.layout?.pane(after: currentTab.focusedPaneId) else {
-                return .unavailable
-            }
-            currentTab.focusedPaneId = paneId
-            updateTab(currentTab)
-        case .selectAbove:
-            return selectNeighbor(in: currentTab, direction: .above)
-        case .selectBelow:
-            return selectNeighbor(in: currentTab, direction: .below)
-        case .selectLeft:
-            return selectNeighbor(in: currentTab, direction: .left)
-        case .selectRight:
-            return selectNeighbor(in: currentTab, direction: .right)
-        case .equalize:
-            guard let layout = currentTab.layout else { return .unavailable }
-            currentTab.layout = layout.equalized()
-            updateTab(currentTab)
-        case .moveDividerUp:
-            return moveDivider(in: currentTab, direction: .up)
-        case .moveDividerDown:
-            return moveDivider(in: currentTab, direction: .down)
-        case .moveDividerLeft:
-            return moveDivider(in: currentTab, direction: .left)
-        case .moveDividerRight:
-            return moveDivider(in: currentTab, direction: .right)
-        }
-
-        return .performed
-    }
-
-    private func selectNeighbor(
-        in tab: TerminalTab,
-        direction: TerminalSplitFocusDirection
-    ) -> TerminalSplitCommandOutcome {
-        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
-              let paneId = currentTab.layout?.neighboringPane(
-                  from: currentTab.focusedPaneId,
-                  direction: direction
-              ) else {
-            return .unavailable
-        }
-        currentTab.focusedPaneId = paneId
-        updateTab(currentTab)
-        return .performed
-    }
-
-    private func moveDivider(
-        in tab: TerminalTab,
-        direction: TerminalSplitResizeDirection
-    ) -> TerminalSplitCommandOutcome {
-        guard var currentTab = tabs(for: tab.serverId).first(where: { $0.id == tab.id }),
-              let layout = currentTab.layout,
-              let updatedLayout = layout.movingDivider(
-                  near: currentTab.focusedPaneId,
-                  direction: direction
-              ) else {
-            return .unavailable
-        }
-        currentTab.layout = updatedLayout
-        updateTab(currentTab)
-        return .performed
     }
 
     // MARK: - Terminal Registry
 
     /// Register a terminal view for a pane
     func registerTerminal(_ terminal: GhosttyTerminalView, for paneId: UUID) {
-        let replacesRegisteredTerminal = terminalViews[paneId].map { $0 !== terminal } ?? false
-        #if os(iOS)
-        terminal.onWindowAttachmentChange = { [weak self, weak terminal] _ in
-            Task { @MainActor [weak self, weak terminal] in
-                guard let self, let terminal,
-                      let attachment = TerminalRegistryPolicy.attachmentToPublish(
-                          registered: self.terminalViews[paneId].map { ObjectIdentifier($0) },
-                          reporting: ObjectIdentifier(terminal),
-                          currentAttachment: terminal.window != nil
-                      ) else { return }
-                self.keyboardCoordinator.setWindowAttached(attachment, for: paneId)
-            }
-        }
-        terminal.onTerminalDirectTouch = { [weak self, weak terminal] isFocusTap in
-            guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
-            self.keyboardCoordinator.setActivePane(paneId)
-            self.keyboardCoordinator.directTouchOnTerminal(isFocusTap: isFocusTap)
-        }
-        terminal.onKeyboardAccessoryHideRequested = { [weak self] in
-            self?.keyboardCoordinator.userRequestedHide()
-        }
-        terminal.onFindNavigatorVisibilityChange = { [weak self, weak terminal] isVisible in
-            guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
-            self.setTerminalFindNavigatorVisible(isVisible, for: paneId)
-            self.keyboardCoordinator.setFindNavigatorActive(isVisible, for: paneId)
-        }
-        #endif
         terminalViews[paneId] = terminal
-        #if os(iOS)
-        terminal.acceptsTerminalInput = paneStates[paneId]?.connectionState.isConnected == true
-        // A replacement is commonly registered before UIKit attaches it.
-        // Publish that fact before reconciling its new identity so the
-        // coordinator cannot spend an acquisition or repair off-window.
-        keyboardCoordinator.setWindowAttached(terminal.window != nil, for: paneId)
-        if replacesRegisteredTerminal {
-            keyboardCoordinator.terminalProviderIdentityDidChange(for: paneId)
-        }
-        Task { @MainActor [weak self, weak terminal] in
-            guard let self, let terminal, self.terminalViews[paneId] === terminal else { return }
-            self.keyboardCoordinator.setWindowAttached(terminal.window != nil, for: paneId)
-            self.publishTerminalInputAvailability(for: paneId)
-            self.setTerminalFindNavigatorVisible(terminal.isFindNavigatorVisible, for: paneId)
-            self.keyboardCoordinator.setFindNavigatorActive(
-                terminal.isFindNavigatorVisible,
-                for: paneId
-            )
-        }
-        #endif
         scheduleTerminalRegistryVersionUpdate()
     }
 
-    @discardableResult
-    private func detachTerminalRegistration(for paneId: UUID) -> GhosttyTerminalView? {
-        let terminal = terminalViews.removeValue(forKey: paneId)
-        if let terminal {
-            #if os(iOS)
-            terminal.onWindowAttachmentChange = nil
-            terminal.onTerminalDirectTouch = nil
-            terminal.onKeyboardAccessoryHideRequested = nil
-            terminal.onFindNavigatorVisibilityChange = nil
-            terminalFindNavigatorVisibleByPane.removeValue(forKey: paneId)
-            terminalVoiceRecordingByPane.removeValue(forKey: paneId)
-            terminalPendingVoiceReturnByPane.removeValue(forKey: paneId)
-            keyboardCoordinator.setWindowAttached(false, for: paneId)
-            keyboardCoordinator.removePane(paneId)
-            #endif
-        }
-        scheduleTerminalRegistryVersionUpdate()
-        return terminal
-    }
-
-    /// Unregister a dismantled platform view only if it is still the pane's
-    /// registered terminal. SwiftUI may create its replacement before the old
-    /// view's deferred teardown runs during window reconstruction.
-    func unregisterTerminal(_ terminal: GhosttyTerminalView, for paneId: UUID) {
-        guard let registeredTerminal = terminalViews[paneId],
-              TerminalRegistryPolicy.shouldRemove(
-                  registered: ObjectIdentifier(registeredTerminal),
-                  dismantled: ObjectIdentifier(terminal)
-              ) else {
+    /// Unregister a terminal view
+    func unregisterTerminal(for paneId: UUID) {
+        if let terminal = terminalViews.removeValue(forKey: paneId) {
             terminal.cleanup()
-            return
         }
-        detachTerminalRegistration(for: paneId)
-        terminal.cleanup()
+        scheduleTerminalRegistryVersionUpdate()
     }
-
-    #if os(iOS)
-    private func setTerminalFindNavigatorVisible(_ isVisible: Bool, for paneId: UUID) {
-        if terminalFindNavigatorVisibleByPane[paneId] != isVisible {
-            terminalFindNavigatorVisibleByPane[paneId] = isVisible
-        }
-    }
-
-    func setTerminalVoiceRecording(_ isRecording: Bool, for paneId: UUID) {
-        if isRecording {
-            if terminalVoiceRecordingByPane[paneId] != true {
-                terminalVoiceRecordingByPane[paneId] = true
-            }
-        } else {
-            terminalVoiceRecordingByPane.removeValue(forKey: paneId)
-        }
-    }
-
-    func setTerminalPendingVoiceReturn(_ isPending: Bool, for paneId: UUID) {
-        if isPending {
-            if terminalPendingVoiceReturnByPane[paneId] != true {
-                terminalPendingVoiceReturnByPane[paneId] = true
-            }
-        } else {
-            terminalPendingVoiceReturnByPane.removeValue(forKey: paneId)
-        }
-    }
-    #endif
 
     private func scheduleTerminalRegistryVersionUpdate() {
         Task { @MainActor [weak self] in
@@ -944,143 +429,79 @@ final class TerminalTabManager: ObservableObject {
     }
 
     /// Register SSH shell for a pane
-    @discardableResult
     func registerSSHClient(
         _ client: SSHClient,
         shellId: UUID,
-        startToken: SSHShellRegistry.StartToken,
         for paneId: UUID,
         serverId: UUID,
         transport: ShellTransport = .ssh,
         fallbackReason: MoshFallbackReason? = nil,
-        fallbackDiagnostics: MoshFallbackDiagnostics? = nil
-    ) async -> Bool {
+        skipTmuxLifecycle: Bool = false
+    ) {
         let registerResult = shellRegistry.register(
             client: client,
             shellId: shellId,
-            startToken: startToken,
             for: paneId,
             serverId: serverId,
             transport: transport,
-            fallbackReason: fallbackReason,
-            fallbackDiagnostics: fallbackDiagnostics
+            fallbackReason: fallbackReason
         )
 
-        switch registerResult {
-        case .stale:
+        if let stale = registerResult.staleIncomingShell {
             logger.warning("Ignoring stale shell registration for pane \(paneId.uuidString, privacy: .public)")
-            await performTrackedConnectionCleanup(for: client) {
+            Task.detached(priority: .utility) { [client = stale.client, shellId = stale.shellId] in
                 await client.closeShell(shellId)
+                await client.disconnect()
             }
-            return false
-        case .accepted:
-            break
+            return
         }
 
-        setPaneTransport(
-            transport,
-            fallbackReason: fallbackReason,
-            fallbackDiagnostics: fallbackDiagnostics,
-            for: paneId
-        )
-        return true
+        if let replaced = registerResult.replacedShell {
+            Task.detached { [client = replaced.client, shellId = replaced.shellId] in
+                await client.closeShell(shellId)
+            }
+        }
+
+        setPaneTransport(transport, fallbackReason: fallbackReason, for: paneId)
+
+        if !skipTmuxLifecycle {
+            Task { [weak self] in
+                await self?.handleTmuxLifecycle(paneId: paneId, serverId: serverId, client: client, shellId: shellId)
+            }
+        }
     }
 
     /// Unregister SSH shell
     func unregisterSSHClient(for paneId: UUID) async {
-        await unregisterSSHClient(
-            for: paneId,
-            killingManagedTmuxSessionNamed: nil,
-            beforeCleanup: nil
-        )
-    }
-
-    func unregisterSSHClient(
-        for paneId: UUID,
-        ifOwnedBy client: SSHClient,
-        shellId: UUID
-    ) async {
-        guard shellRegistry.owns(
-            client: client,
-            shellId: shellId,
-            for: paneId
-        ) else { return }
-        await unregisterSSHClient(for: paneId)
-    }
-
-    func unregisterSSHClient(
-        for paneId: UUID,
-        ifOwnedBy startToken: SSHShellRegistry.StartToken
-    ) async {
-        guard shellRegistry.owns(startToken: startToken, for: paneId) else { return }
-        await unregisterSSHClient(for: paneId)
+        await unregisterSSHClient(for: paneId, killingManagedTmuxSessionNamed: nil)
     }
 
     private func unregisterSSHClient(
         for paneId: UUID,
-        killingManagedTmuxSessionNamed tmuxSessionName: String?,
-        beforeCleanup: (@MainActor @Sendable () async -> Void)?
+        killingManagedTmuxSessionNamed tmuxSessionName: String?
     ) async {
         let unregisterResult = shellRegistry.unregister(for: paneId)
-        if let pendingStart = unregisterResult.pendingStart {
-            tmuxResolver.cancelPrompt(
-                requestId: pendingStart.token.id,
-                setPrompt: setTmuxAttachPrompt
-            )
-        }
 
         guard let registration = unregisterResult.registration else {
             if let pendingStart = unregisterResult.pendingStart {
                 if !shellRegistry.hasClientReferences(pendingStart.client) {
-                    await performTrackedConnectionCleanup(for: pendingStart.client) {
-                        if let beforeCleanup {
-                            await beforeCleanup()
-                        }
-                        await pendingStart.client.disconnect()
-                    }
+                    await pendingStart.client.disconnect()
                 }
             }
             return
         }
 
-        await performTrackedConnectionCleanup(for: registration.client) {
-            if let beforeCleanup {
-                await beforeCleanup()
-            }
-            if let tmuxSessionName {
-                await RemoteTmuxManager.shared.killSession(named: tmuxSessionName, using: registration.client)
-            }
-            if !self.shellRegistry.hasClientReferences(registration.client) {
-                // Abort the whole session before its bounded shutdown. A last
-                // shell does not need a separate channel-close handshake.
-                await registration.client.disconnect()
-            } else {
-                await registration.client.closeShell(registration.shellId)
-            }
+        if let tmuxSessionName {
+            await RemoteTmuxManager.shared.killSession(named: tmuxSessionName, using: registration.client)
         }
 
-        setPaneTransport(
-            .ssh,
-            fallbackReason: nil,
-            fallbackDiagnostics: nil,
-            for: paneId
-        )
-    }
+        await registration.client.closeShell(registration.shellId)
 
-    private func performTrackedConnectionCleanup(
-        for client: SSHClient,
-        operation: @MainActor @Sendable @escaping () async -> Void
-    ) async {
-        let cleanupId = UUID()
-        let task = Task { @MainActor in
-            await operation()
+        if !shellRegistry.hasClientReferences(registration.client) {
+            await registration.client.disconnect()
         }
-        connectionCleanupsInFlight[cleanupId] = ConnectionCleanup(
-            client: client,
-            task: task
-        )
-        await task.value
-        connectionCleanupsInFlight.removeValue(forKey: cleanupId)
+
+        setPaneTransport(.ssh, fallbackReason: nil, for: paneId)
     }
 
     /// Get SSH client for a pane
@@ -1088,246 +509,14 @@ final class TerminalTabManager: ObservableObject {
         shellRegistry.client(for: paneId)
     }
 
-    func connectionStartToken(for paneId: UUID) -> SSHShellRegistry.StartToken? {
-        shellRegistry.connectionStartToken(for: paneId)
-    }
-
     func shellId(for paneId: UUID) -> UUID? {
         shellRegistry.shellId(for: paneId)
     }
 
-    func eternalTerminalRuntime(
-        for paneId: UUID,
-        server: Server,
-        credentials: ServerCredentials
-    ) -> EternalTerminalRuntime {
-        if let runtime = eternalTerminalRuntimes[paneId] {
-            return runtime
-        }
-        let runtime = EternalTerminalRuntime(
-            paneId: paneId,
-            server: server,
-            credentials: credentials,
-            resumeStore: eternalTerminalResumeStore
-        )
-        eternalTerminalRuntimes[paneId] = runtime
-        markEternalTerminalTransport(for: paneId)
-        return runtime
-    }
-
-    func existingEternalTerminalRuntime(for paneId: UUID) -> EternalTerminalRuntime? {
-        eternalTerminalRuntimes[paneId]
-    }
-
-    func isCurrentEternalTerminalRuntime(
-        _ runtime: EternalTerminalRuntime,
-        for paneId: UUID
-    ) -> Bool {
-        eternalTerminalRuntimes[paneId] === runtime
-    }
-
-    func isCurrentEternalTerminalRuntime(
-        token: UUID,
-        for paneId: UUID
-    ) -> Bool {
-        eternalTerminalRuntimes[paneId]?.identityToken == token
-    }
-
-    func markEternalTerminalTransport(for paneId: UUID) {
-        setPaneTransport(
-            .eternalTerminal,
-            fallbackReason: nil,
-            fallbackDiagnostics: nil,
-            for: paneId
-        )
-    }
-
-    func eternalTerminalTmuxResumeContext(
-        for paneId: UUID
-    ) -> EternalTerminalTmuxResumeContext? {
-        paneStates[paneId]?.eternalTerminalTmuxResumeContext
-    }
-
-    func setEternalTerminalTmuxResumeContext(
-        _ context: EternalTerminalTmuxResumeContext?,
-        for paneId: UUID
-    ) {
-        guard paneStates[paneId]?.eternalTerminalTmuxResumeContext != context else { return }
-        paneStates[paneId]?.eternalTerminalTmuxResumeContext = context
-        schedulePersist()
-    }
-
-    func unregisterEternalTerminalRuntime(
-        for paneId: UUID,
-        killingManagedTmuxSessionNamed tmuxSessionName: String? = nil
-    ) async {
-        guard let runtime = eternalTerminalRuntimes.removeValue(forKey: paneId) else { return }
-        if let tmuxSessionName {
-            await runtime.killManagedTmuxSession(named: tmuxSessionName)
-        }
-        await runtime.close()
-        if paneStates[paneId] != nil {
-            setPaneTransport(.ssh, fallbackReason: nil, fallbackDiagnostics: nil, for: paneId)
-        }
-    }
-
-    func notifyEternalTerminalNetworkPathChanged(for paneId: UUID) {
-        eternalTerminalRuntimes[paneId]?.notifyNetworkPathChanged()
-    }
-
-    func prepareEternalTerminalSessionsForApplicationBackground() async {
-        let runtimes = Array(eternalTerminalRuntimes.values)
-        for runtime in runtimes {
-            await runtime.prepareForApplicationBackground()
-        }
-    }
-
-    func resumeEternalTerminalSessionsFromApplicationBackground() async {
-        let runtimes = Array(eternalTerminalRuntimes.values)
-        for runtime in runtimes {
-            await runtime.resumeFromApplicationBackground()
-        }
-    }
-
-    func hasEternalTerminalCheckpoint(for paneId: UUID) -> Bool {
-        eternalTerminalResumeStore.hasCheckpoint(for: paneId)
-    }
-
-    func hasMoshCheckpoint(for paneId: UUID) -> Bool {
-        moshResumeStore.hasSnapshot(for: paneId)
-    }
-
-    func restoreMoshShell(
-        for paneId: UUID,
-        using client: SSHClient,
-        cols: Int,
-        rows: Int
-    ) async -> ShellHandle? {
-        let snapshot: MoshSnapshot
-        do {
-            guard let stored = try moshResumeStore.snapshot(for: paneId) else {
-                return nil
-            }
-            snapshot = stored
-        } catch {
-            discardMoshSnapshotIfNeeded(after: error, paneId: paneId)
-            logger.warning(
-                "Unable to load Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)"
-            )
-            return nil
-        }
-
-        do {
-            return try await client.restoreMoshShell(
-                from: snapshot,
-                cols: cols,
-                rows: rows
-            )
-        } catch {
-            discardMoshSnapshotIfNeeded(after: error, paneId: paneId)
-            logger.warning(
-                "Unable to restore Mosh session; falling back to bootstrap: \(error.localizedDescription, privacy: .public)"
-            )
-            return nil
-        }
-    }
-
-    func persistMoshSnapshot(
-        for paneId: UUID,
-        client: SSHClient,
-        shellId: UUID
-    ) async {
-        do {
-            guard let snapshot = try await client.moshSnapshot(for: shellId) else {
-                return
-            }
-            try moshResumeStore.save(snapshot, for: paneId)
-        } catch {
-            logger.warning(
-                "Unable to save Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-    }
-
-    func prepareResumableSessionsForApplicationBackground() async {
-        await prepareEternalTerminalSessionsForApplicationBackground()
-
-        let moshRoutes: [(paneId: UUID, client: SSHClient, shellId: UUID)] = paneStates.compactMap { paneId, state in
-            guard state.activeTransport == .mosh,
-                  let client = shellRegistry.client(for: paneId),
-                  let shellId = shellRegistry.shellId(for: paneId) else {
-                return nil
-            }
-            return (paneId: paneId, client: client, shellId: shellId)
-        }
-        for (paneId, client, shellId) in moshRoutes {
-            do {
-                guard let snapshot = try await client
-                    .prepareMoshShellForApplicationBackground(shellId) else {
-                    continue
-                }
-                try moshResumeStore.save(snapshot, for: paneId)
-            } catch {
-                logger.warning(
-                    "Unable to prepare Mosh session for background: \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
-    }
-
-    func resumeResumableSessionsFromApplicationBackground() async {
-        await resumeEternalTerminalSessionsFromApplicationBackground()
-
-        let moshRoutes: [(paneId: UUID, client: SSHClient, shellId: UUID)] = paneStates.compactMap { paneId, state in
-            guard state.activeTransport == .mosh,
-                  let client = shellRegistry.client(for: paneId),
-                  let shellId = shellRegistry.shellId(for: paneId) else {
-                return nil
-            }
-            return (paneId: paneId, client: client, shellId: shellId)
-        }
-        for (paneId, client, shellId) in moshRoutes {
-            do {
-                try await client.resumeMoshShellFromApplicationBackground(shellId)
-                await persistMoshSnapshot(
-                    for: paneId,
-                    client: client,
-                    shellId: shellId
-                )
-            } catch {
-                logger.warning(
-                    "Unable to resume Mosh session from background: \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
-    }
-
-    private func discardMoshSnapshotIfNeeded(after error: Error, paneId: UUID) {
-        let shouldDiscard: Bool
-        if let storeError = error as? MoshResumeStoreError {
-            shouldDiscard = storeError.shouldDeleteStoredState
-        } else if let sessionError = error as? MoshSessionError {
-            shouldDiscard = MoshResumePolicy.shouldDiscardSnapshot(after: sessionError)
-        } else {
-            shouldDiscard = false
-        }
-        guard shouldDiscard else { return }
-        do {
-            try moshResumeStore.deleteSnapshot(for: paneId)
-        } catch {
-            logger.error(
-                "Unable to delete invalid Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-    }
-
-    /// Returns a unique ownership token only for the first caller while no live shell exists.
-    func beginShellStart(
-        for paneId: UUID,
-        client: SSHClient
-    ) -> SSHShellRegistry.StartToken? {
+    /// Returns true only for the first caller while no live shell exists for the pane.
+    func tryBeginShellStart(for paneId: UUID, client: SSHClient) -> Bool {
         guard let serverId = paneStates[paneId]?.serverId else {
-            return nil
+            return false
         }
 
         let startResult = shellRegistry.tryBeginStart(
@@ -1341,19 +530,11 @@ final class TerminalTabManager: ObservableObject {
             logMessage: "Recovered stale pane shell-start lock for",
             paneId: paneId
         )
-        return startResult.token
+        return startResult.started
     }
 
-    func finishShellStart(
-        for paneId: UUID,
-        client: SSHClient,
-        startToken: SSHShellRegistry.StartToken
-    ) {
-        shellRegistry.finishStart(
-            for: paneId,
-            client: client,
-            startToken: startToken
-        )
+    func finishShellStart(for paneId: UUID, client: SSHClient) {
+        shellRegistry.finishStart(for: paneId, client: client)
     }
 
     func isShellStartInFlight(for paneId: UUID) -> Bool {
@@ -1364,19 +545,6 @@ final class TerminalTabManager: ObservableObject {
             paneId: paneId
         )
         return result.inFlight
-    }
-
-    func isCurrentShellOwner(
-        for paneId: UUID,
-        client: SSHClient,
-        startToken: SSHShellRegistry.StartToken
-    ) -> Bool {
-        paneStates[paneId] != nil
-            && shellRegistry.ownsConnection(
-                client: client,
-                startToken: startToken,
-                for: paneId
-            )
     }
 
     private func preferredSSHClient(for serverId: UUID, allowPendingStart: Bool) -> SSHClient? {
@@ -1452,46 +620,18 @@ final class TerminalTabManager: ObservableObject {
     }
 
     /// Clean up a pane (terminal + SSH)
-    private func cleanupPane(
-        _ paneId: UUID,
-        intent: TerminalTeardownIntent = .explicitClose
-    ) {
-        guard intent.removesPersistedDescriptor else {
-            assertionFailure("Application termination must preserve the pane descriptor")
-            return
-        }
-        let tmuxSessionToKill = intent.terminatesManagedTmux
-            ? paneTmuxStatus(for: paneId)
-                .flatMap { managedTmuxSessionNameToKill(for: paneId, status: $0) }
-            : nil
+    private func cleanupPane(_ paneId: UUID) {
+        let tmuxSessionToKill = paneTmuxStatus(for: paneId)
+            .flatMap { managedTmuxSessionNameToKill(for: paneId, status: $0) }
 
         clearTmuxRuntimeState(for: paneId)
-        reconnectPreparationsInFlight.removeValue(forKey: paneId)
-        detachTerminalRegistration(for: paneId)
+        unregisterTerminal(for: paneId)
         paneStates.removeValue(forKey: paneId)
         runtimeTitleByPane.removeValue(forKey: paneId)
         titleOverrideByPane.removeValue(forKey: paneId)
 
-        if intent.deletesResumableSessionState {
-            do {
-                try eternalTerminalResumeStore.deleteResumeState(for: paneId)
-            } catch {
-                logger.error("Failed to delete ET resume credentials: \(error.localizedDescription, privacy: .public)")
-            }
-            do {
-                try moshResumeStore.deleteSnapshot(for: paneId)
-            } catch {
-                logger.error("Failed to delete Mosh recovery snapshot: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
         Task.detached { [weak self] in
             await self?.unregisterSSHClient(
-                for: paneId,
-                killingManagedTmuxSessionNamed: tmuxSessionToKill,
-                beforeCleanup: nil
-            )
-            await self?.unregisterEternalTerminalRuntime(
                 for: paneId,
                 killingManagedTmuxSessionNamed: tmuxSessionToKill
             )
@@ -1500,161 +640,25 @@ final class TerminalTabManager: ObservableObject {
 
     // MARK: - Pane State
 
-    #if os(iOS)
-    private func publishTerminalInputAvailability(for paneId: UUID) {
-        let connectionState = paneStates[paneId]?.connectionState ?? .idle
-        let terminal = terminalViews[paneId]
-
-        // Routing must be enabled before the coordinator can preserve or
-        // reacquire the responder at the connected boundary.
-        terminal?.acceptsTerminalInput = connectionState.isConnected
-        keyboardCoordinator.setPaneInputEligible(
-            TerminalKeyboardCoordinator.paneInputEligible(
-                connectionState: connectionState,
-                shouldRestoreOnReconnect: terminal?.shouldRestoreKeyboardFocusOnReconnect == true
-            ),
-            for: paneId
-        )
-    }
-    #endif
-
     /// Update connection state for a pane
     func updatePaneState(_ paneId: UUID, connectionState: ConnectionState) {
-        let serverId = paneStates[paneId]?.serverId
         paneStates[paneId]?.connectionState = connectionState
-        if connectionState.isConnected {
-            let clearedDisconnectReason = paneStates[paneId]?.disconnectReason != nil
-            paneStates[paneId]?.disconnectReason = nil
-            if clearedDisconnectReason {
-                schedulePersist()
-            }
-        }
-        if connectionState.isConnected {
-            paneStates[paneId]?.markConnectionEstablished()
-        }
-        #if os(iOS)
-        publishTerminalInputAvailability(for: paneId)
-        #endif
         switch connectionState {
         case .connecting, .reconnecting:
-            if paneStates[paneId]?.activeTransport != .eternalTerminal {
-                setPaneTransport(
-                    .ssh,
-                    fallbackReason: nil,
-                    fallbackDiagnostics: nil,
-                    for: paneId
-                )
-            }
+            setPaneTransport(.ssh, fallbackReason: nil, for: paneId)
         case .disconnected, .failed:
             setPanePresentationOverrides(.empty, for: paneId)
             terminalViews[paneId]?.applyPresentationOverrides(.empty)
             if paneTmuxStatus(for: paneId) == .foreground {
                 setPaneTmuxStatus(.background, for: paneId)
             }
-            if let serverId {
-                refreshConnectedServerState(for: serverId)
-            }
         case .connected:
-            if let serverId {
-                refreshConnectedServerState(for: serverId)
-            }
             EngagementTracker.shared.recordSuccessfulConnection(
                 id: paneId,
                 transport: paneStates[paneId]?.activeTransport.rawValue ?? ShellTransport.ssh.rawValue
             )
         case .idle:
-            if let serverId {
-                refreshConnectedServerState(for: serverId)
-            }
-        }
-    }
-
-    func handleConnectionFailure(for paneId: UUID, error: Error) {
-        let requiresUserAction = (error as? SSHError).map {
-            !$0.allowsAutomaticReconnectRetry
-        } ?? false
-        if requiresUserAction, paneStates[paneId]?.disconnectReason != nil {
-            paneStates[paneId]?.disconnectReason = nil
-            schedulePersist()
-        }
-        updatePaneState(paneId, connectionState: .failed(error.localizedDescription))
-    }
-
-    func handleShellEnd(
-        for paneId: UUID,
-        client: SSHClient,
-        shellId: UUID,
-        reason: TerminalShellEndReason
-    ) {
-        guard shellRegistry.owns(client: client, shellId: shellId, for: paneId) else {
-            logger.info("Ignoring stale shell end for pane \(paneId.uuidString, privacy: .public)")
-            return
-        }
-        handleShellEnd(
-            for: paneId,
-            reason: reason,
-            unregistering: (client, shellId)
-        )
-    }
-
-    func handleShellEnd(for paneId: UUID, reason: TerminalShellEndReason) {
-        handleShellEnd(for: paneId, reason: reason, unregistering: nil)
-    }
-
-    private func handleShellEnd(
-        for paneId: UUID,
-        reason: TerminalShellEndReason,
-        unregistering ownership: (client: SSHClient, shellId: UUID)?
-    ) {
-        guard let paneState = paneStates[paneId] else { return }
-
-        switch reason {
-        case .tmuxEnded(.managed):
-            guard let tab = tabs(for: paneState.serverId).first(where: { $0.id == paneState.tabId }) else {
-                return
-            }
-            closePane(tab: tab, paneId: paneId, intent: .remoteSessionEnded)
-            return
-
-        case .tmuxDetached(let ownership):
-            if ownership == .managed {
-                tmuxResolver.confirmManagedSession(for: paneId)
-            }
-            paneStates[paneId]?.disconnectReason = .tmuxDetached
-            updatePaneState(paneId, connectionState: .disconnected)
-            schedulePersist()
-
-        case .tmuxCreationFailed:
-            tmuxResolver.clearAttachmentState(for: paneId)
-            paneStates[paneId]?.disconnectReason = nil
-            updatePaneTmuxStatus(paneId, status: .unknown)
-            updatePaneState(
-                paneId,
-                connectionState: .failed(String(localized: "Unable to start tmux session."))
-            )
-            schedulePersist()
-
-        case .tmuxEnded(.external):
-            paneStates[paneId]?.disconnectReason = .externalTmuxEnded
-            updatePaneState(paneId, connectionState: .disconnected)
-            schedulePersist()
-
-        case .transportEnded:
-            paneStates[paneId]?.disconnectReason = .transportEnded
-            updatePaneState(paneId, connectionState: .disconnected)
-        }
-
-        Task { [weak self, ownership] in
-            guard let self else { return }
-            if let ownership {
-                await self.unregisterSSHClient(
-                    for: paneId,
-                    ifOwnedBy: ownership.client,
-                    shellId: ownership.shellId
-                )
-            } else {
-                await self.unregisterSSHClient(for: paneId)
-            }
+            break
         }
     }
 
@@ -1743,16 +747,12 @@ final class TerminalTabManager: ObservableObject {
         tmuxResolver.clearRuntimeState(for: paneId, setPrompt: setTmuxAttachPrompt)
     }
 
-    func resolveTmuxAttachPrompt(requestId: UUID, selection: TmuxAttachSelection) {
-        tmuxResolver.resolvePrompt(
-            requestId: requestId,
-            selection: selection,
-            setPrompt: setTmuxAttachPrompt
-        )
+    func resolveTmuxAttachPrompt(paneId: UUID, selection: TmuxAttachSelection) {
+        tmuxResolver.resolvePrompt(entityId: paneId, selection: selection, setPrompt: setTmuxAttachPrompt)
     }
 
-    func cancelTmuxAttachPrompt(requestId: UUID) {
-        tmuxResolver.cancelPrompt(requestId: requestId, setPrompt: setTmuxAttachPrompt)
+    func cancelTmuxAttachPrompt(paneId: UUID) {
+        tmuxResolver.cancelPrompt(entityId: paneId, setPrompt: setTmuxAttachPrompt)
     }
 
     private func managedTmuxSessionNames(for serverId: UUID) -> Set<String> {
@@ -1798,24 +798,16 @@ final class TerminalTabManager: ObservableObject {
         for serverId: UUID,
         paneId: UUID,
         selection: TmuxAttachSelection,
-        using client: SSHClient,
-        backend: RemoteTmuxBackend
+        using client: SSHClient
     ) async {
-        guard tmuxCleanupServers.insert(serverId).inserted else { return }
-        await RemoteTmuxManager.shared.cleanupLegacySessions(
-            using: client,
-            backend: backend
+        var cleanupSet = tmuxCleanupServers
+        await tmuxResolver.runCleanupIfNeeded(
+            serverId: serverId,
+            cleanupSet: &cleanupSet,
+            managedNames: tmuxSessionNamesToKeep(for: serverId, paneId: paneId, selection: selection),
+            using: client
         )
-        await RemoteTmuxManager.shared.cleanupDetachedSessions(
-            deviceId: DeviceIdentity.id,
-            keeping: tmuxSessionNamesToKeep(
-                for: serverId,
-                paneId: paneId,
-                selection: selection
-            ),
-            using: client,
-            backend: backend
-        )
+        tmuxCleanupServers = cleanupSet
     }
 
     private func prepareActiveTmuxPane(
@@ -1829,72 +821,51 @@ final class TerminalTabManager: ObservableObject {
         await RemoteTmuxManager.shared.prepareConfig(using: client, terminalType: terminalType, backend: backend)
     }
 
+    private func immediateTmuxSelection(for paneId: UUID) -> TmuxAttachSelection {
+        if tmuxResolver.sessionOwnership[paneId] == .external {
+            return .attachExisting(sessionName: tmuxResolver.sessionName(for: paneId))
+        }
+
+        tmuxResolver.sessionNames[paneId] = tmuxResolver.managedSessionName(for: paneId)
+        tmuxResolver.sessionOwnership[paneId] = .managed
+        return .createManaged
+    }
+
     private func tmuxStartupCommand(
         for paneId: UUID,
         selection: TmuxAttachSelection,
         workingDirectory: String,
-        backend: RemoteTmuxBackend,
-        lifecycleMarkerToken: String,
-        ownership: TmuxSessionOwnership,
-        reattachingManagedSession: Bool,
-        transport: ShellTransport
+        backend: RemoteTmuxBackend
     ) -> String? {
         switch selection {
         case .skipTmux:
             return nil
         case .createManaged:
-            if reattachingManagedSession {
-                return RemoteTmuxManager.shared.attachExistingCommand(
-                    sessionName: tmuxResolver.sessionName(for: paneId),
-                    ownership: .managed,
-                    backend: backend,
-                    lifecycleMarkerToken: lifecycleMarkerToken,
-                    transport: transport
-                )
-            }
             return RemoteTmuxManager.shared.attachCommand(
                 sessionName: tmuxResolver.sessionName(for: paneId),
                 workingDirectory: workingDirectory,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken,
-                transport: transport
+                backend: backend
             )
         case .attachExisting(let sessionName):
-            return RemoteTmuxManager.shared.attachExistingCommand(
-                sessionName: sessionName,
-                ownership: ownership,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken,
-                transport: transport
-            )
+            return RemoteTmuxManager.shared.attachExistingCommand(sessionName: sessionName, backend: backend)
         }
     }
 
-    func shouldReattachManagedTmuxSession(for paneId: UUID) -> Bool {
-        tmuxResolver.sessionOwnership[paneId] == .managed
-            && tmuxResolver.sessionNames[paneId] != nil
-            && tmuxResolver.hasConfirmedManagedSession(for: paneId)
-    }
-
-    private func resolveTmuxWorkingDirectory(
-        for paneId: UUID,
-        using client: SSHClient,
-        backend: RemoteTmuxBackend? = nil
-    ) async -> String {
+    private func resolveTmuxWorkingDirectory(for paneId: UUID, using client: SSHClient) async -> String {
         if let seedPaneId = paneStates[paneId]?.seedPaneId,
            let path = await RemoteTmuxManager.shared.currentPath(
                sessionName: tmuxResolver.sessionName(for: seedPaneId),
-               using: client,
-               backend: backend
+               using: client
            ) {
+            setPaneWorkingDirectory(path, for: paneId)
             return path
         }
 
         if let path = await RemoteTmuxManager.shared.currentPath(
             sessionName: tmuxResolver.sessionName(for: paneId),
-            using: client,
-            backend: backend
+            using: client
         ) {
+            setPaneWorkingDirectory(path, for: paneId)
             return path
         }
 
@@ -1941,435 +912,137 @@ final class TerminalTabManager: ObservableObject {
         }
     }
 
-    func tmuxStartupPlan(
-        for paneId: UUID,
+    private func handleTmuxLifecycle(
+        paneId: UUID,
         serverId: UUID,
         client: SSHClient,
-        startToken: SSHShellRegistry.StartToken
-    ) async throws -> TerminalShellStartupPlan {
-        try await tmuxStartupPlan(
-            for: paneId,
-            serverId: serverId,
-            client: client,
-            startToken: startToken,
-            availabilityResolver: {
-                await RemoteTmuxManager.shared.tmuxAvailability(using: client)
-            }
-        )
-    }
-
-    func tmuxStartupPlan(
-        for paneId: UUID,
-        serverId: UUID,
-        client: SSHClient,
-        startToken: SSHShellRegistry.StartToken,
-        availabilityResolver: () async -> RemoteTmuxAvailability,
-        transport: ShellTransport = .ssh
-    ) async throws -> TerminalShellStartupPlan {
-        try await tmuxStartupPlan(
-            for: paneId,
-            serverId: serverId,
-            client: client,
-            availabilityResolver: availabilityResolver,
-            transport: transport,
-            requestId: startToken.id,
-            validateOwner: {
-                try self.requireCurrentShellOwner(
-                    for: paneId,
-                    client: client,
-                    startToken: startToken
-                )
-            }
-        )
-    }
-
-    func eternalTerminalTmuxStartupPlan(
-        for paneId: UUID,
-        serverId: UUID,
-        client: SSHClient,
-        runtimeToken: UUID
-    ) async throws -> TerminalShellStartupPlan {
-        let plan = try await tmuxStartupPlan(
-            for: paneId,
-            serverId: serverId,
-            client: client,
-            availabilityResolver: {
-                await RemoteTmuxManager.shared.tmuxAvailability(using: client)
-            },
-            transport: .eternalTerminal,
-            requestId: runtimeToken,
-            validateOwner: {
-                try Task.checkCancellation()
-                guard self.isCurrentEternalTerminalRuntime(token: runtimeToken, for: paneId) else {
-                    throw CancellationError()
-                }
-            }
-        )
-        if let command = plan.command, plan.tmuxLifecycle != nil {
-            try Task.checkCancellation()
-            guard isCurrentEternalTerminalRuntime(token: runtimeToken, for: paneId) else {
-                throw CancellationError()
-            }
-
-            let remotePath = EternalTerminalStartupCommand.remoteScriptPath(token: runtimeToken)
-            let script = EternalTerminalStartupCommand.script(
-                command: command,
-                remotePath: remotePath
-            )
-            try await client.upload(
-                Data(script.utf8),
-                to: remotePath,
-                permissions: 0o700
-            )
-            return TerminalShellStartupPlan(
-                command: EternalTerminalStartupCommand.invocation(remotePath: remotePath),
-                tmuxLifecycle: plan.tmuxLifecycle
-            )
-        }
-
-        guard plan.command == nil,
-              let workingDirectory = paneWorkingDirectory(for: paneId),
-              !workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return plan
-        }
-
-        let environment = await client.remoteEnvironment()
-        return TerminalShellStartupPlan(
-            command: RemoteTerminalBootstrap.directoryChangeCommand(
-                for: workingDirectory,
-                environment: environment
-            ),
-            tmuxLifecycle: nil
-        )
-    }
-
-    private func tmuxStartupPlan(
-        for paneId: UUID,
-        serverId: UUID,
-        client: SSHClient,
-        availabilityResolver: () async -> RemoteTmuxAvailability,
-        transport: ShellTransport,
-        requestId: UUID,
-        validateOwner: () throws -> Void
-    ) async throws -> TerminalShellStartupPlan {
-        try validateOwner()
-
-        guard tmuxResolver.isTmuxEnabled(for: serverId) else {
-            disableTmuxAttachment(for: paneId, status: .off)
-            return .plainShell
-        }
-
-        let availability = await availabilityResolver()
-        try validateOwner()
-
-        let backend: RemoteTmuxBackend
-        switch availability {
-        case .unsupported:
-            disableTmuxAttachment(for: paneId, status: .off)
-            return .plainShell
-        case .available(let availableBackend):
-            backend = availableBackend
-        case .confirmedMissing:
-            disableTmuxAttachment(for: paneId, status: .missing)
-            return .plainShell
-        case .indeterminate(let failure):
-            logger.warning(
-                "Preserving tmux attachment for pane \(paneId.uuidString, privacy: .public) after indeterminate probe: \(failure.logDescription, privacy: .public)"
-            )
-            throw failure.retryError
-        }
-
-        let isReattachingManagedSession = shouldReattachManagedTmuxSession(for: paneId)
-        let selection = try await tmuxResolver.resolveSelection(
-            for: paneId,
-            serverId: serverId,
-            client: client,
-            backend: backend,
-            requestId: requestId,
-            validateOwner: {
-                try validateOwner()
-            },
-            setPrompt: setTmuxAttachPrompt
-        )
-        try validateOwner()
-        tmuxResolver.updateAttachmentState(for: paneId, selection: selection, setPrompt: setTmuxAttachPrompt)
-        schedulePersist()
-
-        if case .skipTmux = selection {
-            updatePaneTmuxStatus(paneId, status: .off)
-            return .plainShell
-        }
-
-        await runTmuxCleanupIfNeeded(
-            for: serverId,
-            paneId: paneId,
-            selection: selection,
-            using: client,
-            backend: backend
-        )
-        try validateOwner()
-        await prepareActiveTmuxPane(for: paneId, serverId: serverId, using: client, backend: backend)
-        try validateOwner()
-
-        let workingDirectory = await resolveTmuxWorkingDirectory(
-            for: paneId,
-            using: client,
-            backend: backend
-        )
-        try validateOwner()
-        if workingDirectory != "~" {
-            setPaneWorkingDirectory(workingDirectory, for: paneId)
-        }
-        guard let ownership = tmuxResolver.sessionOwnership[paneId] else {
-            throw SSHError.unknown("tmux attachment state was lost during startup")
-        }
-        let lifecycleMarkerToken = UUID().uuidString
-        let sessionName = tmuxResolver.sessionName(for: paneId)
-        let presenceToken = UUID().uuidString
-        let existsMarker = "__VVTERM_TMUX_EXISTS_\(presenceToken)__"
-        let missingMarker = "__VVTERM_TMUX_MISSING_\(presenceToken)__"
-        return TerminalShellStartupPlan(
-            command: tmuxStartupCommand(
-                for: paneId,
-                selection: selection,
-                workingDirectory: workingDirectory,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken,
-                ownership: ownership,
-                reattachingManagedSession: isReattachingManagedSession,
-                transport: transport
-            ),
-            tmuxLifecycle: TmuxShellLifecycleContext(
-                ownership: ownership,
-                markerToken: lifecycleMarkerToken,
-                presenceProbe: TmuxSessionPresenceProbe(
-                    command: RemoteTmuxManager.shared.sessionPresenceProbeCommand(
-                        sessionName: sessionName,
-                        backend: backend,
-                        existsMarker: existsMarker,
-                        missingMarker: missingMarker
-                    ),
-                    existsMarker: existsMarker,
-                    missingMarker: missingMarker
-                )
-            )
-        )
-    }
-
-    private func requireCurrentShellOwner(
-        for paneId: UUID,
-        client: SSHClient,
-        startToken: SSHShellRegistry.StartToken
-    ) throws {
-        try Task.checkCancellation()
-        guard isCurrentShellOwner(
-            for: paneId,
-            client: client,
-            startToken: startToken
-        ) else {
-            logger.info("Ignoring stale tmux startup result for pane \(paneId.uuidString, privacy: .public)")
-            throw CancellationError()
-        }
-    }
-
-    func startTmuxInstall(
-        for paneId: UUID,
-        onInstalled: @MainActor @escaping () -> Void
+        shellId: UUID
     ) async {
-        if let runtime = eternalTerminalRuntimes[paneId] {
-            await startEternalTerminalTmuxInstall(
-                for: paneId,
-                runtime: runtime,
-                onInstalled: onInstalled
-            )
+        guard tmuxResolver.isTmuxEnabled(for: serverId) else {
+            await MainActor.run {
+                self.disableTmuxAttachment(for: paneId, status: .off)
+            }
             return
         }
 
+        guard await client.supportsTmuxRuntime() else {
+            logger.info("Resolved remote environment does not support tmux runtime for pane \(paneId.uuidString, privacy: .public); using plain SSH shell")
+            await MainActor.run {
+                self.disableTmuxAttachment(for: paneId, status: .off)
+            }
+            return
+        }
+
+        guard let backend = await RemoteTmuxManager.shared.tmuxBackend(using: client) else {
+            await MainActor.run {
+                self.disableTmuxAttachment(for: paneId, status: .missing)
+            }
+            return
+        }
+
+        let selection = immediateTmuxSelection(for: paneId)
+        await runTmuxCleanupIfNeeded(for: serverId, paneId: paneId, selection: selection, using: client)
+        await prepareActiveTmuxPane(for: paneId, serverId: serverId, using: client, backend: backend)
+
+        let workingDirectory = await resolveTmuxWorkingDirectory(for: paneId, using: client)
+        guard let command = tmuxResolver.buildAttachExecCommand(
+            for: paneId,
+            selection: selection,
+            workingDirectory: workingDirectory,
+            backend: backend
+        ) else {
+            return
+        }
+
+        await RemoteTmuxManager.shared.sendScript(command, using: client, shellId: shellId)
+    }
+
+    func tmuxStartupPlan(
+        for paneId: UUID,
+        serverId: UUID,
+        client: SSHClient
+    ) async -> (command: String?, skipTmuxLifecycle: Bool) {
+        guard tmuxResolver.isTmuxEnabled(for: serverId) else {
+            disableTmuxAttachment(for: paneId, status: .off)
+            return (nil, true)
+        }
+
+        guard await client.supportsTmuxRuntime() else {
+            disableTmuxAttachment(for: paneId, status: .off)
+            return (nil, true)
+        }
+
+        guard let backend = await RemoteTmuxManager.shared.tmuxBackend(using: client) else {
+            disableTmuxAttachment(for: paneId, status: .missing)
+            return (nil, true)
+        }
+
+        let selection = await tmuxResolver.resolveSelection(
+            for: paneId, serverId: serverId, client: client, setPrompt: setTmuxAttachPrompt
+        )
+        tmuxResolver.updateAttachmentState(for: paneId, selection: selection, setPrompt: setTmuxAttachPrompt)
+
+        if case .skipTmux = selection {
+            updatePaneTmuxStatus(paneId, status: .off)
+            return (nil, true)
+        }
+
+        await runTmuxCleanupIfNeeded(for: serverId, paneId: paneId, selection: selection, using: client)
+        await prepareActiveTmuxPane(for: paneId, serverId: serverId, using: client, backend: backend)
+
+        let workingDirectory = await resolveTmuxWorkingDirectory(for: paneId, using: client)
+        return (
+            tmuxStartupCommand(
+                for: paneId,
+                selection: selection,
+                workingDirectory: workingDirectory,
+                backend: backend
+            ),
+            true
+        )
+    }
+
+    func startTmuxInstall(for paneId: UUID) async {
         guard let registration = shellRegistry.registration(for: paneId) else { return }
         let serverId = registration.serverId
         guard tmuxResolver.isTmuxEnabled(for: serverId) else { return }
 
         updatePaneTmuxStatus(paneId, status: .installing)
-        do {
-            let outcome = try await performTmuxInstall(
-                for: paneId,
-                using: registration.client,
-                sendScript: { script in
-                    try await RemoteTmuxManager.shared.sendScript(
-                        script,
-                        using: registration.client,
-                        shellId: registration.shellId
-                    )
-                },
-                validateOwner: {
-                    self.shellRegistry.owns(
-                        client: registration.client,
-                        shellId: registration.shellId,
-                        for: paneId
-                    )
-                }
-            )
-            guard shellRegistry.owns(
-                client: registration.client,
-                shellId: registration.shellId,
-                for: paneId
-            ) else { return }
-            await finishTmuxInstall(
-                outcome,
-                for: paneId,
-                onInstalled: onInstalled,
-                beforeReconnect: {
-                    await self.unregisterSSHClient(
-                        for: paneId,
-                        ifOwnedBy: registration.client,
-                        shellId: registration.shellId
-                    )
-                }
-            )
-        } catch is CancellationError {
+
+        guard let backend = await RemoteTmuxManager.shared.tmuxInstallBackend(using: registration.client) else {
+            updatePaneTmuxStatus(paneId, status: .off)
             return
-        } catch {
-            guard shellRegistry.owns(
-                client: registration.client,
-                shellId: registration.shellId,
-                for: paneId
-            ) else { return }
-            logger.warning("tmux installation failed: \(error.localizedDescription, privacy: .public)")
-            updatePaneTmuxStatus(paneId, status: .unknown)
         }
-    }
-
-    private func startEternalTerminalTmuxInstall(
-        for paneId: UUID,
-        runtime: EternalTerminalRuntime,
-        onInstalled: @MainActor @escaping () -> Void
-    ) async {
-        guard let serverId = paneStates[paneId]?.serverId,
-              tmuxResolver.isTmuxEnabled(for: serverId),
-              isCurrentEternalTerminalRuntime(runtime, for: paneId) else { return }
-
-        updatePaneTmuxStatus(paneId, status: .installing)
-        do {
-            let outcome = try await runtime.withBootstrapSSHClient { client in
-                try await self.performTmuxInstall(
-                    for: paneId,
-                    using: client,
-                    sendScript: { script in
-                        try await runtime.sendInteractiveScript(script)
-                    },
-                    validateOwner: {
-                        self.isCurrentEternalTerminalRuntime(runtime, for: paneId)
-                    }
-                )
-            }
-            guard isCurrentEternalTerminalRuntime(runtime, for: paneId) else { return }
-            await finishTmuxInstall(
-                outcome,
-                for: paneId,
-                onInstalled: onInstalled,
-                beforeReconnect: {
-                    await self.unregisterEternalTerminalRuntime(for: paneId)
-                }
-            )
-        } catch is CancellationError {
-            return
-        } catch {
-            guard isCurrentEternalTerminalRuntime(runtime, for: paneId) else { return }
-            logger.warning("ET tmux installation failed: \(error.localizedDescription, privacy: .public)")
-            updatePaneTmuxStatus(paneId, status: .unknown)
-        }
-    }
-
-    private func performTmuxInstall(
-        for paneId: UUID,
-        using client: SSHClient,
-        sendScript: @MainActor @Sendable (String) async throws -> Void,
-        validateOwner: @MainActor @Sendable () -> Bool
-    ) async throws -> TmuxInstallOutcome {
-        guard let backend = await RemoteTmuxManager.shared.tmuxInstallBackend(using: client) else {
-            return .unavailable
-        }
-        try Task.checkCancellation()
-        guard validateOwner() else { throw CancellationError() }
 
         let sessionName = tmuxResolver.sessionName(for: paneId)
-        let workingDirectory = await resolveTmuxWorkingDirectory(
-            for: paneId,
-            using: client,
-            backend: backend
-        )
-        try Task.checkCancellation()
-        guard validateOwner() else { throw CancellationError() }
-
-        let terminalType = await client.remoteTerminalType()
-        try Task.checkCancellation()
-        guard validateOwner() else { throw CancellationError() }
-
+        let workingDirectory = await resolveTmuxWorkingDirectory(for: paneId, using: registration.client)
+        let terminalType = await registration.client.remoteTerminalType()
         let script = RemoteTmuxManager.shared.installAndAttachScript(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
             terminalType: terminalType,
-            backend: backend,
-            attachAfterInstall: false
+            backend: backend
         )
-        try await sendScript(script)
+        await RemoteTmuxManager.shared.sendScript(script, using: registration.client, shellId: registration.shellId)
 
-        var observedIndeterminateResult = false
-        for _ in 0..<6 {
-            try await Task.sleep(for: .seconds(2))
-            guard validateOwner() else { throw CancellationError() }
-            let availability = await RemoteTmuxManager.shared.tmuxAvailability(using: client)
-            try Task.checkCancellation()
-            guard validateOwner() else { throw CancellationError() }
-
-            switch availability {
-            case .available:
-                return .installed(sessionName: sessionName)
-            case .confirmedMissing:
-                continue
-            case .indeterminate:
-                observedIndeterminateResult = true
-            case .unsupported:
-                return .unavailable
+        Task { [weak self] in
+            guard let self else { return }
+            for _ in 0..<6 {
+                try? await Task.sleep(for: .seconds(2))
+                let available = await RemoteTmuxManager.shared.isTmuxAvailable(using: registration.client)
+                if available {
+                    await MainActor.run {
+                        self.tmuxResolver.sessionNames[paneId] = sessionName
+                        self.tmuxResolver.sessionOwnership[paneId] = .managed
+                        self.updatePaneTmuxStatus(paneId, status: self.currentTmuxStatus(for: paneId, serverId: serverId))
+                    }
+                    return
+                }
+            }
+            await MainActor.run {
+                self.updatePaneTmuxStatus(paneId, status: .missing)
             }
         }
-        return observedIndeterminateResult ? .indeterminate : .missing
-    }
-
-    private func finishTmuxInstall(
-        _ outcome: TmuxInstallOutcome,
-        for paneId: UUID,
-        onInstalled: @MainActor @escaping () -> Void,
-        beforeReconnect: @MainActor @Sendable () async -> Void
-    ) async {
-        switch outcome {
-        case .installed(let sessionName):
-            await beforeReconnect()
-            completeTmuxInstall(
-                for: paneId,
-                sessionName: sessionName,
-                onInstalled: onInstalled
-            )
-        case .unavailable:
-            updatePaneTmuxStatus(paneId, status: .off)
-        case .missing:
-            updatePaneTmuxStatus(paneId, status: .missing)
-        case .indeterminate:
-            updatePaneTmuxStatus(paneId, status: .unknown)
-        }
-    }
-
-    func completeTmuxInstall(
-        for paneId: UUID,
-        sessionName: String,
-        onInstalled: () -> Void
-    ) {
-        guard paneStates[paneId] != nil else { return }
-        tmuxResolver.clearAttachmentState(for: paneId)
-        tmuxResolver.sessionNames[paneId] = sessionName
-        tmuxResolver.sessionOwnership[paneId] = .managed
-        schedulePersist()
-        onInstalled()
     }
 
     func installMoshServer(for paneId: UUID) async throws {
@@ -2407,17 +1080,10 @@ final class TerminalTabManager: ObservableObject {
     // MARK: - Persistence
 
     private func makeServerSnapshots() -> [TerminalTabsSnapshot.ServerSnapshot] {
-        tabsByServer.compactMap { serverId, tabs in
-            guard !tabs.isEmpty else { return nil }
-            return TerminalTabsSnapshot.ServerSnapshot(
+        tabsByServer.map { serverId, tabs in
+            TerminalTabsSnapshot.ServerSnapshot(
                 serverId: serverId,
-                tabs: tabs.map {
-                    TerminalTabsSnapshot.TabSnapshot(
-                        from: $0,
-                        paneStates: paneStates,
-                        tmuxResolver: tmuxResolver
-                    )
-                },
+                tabs: tabs.map { TerminalTabsSnapshot.TabSnapshot(from: $0, paneStates: paneStates) },
                 selectedTabId: selectedTabByServer[serverId],
                 selectedView: selectedViewByServer[serverId]
             )
@@ -2442,14 +1108,10 @@ final class TerminalTabManager: ObservableObject {
                         tabId: tab.id,
                         serverId: tab.serverId
                     )
-                    paneState.connectionState = .disconnected
-                    paneState.markConnectionEstablished()
                     if !tmuxResolver.isTmuxEnabled(for: tab.serverId) {
                         paneState.tmuxStatus = .off
                     }
                     paneState.presentationOverrides = snapshotsByTabId[tab.id]?.panePresentationOverrides?[paneId] ?? .empty
-                    paneState.disconnectReason = snapshotsByTabId[tab.id]?.paneDisconnectReasons?[paneId]
-                    paneState.eternalTerminalTmuxResumeContext = snapshotsByTabId[tab.id]?.eternalTerminalTmuxResumeContexts?[paneId]
                     restoredPaneStates[paneId] = paneState
                 }
             }
@@ -2469,7 +1131,6 @@ final class TerminalTabManager: ObservableObject {
                 snapshotsByTabId[tabSnapshot.id] = tabSnapshot
             }
             let tabs = server.tabs.map { $0.toTerminalTab() }
-            guard !tabs.isEmpty else { continue }
             restoredTabsByServer[server.serverId] = tabs
             if let selected = server.selectedTabId {
                 restoredSelectedTabs[server.serverId] = selected
@@ -2482,21 +1143,11 @@ final class TerminalTabManager: ObservableObject {
         tabsByServer = restoredTabsByServer
         selectedTabByServer = restoredSelectedTabs
         selectedViewByServer = restoredSelectedViews
-        tmuxResolver.clearAllAttachmentState()
-        for tabSnapshot in snapshotsByTabId.values {
-            for (paneId, attachment) in tabSnapshot.tmuxAttachments ?? [:] {
-                tmuxResolver.sessionNames[paneId] = attachment.sessionName
-                tmuxResolver.sessionOwnership[paneId] = attachment.ownership
-                if attachment.managedSessionConfirmed == true {
-                    tmuxResolver.confirmManagedSession(for: paneId)
-                }
-            }
-        }
         paneStates = makeRestoredPaneStates(
             from: restoredTabsByServer,
             snapshotsByTabId: snapshotsByTabId
         )
-        connectedServerIds = []
+        connectedServerIds = Set(restoredTabsByServer.keys)
     }
 
     private func schedulePersist() {
@@ -2551,15 +1202,8 @@ private struct TerminalTabsSnapshot: Codable {
         let focusedPaneId: UUID
         let rootPaneId: UUID
         let panePresentationOverrides: [UUID: TerminalPresentationOverrides]?
-        let paneDisconnectReasons: [UUID: TerminalDisconnectReason]?
-        let eternalTerminalTmuxResumeContexts: [UUID: EternalTerminalTmuxResumeContext]?
-        let tmuxAttachments: [UUID: TmuxAttachmentSnapshot]?
 
-        init(
-            from tab: TerminalTab,
-            paneStates: [UUID: TerminalPaneState],
-            tmuxResolver: TmuxAttachResolver
-        ) {
+        init(from tab: TerminalTab, paneStates: [UUID: TerminalPaneState]) {
             self.id = tab.id
             self.serverId = tab.serverId
             self.title = tab.title
@@ -2577,40 +1221,6 @@ private struct TerminalTabsSnapshot: Codable {
                 }
             )
             self.panePresentationOverrides = overrides.isEmpty ? nil : overrides
-            let disconnectReasons: [UUID: TerminalDisconnectReason] = Dictionary(
-                uniqueKeysWithValues: tab.allPaneIds.compactMap { paneId in
-                    guard let reason = paneStates[paneId]?.disconnectReason else { return nil }
-                    return (paneId, reason)
-                }
-            )
-            self.paneDisconnectReasons = disconnectReasons.isEmpty ? nil : disconnectReasons
-            let resumeContexts: [UUID: EternalTerminalTmuxResumeContext] = Dictionary(
-                uniqueKeysWithValues: tab.allPaneIds.compactMap { paneId in
-                    guard let context = paneStates[paneId]?.eternalTerminalTmuxResumeContext else {
-                        return nil
-                    }
-                    return (paneId, context)
-                }
-            )
-            self.eternalTerminalTmuxResumeContexts = resumeContexts.isEmpty ? nil : resumeContexts
-            let attachments: [UUID: TmuxAttachmentSnapshot] = Dictionary(
-                uniqueKeysWithValues: tab.allPaneIds.compactMap { paneId in
-                    guard let sessionName = tmuxResolver.sessionNames[paneId],
-                          let ownership = tmuxResolver.sessionOwnership[paneId] else {
-                        return nil
-                    }
-                    return (
-                        paneId,
-                        TmuxAttachmentSnapshot(
-                            sessionName: sessionName,
-                            ownership: ownership,
-                            managedSessionConfirmed: ownership == .managed
-                                && tmuxResolver.hasConfirmedManagedSession(for: paneId)
-                        )
-                    )
-                }
-            )
-            self.tmuxAttachments = attachments.isEmpty ? nil : attachments
         }
 
         func toTerminalTab() -> TerminalTab {
@@ -2626,39 +1236,11 @@ private struct TerminalTabsSnapshot: Codable {
         }
     }
 
-    struct TmuxAttachmentSnapshot: Codable {
-        let sessionName: String
-        let ownership: TmuxSessionOwnership
-        let managedSessionConfirmed: Bool?
-    }
-
     let servers: [ServerSnapshot]
 }
 
 #if DEBUG
 extension TerminalTabManager {
-    func setEternalTerminalResumeStoreForTesting(
-        _ store: any EternalTerminalResumeStoring
-    ) {
-        eternalTerminalResumeStore = store
-    }
-
-    func setMoshResumeStoreForTesting(_ store: any MoshResumeStoring) {
-        moshResumeStore = store
-    }
-
-    func persistAndRestoreSnapshotForTesting() {
-        persistTask?.cancel()
-        persistTask = nil
-        persistSnapshot()
-        tmuxResolver.clearAllAttachmentState()
-        restoreSnapshot()
-    }
-
-    func snapshotDataForTesting() throws -> Data {
-        try JSONEncoder().encode(makeSnapshot())
-    }
-
     /// Resets manager state for deterministic integration tests.
     func resetForTesting() async {
         persistTask?.cancel()
@@ -2677,40 +1259,22 @@ extension TerminalTabManager {
         for context in shellRegistry.startsInFlight.values {
             uniqueClients[ObjectIdentifier(context.client)] = context.client
         }
-        for cleanup in connectionCleanupsInFlight.values {
-            cleanup.task.cancel()
-            uniqueClients[ObjectIdentifier(cleanup.client)] = cleanup.client
-        }
 
         let terminals = Array(terminalViews.values)
-        let eternalRuntimes = Array(eternalTerminalRuntimes.values)
         isRestoring = true
         tabsByServer = [:]
         selectedTabByServer = [:]
-        splitZoomedTabIds = []
         connectedServerIds = []
         selectedViewByServer = [:]
         paneStates = [:]
         runtimeTitleByPane = [:]
         titleOverrideByPane = [:]
-        #if os(iOS)
-        terminalFindNavigatorVisibleByPane = [:]
-        terminalVoiceRecordingByPane = [:]
-        terminalPendingVoiceReturnByPane = [:]
-        keyboardCoordinator.setActivePane(nil)
-        keyboardCoordinator.setViewActive(false)
-        #endif
         tmuxAttachPrompt = nil
         terminalRegistryVersion = 0
         terminalViews.removeAll()
-        eternalTerminalRuntimes.removeAll()
         shellRegistry.removeAll()
-        connectionCleanupsInFlight.removeAll()
-        reconnectPreparationsInFlight.removeAll()
         tabOpensInFlight.removeAll()
         tmuxCleanupServers.removeAll()
-        eternalTerminalResumeStore = EternalTerminalResumeStore.shared
-        moshResumeStore = MoshResumeStore.shared
         isRestoring = false
 
         UserDefaults.standard.removeObject(forKey: persistenceKey)
@@ -2719,9 +1283,6 @@ extension TerminalTabManager {
         }
         for client in uniqueClients.values {
             await client.disconnect()
-        }
-        for runtime in eternalRuntimes {
-            await runtime.close()
         }
     }
 }

@@ -69,8 +69,6 @@ struct TerminalPaneState {
     let tabId: UUID
     let serverId: UUID
     var connectionState: ConnectionState
-    var disconnectReason: TerminalDisconnectReason?
-    private(set) var hasEstablishedConnection: Bool
     var lastActivity: Date
     var tmuxStatus: TmuxStatus
     var workingDirectory: String?
@@ -80,19 +78,12 @@ struct TerminalPaneState {
     var activeTransport: ShellTransport
     /// Set only when this pane is running over SSH fallback from Mosh.
     var moshFallbackReason: MoshFallbackReason?
-    /// Privacy-safe, non-persisted detail for the active Mosh fallback.
-    var moshFallbackDiagnostics: MoshFallbackDiagnostics?
-    /// Minimal non-secret context needed to recognize tmux lifecycle markers
-    /// when an existing ET session is resumed after process relaunch.
-    var eternalTerminalTmuxResumeContext: EternalTerminalTmuxResumeContext?
 
     init(paneId: UUID, tabId: UUID, serverId: UUID) {
         self.paneId = paneId
         self.tabId = tabId
         self.serverId = serverId
         self.connectionState = .connecting
-        self.disconnectReason = nil
-        self.hasEstablishedConnection = false
         self.lastActivity = Date()
         self.tmuxStatus = .unknown
         self.workingDirectory = nil
@@ -100,11 +91,5 @@ struct TerminalPaneState {
         self.seedPaneId = nil
         self.activeTransport = .ssh
         self.moshFallbackReason = nil
-        self.moshFallbackDiagnostics = nil
-        self.eternalTerminalTmuxResumeContext = nil
-    }
-
-    mutating func markConnectionEstablished() {
-        hasEstablishedConnection = true
     }
 }

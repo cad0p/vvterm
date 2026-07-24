@@ -1,18 +1,12 @@
 import Foundation
-import os.log
 
-nonisolated struct RemoteTmuxSession: Hashable, Sendable {
+struct RemoteTmuxSession: Hashable {
     let name: String
     let attachedClients: Int
     let windowCount: Int
 }
 
-nonisolated enum TmuxSessionOwnership: String, Codable, Hashable, Sendable {
-    case managed
-    case external
-}
-
-nonisolated enum RemoteTmuxBackend: Hashable, Sendable {
+enum RemoteTmuxBackend: Hashable, Sendable {
     case unixTmux
     case windowsPsmux(commandName: String, shellFamily: RemoteShellFamily, powerShellExecutable: String?)
 
@@ -24,168 +18,37 @@ nonisolated enum RemoteTmuxBackend: Hashable, Sendable {
     }
 }
 
-nonisolated enum RemoteTmuxProbeFailure: Hashable, Sendable {
-    case cancelled
-    case timeout
-    case disconnected
-    case transport(String)
-    case channelOpenFailed
-    case shellRequestFailed
-    case invalidResponse
-    case commandFailed(String)
-
-    nonisolated var retryError: Error {
-        switch self {
-        case .cancelled:
-            return CancellationError()
-        case .timeout:
-            return SSHError.timeout
-        case .disconnected:
-            return SSHError.notConnected
-        case .transport(let message):
-            return SSHError.socketError(message)
-        case .channelOpenFailed:
-            return SSHError.channelOpenFailed
-        case .shellRequestFailed:
-            return SSHError.shellRequestFailed
-        case .invalidResponse:
-            return SSHError.unknown("Unable to verify tmux availability")
-        case .commandFailed(let message):
-            return SSHError.unknown(message)
-        }
-    }
-
-    nonisolated static func resolve(_ error: Error) -> Self {
-        if error is CancellationError {
-            return .cancelled
-        }
-        guard let sshError = error as? SSHError else {
-            return .commandFailed(error.localizedDescription)
-        }
-        switch sshError {
-        case .timeout:
-            return .timeout
-        case .notConnected:
-            return .disconnected
-        case .connectionFailed(let message), .socketError(let message):
-            return .transport(message)
-        case .channelOpenFailed:
-            return .channelOpenFailed
-        case .shellRequestFailed:
-            return .shellRequestFailed
-        default:
-            return .commandFailed(sshError.localizedDescription)
-        }
-    }
-
-    nonisolated var logDescription: String {
-        switch self {
-        case .cancelled: return "cancelled"
-        case .timeout: return "timeout"
-        case .disconnected: return "disconnected"
-        case .transport: return "transport failure"
-        case .channelOpenFailed: return "channel open failure"
-        case .shellRequestFailed: return "shell request failure"
-        case .invalidResponse: return "invalid response"
-        case .commandFailed: return "command failure"
-        }
-    }
-}
-
-nonisolated enum RemoteTmuxAvailability: Hashable, Sendable {
-    case unsupported
-    case available(RemoteTmuxBackend)
-    case confirmedMissing
-    case indeterminate(RemoteTmuxProbeFailure)
-
-    nonisolated var backend: RemoteTmuxBackend? {
-        guard case .available(let backend) = self else { return nil }
-        return backend
-    }
-
-    nonisolated var logDescription: String {
-        switch self {
-        case .unsupported: return "unsupported"
-        case .available(let backend): return "available (\(String(describing: backend)))"
-        case .confirmedMissing: return "confirmed missing"
-        case .indeterminate(let failure): return "indeterminate (\(failure.logDescription))"
-        }
-    }
-}
-
 actor RemoteTmuxManager {
+    enum CommandContext {
+        case startupExec
+        case interactiveShell
+    }
+
     static let shared = RemoteTmuxManager()
 
+    private let configDirectory = "~/.vvterm"
+    private let configPath = "~/.vvterm/tmux.conf"
     private let availabilityTimeout: Duration = .seconds(8)
     private let listTimeout: Duration = .seconds(12)
     private let configTimeout: Duration = .seconds(20)
     private let killTimeout: Duration = .seconds(10)
     private let cleanupTimeout: Duration = .seconds(20)
     private let pathTimeout: Duration = .seconds(10)
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
-        category: "Tmux"
-    )
 
     private init() {}
 
-    func tmuxAvailability(using client: SSHClient) async -> RemoteTmuxAvailability {
-        let probeId = UUID().uuidString
-        let startedAt = ContinuousClock.now
-        logger.info("Starting tmux availability probe \(probeId, privacy: .public)")
+    func tmuxBackend(using client: SSHClient) async -> RemoteTmuxBackend? {
         let environment = await client.remoteEnvironment()
-        guard !Task.isCancelled else {
-            return .indeterminate(.cancelled)
-        }
-        let result = await tmuxAvailability(in: environment) { command, timeout in
-            try await client.execute(command, timeout: timeout)
-        }
-        let elapsed = startedAt.duration(to: ContinuousClock.now)
-        logger.info(
-            "Tmux availability probe \(probeId, privacy: .public) resolved \(result.logDescription, privacy: .public) after \(String(describing: elapsed), privacy: .public)"
-        )
-        return result
-    }
-
-    func tmuxAvailability(
-        in environment: RemoteEnvironment,
-        execute: RemoteEnvironmentResolver.CommandExecutor
-    ) async -> RemoteTmuxAvailability {
-        guard !Task.isCancelled else { return .indeterminate(.cancelled) }
-        guard environment.supportsTmuxRuntime else { return .unsupported }
+        guard environment.supportsTmuxRuntime else { return nil }
 
         if environment.platform == .windows {
-            return await windowsPsmuxAvailability(for: environment, execute: execute)
+            return await windowsPsmuxBackend(for: environment, using: client)
         }
 
         let okMarker = "__VVTERM_TMUX_OK__"
         let command = tmuxAvailabilityProbeCommand(okMarker: okMarker)
-        do {
-            let output = try await execute(command, availabilityTimeout)
-            try Task.checkCancellation()
-            return classifyAvailabilityOutput(
-                output,
-                availableMarker: okMarker,
-                missingMarker: "__VVTERM_TMUX_NO__",
-                backend: .unixTmux
-            )
-        } catch {
-            return .indeterminate(.resolve(error))
-        }
-    }
-
-    private func availableBackend(using client: SSHClient) async -> RemoteTmuxBackend? {
-        await tmuxAvailability(using: client).backend
-    }
-
-    private func resolveBackend(
-        _ explicitBackend: RemoteTmuxBackend?,
-        using client: SSHClient
-    ) async -> RemoteTmuxBackend? {
-        if let explicitBackend {
-            return explicitBackend
-        }
-        return await availableBackend(using: client)
+        let output = try? await client.execute(command, timeout: availabilityTimeout)
+        return output?.contains(okMarker) == true ? .unixTmux : nil
     }
 
     func tmuxInstallBackend(using client: SSHClient) async -> RemoteTmuxBackend? {
@@ -203,32 +66,24 @@ actor RemoteTmuxManager {
         return .unixTmux
     }
 
-    func listSessions(
-        using client: SSHClient,
-        backend: RemoteTmuxBackend
-    ) async throws -> [RemoteTmuxSession] {
+    func isTmuxAvailable(using client: SSHClient) async -> Bool {
+        await tmuxBackend(using: client) != nil
+    }
+
+    func listSessions(using client: SSHClient) async -> [RemoteTmuxSession] {
+        guard let backend = await tmuxBackend(using: client) else { return [] }
         let candidates = listSessionCommands(backend: backend)
-        var lastError: Error?
-        var completedProbe = false
 
         for (index, command) in candidates.enumerated() {
-            do {
-                let output = try await client.execute(command, timeout: listTimeout)
-                completedProbe = true
-                let sessions = parseSessionListOutput(output, allowLegacy: index == candidates.count - 1)
+            guard let output = try? await client.execute(command, timeout: listTimeout) else { continue }
+            let sessions = parseSessionListOutput(output, allowLegacy: index == candidates.count - 1)
 
-                if !sessions.isEmpty {
-                    return sessions
-                }
-            } catch {
-                lastError = error
+            if !sessions.isEmpty {
+                return sessions
             }
         }
 
-        if completedProbe {
-            return []
-        }
-        throw lastError ?? SSHError.unknown("Unable to list tmux sessions")
+        return []
     }
 
     func prepareConfig(
@@ -236,178 +91,159 @@ actor RemoteTmuxManager {
         terminalType: RemoteTerminalType,
         backend explicitBackend: RemoteTmuxBackend? = nil
     ) async {
-        let backend = await resolveBackend(explicitBackend, using: client)
-        guard let backend, case .windowsPsmux = backend else { return }
-        let command = windowsConfigWriteCommand(terminalType: terminalType, backend: backend)
+        let backend: RemoteTmuxBackend?
+        if let explicitBackend {
+            backend = explicitBackend
+        } else {
+            backend = await tmuxBackend(using: client)
+        }
+        guard let backend else { return }
+        let command = configWriteExecutionCommand(terminalType: terminalType, backend: backend)
         _ = try? await client.execute(command, timeout: configTimeout)
+    }
+
+    nonisolated func configWriteExecutionCommand(
+        terminalType: RemoteTerminalType,
+        backend: RemoteTmuxBackend = .unixTmux
+    ) -> String {
+        let configWrite = configWriteCommand(terminalType: terminalType, backend: backend)
+        return backend.isWindows
+            ? configWrite
+            : "sh -lc \(RemoteTerminalBootstrap.shellQuoted(configWrite))"
     }
 
     nonisolated func attachCommand(
         sessionName: String,
         workingDirectory: String,
-        backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil,
-        transport: ShellTransport = .ssh
+        context: CommandContext = .startupExec,
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         let body = attachOrCreateBody(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
-            backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken,
-            transport: transport
+            context: context,
+            backend: backend
         )
-        return body
+        return commandString(for: body, context: context, backend: backend)
     }
 
     nonisolated func attachExistingCommand(
         sessionName: String,
-        ownership: TmuxSessionOwnership,
-        backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil,
-        transport: ShellTransport = .ssh
+        context: CommandContext = .startupExec,
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         let body = attachExistingBody(
             sessionName: sessionName,
-            missingCommand: lifecycleMarkerToken == nil
-                ? missingSessionCommand(backend: backend)
-                : lifecycleMissingSessionCommand(backend: backend),
-            backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken,
-            ownership: ownership,
-            transport: transport
+            missingCommand: missingSessionCommand(for: context, backend: backend),
+            backend: backend
         )
-        return body
+        return commandString(for: body, context: context, backend: backend)
     }
 
-    nonisolated func sessionPresenceProbeCommand(
+    nonisolated func attachExistingExecCommand(
         sessionName: String,
-        backend: RemoteTmuxBackend = .unixTmux,
-        existsMarker: String,
-        missingMarker: String
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
-        if case .windowsPsmux(let commandName, _, _) = backend {
-            let script = """
-            $vvtermPsmux = \(powerShellQuoted(commandName))
-            $vvtermSession = \(powerShellQuoted(sessionName))
-            & $vvtermPsmux has-session -t $vvtermSession 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              [Console]::Out.Write(\(powerShellQuoted(existsMarker)))
-            } else {
-              [Console]::Out.Write(\(powerShellQuoted(missingMarker)))
-            }
-            """
-            return windowsShellCommand(powerShellScript: script, backend: backend)
-        }
+        attachExistingCommand(sessionName: sessionName, context: .interactiveShell, backend: backend)
+    }
 
-        let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
-        let plainSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-        let exists = RemoteTerminalBootstrap.shellQuoted(existsMarker)
-        let missing = RemoteTerminalBootstrap.shellQuoted(missingMarker)
-        let tmuxProbe = tmuxCommand(includeUTF8: false)
-        let body = """
-        \(RemoteTerminalBootstrap.shellPathExport()); \
-        if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-        printf '%s' \(exists); else printf '%s' \(missing); fi
-        """
-        return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+    nonisolated func attachExecCommand(
+        sessionName: String,
+        workingDirectory: String,
+        backend: RemoteTmuxBackend = .unixTmux
+    ) -> String {
+        attachCommand(
+            sessionName: sessionName,
+            workingDirectory: workingDirectory,
+            context: .interactiveShell,
+            backend: backend
+        )
     }
 
     nonisolated func installAndAttachScript(
         sessionName: String,
         workingDirectory: String,
         terminalType: RemoteTerminalType,
-        backend: RemoteTmuxBackend = .unixTmux,
-        attachAfterInstall: Bool = true
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         if backend.isWindows {
             return windowsInstallAndAttachScript(
                 sessionName: sessionName,
                 workingDirectory: workingDirectory,
                 terminalType: terminalType,
-                backend: backend,
-                attachAfterInstall: attachAfterInstall
+                backend: backend
             )
         }
 
         let attach = attachCommand(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
+            context: .startupExec,
             backend: backend
         )
-        let afterInstall = attachAfterInstall ? attach : ":"
+        let configWrite = configWriteCommand(terminalType: terminalType, backend: backend)
 
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
-        if command -v tmux >/dev/null 2>&1; then
-          \(afterInstall);
-        else
-          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi;
-          OS_NAME="$(uname -s)";
-          if [ "$OS_NAME" = "Darwin" ]; then
-            if command -v brew >/dev/null 2>&1; then
-              brew install tmux;
-            elif command -v port >/dev/null 2>&1; then
-              $SUDO port install tmux;
-            else
-              echo "No supported package manager found for macOS.";
-            fi;
-          elif [ "$OS_NAME" = "Linux" ]; then
-            if command -v apt-get >/dev/null 2>&1; then
-              $SUDO apt-get update && $SUDO apt-get install -y tmux;
-            elif command -v dnf >/dev/null 2>&1; then
-              $SUDO dnf install -y tmux;
-            elif command -v yum >/dev/null 2>&1; then
-              $SUDO yum install -y tmux;
-            elif command -v pacman >/dev/null 2>&1; then
-              $SUDO pacman -Sy --noconfirm tmux;
-            elif command -v apk >/dev/null 2>&1; then
-              $SUDO apk add tmux;
-            elif command -v zypper >/dev/null 2>&1; then
-              $SUDO zypper -n install tmux;
-            elif command -v xbps-install >/dev/null 2>&1; then
-              $SUDO xbps-install -Sy tmux;
-            elif command -v opkg >/dev/null 2>&1; then
-              $SUDO opkg update && $SUDO opkg install tmux;
-            elif command -v emerge >/dev/null 2>&1; then
-              $SUDO emerge app-misc/tmux;
-            elif command -v pkg >/dev/null 2>&1; then
-              $SUDO pkg install -y tmux;
-            else
-              echo "No supported package manager found for Linux.";
-            fi;
+        \(configWrite);
+        if command -v tmux >/dev/null 2>&1; then \(attach); fi;
+        if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi;
+        OS_NAME="$(uname -s)";
+        if [ "$OS_NAME" = "Darwin" ]; then
+          if command -v brew >/dev/null 2>&1; then
+            brew install tmux;
+          elif command -v port >/dev/null 2>&1; then
+            $SUDO port install tmux;
           else
-            echo "Unsupported OS: $OS_NAME";
+            echo "No supported package manager found for macOS.";
           fi;
+        elif [ "$OS_NAME" = "Linux" ]; then
+          if command -v apt-get >/dev/null 2>&1; then
+            $SUDO apt-get update && $SUDO apt-get install -y tmux;
+          elif command -v dnf >/dev/null 2>&1; then
+            $SUDO dnf install -y tmux;
+          elif command -v yum >/dev/null 2>&1; then
+            $SUDO yum install -y tmux;
+          elif command -v pacman >/dev/null 2>&1; then
+            $SUDO pacman -Sy --noconfirm tmux;
+          elif command -v apk >/dev/null 2>&1; then
+            $SUDO apk add tmux;
+          elif command -v zypper >/dev/null 2>&1; then
+            $SUDO zypper -n install tmux;
+          elif command -v xbps-install >/dev/null 2>&1; then
+            $SUDO xbps-install -Sy tmux;
+          elif command -v opkg >/dev/null 2>&1; then
+            $SUDO opkg update && $SUDO opkg install tmux;
+          elif command -v emerge >/dev/null 2>&1; then
+            $SUDO emerge app-misc/tmux;
+          elif command -v pkg >/dev/null 2>&1; then
+            $SUDO pkg install -y tmux;
+          else
+            echo "No supported package manager found for Linux.";
+          fi;
+        else
+          echo "Unsupported OS: $OS_NAME";
         fi;
-        if command -v tmux >/dev/null 2>&1; then \(afterInstall); else echo "tmux installation failed."; fi
+        if command -v tmux >/dev/null 2>&1; then \(attach); else echo "tmux installation failed."; fi
         """
         return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
-    func sendScript(_ script: String, using client: SSHClient, shellId: UUID) async throws {
+    func sendScript(_ script: String, using client: SSHClient, shellId: UUID) async {
         let payload = script.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
         guard let data = payload.data(using: .utf8) else { return }
-        try await client.write(data, to: shellId)
+        try? await client.write(data, to: shellId)
     }
 
-    func killSession(
-        named sessionName: String,
-        using client: SSHClient,
-        backend explicitBackend: RemoteTmuxBackend? = nil
-    ) async {
-        let backend = await resolveBackend(explicitBackend, using: client)
-        guard let backend else { return }
+    func killSession(named sessionName: String, using client: SSHClient) async {
+        guard let backend = await tmuxBackend(using: client) else { return }
         let command = killSessionCommand(named: sessionName, backend: backend)
         _ = try? await client.execute(command, timeout: killTimeout)
     }
 
-    func cleanupLegacySessions(
-        using client: SSHClient,
-        backend explicitBackend: RemoteTmuxBackend? = nil
-    ) async {
-        let backend = await resolveBackend(explicitBackend, using: client)
-        guard let backend else { return }
-        guard case .unixTmux = backend else { return }
+    func cleanupLegacySessions(using client: SSHClient) async {
+        guard let backend = await tmuxBackend(using: client) else { return }
+        guard backend == .unixTmux else { return }
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
         if command -v tmux >/dev/null 2>&1; then
@@ -420,39 +256,21 @@ actor RemoteTmuxManager {
         _ = try? await client.execute(command, timeout: cleanupTimeout)
     }
 
-    func cleanupDetachedSessions(
-        deviceId: String,
-        keeping sessionNames: Set<String>,
-        using client: SSHClient,
-        backend explicitBackend: RemoteTmuxBackend? = nil
-    ) async {
-        let backend = await resolveBackend(explicitBackend, using: client)
-        guard let backend else { return }
+    func cleanupDetachedSessions(deviceId: String, keeping sessionNames: Set<String>, using client: SSHClient) async {
         let prefix = "vvterm_\(deviceId)_"
         let keep = sessionNames
-        let sessions: [RemoteTmuxSession]
-        do {
-            sessions = try await listSessions(using: client, backend: backend)
-        } catch {
-            logger.warning("Unable to list detached tmux sessions during cleanup: \(error.localizedDescription, privacy: .public)")
-            return
-        }
+        let sessions = await listSessions(using: client)
 
         for session in sessions {
             guard session.name.hasPrefix(prefix) else { continue }
             guard session.attachedClients == 0 else { continue }
             guard !keep.contains(session.name) else { continue }
-            await killSession(named: session.name, using: client, backend: backend)
+            await killSession(named: session.name, using: client)
         }
     }
 
-    func currentPath(
-        sessionName: String,
-        using client: SSHClient,
-        backend explicitBackend: RemoteTmuxBackend? = nil
-    ) async -> String? {
-        let backend = await resolveBackend(explicitBackend, using: client)
-        guard let backend else { return nil }
+    func currentPath(sessionName: String, using client: SSHClient) async -> String? {
+        guard let backend = await tmuxBackend(using: client) else { return nil }
         let command = currentPathCommand(sessionName: sessionName, backend: backend)
         guard let output = try? await client.execute(command, timeout: pathTimeout) else { return nil }
         let trimmed = output
@@ -471,132 +289,111 @@ actor RemoteTmuxManager {
         return "\"\(escaped)\""
     }
 
-    nonisolated private func missingSessionCommand(backend: RemoteTmuxBackend) -> String {
+    nonisolated private func commandString(for body: String, context: CommandContext) -> String {
+        commandString(for: body, context: context, backend: .unixTmux)
+    }
+
+    nonisolated private func commandString(
+        for body: String,
+        context: CommandContext,
+        backend: RemoteTmuxBackend
+    ) -> String {
         if backend.isWindows {
-            return windowsDefaultShellCommand(backend: backend)
+            return body
         }
-        return "exec \"${SHELL:-/bin/sh}\" -l"
+
+        switch context {
+        case .startupExec:
+            return body
+        case .interactiveShell:
+            return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+        }
+    }
+
+    nonisolated private func missingSessionCommand(for context: CommandContext) -> String {
+        missingSessionCommand(for: context, backend: .unixTmux)
+    }
+
+    nonisolated private func missingSessionCommand(
+        for context: CommandContext,
+        backend: RemoteTmuxBackend
+    ) -> String {
+        if backend.isWindows {
+            switch context {
+            case .startupExec:
+                return windowsDefaultShellCommand(backend: backend)
+            case .interactiveShell:
+                return ""
+            }
+        }
+
+        switch context {
+        case .startupExec:
+            return "exec \"${SHELL:-/bin/sh}\" -l"
+        case .interactiveShell:
+            return ":"
+        }
     }
 
     nonisolated private func attachOrCreateBody(
         sessionName: String,
         workingDirectory: String,
-        backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil,
-        transport: ShellTransport = .ssh
+        context: CommandContext = .startupExec,
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachOrCreateCommand(
                 sessionName: sessionName,
                 workingDirectory: workingDirectory,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken
+                backend: backend
             )
         }
 
         let createCommand = createSessionCommand(
             sessionName: sessionName,
             workingDirectory: workingDirectory,
-            backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken,
-            transport: transport
+            backend: backend
         )
         return attachExistingBody(
             sessionName: sessionName,
             missingCommand: createCommand,
-            backend: backend,
-            lifecycleMarkerToken: lifecycleMarkerToken,
-            reportsCreationFailure: true,
-            ownership: .managed,
-            transport: transport
+            backend: backend
         )
     }
 
     nonisolated private func attachExistingBody(
         sessionName: String,
         missingCommand: String,
-        backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil,
-        reportsCreationFailure: Bool = false,
-        ownership: TmuxSessionOwnership,
-        transport: ShellTransport = .ssh
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsAttachExistingCommand(
                 sessionName: sessionName,
                 missingCommand: missingCommand,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken,
-                reportsCreationFailure: reportsCreationFailure,
-                ownership: ownership
+                backend: backend
             )
         }
 
         let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
         let plainSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-        let tmuxProbe = tmuxCommand(includeUTF8: false)
-        let usesManagedConfiguration = ownership == .managed
-        let replacesProcess = lifecycleMarkerToken == nil
-        let managedConfiguration = usesManagedConfiguration
-            ? "\(managedSessionConfigurationCommand(sessionName: sessionName, transport: transport)); \(managedWindowsConfigurationCommand(sessionName: sessionName)); "
-            : ""
-        let exactAttach = tmuxAttachCommand(
-            target: exactSession,
-            replacesProcess: replacesProcess,
-            advertisesManagedFeatures: usesManagedConfiguration
-        )
-        let plainAttach = tmuxAttachCommand(
-            target: plainSession,
-            replacesProcess: replacesProcess,
-            advertisesManagedFeatures: usesManagedConfiguration
-        )
-        let creationStatusCapture = reportsCreationFailure && lifecycleMarkerToken != nil
-            ? "; vvtermTmuxCreateStatus=$?"
-            : ""
-
-        let lifecycleReport: String
-        if let lifecycleMarkerToken {
-            let detached = RemoteTerminalBootstrap.shellQuoted(
-                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .detached)
-            )
-            let ended = RemoteTerminalBootstrap.shellQuoted(
-                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .ended)
-            )
-            if reportsCreationFailure {
-                let creationFailed = RemoteTerminalBootstrap.shellQuoted(
-                    TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .creationFailed)
-                )
-                lifecycleReport = """
-                ; if [ "${vvtermTmuxCreateStatus:-0}" -ne 0 ]; then printf '%s' \(creationFailed); \
-                elif \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-                printf '%s' \(detached); else printf '%s' \(ended); fi
-                """
-            } else {
-                lifecycleReport = """
-                ; if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-                printf '%s' \(detached); else printf '%s' \(ended); fi
-                """
-            }
-        } else {
-            lifecycleReport = ""
-        }
+        let tmuxProbe = tmuxCommand(includeUTF8: false, includeConfig: false)
+        let tmuxAttach = tmuxCommand(includeUTF8: true, includeConfig: true)
+        let tmuxSource = tmuxCommand(includeUTF8: false, includeConfig: false)
 
         return """
         \(RemoteTerminalBootstrap.shellPathExport()); \
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null; then \
-        \(managedConfiguration)\(exactAttach); \
+        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; exec \(tmuxAttach) attach-session -t \(exactSession); \
         elif \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
-        \(managedConfiguration)\(plainAttach); \
-        else \(missingCommand)\(creationStatusCapture); fi\(lifecycleReport)
+        \(tmuxSource) source-file \(configPath) >/dev/null 2>&1 || true; exec \(tmuxAttach) attach-session -t \(plainSession); \
+        else \(missingCommand); fi
         """
     }
 
     nonisolated private func createSessionCommand(
         sessionName: String,
         workingDirectory: String,
-        backend: RemoteTmuxBackend = .unixTmux,
-        lifecycleMarkerToken: String? = nil,
-        transport: ShellTransport = .ssh
+        backend: RemoteTmuxBackend = .unixTmux
     ) -> String {
         if case .windowsPsmux = backend {
             return windowsCreateSessionCommand(
@@ -608,146 +405,20 @@ actor RemoteTmuxManager {
 
         let escapedDir = shellDirectoryArgument(workingDirectory)
         let escapedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-        let exactSession = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
-        let sessionWindowTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
-        let bootstrapWindowName = "__vvterm_bootstrap__"
-        let escapedBootstrapWindow = RemoteTerminalBootstrap.shellQuoted(bootstrapWindowName)
-        let bootstrapWindowTarget = RemoteTerminalBootstrap.shellQuoted(
-            "=\(sessionName):\(bootstrapWindowName)"
-        )
-        let tmux = tmuxCommand(includeUTF8: false)
-        let sessionConfiguration = managedSessionConfigurationCommand(
-            sessionName: sessionName,
-            transport: transport
-        )
-        let windowsConfiguration = managedWindowsConfigurationCommand(sessionName: sessionName)
-        let createBootstrap = "\(tmux) new-session -d -s \(escapedSession) -n \(escapedBootstrapWindow) -c \(escapedDir) \(RemoteTerminalBootstrap.shellQuoted("sleep 86400"))"
-        let loginShell = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
-            RemoteTerminalBootstrap.defaultLoginShellCommand()
-        )
-        let createTerminalWindow = "\(tmux) new-window -d -t \(sessionWindowTarget) -c \(escapedDir) \(loginShell)"
-        let removeBootstrap = "\(tmux) kill-window -t \(bootstrapWindowTarget)"
-        let renumberWindows = "\(tmux) move-window -r -t \(sessionWindowTarget)"
-        let removeFailedSession = "\(tmux) kill-session -t \(exactSession) 2>/dev/null"
-        let attach = tmuxAttachCommand(
-            target: escapedSession,
-            replacesProcess: lifecycleMarkerToken == nil,
-            advertisesManagedFeatures: true
-        )
-        return """
-        if \(createBootstrap) 2>/dev/null; then \
-        if \(sessionConfiguration) && \
-        \(createTerminalWindow) 2>/dev/null && \
-        \(removeBootstrap) 2>/dev/null && \
-        \(renumberWindows) 2>/dev/null && \
-        \(windowsConfiguration); then \(attach); \
-        else \(removeFailedSession); false; fi; \
-        elif \(tmux) has-session -t \(exactSession) 2>/dev/null; then \
-        \(sessionConfiguration); \(windowsConfiguration); \(attach); \
-        else false; fi
-        """
-    }
-
-    nonisolated private func managedSessionConfigurationCommand(
-        sessionName: String,
-        transport: ShellTransport
-    ) -> String {
-        let tmux = tmuxCommand(includeUTF8: false)
-        let sessionOptionTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
-        let sessionEnvironmentTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName)")
-        let paneTitle = RemoteTerminalBootstrap.shellQuoted("#{pane_title}")
-
-        var commands = [
-            "\(tmux) set-option -q -t \(sessionOptionTarget) status off",
-            "\(tmux) set-option -q -t \(sessionOptionTarget) history-limit 10000",
-            "\(tmux) set-option -q -t \(sessionOptionTarget) mouse on",
-            "\(tmux) set-option -q -t \(sessionOptionTarget) set-titles on",
-            "\(tmux) set-option -q -t \(sessionOptionTarget) set-titles-string \(paneTitle)"
-        ]
-        let terminalEnvironment = RemoteTerminalBootstrap.terminalEnvironment(transport: transport)
-        commands.append(contentsOf: terminalEnvironment.map { variable in
-            let value = RemoteTerminalBootstrap.shellQuoted(variable.value)
-            return "\(tmux) set-environment -t \(sessionEnvironmentTarget) \(variable.name) \(value)"
-        })
-        if !terminalEnvironment.contains(where: {
-            $0.name == RemoteKittyGraphicsPolicy.compatibilityEnvironmentName
-        }) {
-            commands.append(
-                "\(tmux) set-environment -u -t \(sessionEnvironmentTarget) \(RemoteKittyGraphicsPolicy.compatibilityEnvironmentName)"
-            )
-        }
-        return commands.joined(separator: " && ")
-    }
-
-    nonisolated private func managedWindowsConfigurationCommand(sessionName: String) -> String {
-        let tmux = tmuxCommand(includeUTF8: false)
-        let sessionTarget = RemoteTerminalBootstrap.shellQuoted("=\(sessionName):")
-        let settings = [
-            (name: "allow-passthrough", value: "on"),
-            (name: "allow-set-title", value: "on"),
-            (name: "mode-style", value: tmuxThemeConfiguration().modeStyle),
-            // `clear` sends E3 followed by 2J. Keep this override on each
-            // managed window so the visible grid is not restored into history.
-            (name: "scroll-on-clear", value: "off")
-        ]
-        let existingWindowCommands = settings.map { setting in
-            let value = RemoteTerminalBootstrap.shellQuoted(setting.value)
-            return "\(tmux) set-option -wq -t \"$vvtermWindow\" \(setting.name) \(value)"
-        }.joined(separator: " && ")
-        let futureWindowCommands = settings.map { setting in
-            let value = RemoteTerminalBootstrap.shellQuoted(setting.value)
-            return "set-option -wq \(setting.name) \(value)"
-        }.joined(separator: " ; ")
-        // Window options belong to the window object, so skip linked windows
-        // that may also be visible in a user's external session.
-        let windowListingFormat = RemoteTerminalBootstrap.shellQuoted(
-            "#{window_id} #{window_linked}"
-        )
-        let unlinkedWindowCondition = RemoteTerminalBootstrap.shellQuoted(
-            "#{==:#{window_linked},0}"
-        )
-        let guardedFutureWindowCommands = [
-            "if-shell -F",
-            unlinkedWindowCondition,
-            RemoteTerminalBootstrap.shellQuoted(futureWindowCommands)
-        ].joined(separator: " ")
-        // A stable array index makes reattach idempotent without replacing
-        // other session-local after-new-window hooks.
-        let hookName = RemoteTerminalBootstrap.shellQuoted("after-new-window[1000]")
-        let hookCommand = RemoteTerminalBootstrap.shellQuoted(guardedFutureWindowCommands)
-
-        return """
-        (vvtermWindows="$(\(tmux) list-windows -t \(sessionTarget) -F \(windowListingFormat) 2>/dev/null)" || exit 1; \
-        printf '%s\\n' "$vvtermWindows" | while IFS=' ' read -r vvtermWindow vvtermLinked; do \
-        [ "$vvtermLinked" = 0 ] || continue; \(existingWindowCommands) || exit 1; done || exit 1; \
-        \(tmux) set-hook -t \(sessionTarget) \(hookName) \(hookCommand) 2>/dev/null || true)
-        """
-    }
-
-    nonisolated private func tmuxAttachCommand(
-        target: String,
-        replacesProcess: Bool,
-        advertisesManagedFeatures: Bool
-    ) -> String {
-        let processReplacement = replacesProcess ? "exec " : ""
-        let tmux = tmuxCommand(includeUTF8: true)
-        let attach = "\(processReplacement)\(tmux) attach-session -t \(target)"
-        guard advertisesManagedFeatures else { return attach }
-
-        let features = "-T RGB,hyperlinks"
-        return "if tmux \(features) -V >/dev/null 2>&1; then \(processReplacement)\(tmux) \(features) attach-session -t \(target); else \(attach); fi"
-    }
-
-    nonisolated private func lifecycleMissingSessionCommand(backend: RemoteTmuxBackend) -> String {
-        backend.isWindows ? "$null" : ":"
+        let tmux = tmuxCommand(includeUTF8: true, includeConfig: true)
+        return "exec \(tmux) new-session -A -s \(escapedSession) -c \(escapedDir)"
     }
 
     nonisolated private func tmuxCommand(
-        includeUTF8: Bool
+        includeUTF8: Bool,
+        includeConfig: Bool
     ) -> String {
         var parts = ["tmux"]
         if includeUTF8 {
             parts.append("-u")
+        }
+        if includeConfig {
+            parts.append("-f \(configPath)")
         }
         return parts.joined(separator: " ")
     }
@@ -776,59 +447,42 @@ actor RemoteTmuxManager {
         return "sh -c \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
-    private func windowsPsmuxAvailability(
+    private func windowsPsmuxBackend(
         for environment: RemoteEnvironment,
-        execute: RemoteEnvironmentResolver.CommandExecutor
-    ) async -> RemoteTmuxAvailability {
+        using client: SSHClient
+    ) async -> RemoteTmuxBackend? {
         let shellFamily = environment.shellProfile.family
         let powerShellExecutable = environment.powerShellExecutable ?? environment.shellProfile.executableName
-        var firstIndeterminateFailure: RemoteTmuxProbeFailure?
 
-        for (commandName, requirePsmuxExtension) in [
-            ("psmux", false),
-            ("pmux", false),
-            ("tmux", true)
-        ] {
+        for commandName in ["psmux", "pmux"] {
             let backend = RemoteTmuxBackend.windowsPsmux(
                 commandName: commandName,
                 shellFamily: shellFamily,
                 powerShellExecutable: powerShellExecutable
             )
-            do {
-                let output = try await execute(
-                    windowsPsmuxAvailabilityProbeCommand(
-                        commandName: commandName,
-                        backend: backend,
-                        requirePsmuxExtension: requirePsmuxExtension
-                    ),
-                    availabilityTimeout
-                )
-                try Task.checkCancellation()
-                let resolution = classifyAvailabilityOutput(
-                    output,
-                    availableMarker: "__VVTERM_TMUX_OK__:\(commandName)",
-                    missingMarker: "__VVTERM_TMUX_NO__:\(commandName)",
-                    backend: backend
-                )
-                switch resolution {
-                case .available:
-                    return resolution
-                case .indeterminate(let failure):
-                    firstIndeterminateFailure = firstIndeterminateFailure ?? failure
-                case .confirmedMissing:
-                    break
-                case .unsupported:
-                    assertionFailure("A supported Windows tmux probe resolved as unsupported")
-                }
-            } catch {
-                firstIndeterminateFailure = firstIndeterminateFailure ?? .resolve(error)
+            let output = try? await client.execute(
+                windowsPsmuxAvailabilityProbeCommand(commandName: commandName, backend: backend, requirePsmuxExtension: false),
+                timeout: availabilityTimeout
+            )
+            if output?.contains("__VVTERM_TMUX_OK__:\(commandName)") == true {
+                return backend
             }
         }
 
-        if let firstIndeterminateFailure {
-            return .indeterminate(firstIndeterminateFailure)
+        let tmuxBackend = RemoteTmuxBackend.windowsPsmux(
+            commandName: "tmux",
+            shellFamily: shellFamily,
+            powerShellExecutable: powerShellExecutable
+        )
+        let output = try? await client.execute(
+            windowsPsmuxAvailabilityProbeCommand(commandName: "tmux", backend: tmuxBackend, requirePsmuxExtension: true),
+            timeout: availabilityTimeout
+        )
+        if output?.contains("__VVTERM_TMUX_OK__:tmux") == true {
+            return tmuxBackend
         }
-        return .confirmedMissing
+
+        return nil
     }
 
     nonisolated func windowsPsmuxAvailabilityProbeCommand(
@@ -836,51 +490,26 @@ actor RemoteTmuxManager {
         backend: RemoteTmuxBackend,
         requirePsmuxExtension: Bool
     ) -> String {
-        let availableMarker = "__VVTERM_TMUX_OK__:\(commandName)"
-        let missingMarker = "__VVTERM_TMUX_NO__:\(commandName)"
+        let marker = "__VVTERM_TMUX_OK__:\(commandName)"
         let script = """
-        $vvtermAvailable = $false
         $cmd = Get-Command \(powerShellQuoted(commandName)) -ErrorAction SilentlyContinue
         if ($cmd) {
           & $cmd.Source -V *> $null
           if ($LASTEXITCODE -eq 0) {
             $vvtermCommands = (& $cmd.Source list-commands 2>$null) -join "`n"
             if (-not \(requirePsmuxExtension ? "$true" : "$false") -or $vvtermCommands.Contains('dump-state') -or $vvtermCommands.Contains('claim-session')) {
-              $vvtermAvailable = $true
+              Write-Output \(powerShellQuoted(marker))
             }
           }
-        }
-        if ($vvtermAvailable) {
-          Write-Output \(powerShellQuoted(availableMarker))
-        } else {
-          Write-Output \(powerShellQuoted(missingMarker))
         }
         """
         return windowsShellCommand(powerShellScript: script, backend: backend)
     }
 
-    nonisolated private func classifyAvailabilityOutput(
-        _ output: String,
-        availableMarker: String,
-        missingMarker: String,
-        backend: RemoteTmuxBackend
-    ) -> RemoteTmuxAvailability {
-        let reportsAvailable = output.contains(availableMarker)
-        let reportsMissing = output.contains(missingMarker)
-        switch (reportsAvailable, reportsMissing) {
-        case (true, false):
-            return .available(backend)
-        case (false, true):
-            return .confirmedMissing
-        case (false, false), (true, true):
-            return .indeterminate(.invalidResponse)
-        }
-    }
-
     nonisolated private func listSessionCommands(backend: RemoteTmuxBackend) -> [String] {
         switch backend {
         case .unixTmux:
-            let tmux = tmuxCommand(includeUTF8: false)
+            let tmux = tmuxCommand(includeUTF8: false, includeConfig: false)
             let bodies = [
                 "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-sessions -F '#{session_name} #{session_attached} #{session_windows}' 2>/dev/null",
                 "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-sessions -F '#{session_name} #{session_attached}' 2>/dev/null",
@@ -1046,7 +675,7 @@ actor RemoteTmuxManager {
         switch backend {
         case .unixTmux:
             let quoted = RemoteTerminalBootstrap.shellQuoted(sessionName)
-            let tmux = tmuxCommand(includeUTF8: false)
+            let tmux = tmuxCommand(includeUTF8: false, includeConfig: false)
             let body = "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) kill-session -t \(quoted) 2>/dev/null || true"
             return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
 
@@ -1060,7 +689,7 @@ actor RemoteTmuxManager {
         switch backend {
         case .unixTmux:
             let quotedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
-            let tmux = tmuxCommand(includeUTF8: false)
+            let tmux = tmuxCommand(includeUTF8: false, includeConfig: false)
             let body = "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-panes -t \(quotedSession) -F '#{pane_current_path}' 2>/dev/null | head -n 1"
             return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
 
@@ -1073,15 +702,13 @@ actor RemoteTmuxManager {
     nonisolated private func windowsAttachOrCreateCommand(
         sessionName: String,
         workingDirectory: String,
-        backend: RemoteTmuxBackend,
-        lifecycleMarkerToken: String?
+        backend: RemoteTmuxBackend
     ) -> String {
         windowsShellCommand(
             powerShellScript: windowsAttachOrCreatePowerShell(
                 sessionName: sessionName,
                 workingDirectory: workingDirectory,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken
+                backend: backend
             ),
             backend: backend
         )
@@ -1090,19 +717,13 @@ actor RemoteTmuxManager {
     nonisolated private func windowsAttachExistingCommand(
         sessionName: String,
         missingCommand: String,
-        backend: RemoteTmuxBackend,
-        lifecycleMarkerToken: String?,
-        reportsCreationFailure: Bool = false,
-        ownership: TmuxSessionOwnership
+        backend: RemoteTmuxBackend
     ) -> String {
         windowsShellCommand(
             powerShellScript: windowsAttachExistingPowerShell(
                 sessionName: sessionName,
                 missingCommand: missingCommand,
-                backend: backend,
-                lifecycleMarkerToken: lifecycleMarkerToken,
-                reportsCreationFailure: reportsCreationFailure,
-                ownership: ownership
+                backend: backend
             ),
             backend: backend
         )
@@ -1112,8 +733,7 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         backend: RemoteTmuxBackend,
-        commandExpression: String? = nil,
-        lifecycleMarkerToken: String? = nil
+        commandExpression: String? = nil
     ) -> String {
         let createCommand = windowsCreateSessionPowerShell(
             sessionName: sessionName,
@@ -1125,10 +745,7 @@ actor RemoteTmuxManager {
             sessionName: sessionName,
             missingCommand: createCommand,
             backend: backend,
-            commandExpression: commandExpression,
-            lifecycleMarkerToken: lifecycleMarkerToken,
-            reportsCreationFailure: true,
-            ownership: .managed
+            commandExpression: commandExpression
         )
     }
 
@@ -1136,69 +753,21 @@ actor RemoteTmuxManager {
         sessionName: String,
         missingCommand: String,
         backend: RemoteTmuxBackend,
-        commandExpression: String? = nil,
-        lifecycleMarkerToken: String? = nil,
-        reportsCreationFailure: Bool = false,
-        ownership: TmuxSessionOwnership
+        commandExpression: String? = nil
     ) -> String {
         guard case .windowsPsmux(let commandName, _, _) = backend else { return missingCommand }
         let psmuxExpression = commandExpression ?? powerShellQuoted(commandName)
-        let usesManagedConfiguration = ownership == .managed
-        let configDeclaration = usesManagedConfiguration
-            ? "$vvtermConfig = \(windowsConfigPathPowerShellExpression())"
-            : ""
-        let attachCommand = usesManagedConfiguration
-            ? """
-              & $vvtermPsmux source-file -t $vvtermSession $vvtermConfig 2>$null
-              & $vvtermPsmux -u attach-session -d -t $vvtermSession
-              """
-            : "& $vvtermPsmux -u attach-session -d -t $vvtermSession"
-        let lifecycleReport: String
-        if let lifecycleMarkerToken {
-            let detached = powerShellQuoted(
-                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .detached)
-            )
-            let ended = powerShellQuoted(
-                TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .ended)
-            )
-            let sessionPresenceReport = """
-            & $vvtermPsmux has-session -t $vvtermSession 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              [Console]::Out.Write(\(detached))
-            } else {
-              [Console]::Out.Write(\(ended))
-            }
-            """
-            if reportsCreationFailure {
-                let creationFailed = powerShellQuoted(
-                    TmuxLifecycleMarker.sequence(token: lifecycleMarkerToken, event: .creationFailed)
-                )
-                lifecycleReport = """
-                if ($null -ne $vvtermTmuxCreateStatus -and $vvtermTmuxCreateStatus -ne 0) {
-                  [Console]::Out.Write(\(creationFailed))
-                } else {
-                  \(sessionPresenceReport)
-                }
-                """
-            } else {
-                lifecycleReport = sessionPresenceReport
-            }
-        } else {
-            lifecycleReport = ""
-        }
-
         return """
         $vvtermPsmux = \(psmuxExpression)
-        \(configDeclaration)
+        $vvtermConfig = \(windowsConfigPathPowerShellExpression())
         $vvtermSession = \(powerShellQuoted(sessionName))
         & $vvtermPsmux has-session -t $vvtermSession 2>$null
         if ($LASTEXITCODE -eq 0) {
-        \(indentPowerShell(attachCommand, spaces: 2))
+          & $vvtermPsmux -f $vvtermConfig source-file $vvtermConfig 2>$null
+          & $vvtermPsmux -u -f $vvtermConfig attach-session -d -t $vvtermSession
         } else {
         \(indentPowerShell(missingCommand, spaces: 2))
-        \(reportsCreationFailure && lifecycleMarkerToken != nil ? "  $vvtermTmuxCreateStatus = $LASTEXITCODE" : "")
         }
-        \(lifecycleReport)
         """
     }
 
@@ -1250,12 +819,30 @@ actor RemoteTmuxManager {
         }
     }
 
-    nonisolated private func windowsConfigLines(
-        terminalType: RemoteTerminalType
+    nonisolated private func configWriteCommand(
+        terminalType: RemoteTerminalType,
+        backend: RemoteTmuxBackend = .unixTmux
+    ) -> String {
+        if backend.isWindows {
+            return windowsConfigWriteCommand(terminalType: terminalType, backend: backend)
+        }
+
+        let lines = configLines(
+            terminalType: terminalType,
+            includeWheelBindings: true,
+            quietAllowSetTitle: true
+        )
+        let quotedLines = lines.map { "\"\(escapeForDoubleQuotes($0))\"" }.joined(separator: " ")
+        return "mkdir -p \(configDirectory); printf '%s\\n' \(quotedLines) > \(configPath)"
+    }
+
+    nonisolated private func configLines(
+        terminalType: RemoteTerminalType,
+        includeWheelBindings: Bool,
+        quietAllowSetTitle: Bool
     ) -> [String] {
-        // psmux runs one server per session. VVTerm loads this global-looking
-        // config only into the explicitly targeted managed-session server.
-        let theme = tmuxThemeConfiguration()
+        let themeName = UserDefaults.standard.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "Aizen Dark"
+        let modeStyle = ThemeColorParser.tmuxModeStyle(for: themeName)
         var lines = [
             "# VVTerm tmux configuration",
             "# Auto-generated by VVTerm - changes will be overwritten",
@@ -1282,7 +869,7 @@ actor RemoteTmuxManager {
             "",
             "# Publish the active pane title to the outer VVTerm terminal"
         ])
-        lines.append(contentsOf: titlePropagationConfigLines())
+        lines.append(contentsOf: titlePropagationConfigLines(quietAllowSetTitle: quietAllowSetTitle))
         lines.append(contentsOf: [
             "",
             "# Hide status bar",
@@ -1297,23 +884,25 @@ actor RemoteTmuxManager {
             "# Set default terminal with true color support",
             "set -g default-terminal \"\(terminalType.rawValue)\"",
             "",
-            "# Selection highlighting in copy-mode (from theme: \(theme.name))",
-            "set -g mode-style \"\(theme.modeStyle)\""
+            "# Selection highlighting in copy-mode (from theme: \(themeName))",
+            "set -g mode-style \"\(modeStyle)\""
         ])
 
-        lines.append(contentsOf: [
-            "",
-            "# Use psmux's native scroll behavior on Windows"
-        ])
+        if includeWheelBindings {
+            lines.append(contentsOf: [
+                "",
+                "# Smart mouse scroll: copy-mode at shell, passthrough in TUI apps",
+                "bind -n WheelUpPane if -F '#{||:#{mouse_any_flag},#{alternate_on}}' 'send-keys -M' 'copy-mode -eH; send-keys -M'",
+                "bind -n WheelDownPane if -F '#{||:#{mouse_any_flag},#{alternate_on}}' 'send-keys -M' 'send-keys -M'"
+            ])
+        } else {
+            lines.append(contentsOf: [
+                "",
+                "# Use psmux's native scroll behavior on Windows"
+            ])
+        }
 
         return lines
-    }
-
-    nonisolated private func tmuxThemeConfiguration() -> (name: String, modeStyle: String) {
-        let name = UserDefaults.standard.string(
-            forKey: CloudKitSyncConstants.terminalThemeNameKey
-        ) ?? "Aizen Dark"
-        return (name, ThemeColorParser.tmuxModeStyle(for: name))
     }
 
     nonisolated private func windowsConfigWriteCommand(
@@ -1329,7 +918,11 @@ actor RemoteTmuxManager {
     nonisolated private func windowsConfigWritePowerShell(
         terminalType: RemoteTerminalType
     ) -> String {
-        let lines = windowsConfigLines(terminalType: terminalType)
+        let lines = configLines(
+            terminalType: terminalType,
+            includeWheelBindings: false,
+            quietAllowSetTitle: false
+        )
         let content = lines.joined(separator: "\n") + "\n"
         return """
         $vvtermConfigDirectory = \(windowsConfigDirectoryPowerShellExpression())
@@ -1340,9 +933,9 @@ actor RemoteTmuxManager {
         """
     }
 
-    nonisolated private func titlePropagationConfigLines() -> [String] {
+    nonisolated private func titlePropagationConfigLines(quietAllowSetTitle: Bool) -> [String] {
         [
-            "set -g allow-set-title on",
+            quietAllowSetTitle ? "set -gq allow-set-title on" : "set -g allow-set-title on",
             "set -g set-titles on",
             "set -g set-titles-string \"#{pane_title}\""
         ]
@@ -1352,8 +945,7 @@ actor RemoteTmuxManager {
         sessionName: String,
         workingDirectory: String,
         terminalType: RemoteTerminalType,
-        backend: RemoteTmuxBackend,
-        attachAfterInstall: Bool
+        backend: RemoteTmuxBackend
     ) -> String {
         let configWrite = windowsConfigWritePowerShell(terminalType: terminalType)
         let attach = windowsAttachOrCreatePowerShell(
@@ -1362,7 +954,6 @@ actor RemoteTmuxManager {
             backend: backend,
             commandExpression: "$vvtermPsmuxCommand.Source"
         )
-        let afterInstall = attachAfterInstall ? attach : "Write-Output 'psmux installation completed.'"
         let script = """
         \(configWrite)
         function Get-VVTermPsmuxCommand {
@@ -1396,7 +987,7 @@ actor RemoteTmuxManager {
           $vvtermPsmuxInstalled = $null -ne $vvtermPsmuxCommand
         }
         if ($vvtermPsmuxInstalled) {
-        \(indentPowerShell(afterInstall, spaces: 2))
+        \(indentPowerShell(attach, spaces: 2))
         } else {
           Write-Output 'psmux installation failed or no supported package manager was found.'
         }
@@ -1478,4 +1069,11 @@ actor RemoteTmuxManager {
             .joined(separator: "\n")
     }
 
+    nonisolated private func escapeForDoubleQuotes(_ value: String) -> String {
+        var escaped = value.replacingOccurrences(of: "\\", with: "\\\\")
+        escaped = escaped.replacingOccurrences(of: "\"", with: "\\\"")
+        escaped = escaped.replacingOccurrences(of: "$", with: "\\$")
+        escaped = escaped.replacingOccurrences(of: "`", with: "\\`")
+        return escaped
+    }
 }

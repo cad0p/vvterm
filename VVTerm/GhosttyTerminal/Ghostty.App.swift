@@ -86,31 +86,15 @@ extension Ghostty {
                 .joined(separator: "\n")
         }
 
-        static func optionAsAltConfigValue(_ mode: TerminalOptionAsAltMode) -> String {
-            switch mode {
-            case .none: "false"
-            case .left: "left"
-            case .right: "right"
-            case .both: "true"
-            }
-        }
-
         static func configContent(
             primaryFontFamily: String,
             fontSize: Double,
             shellName: String,
             themeName: String,
             cursorStyle: TerminalCursorStyle = TerminalDefaults.defaultCursorStyle,
-            cursorBlink: Bool = TerminalDefaults.defaultCursorBlink,
-            optionAsAltMode: TerminalOptionAsAltMode = .none
+            cursorBlink: Bool = TerminalDefaults.defaultCursorBlink
         ) -> String {
-            #if os(macOS)
-            let platformInputConfig = "macos-option-as-alt = \(optionAsAltConfigValue(optionAsAltMode))"
-            #else
-            let platformInputConfig = ""
-            #endif
-
-            return """
+            """
             \(fontFamilyLines(primaryFamily: primaryFontFamily))
             font-size = \(Int(fontSize))
             window-inherit-font-size = false
@@ -141,8 +125,6 @@ extension Ghostty {
 
             # Custom keybinds
             keybind = shift+enter=text:\\n
-
-            \(platformInputConfig)
 
             """
         }
@@ -183,9 +165,6 @@ extension Ghostty {
         @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
         @AppStorage(TerminalDefaults.cursorStyleKey) private var terminalCursorStyleRaw = TerminalDefaults.defaultCursorStyle.rawValue
         @AppStorage(TerminalDefaults.cursorBlinkKey) private var terminalCursorBlink = TerminalDefaults.defaultCursorBlink
-        #if os(macOS)
-        @AppStorage(TerminalDefaults.optionAsAltModeKey) private var terminalOptionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
-        #endif
         @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
         @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
         @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
@@ -215,14 +194,6 @@ extension Ghostty {
             TerminalCursorStyle(rawValue: terminalCursorStyleRaw) ?? TerminalDefaults.defaultCursorStyle
         }
 
-        private var terminalOptionAsAltMode: TerminalOptionAsAltMode {
-            #if os(macOS)
-            TerminalOptionAsAltMode(rawValue: terminalOptionAsAltModeRaw) ?? .none
-            #else
-            .none
-            #endif
-        }
-
         // MARK: - Initialization
 
         private var didStart = false
@@ -233,7 +204,6 @@ extension Ghostty {
             let themeName: String
             let cursorStyleRaw: String
             let cursorBlink: Bool
-            let optionAsAltModeRaw: String
         }
 
         init(autoStart: Bool = true) {
@@ -252,8 +222,6 @@ extension Ghostty {
         }
 
         private func start() {
-            ensureProcessEnvironment()
-
             // CRITICAL: Initialize libghostty first
             let initResult = ghostty_init(0, nil)
             if initResult != GHOSTTY_SUCCESS {
@@ -343,29 +311,6 @@ extension Ghostty {
             }
 
             Ghostty.logger.info("Ghostty app initialized successfully")
-        }
-
-        private func ensureProcessEnvironment() {
-            #if os(iOS)
-            let homeDirectory = NSHomeDirectory()
-            if !homeDirectory.isEmpty {
-                if let currentHome = getenv("HOME"), !String(cString: currentHome).isEmpty {
-                    // Keep the system-provided value when it exists.
-                } else {
-                    setenv("HOME", homeDirectory, 1)
-                }
-            }
-
-            let temporaryDirectory = NSTemporaryDirectory()
-            if !temporaryDirectory.isEmpty {
-                if let currentTemporaryDirectory = getenv("TMPDIR"),
-                   !String(cString: currentTemporaryDirectory).isEmpty {
-                    // Keep the system-provided value when it exists.
-                } else {
-                    setenv("TMPDIR", temporaryDirectory, 1)
-                }
-            }
-            #endif
         }
 
         #if os(macOS)
@@ -526,8 +471,7 @@ extension Ghostty {
                 fontSize: presentationOverrides.resolvedFontSize(),
                 themeName: effectiveThemeName,
                 cursorStyleRaw: terminalCursorStyle.rawValue,
-                cursorBlink: terminalCursorBlink,
-                optionAsAltModeRaw: terminalOptionAsAltMode.rawValue
+                cursorBlink: terminalCursorBlink
             )
 
             if let cachedConfig = surfaceConfigCache[key] {
@@ -582,8 +526,7 @@ extension Ghostty {
                     shellName: shellName,
                     themeName: effectiveThemeName,
                     cursorStyle: terminalCursorStyle,
-                    cursorBlink: terminalCursorBlink,
-                    optionAsAltMode: terminalOptionAsAltMode
+                    cursorBlink: terminalCursorBlink
                 )
 
                 Ghostty.logger.info("Loading Ghostty theme: \(self.effectiveThemeName)")
@@ -836,7 +779,7 @@ extension Ghostty {
                 DispatchQueue.main.async {
                     guard let terminalView = terminalView else { return }
                     // Convert from backing (pixel) coordinates to points
-                    let scale = terminalView.window?.screen.scale ?? max(terminalView.traitCollection.displayScale, 1)
+                    let scale = terminalView.window?.screen.scale ?? UIScreen.main.scale
                     terminalView.cellSize = CGSize(
                         width: Double(cellSize.width) / scale,
                         height: Double(cellSize.height) / scale
@@ -856,11 +799,15 @@ extension Ghostty {
                 return true
 
             case GHOSTTY_ACTION_READONLY:
+                #if os(macOS)
                 let isReadonly = action.action.readonly == GHOSTTY_READONLY_ON
                 DispatchQueue.main.async {
                     terminalView?.updateReadonlyState(isReadonly)
                 }
                 return true
+                #else
+                return true
+                #endif
 
             case GHOSTTY_ACTION_MOUSE_SHAPE,
                  GHOSTTY_ACTION_MOUSE_VISIBILITY,

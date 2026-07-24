@@ -9,9 +9,8 @@ struct TmuxAttachSessionInfo: Identifiable, Equatable {
 }
 
 struct TmuxAttachPrompt: Identifiable, Equatable {
-    /// Unique shell-start request that owns this prompt.
+    /// Session ID (ConnectionSession.id or Terminal paneId) that is waiting for selection.
     let id: UUID
-    let paneId: UUID
     let serverId: UUID
     let serverName: String
     let existingSessions: [TmuxAttachSessionInfo]

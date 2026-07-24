@@ -6,7 +6,6 @@ import SwiftUI
 @main
 struct VVTermLiveActivityBundle: WidgetBundle {
     var body: some Widget {
-        VVTermLauncherWidget()
         VVTermLiveActivityWidget()
     }
 }

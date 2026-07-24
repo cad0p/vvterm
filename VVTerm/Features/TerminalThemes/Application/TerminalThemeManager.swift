@@ -228,8 +228,6 @@ final class TerminalThemeManager: ObservableObject {
     }
 
     private func syncCustomThemeFiles() {
-        defer { ThemeColorParser.invalidateCache() }
-
         let fm = FileManager.default
         let directoryURL = TerminalThemeStoragePaths.customThemesDirectoryURL()
 

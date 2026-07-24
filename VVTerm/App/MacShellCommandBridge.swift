@@ -15,7 +15,8 @@ import Combine
 import Foundation
 
 final class MacShellCommandBridge: ObservableObject {
-    init() {}
+    static let shared = MacShellCommandBridge()
+    private init() {}
 
     @Published private(set) var revision: Int = 0
     private(set) var serverViewTabActions: ServerViewTabActions?

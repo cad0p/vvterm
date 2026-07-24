@@ -1,193 +1,7 @@
-import Foundation
 import Testing
 @testable import VVTerm
 
-private actor TmuxProbeExecutor {
-    private var outputs: [Result<String, Error>]
-    private var commands: [String] = []
-
-    init(outputs: [Result<String, Error>]) {
-        self.outputs = outputs
-    }
-
-    func run(command: String, timeout _: Duration?) throws -> String {
-        commands.append(command)
-        guard !outputs.isEmpty else {
-            Issue.record("Unexpected extra command: \(command)")
-            return ""
-        }
-        return try outputs.removeFirst().get()
-    }
-
-    func recordedCommands() -> [String] {
-        commands
-    }
-}
-
-enum InjectedTmuxProbeError: CaseIterable, Sendable {
-    case timeout
-    case disconnected
-    case cancelled
-    case transport
-    case channelOpenFailed
-    case shellRequestFailed
-
-    var error: Error {
-        switch self {
-        case .timeout: return SSHError.timeout
-        case .disconnected: return SSHError.notConnected
-        case .cancelled: return CancellationError()
-        case .transport: return SSHError.socketError("connection reset")
-        case .channelOpenFailed: return SSHError.channelOpenFailed
-        case .shellRequestFailed: return SSHError.shellRequestFailed
-        }
-    }
-
-    var expectedFailure: RemoteTmuxProbeFailure {
-        switch self {
-        case .timeout: return .timeout
-        case .disconnected: return .disconnected
-        case .cancelled: return .cancelled
-        case .transport: return .transport("connection reset")
-        case .channelOpenFailed: return .channelOpenFailed
-        case .shellRequestFailed: return .shellRequestFailed
-        }
-    }
-}
-
 struct RemoteTmuxManagerParserTests {
-
-    private func resolveAvailability(
-        environment: RemoteEnvironment = .fallbackPOSIX,
-        outputs: [Result<String, Error>]
-    ) async -> (RemoteTmuxAvailability, [String]) {
-        let executor = TmuxProbeExecutor(outputs: outputs)
-        let availability = await RemoteTmuxManager.shared.tmuxAvailability(
-            in: environment
-        ) { command, timeout in
-            try await executor.run(command: command, timeout: timeout)
-        }
-        return (availability, await executor.recordedCommands())
-    }
-
-    @Test
-    func explicitAvailabilityMarkerReportsUnixTmuxAvailable() async {
-        let (availability, commands) = await resolveAvailability(outputs: [
-            .success("__VVTERM_TMUX_OK__")
-        ])
-
-        #expect(availability == .available(.unixTmux))
-        #expect(commands.count == 1)
-    }
-
-    @Test
-    func explicitMissingMarkerConfirmsUnixTmuxMissing() async {
-        let (availability, _) = await resolveAvailability(outputs: [
-            .success("__VVTERM_TMUX_NO__")
-        ])
-
-        #expect(availability == .confirmedMissing)
-    }
-
-    @Test(arguments: InjectedTmuxProbeError.allCases)
-    func probeErrorsRemainIndeterminate(error: InjectedTmuxProbeError) async {
-        let (availability, _) = await resolveAvailability(outputs: [
-            .failure(error.error)
-        ])
-
-        #expect(availability == .indeterminate(error.expectedFailure))
-    }
-
-    @Test(arguments: ["", "unexpected output", "__VVTERM_TMUX_OK____VVTERM_TMUX_NO__"])
-    func emptyMalformedAndConflictingProbeOutputRemainIndeterminate(output: String) async {
-        let (availability, _) = await resolveAvailability(outputs: [.success(output)])
-
-        #expect(availability == .indeterminate(.invalidResponse))
-    }
-
-    @Test
-    func unsupportedEnvironmentDoesNotRunTmuxProbe() async {
-        let environment = RemoteEnvironment(
-            platform: .windows,
-            shellProfile: .unknown(),
-            activeShellName: nil,
-            powerShellExecutable: "powershell"
-        )
-        let (availability, commands) = await resolveAvailability(
-            environment: environment,
-            outputs: []
-        )
-
-        #expect(availability == .unsupported)
-        #expect(commands.isEmpty)
-    }
-
-    @Test
-    func windowsConfirmsMissingOnlyAfterEveryCandidateReportsMissing() async {
-        let environment = RemoteEnvironment(
-            platform: .windows,
-            shellProfile: .powershell(executableName: "pwsh"),
-            activeShellName: "pwsh",
-            powerShellExecutable: "pwsh"
-        )
-        let (availability, commands) = await resolveAvailability(
-            environment: environment,
-            outputs: [
-                .success("__VVTERM_TMUX_NO__:psmux"),
-                .success("__VVTERM_TMUX_NO__:pmux"),
-                .success("__VVTERM_TMUX_NO__:tmux")
-            ]
-        )
-
-        #expect(availability == .confirmedMissing)
-        #expect(commands.count == 3)
-    }
-
-    @Test
-    func oneIndeterminateWindowsCandidatePreventsFalseMissingResult() async {
-        let environment = RemoteEnvironment(
-            platform: .windows,
-            shellProfile: .powershell(executableName: "pwsh"),
-            activeShellName: "pwsh",
-            powerShellExecutable: "pwsh"
-        )
-        let (availability, _) = await resolveAvailability(
-            environment: environment,
-            outputs: [
-                .failure(SSHError.timeout),
-                .success("__VVTERM_TMUX_NO__:pmux"),
-                .success("__VVTERM_TMUX_NO__:tmux")
-            ]
-        )
-
-        #expect(availability == .indeterminate(.timeout))
-    }
-
-    @Test
-    func laterAvailableWindowsCandidateWinsAfterEarlierIndeterminateProbe() async {
-        let environment = RemoteEnvironment(
-            platform: .windows,
-            shellProfile: .powershell(executableName: "pwsh"),
-            activeShellName: "pwsh",
-            powerShellExecutable: "pwsh"
-        )
-        let (availability, commands) = await resolveAvailability(
-            environment: environment,
-            outputs: [
-                .failure(SSHError.timeout),
-                .success("__VVTERM_TMUX_OK__:pmux")
-            ]
-        )
-
-        #expect(
-            availability == .available(.windowsPsmux(
-                commandName: "pmux",
-                shellFamily: .powershell,
-                powerShellExecutable: "pwsh"
-            ))
-        )
-        #expect(commands.count == 2)
-    }
 
     @Test
     func parseWhitespaceFormatFromRealTmuxOutput() {
@@ -270,343 +84,45 @@ struct RemoteTmuxManagerParserTests {
 
     @Test
     func attachExistingCommandFallsBackToLoginShell() {
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "team session",
-            ownership: .external
-        )
+        let command = RemoteTmuxManager.shared.attachExistingCommand(sessionName: "team session")
         #expect(command.contains("tmux has-session"))
         #expect(command.contains("attach-session"))
         #expect(command.contains("exec \"${SHELL:-/bin/sh}\" -l"))
     }
 
     @Test
-    func managedLifecycleCommandReportsDetachOrSessionEnd() {
-        let command = RemoteTmuxManager.shared.attachCommand(
-            sessionName: "vvterm_managed",
-            workingDirectory: "/work",
-            lifecycleMarkerToken: "marker-token"
-        )
-
-        #expect(command.contains("new-session -d -s"))
-        #expect(command.contains("has-session -t '=vvterm_managed'"))
-        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .detached)))
-        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
-        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .creationFailed)))
-        #expect(command.contains("vvtermTmuxCreateStatus=$?"))
-        #expect(!command.contains("exec tmux"))
-    }
-
-    @Test
-    func unixSessionPresenceProbeUsesExactSessionAndPrivateMarkers() {
-        let command = RemoteTmuxManager.shared.sessionPresenceProbeCommand(
-            sessionName: "vvterm_managed",
-            backend: .unixTmux,
-            existsMarker: "private-exists",
-            missingMarker: "private-missing"
-        )
-
-        #expect(command.contains("has-session -t"))
-        #expect(command.contains("=vvterm_managed"))
-        #expect(command.contains("private-exists"))
-        #expect(command.contains("private-missing"))
-    }
-
-    @Test
-    func managedReattachDoesNotRecreateMissingSession() {
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "vvterm_managed",
-            ownership: .managed,
-            lifecycleMarkerToken: "marker-token"
-        )
-
-        #expect(command.contains("attach-session"))
-        #expect(command.contains("set-option -wq -t \"$vvtermWindow\" scroll-on-clear 'off'"))
-        #expect(command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .ended)))
-        #expect(!command.contains(TmuxLifecycleMarker.sequence(token: "marker-token", event: .creationFailed)))
-        #expect(!command.contains("new-session"))
-        #expect(!command.contains("exec \"${SHELL:-/bin/sh}\" -l"))
-    }
-
-    @Test
-    func installAndAttachScriptIncludesScopedManagedConfiguration() {
+    func installAndAttachScriptIncludesSessionAndConfig() {
         let script = RemoteTmuxManager.shared.installAndAttachScript(
             sessionName: "vvterm_demo",
             workingDirectory: "/tmp/work dir",
             terminalType: .xtermGhostty
         )
-        #expect(script.contains("new-session -d -s"))
+        #expect(script.contains("~/.vvterm/tmux.conf"))
+        #expect(script.contains("new-session -A -s"))
         #expect(script.contains("vvterm_demo"))
         #expect(script.contains("/tmp/work dir"))
-        #expect(script.contains("set-option -q -t"))
-        #expect(script.contains("status off"))
-        #expect(script.contains("RGB,hyperlinks"))
-        #expect(script.contains("tmux -u"))
-        #expect(!script.contains("~/.vvterm/tmux.conf"))
-        #expect(!script.contains("set -g"))
+        #expect(script.contains("set -g default-terminal"))
+        #expect(script.contains("xterm-ghostty"))
+        #expect(script.contains("set -gq allow-set-title on"))
+        #expect(!script.contains("%if"))
+        #expect(!script.contains("#{version}"))
     }
 
     @Test
-    func installOnlyScriptDoesNotEnterUntrackedTmuxSession() {
-        let script = RemoteTmuxManager.shared.installAndAttachScript(
-            sessionName: "vvterm_demo",
-            workingDirectory: "/tmp/work",
+    func unixConfigWriteExecutesThroughSh() {
+        let command = RemoteTmuxManager.shared.configWriteExecutionCommand(
             terminalType: .xtermGhostty,
-            attachAfterInstall: false
+            backend: .unixTmux
         )
 
-        #expect(script.contains("apt-get install -y tmux"))
-        #expect(!script.contains("new-session"))
-        #expect(!script.contains("attach-session"))
-        #expect(!script.contains("exec tmux"))
-        #expect(!script.contains("~/.vvterm/tmux.conf"))
-    }
-
-    @Test
-    func managedSessionClearBehaviorIsWindowScoped() {
-        let create = RemoteTmuxManager.shared.attachCommand(
-            sessionName: "vvterm_managed",
-            workingDirectory: "/tmp"
-        )
-        let reattach = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "vvterm_managed",
-            ownership: .managed
-        )
-        let external = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "shared",
-            ownership: .external
-        )
-
-        let scopedOption = "set-option -wq -t \"$vvtermWindow\" scroll-on-clear 'off'"
-        #expect(create.contains(scopedOption))
-        #expect(reattach.contains(scopedOption))
-        #expect(!external.contains("scroll-on-clear"))
-        #expect(!reattach.contains("source-file"))
-        #expect(!reattach.contains("~/.vvterm/tmux.conf"))
-    }
-
-    @Test
-    func managedUnixSessionConfigurationIsScopedToItsSession() {
-        let create = RemoteTmuxManager.shared.attachCommand(
-            sessionName: "vvterm_managed",
-            workingDirectory: "/tmp"
-        )
-        let reattach = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "vvterm_managed",
-            ownership: .managed
-        )
-        let external = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "shared",
-            ownership: .external
-        )
-
-        for command in [create, reattach] {
-            #expect(command.contains("set-option -q -t '=vvterm_managed:' status off"))
-            #expect(command.contains("set-option -q -t '=vvterm_managed:' history-limit 10000"))
-            #expect(command.contains("set-option -q -t '=vvterm_managed:' mouse on"))
-            #expect(command.contains("set-environment -t '=vvterm_managed' TERM_PROGRAM 'vvterm'"))
-            #expect(command.contains("-F '#{window_id} #{window_linked}'"))
-            #expect(command.contains("[ \"$vvtermLinked\" = 0 ] || continue"))
-            #expect(command.contains("set-hook -t '=vvterm_managed:' 'after-new-window[1000]'"))
-            #expect(command.contains("#{==:#{window_linked},0}"))
-            #expect(!command.contains("source-file"))
-            #expect(!command.contains("-f ~/.vvterm/tmux.conf"))
-            #expect(!command.contains("set -g"))
-            #expect(!command.contains("bind -n"))
-        }
-
-        #expect(!external.contains("set-option"))
-        #expect(!external.contains("set-environment"))
-        #expect(!external.contains("source-file"))
-        #expect(!external.contains("~/.vvterm/tmux.conf"))
-    }
-
-    @Test
-    func managedETSessionPropagatesSnacksHintWithoutFabricatingSSHEnvironment() throws {
-        let create = RemoteTmuxManager.shared.attachCommand(
-            sessionName: "vvterm_et",
-            workingDirectory: "/tmp",
-            lifecycleMarkerToken: "create",
-            transport: .eternalTerminal
-        )
-        let reattach = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "vvterm_et",
-            ownership: .managed,
-            lifecycleMarkerToken: "reattach",
-            transport: .eternalTerminal
-        )
-        let external = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "shared",
-            ownership: .external,
-            lifecycleMarkerToken: "external",
-            transport: .eternalTerminal
-        )
-
-        let assignment = "set-environment -t '=vvterm_et' SNACKS_SSH '1'"
-        #expect(create.contains(assignment))
-        #expect(reattach.contains(assignment))
-        #expect(!external.contains("SNACKS_SSH"))
-        for command in [create, reattach, external] {
-            #expect(!command.contains("SSH_CONNECTION"))
-            #expect(!command.contains("SSH_CLIENT"))
-            #expect(!command.contains("SSH_TTY"))
-        }
-
-        let hint = try #require(create.range(of: assignment))
-        let terminalWindow = try #require(create.range(of: "new-window -d"))
-        #expect(hint.lowerBound < terminalWindow.lowerBound)
-    }
-
-    @Test
-    func managedSSHAndMoshSessionsClearStaleETCompatibilityHint() {
-        for transport in [ShellTransport.ssh, .sshFallback, .mosh] {
-            let command = RemoteTmuxManager.shared.attachCommand(
-                sessionName: "vvterm_transport",
-                workingDirectory: "/tmp",
-                transport: transport
-            )
-            #expect(command.contains("set-environment -u -t '=vvterm_transport' SNACKS_SSH"))
-            #expect(!command.contains("SNACKS_SSH '1'"))
-            #expect(!command.contains("SSH_CONNECTION"))
-        }
-    }
-
-    @Test
-    func managedUnixCreationBootstrapsLegacyTmuxBeforeStartingTerminalShell() {
-        let command = RemoteTmuxManager.shared.attachCommand(
-            sessionName: "vvterm_managed",
-            workingDirectory: "/tmp"
-        )
-
-        #expect(command.contains("tmux -T RGB,hyperlinks -V"))
-        #expect(command.contains("tmux -u -T RGB,hyperlinks attach-session"))
-        #expect(command.contains("else exec tmux -u attach-session"))
-        #expect(command.components(separatedBy: "new-session -d -s").count == 2)
-        #expect(!command.contains("-e 'COLORTERM=truecolor'"))
-        #expect(command.contains("__vvterm_bootstrap__"))
-        #expect(command.contains("new-window -d -t '=vvterm_managed:'"))
-        #expect(command.contains("new-window -d -t '=vvterm_managed:' -c \"/tmp\" /bin/sh -lc"))
-        #expect(command.contains("if [ -n \\\"\\$SHELL\\\" ]; then exec \\\"\\$SHELL\\\" -l; fi;"))
-        #expect(command.contains("kill-window -t '=vvterm_managed:__vvterm_bootstrap__'"))
-        #expect(command.contains("move-window -r -t '=vvterm_managed:'"))
-
-        let createWindowOffset = command.range(of: "new-window -d -t '=vvterm_managed:'")
-            .map { command.distance(from: command.startIndex, to: $0.lowerBound) }
-        let removeBootstrapOffset = command.range(of: "kill-window -t '=vvterm_managed:__vvterm_bootstrap__'")
-            .map { command.distance(from: command.startIndex, to: $0.lowerBound) }
-        #expect((createWindowOffset ?? .max) < (removeBootstrapOffset ?? .min))
-    }
-
-    @Test
-    func externalUnixSessionAttachDoesNotLoadVVTermConfiguration() {
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "external's; $session",
-            ownership: .external
-        )
-        let exactSession = "'=external'\\''s; $session'"
-
-        #expect(command.contains("has-session -t \(exactSession)"))
-        #expect(command.contains("attach-session -t \(exactSession)"))
-        #expect(!command.contains("source-file"))
-        #expect(!command.contains("~/.vvterm/tmux.conf"))
-    }
-
-    @Test
-    func externalWindowsSessionAttachDoesNotLoadVVTermConfiguration() {
-        let backend = RemoteTmuxBackend.windowsPsmux(
-            commandName: "psmux",
-            shellFamily: .powershell,
-            powerShellExecutable: "pwsh"
-        )
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "external team; session",
-            ownership: .external,
-            backend: backend
-        )
-
-        #expect(command.contains("attach-session -d -t $vvtermSession"))
-        #expect(!command.contains("source-file"))
-        #expect(!command.contains("$vvtermConfig"))
-    }
-
-    @Test
-    func managedWindowsSessionAttachLoadsVVTermConfiguration() {
-        let backend = RemoteTmuxBackend.windowsPsmux(
-            commandName: "psmux",
-            shellFamily: .powershell,
-            powerShellExecutable: "pwsh"
-        )
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "vvterm_managed",
-            ownership: .managed,
-            backend: backend
-        )
-
-        #expect(command.contains("source-file -t $vvtermSession $vvtermConfig"))
-        #expect(command.contains("-u attach-session"))
-    }
-
-    @Test @MainActor
-    func selectedVVTermManagedSessionKeepsManagedClearBehavior() throws {
-        let resolver = TmuxAttachResolver()
-        let paneId = UUID()
-        let sessionName = resolver.managedSessionName(for: paneId)
-        let selection = TmuxAttachSelection.attachExisting(sessionName: sessionName)
-
-        resolver.updateAttachmentState(for: paneId, selection: selection) { _ in }
-        let ownership = try #require(resolver.sessionOwnership[paneId])
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: sessionName,
-            ownership: ownership
-        )
-
-        #expect(ownership == .managed)
-        #expect(command.contains("set-option -wq -t \"$vvtermWindow\" scroll-on-clear 'off'"))
-        #expect(command.contains("set-hook -t '=\(sessionName):' 'after-new-window[1000]'"))
-    }
-
-    @Test @MainActor
-    func selectedExternalSessionDoesNotLoadVVTermConfiguration() throws {
-        let resolver = TmuxAttachResolver()
-        let paneId = UUID()
-        let selection = TmuxAttachSelection.attachExisting(sessionName: "shared")
-
-        resolver.updateAttachmentState(for: paneId, selection: selection) { _ in }
-        let ownership = try #require(resolver.sessionOwnership[paneId])
-        let command = RemoteTmuxManager.shared.attachExistingCommand(
-            sessionName: "shared",
-            ownership: ownership
-        )
-
-        #expect(ownership == .external)
-        #expect(!command.contains("source-file"))
-        #expect(!command.contains("~/.vvterm/tmux.conf"))
-    }
-
-    @Test @MainActor
-    func failedExternalSessionListingPreservesRememberedAttachment() async {
-        let resolver = TmuxAttachResolver()
-        let paneId = UUID()
-        let serverId = UUID()
-        resolver.sessionNames[paneId] = "shared-session"
-        resolver.sessionOwnership[paneId] = .external
-
-        do {
-            _ = try await resolver.resolveSelection(
-                for: paneId,
-                serverId: serverId,
-                client: SSHClient(),
-                backend: .unixTmux,
-                requestId: UUID(),
-                validateOwner: {},
-                setPrompt: { _ in }
-            )
-            Issue.record("A failed session listing should remain a retryable connection error")
-        } catch {
-            #expect(error is SSHError)
-        }
-
-        #expect(resolver.sessionNames[paneId] == "shared-session")
-        #expect(resolver.sessionOwnership[paneId] == .external)
+        #expect(command.hasPrefix("sh -lc "))
+        #expect(command.contains("mkdir -p ~/.vvterm"))
+        #expect(command.contains("> ~/.vvterm/tmux.conf"))
+        #expect(command.contains("set -g default-terminal"))
+        #expect(command.contains("xterm-ghostty"))
+        #expect(command.contains("set -gq allow-set-title on"))
+        #expect(!command.contains("%if"))
+        #expect(!command.contains("#{version}"))
     }
 
     @Test
@@ -620,7 +136,6 @@ struct RemoteTmuxManagerParserTests {
         #expect(probe.contains("/usr/local/bin/tmux"))
         #expect(probe.contains("-V >/dev/null 2>&1"))
         #expect(probe.contains("__VVTERM_TMUX_OK__"))
-        #expect(probe.contains("__VVTERM_TMUX_NO__"))
     }
 
     @Test
@@ -653,30 +168,6 @@ struct RemoteTmuxManagerParserTests {
     }
 
     @Test
-    func windowsPsmuxLifecycleCommandReportsDetachOrSessionEnd() {
-        let backend = RemoteTmuxBackend.windowsPsmux(
-            commandName: "psmux",
-            shellFamily: .powershell,
-            powerShellExecutable: "pwsh"
-        )
-
-        let command = RemoteTmuxManager.shared.attachCommand(
-            sessionName: "vvterm_demo",
-            workingDirectory: "C:/work",
-            backend: backend,
-            lifecycleMarkerToken: "marker-token"
-        )
-
-        #expect(command.contains("has-session -t $vvtermSession"))
-        #expect(command.contains("[Console]::Out.Write"))
-        #expect(command.contains("marker-token"))
-        #expect(command.contains("detached"))
-        #expect(command.contains("ended"))
-        #expect(command.contains("creationFailed"))
-        #expect(command.contains("$vvtermTmuxCreateStatus = $LASTEXITCODE"))
-    }
-
-    @Test
     func windowsCmdPsmuxAttachCommandWrapsPowerShell() {
         let backend = RemoteTmuxBackend.windowsPsmux(
             commandName: "pmux",
@@ -686,7 +177,6 @@ struct RemoteTmuxManagerParserTests {
 
         let command = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "shared",
-            ownership: .external,
             backend: backend
         )
 
@@ -703,7 +193,6 @@ struct RemoteTmuxManagerParserTests {
 
         let command = RemoteTmuxManager.shared.attachExistingCommand(
             sessionName: "shared",
-            ownership: .external,
             backend: backend
         )
 
@@ -730,7 +219,6 @@ struct RemoteTmuxManagerParserTests {
         #expect(probe.contains("dump-state"))
         #expect(probe.contains("claim-session"))
         #expect(probe.contains("__VVTERM_TMUX_OK__:tmux"))
-        #expect(probe.contains("__VVTERM_TMUX_NO__:tmux"))
     }
 
     @Test
@@ -763,7 +251,6 @@ struct RemoteTmuxManagerParserTests {
         #expect(!script.contains("irm "))
         #expect(!script.contains("WheelUpPane"))
         #expect(!script.contains("WheelDownPane"))
-        #expect(!script.contains("scroll-on-clear"))
         #expect(!script.contains("sh -lc"))
     }
 }

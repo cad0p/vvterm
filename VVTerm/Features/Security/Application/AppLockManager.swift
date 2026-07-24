@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 @MainActor
 final class AppLockManager: ObservableObject {
@@ -73,29 +74,15 @@ final class AppLockManager: ObservableObject {
     }
 
     func refreshBiometryAvailability() {
-        let nextIsAvailable: Bool
-        let nextKind: BiometryKind
-        let nextMessage: String?
-
         switch authService.availability() {
         case .available(let kind):
-            nextIsAvailable = true
-            nextKind = kind
-            nextMessage = nil
+            isBiometryAvailable = true
+            biometryKind = kind
+            biometryAvailabilityMessage = nil
         case .unavailable(let message):
-            nextIsAvailable = false
-            nextKind = .none
-            nextMessage = message
-        }
-
-        if isBiometryAvailable != nextIsAvailable {
-            isBiometryAvailable = nextIsAvailable
-        }
-        if biometryKind != nextKind {
-            biometryKind = nextKind
-        }
-        if biometryAvailabilityMessage != nextMessage {
-            biometryAvailabilityMessage = nextMessage
+            isBiometryAvailable = false
+            biometryKind = .none
+            biometryAvailabilityMessage = message
         }
     }
 
@@ -166,8 +153,17 @@ final class AppLockManager: ObservableObject {
         return true
     }
 
-    func handleSceneActivation() {
-        refreshBiometryAvailability()
+    func handleScenePhaseChange(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            refreshBiometryAvailability()
+        case .background:
+            lockIfNeededForBackground()
+        case .inactive:
+            break
+        @unknown default:
+            break
+        }
     }
 
     func lockIfNeededForBackground() {

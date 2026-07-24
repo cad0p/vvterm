@@ -1,6 +1,5 @@
 import Foundation
 import os.log
-
 #if os(iOS)
 import ActivityKit
 #endif
@@ -9,142 +8,90 @@ import ActivityKit
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "VVTerm",
-        category: "LiveActivity"
-    )
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "LiveActivity")
 
     private init() {}
 
-    func refresh(with connectionStates: [ConnectionState]) {
+    func refresh(with sessions: [ConnectionSession]) {
         #if os(iOS)
-        guard #available(iOS 16.1, *) else { return }
-
-        requestedTarget = TerminalLiveActivityPolicy.snapshot(for: connectionStates)
-            .map(ReconciliationTarget.active) ?? .end
-        guard reconciliationTask == nil else { return }
-
-        reconciliationTask = Task { [weak self] in
-            await self?.reconcileRequestedSnapshots()
+        if #available(iOS 16.1, *) {
+            Task { await updateActivity(for: sessions) }
         }
-        #endif
-    }
-
-    @discardableResult
-    func endForApplicationTermination() -> Bool {
-        #if os(iOS)
-        guard #available(iOS 16.1, *) else { return true }
-
-        requestedTarget = .end
-        let completion = DispatchSemaphore(value: 0)
-        Task.detached(priority: .high) {
-            defer { completion.signal() }
-            for activity in Activity<VVTermActivityAttributes>.activities {
-                await activity.end(dismissalPolicy: .immediate)
-            }
-        }
-
-        let completed = completion.wait(timeout: .now() + 2) == .success
-        if completed {
-            reconciledTarget = .end
-        } else {
-            logger.error("Timed out ending Live Activities during application termination")
-        }
-        return completed
-        #else
-        return true
         #endif
     }
 
     #if os(iOS)
     @available(iOS 16.1, *)
-    private enum ReconciliationTarget: Equatable {
-        case end
-        case active(TerminalLiveActivitySnapshot)
-    }
+    private var activity: Activity<VVTermActivityAttributes>?
 
     @available(iOS 16.1, *)
-    private var requestedTarget: ReconciliationTarget?
+    private var lastState: VVTermActivityAttributes.ContentState?
 
     @available(iOS 16.1, *)
-    private var reconciliationTask: Task<Void, Never>?
-
-    @available(iOS 16.1, *)
-    private var reconciledTarget: ReconciliationTarget?
-
-    @available(iOS 16.1, *)
-    private func reconcileRequestedSnapshots() async {
-        while let target = requestedTarget {
-            requestedTarget = nil
-            await reconcileActivity(toward: target)
-        }
-        reconciliationTask = nil
-    }
-
-    @available(iOS 16.1, *)
-    private func reconcileActivity(toward target: ReconciliationTarget) async {
-        let activities = Activity<VVTermActivityAttributes>.activities
+    private func updateActivity(for sessions: [ConnectionSession]) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            await end(activities)
-            reconciledTarget = .end
+            await endAllActivities()
             return
         }
 
-        guard case .active(let snapshot) = target else {
-            await end(activities)
-            reconciledTarget = .end
+        let activeCount = sessions.filter { $0.connectionState.isConnected || $0.connectionState.isConnecting }.count
+        if activeCount == 0 {
+            await endAllActivities()
             return
         }
 
-        let contentState = VVTermActivityAttributes.ContentState(
-            status: activityStatus(for: snapshot.status),
-            activeCount: snapshot.activeCount
-        )
+        await attachToExistingActivityIfNeeded()
 
-        if let activity = activities.first {
-            for duplicate in activities.dropFirst() {
+        let status: VVTermLiveActivityStatus
+        if sessions.contains(where: { if case .reconnecting = $0.connectionState { return true } else { return false } }) {
+            status = .reconnecting
+        } else if sessions.contains(where: { if case .connecting = $0.connectionState { return true } else { return false } }) {
+            status = .connecting
+        } else if sessions.contains(where: { $0.connectionState.isConnected }) {
+            status = .connected
+        } else {
+            status = .disconnected
+        }
+
+        let newState = VVTermActivityAttributes.ContentState(status: status, activeCount: activeCount)
+        if activity == nil {
+            do {
+                let attributes = VVTermActivityAttributes(appName: "VVTerm")
+                activity = try Activity.request(attributes: attributes, contentState: newState, pushType: nil)
+                lastState = newState
+            } catch {
+                logger.error("Failed to start Live Activity: \(String(describing: error))")
+            }
+            return
+        }
+
+        guard newState != lastState else { return }
+        await activity?.update(using: newState)
+        lastState = newState
+    }
+
+    @available(iOS 16.1, *)
+    private func attachToExistingActivityIfNeeded() async {
+        guard activity == nil else { return }
+        let existing = Activity<VVTermActivityAttributes>.activities
+        guard let current = existing.first else { return }
+        activity = current
+
+        if existing.count > 1 {
+            for duplicate in existing.dropFirst() {
                 await duplicate.end(dismissalPolicy: .immediate)
             }
-            guard reconciledTarget != target || activities.count > 1 else {
-                return
-            }
-            await activity.update(using: contentState)
-            reconciledTarget = target
-            return
-        }
-
-        do {
-            let attributes = VVTermActivityAttributes(appName: "VVTerm")
-            _ = try Activity.request(
-                attributes: attributes,
-                contentState: contentState,
-                pushType: nil
-            )
-            reconciledTarget = target
-        } catch {
-            reconciledTarget = nil
-            logger.error("Failed to start Live Activity: \(String(describing: error))")
         }
     }
 
     @available(iOS 16.1, *)
-    private func end(_ activities: [Activity<VVTermActivityAttributes>]) async {
-        for activity in activities {
+    private func endAllActivities() async {
+        let existing = Activity<VVTermActivityAttributes>.activities
+        for activity in existing {
             await activity.end(dismissalPolicy: .immediate)
         }
-    }
-
-    private func activityStatus(
-        for status: TerminalLiveActivitySnapshot.Status
-    ) -> VVTermLiveActivityStatus {
-        switch status {
-        case .connected:
-            return .connected
-        case .connecting:
-            return .connecting
-        case .reconnecting:
-            return .reconnecting
-        }
+        self.activity = nil
+        lastState = nil
     }
     #endif
 }

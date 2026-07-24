@@ -1,5 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 // MARK: - Keychain Settings View
 
@@ -9,7 +14,7 @@ struct KeychainSettingsView: View {
     @State private var showingGenerateKey = false
     @State private var showingDeleteConfirmation = false
     @State private var keyToDelete: SSHKeyEntry?
-    @State var keyToShowDetails: SSHKeyEntry?
+    @State private var keyToShowDetails: SSHKeyEntry?
     @State private var error: String?
 
     var body: some View {
@@ -20,7 +25,28 @@ struct KeychainSettingsView: View {
                 Form {
                     Section {
                         ForEach(storedKeys) { key in
-                            platformKeyRow(for: key)
+                            HStack(spacing: 8) {
+                                Button {
+                                    keyToShowDetails = key
+                                } label: {
+                                    SSHKeyRow(key: key)
+                                }
+                                .buttonStyle(.plain)
+
+                                #if os(macOS)
+                                keyActionsMenu(for: key)
+                                #endif
+                            }
+                            #if os(macOS)
+                            .contextMenu {
+                                keyActions(for: key)
+                            }
+                            #endif
+                            #if os(iOS)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                keyActions(for: key)
+                            }
+                            #endif
                         }
                     } footer: {
                         Text("Keys are stored securely in your device's Keychain. Passphrases are stored separately.")
@@ -144,11 +170,16 @@ struct KeychainSettingsView: View {
     }
 
     private func copyToClipboard(_ text: String) {
-        Clipboard.copy(text)
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
     }
 
     @ViewBuilder
-    func keyActions(for key: SSHKeyEntry) -> some View {
+    private func keyActions(for key: SSHKeyEntry) -> some View {
         Button {
             keyToShowDetails = key
         } label: {
@@ -173,11 +204,27 @@ struct KeychainSettingsView: View {
             Label("Delete", systemImage: "trash")
         }
     }
+
+    #if os(macOS)
+    private func keyActionsMenu(for key: SSHKeyEntry) -> some View {
+        Menu {
+            keyActions(for: key)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .imageScale(.large)
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel(String(localized: "Key Actions"))
+    }
+    #endif
 }
 
 // MARK: - SSH Key Row
 
-struct SSHKeyRow: View {
+private struct SSHKeyRow: View {
     let key: SSHKeyEntry
 
     var body: some View {
@@ -325,12 +372,21 @@ struct AddSSHKeySheet: View {
     }
 
     private func pasteKeyFromClipboard() {
-        if let key = Clipboard.readString() {
+        #if os(iOS)
+        if let key = UIPasteboard.general.string {
             keyContent = key
             if name.isEmpty {
                 name = extractKeyName(from: key)
             }
         }
+        #elseif os(macOS)
+        if let key = NSPasteboard.general.string(forType: .string) {
+            keyContent = key
+            if name.isEmpty {
+                name = extractKeyName(from: key)
+            }
+        }
+        #endif
     }
 
     private func handleKeyImport(_ result: Result<[URL], Error>) {
@@ -569,7 +625,12 @@ struct KeyDetailsSheet: View {
     }
 
     private func copyToClipboard(_ text: String) {
-        Clipboard.copy(text)
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
         copied = true
     }
 }
@@ -638,7 +699,12 @@ struct PublicKeyDisplaySheet: View {
     }
 
     private func copyToClipboard(_ text: String) {
-        Clipboard.copy(text)
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
         copied = true
     }
 }

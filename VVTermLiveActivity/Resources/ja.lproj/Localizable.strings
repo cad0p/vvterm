@@ -3,7 +3,3 @@
 "active" = "アクティブ";
 "1 active session" = "アクティブなセッション 1 件";
 "%lld active sessions" = "アクティブなセッション %lld 件";
-
-/* Lock Screen widget */
-"Open VVTerm" = "VVTermを開く";
-"Open VVTerm from the Lock Screen." = "ロック画面からVVTermを開きます。";

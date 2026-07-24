@@ -3,7 +3,3 @@
 "active" = "aktiv";
 "1 active session" = "1 aktive Sitzung";
 "%lld active sessions" = "%lld aktive Sitzungen";
-
-/* Lock Screen widget */
-"Open VVTerm" = "VVTerm öffnen";
-"Open VVTerm from the Lock Screen." = "Öffne VVTerm vom Sperrbildschirm.";

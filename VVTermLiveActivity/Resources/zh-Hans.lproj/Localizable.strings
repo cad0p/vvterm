@@ -3,7 +3,3 @@
 "active" = "活动";
 "1 active session" = "1 个活动会话";
 "%lld active sessions" = "%lld 个活动会话";
-
-/* Lock Screen widget */
-"Open VVTerm" = "打开 VVTerm";
-"Open VVTerm from the Lock Screen." = "从锁定屏幕打开 VVTerm。";

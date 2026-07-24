@@ -47,10 +47,10 @@ enum PaywallSource: String {
     case splitPane = "split_pane"
     case customEnvironment = "custom_environment"
     case snippetLimit = "snippet_limit"
+    case postFirstConnection = "post_first_connection"
     case welcome
     case settings
     case sidebarBanner = "sidebar_banner"
-    case dockerStats = "docker_stats"
 }
 
 enum VVTermProducts {

@@ -22,7 +22,7 @@ VVTerm is a cross-platform SSH terminal app for Apple platforms. The current cod
 - Runtime targets: `macOS 13.3+` and `iOS 16.1+`
 - Hardware targets: Apple Silicon / arm64 only
 - App-owned code is organized under `VVTerm/App`, `VVTerm/Core`, and `VVTerm/Features`
-- The repo also contains tests, native vendor builds, and the marketing site under `web/`
+- The repo also contains tests, native vendor builds, feature specs under `docs/specs`, and the marketing site under `web/`
 
 ## Implemented Feature Areas
 
@@ -30,14 +30,12 @@ VVTerm is a cross-platform SSH terminal app for Apple platforms. The current cod
 
 - GPU-accelerated terminal rendering via `GhosttyKit`
 - SSH authentication with password, SSH key, and SSH key + passphrase
-- Connection modes for standard SSH, Tailscale, Mosh, Eternal Terminal, and Cloudflare Access
+- Connection modes for standard SSH, Tailscale, Mosh, and Cloudflare Access
 - Multi-session connection management with tabs, split panes, reconnect handling, and persisted session state
 - tmux-aware startup, attach, install, and recovery flows
 - Rich paste and clipboard helpers for terminal input
 - iOS keyboard accessory support, including special keys and custom actions
 - iOS Live Activity status for active terminal connections
-
-Eternal Terminal connections use the configured SSH authentication and SSH port to run `etterminal`, then connect to `etserver` on TCP port `2022` by default. Install Eternal Terminal on the host and allow inbound traffic to the configured ET port. VVTerm's working-directory and optional tmux startup, attach, installation, and cleanup behavior also applies to ET sessions.
 
 ### Servers and organization
 
@@ -127,6 +125,7 @@ VVTermShared/                   # Shared Activity attributes and small shared ty
 VVTermTests/                    # Unit and integration tests
 VVTermUITests/                  # UI tests
 Vendor/                         # Vendored native dependencies
+docs/specs/                     # Feature specs and implementation notes
 scripts/                        # Vendor build scripts
 web/                            # Astro site for vvterm.com
 ```
@@ -172,7 +171,6 @@ Swift package dependencies currently resolved by the Xcode project:
 
 - [Cloudflared](https://github.com/wiedymi/swift-cloudflared)
 - [swift-mosh](https://github.com/wiedymi/swift-mosh)
-- [swift-et](https://github.com/wiedymi/swift-et)
 - [mlx-swift](https://github.com/ml-explore/mlx-swift)
 - [ZIPFoundation](https://github.com/weichsel/ZIPFoundation)
 - [swift-numerics](https://github.com/apple/swift-numerics)
@@ -199,6 +197,7 @@ Swift package dependencies currently resolved by the Xcode project:
 - [SECURITY.md](SECURITY.md) for vulnerability reporting
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party notices
 - [CLA.md](CLA.md) for the contributor license agreement
+- `docs/specs/` for feature specs such as biometric locks, local discovery, terminal themes, terminal accessories, remote rich clipboard, and the SFTP browser
 
 ## License
 
