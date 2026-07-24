@@ -16,33 +16,15 @@ class AudioPermissionManager: ObservableObject {
     // MARK: - Permission Requests
 
     func requestPermissions(includeSpeech: Bool = true) async -> Bool {
-        let granted = await Self.requestPermissionSequence(
-            includeSpeech: includeSpeech,
-            requestMicrophone: { [weak self] in
-                await self?.requestMicrophonePermission() ?? false
-            },
-            requestSpeech: { [weak self] in
-                await self?.requestSpeechPermission() ?? false
-            }
-        )
-        guard !Task.isCancelled else { return false }
+        let micPermission = await requestMicrophonePermission()
+        let speechPermission = includeSpeech ? await requestSpeechPermission() : true
+
+        let granted = micPermission && speechPermission
         permissionStatus = granted ? .authorized : .denied
         return granted
     }
 
-    static func requestPermissionSequence(
-        includeSpeech: Bool,
-        requestMicrophone: @escaping @MainActor () async -> Bool,
-        requestSpeech: @escaping @MainActor () async -> Bool
-    ) async -> Bool {
-        let microphoneGranted = await requestMicrophone()
-        guard !Task.isCancelled else { return false }
-        let speechGranted = includeSpeech ? await requestSpeech() : true
-        guard !Task.isCancelled else { return false }
-        return microphoneGranted && speechGranted
-    }
-
-    func checkPermissions(includeSpeech: Bool = true) -> Bool {
+    func checkPermissions(includeSpeech: Bool = true) async -> Bool {
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         let speechStatus = includeSpeech ? SFSpeechRecognizer.authorizationStatus() : .authorized
 

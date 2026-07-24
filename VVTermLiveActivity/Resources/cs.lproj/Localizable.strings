@@ -3,7 +3,3 @@
 "active" = "aktivní";
 "1 active session" = "1 aktivní relace";
 "%lld active sessions" = "%lld aktivních relací";
-
-/* Lock Screen widget */
-"Open VVTerm" = "Otevřít VVTerm";
-"Open VVTerm from the Lock Screen." = "Otevřete VVTerm ze zamčené obrazovky.";

@@ -124,10 +124,6 @@ struct TranscriptionSettingsView: View {
     }
 
     private var providerDescription: String {
-        guard mlxAvailable else {
-            return MLXAudioSupport.unavailableDescription
-        }
-
         switch provider {
         case TranscriptionProvider.system.rawValue:
             return String(localized: "Uses Apple's built-in speech recognition. Requires network for best results.")

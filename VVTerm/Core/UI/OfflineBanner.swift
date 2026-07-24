@@ -17,7 +17,7 @@ struct OfflineBanner: View {
     }
 
     var body: some View {
-        if networkMonitor.isOffline {
+        if !networkMonitor.isConnected {
             NoticeBannerView(item: noticeItem)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 12)
@@ -33,7 +33,7 @@ struct CompactOfflineIndicator: View {
     @ObservedObject var networkMonitor: NetworkMonitor = .shared
 
     var body: some View {
-        if networkMonitor.isOffline {
+        if !networkMonitor.isConnected {
             HStack(spacing: 4) {
                 Image(systemName: "wifi.slash")
                     .font(.caption2)
@@ -57,11 +57,11 @@ struct NetworkStatusIndicator: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(networkMonitor.isConnected ? Color.green : (networkMonitor.isOffline ? Color.orange : Color.secondary))
+                .fill(networkMonitor.isConnected ? Color.green : Color.orange)
                 .frame(width: 8, height: 8)
 
             if showLabel {
-                Text(networkMonitor.isOffline ? String(localized: "Offline") : networkMonitor.connectionType.displayName)
+                Text(networkMonitor.isConnected ? networkMonitor.connectionType.displayName : String(localized: "Offline"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -82,7 +82,7 @@ struct NetworkAwareModifier: ViewModifier {
             }
             content
         }
-        .animation(.easeInOut(duration: 0.3), value: networkMonitor.readiness)
+        .animation(.easeInOut(duration: 0.3), value: networkMonitor.isConnected)
     }
 }
 
@@ -114,14 +114,14 @@ struct OfflineSafeButton<Label: View>: View {
         Button(action: action) {
             HStack {
                 label()
-                if requiresNetwork && networkMonitor.isOffline {
+                if requiresNetwork && !networkMonitor.isConnected {
                     Image(systemName: "wifi.slash")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
             }
         }
-        .disabled(requiresNetwork && networkMonitor.isOffline)
+        .disabled(requiresNetwork && !networkMonitor.isConnected)
     }
 }
 

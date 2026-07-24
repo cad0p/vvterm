@@ -3,7 +3,3 @@
 "active" = "กำลังทำงาน";
 "1 active session" = "1 เซสชันที่ใช้งานอยู่";
 "%lld active sessions" = "%lld เซสชันที่ใช้งานอยู่";
-
-/* Lock Screen widget */
-"Open VVTerm" = "เปิด VVTerm";
-"Open VVTerm from the Lock Screen." = "เปิด VVTerm จากหน้าจอล็อค";

@@ -239,6 +239,34 @@ final class TerminalRichPasteRuntime: TerminalRichPasteContext {
         self.sendTextHandler = sendText
     }
 
+    static func connectionSession(
+        sessionId: UUID,
+        sshClient: SSHClient,
+        uiModel: TerminalRichPasteUIModel
+    ) -> TerminalRichPasteRuntime {
+        TerminalRichPasteRuntime(
+            sessionId: sessionId,
+            uiModel: uiModel,
+            resolveConnectedSSHClient: {
+                if let registeredClient = ConnectionSessionManager.shared.sshClient(forSessionId: sessionId) {
+                    return registeredClient
+                }
+
+                if await sshClient.isConnected {
+                    return sshClient
+                }
+
+                return nil
+            },
+            pasteTextFromClipboard: {
+                ConnectionSessionManager.shared.peekTerminal(for: sessionId)?.pasteTextFromClipboard()
+            },
+            sendText: { text in
+                ConnectionSessionManager.shared.sendText(text, to: sessionId)
+            }
+        )
+    }
+
     static func terminalPane(
         paneId: UUID,
         sshClient: SSHClient,

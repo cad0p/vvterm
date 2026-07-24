@@ -5,8 +5,11 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
-enum CustomThemeApplyTarget: String, CaseIterable, Identifiable {
+private enum CustomThemeApplyTarget: String, CaseIterable, Identifiable {
     case dark
     case light
     case both
@@ -147,8 +150,8 @@ struct TerminalSettingsView: View {
     @AppStorage("appearanceMode") private var appearanceMode = "system"
     @AppStorage("terminalNotificationsEnabled") private var terminalNotificationsEnabled = true
     @AppStorage("terminalProgressEnabled") private var terminalProgressEnabled = true
-    @AppStorage("terminalAccessoryCustomizationEnabled") var terminalAccessoryCustomizationEnabled = true
-    @AppStorage("terminalKeyboardDismissButtonEnabled") var terminalKeyboardDismissButtonEnabled = true
+    @AppStorage("terminalAccessoryCustomizationEnabled") private var terminalAccessoryCustomizationEnabled = true
+    @AppStorage("terminalKeyboardDismissButtonEnabled") private var terminalKeyboardDismissButtonEnabled = true
     @AppStorage("terminalTmuxEnabledDefault") private var tmuxEnabledDefault = true
     @AppStorage("terminalTmuxStartupBehaviorDefault") private var tmuxStartupBehaviorDefaultRaw = TmuxStartupBehavior.askEveryTime.rawValue
 
@@ -166,12 +169,11 @@ struct TerminalSettingsView: View {
     // SSH settings
     @AppStorage("sshKeepAliveEnabled") private var keepAliveEnabled = true
     @AppStorage("sshKeepAliveInterval") private var keepAliveInterval = 30
-    @AppStorage(TerminalDefaults.sshAutoReconnectKey) private var autoReconnect = true
+    @AppStorage("sshAutoReconnect") private var autoReconnect = true
 
     // Cursor settings
     @AppStorage(TerminalDefaults.cursorStyleKey) private var cursorStyleRaw = TerminalDefaults.defaultCursorStyle.rawValue
     @AppStorage(TerminalDefaults.cursorBlinkKey) private var cursorBlink = TerminalDefaults.defaultCursorBlink
-    @AppStorage(TerminalDefaults.optionAsAltModeKey) private var optionAsAltModeRaw = TerminalOptionAsAltMode.none.rawValue
 
     @EnvironmentObject private var terminalThemeManager: TerminalThemeManager
     @Environment(\.colorScheme) private var colorScheme
@@ -236,13 +238,6 @@ struct TerminalSettingsView: View {
 
     private var selectedCursorStyle: TerminalCursorStyle {
         TerminalCursorStyle(rawValue: cursorStyleRaw) ?? TerminalDefaults.defaultCursorStyle
-    }
-
-    var optionAsAltModeBinding: Binding<TerminalOptionAsAltMode> {
-        Binding(
-            get: { TerminalOptionAsAltMode(rawValue: optionAsAltModeRaw) ?? .none },
-            set: { optionAsAltModeRaw = $0.rawValue }
-        )
     }
 
     private var cursorPreviewThemeName: String {
@@ -388,12 +383,38 @@ struct TerminalSettingsView: View {
 
     private var terminalBehaviorSection: some View {
         Section("Terminal Behavior") {
-            #if os(iOS)
-            TerminalScreenAwakeSettingRow()
-            #endif
             Toggle("Enable terminal notifications", isOn: $terminalNotificationsEnabled)
             Toggle("Show progress overlays", isOn: $terminalProgressEnabled)
         }
+    }
+
+    @ViewBuilder
+    private var keyboardAccessorySection: some View {
+        #if os(iOS)
+        if terminalAccessoryCustomizationEnabled {
+            Section {
+                Toggle("Show keyboard dismiss button", isOn: $terminalKeyboardDismissButtonEnabled)
+
+                NavigationLink {
+                    TerminalAccessoryCustomizationView()
+                } label: {
+                    Text("Customize Accessory Bar")
+                }
+
+                NavigationLink {
+                    TerminalCustomActionLibraryView()
+                } label: {
+                    Text("Manage Custom Actions")
+                }
+            } header: {
+                Text("Keyboard Accessory")
+            } footer: {
+                Text("Reorder actions, add custom actions, show or hide the keyboard dismiss button, and sync your accessory bar across devices.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        #endif
     }
 
     private var sessionPersistenceSection: some View {
@@ -604,6 +625,32 @@ struct TerminalSettingsView: View {
         knownHostCount = KnownHostsManager.shared.entries().count
     }
 
+    #if os(macOS)
+    private func loadSystemFonts() -> [String] {
+        let fontManager = NSFontManager.shared
+        return fontManager.availableFontFamilies.filter { familyName in
+            guard let font = NSFont(name: familyName, size: 12) else { return false }
+            return font.isFixedPitch
+        }.sorted()
+    }
+    #else
+    private func loadSystemFonts() -> [String] {
+        var fonts = ["Menlo", "SF Mono", "Courier New"]
+        let nerdFonts = [
+            "JetBrainsMono Nerd Font",
+            "Hack Nerd Font",
+            "FiraCode Nerd Font",
+            "MesloLGS Nerd Font"
+        ]
+
+        for fontFamily in nerdFonts where UIFont(name: fontFamily, size: 12) != nil {
+            fonts.append(fontFamily)
+        }
+
+        return fonts.sorted()
+    }
+    #endif
+
     private func ensureThemeSelectionIsValid() {
         let available = Set(allThemeNames)
         if !available.contains(themeName) {
@@ -638,12 +685,12 @@ struct TerminalSettingsView: View {
     }
 }
 
-struct CustomThemeSaveSheet: View {
+private struct CustomThemeSaveSheet: View {
     let suggestedName: String
     let usePerAppearanceTheme: Bool
     let onSave: (String, CustomThemeApplyTarget) throws -> Void
 
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var applyTarget: CustomThemeApplyTarget = .dark
     @State private var errorMessage: String?
@@ -659,15 +706,49 @@ struct CustomThemeSaveSheet: View {
         _name = State(initialValue: suggestedName)
     }
 
-    var canSave: Bool {
+    private var canSave: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
-        platformBody
+        #if os(iOS)
+        NavigationStack {
+            formContent
+            .navigationTitle("Save Custom Theme")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        save()
+                    }
+                    .disabled(!canSave)
+                }
+            }
+        }
+        .adaptiveSoftScrollEdges()
+        #else
+        VStack(spacing: 0) {
+            DialogSheetHeader(title: "Save Custom Theme") {
+                dismiss()
+            }
+
+            Divider()
+
+            formContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+
+            macActionRow
+        }
+        .frame(width: 700, height: usePerAppearanceTheme ? 300 : 250)
+        #endif
     }
 
-    var formContent: some View {
+    private var formContent: some View {
         Form {
             Section {
                 #if os(iOS)
@@ -718,7 +799,27 @@ struct CustomThemeSaveSheet: View {
         #endif
     }
 
-    func save() {
+    #if os(macOS)
+    private var macActionRow: some View {
+        HStack(spacing: 10) {
+            Spacer(minLength: 0)
+
+            Button("Cancel") {
+                dismiss()
+            }
+
+            Button("Save") {
+                save()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canSave)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+    #endif
+
+    private func save() {
         do {
             try onSave(
                 name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -731,7 +832,7 @@ struct CustomThemeSaveSheet: View {
     }
 }
 
-struct ManageCustomThemesSheet: View {
+private struct ManageCustomThemesSheet: View {
     let customThemes: [TerminalTheme]
     @Binding var darkThemeName: String
     @Binding var lightThemeName: String
@@ -741,16 +842,16 @@ struct ManageCustomThemesSheet: View {
     let onDelete: (UUID) -> Void
     let onSaveEdit: (UUID, String, String) throws -> Void
 
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.dismiss) private var dismiss
     @State private var showingThemeImporter = false
     @State private var showingThemeBuilder = false
     @State private var pendingCustomThemeSource: PendingCustomThemeSource?
     @State private var customThemeErrorMessage: String?
-    @State var themePendingDeletion: TerminalTheme?
-    @State var themePendingEdit: TerminalTheme?
-    @State var hoveredThemeID: UUID?
+    @State private var themePendingDeletion: TerminalTheme?
+    @State private var themePendingEdit: TerminalTheme?
+    @State private var hoveredThemeID: UUID?
 
-    var sortedThemes: [TerminalTheme] {
+    private var sortedThemes: [TerminalTheme] {
         customThemes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -784,7 +885,13 @@ struct ManageCustomThemesSheet: View {
     }
 
     var body: some View {
-        platformBody
+        Group {
+            #if os(iOS)
+            iosBody
+            #else
+            macBody
+            #endif
+        }
         .sheet(item: editThemeSheetBinding) { theme in
             ThemeBuilderSheet(
                 usePerAppearanceTheme: false,
@@ -853,7 +960,150 @@ struct ManageCustomThemesSheet: View {
         .adaptiveSoftScrollEdges()
     }
 
-    var customThemesEmptyState: some View {
+    #if os(iOS)
+    private var iosBody: some View {
+        NavigationStack {
+            Group {
+                if sortedThemes.isEmpty {
+                    customThemesEmptyState
+                } else {
+                    List {
+                        ForEach(sortedThemes) { theme in
+                            iOSThemeRow(theme)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Custom Themes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Back", systemImage: "chevron.backward")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        createThemeMenuItems
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+        }
+    }
+
+    private func iOSThemeRow(_ theme: TerminalTheme) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(theme.name)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+
+                if let assignment = assignmentLabel(for: theme.name) {
+                    Text(assignment)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Menu {
+                applyMenuItems(themeName: theme.name)
+
+                Divider()
+
+                Button("Edit") {
+                    themePendingEdit = theme
+                }
+
+                Button("Delete", role: .destructive) {
+                    themePendingDeletion = theme
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Edit") {
+                themePendingEdit = theme
+            }
+            .tint(.blue)
+
+            Button("Delete", role: .destructive) {
+                themePendingDeletion = theme
+            }
+        }
+    }
+    #endif
+
+    #if os(macOS)
+    private var macBody: some View {
+        VStack(spacing: 0) {
+            DialogSheetHeader(title: "Custom Themes") {
+                dismiss()
+            }
+
+            Divider()
+
+            if sortedThemes.isEmpty {
+                customThemesEmptyState
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(sortedThemes) { theme in
+                            let assignment = assignmentLabel(for: theme.name)
+                            CustomThemeManagerRow(
+                                theme: theme,
+                                assignment: assignment,
+                                usePerAppearanceTheme: usePerAppearanceTheme,
+                                isHovered: hoveredThemeID == theme.id,
+                                isSelected: assignment != nil,
+                                onApply: { target in
+                                    applyThemeSelection(themeName: theme.name, applyTarget: target)
+                                },
+                                onEdit: {
+                                    themePendingEdit = theme
+                                },
+                                onDeleteRequest: {
+                                    themePendingDeletion = theme
+                                }
+                            )
+                            .onHover { hovering in
+                                hoveredThemeID = hovering ? theme.id : nil
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Menu {
+                    createThemeMenuItems
+                } label: {
+                    Label("New Custom Theme", systemImage: "plus.circle.fill")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .menuStyle(.borderlessButton)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+        }
+        .frame(width: 400, height: 500)
+    }
+    #endif
+
+    private var customThemesEmptyState: some View {
         VStack(spacing: 14) {
             Image(systemName: "paintpalette")
                 .font(.system(size: 44))
@@ -871,7 +1121,7 @@ struct ManageCustomThemesSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    func assignmentLabel(for theme: String) -> String? {
+    private func assignmentLabel(for theme: String) -> String? {
         if usePerAppearanceTheme {
             let usesDark = darkThemeName == theme
             let usesLight = lightThemeName == theme
@@ -892,7 +1142,7 @@ struct ManageCustomThemesSheet: View {
     }
 
     @ViewBuilder
-    func applyMenuItems(themeName: String) -> some View {
+    private func applyMenuItems(themeName: String) -> some View {
         if usePerAppearanceTheme {
             Button("Apply to Dark") {
                 applyThemeSelection(themeName: themeName, applyTarget: .dark)
@@ -911,7 +1161,7 @@ struct ManageCustomThemesSheet: View {
     }
 
     @ViewBuilder
-    var createThemeMenuItems: some View {
+    private var createThemeMenuItems: some View {
         Button("Paste from Clipboard") {
             importThemeFromClipboard()
         }
@@ -924,10 +1174,20 @@ struct ManageCustomThemesSheet: View {
     }
 
     private func importThemeFromClipboard() {
-        guard let text = Clipboard.readString() else {
+        #if os(iOS)
+        guard let text = UIPasteboard.general.string else {
             customThemeErrorMessage = String(localized: "Clipboard does not contain text.")
             return
         }
+        #elseif os(macOS)
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            customThemeErrorMessage = String(localized: "Clipboard does not contain text.")
+            return
+        }
+        #else
+        customThemeErrorMessage = String(localized: "Clipboard import is not supported on this platform.")
+        return
+        #endif
 
         preparePendingCustomTheme(content: text, suggestedName: String(localized: "Pasted Theme"))
     }
@@ -972,7 +1232,7 @@ struct ManageCustomThemesSheet: View {
         }
     }
 
-    func applyThemeSelection(themeName: String, applyTarget: CustomThemeApplyTarget) {
+    private func applyThemeSelection(themeName: String, applyTarget: CustomThemeApplyTarget) {
         guard usePerAppearanceTheme else {
             darkThemeName = themeName
             return
@@ -990,7 +1250,108 @@ struct ManageCustomThemesSheet: View {
     }
 }
 
-struct ThemeBuilderSheet: View {
+#if os(macOS)
+private struct CustomThemeManagerRow: View {
+    let theme: TerminalTheme
+    let assignment: String?
+    let usePerAppearanceTheme: Bool
+    let isHovered: Bool
+    let isSelected: Bool
+    let onApply: (CustomThemeApplyTarget) -> Void
+    let onEdit: () -> Void
+    let onDeleteRequest: () -> Void
+
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    private var selectionFillColor: Color {
+        let base = NSColor.unemphasizedSelectedContentBackgroundColor
+        let alpha: Double = controlActiveState == .key ? 0.26 : 0.18
+        return Color(nsColor: base).opacity(alpha)
+    }
+
+    private var selectedTextColor: Color {
+        Color(nsColor: .selectedTextColor)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(theme.name)
+                .font(.body)
+                .fontWeight(.semibold)
+                .foregroundStyle(isSelected ? selectedTextColor : .primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            if let assignment {
+                PillBadge(text: assignment, color: .secondary)
+            }
+
+            if isHovered || isSelected {
+                Menu {
+                    applyMenuItems
+                } label: {
+                    Image(systemName: "paintbrush.pointed.fill")
+                        .foregroundStyle(isSelected ? selectedTextColor.opacity(0.9) : .secondary)
+                        .imageScale(.medium)
+                }
+                .menuStyle(.borderlessButton)
+
+                Button {
+                    onEdit()
+                } label: {
+                    Image(systemName: "pencil.circle.fill")
+                        .foregroundStyle(isSelected ? selectedTextColor.opacity(0.9) : .secondary)
+                        .imageScale(.medium)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(isSelected ? selectionFillColor : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if usePerAppearanceTheme {
+                onApply(.both)
+            } else {
+                onApply(.dark)
+            }
+        }
+        .contextMenu {
+            applyMenuItems
+            Divider()
+            Button("Edit") {
+                onEdit()
+            }
+            Button("Delete", role: .destructive) {
+                onDeleteRequest()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var applyMenuItems: some View {
+        if usePerAppearanceTheme {
+            Button("Apply to Dark") {
+                onApply(.dark)
+            }
+            Button("Apply to Light") {
+                onApply(.light)
+            }
+            Button("Apply to Both") {
+                onApply(.both)
+            }
+        } else {
+            Button("Use Theme") {
+                onApply(.dark)
+            }
+        }
+    }
+}
+#endif
+
+private struct ThemeBuilderSheet: View {
     let usePerAppearanceTheme: Bool
     let showApplyTarget: Bool
     let title: String
@@ -998,7 +1359,7 @@ struct ThemeBuilderSheet: View {
     let onDeleteRequest: (() -> Void)?
     let onSave: (String, String, CustomThemeApplyTarget) throws -> Void
 
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
     @State private var background: String
@@ -1010,7 +1371,7 @@ struct ThemeBuilderSheet: View {
     @State private var paletteColors: [String]
     @State private var applyTarget: CustomThemeApplyTarget
     @State private var errorMessage: String?
-    @State var showingDeleteConfirmation = false
+    @State private var showingDeleteConfirmation = false
 
     private struct ParsedThemeValues {
         var background = "#101418"
@@ -1053,7 +1414,7 @@ struct ThemeBuilderSheet: View {
         _applyTarget = State(initialValue: initialApplyTarget)
     }
 
-    var canSave: Bool {
+    private var canSave: Bool {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard TerminalThemeValidator.isValidHexColor(background) else { return false }
         guard TerminalThemeValidator.isValidHexColor(foreground) else { return false }
@@ -1090,7 +1451,60 @@ struct ThemeBuilderSheet: View {
     }
 
     var body: some View {
-        platformBody
+        Group {
+            #if os(iOS)
+            NavigationStack {
+                formContent
+                .environment(\.defaultMinListRowHeight, 34)
+                .modifier(ThemeBuilderCompactListSectionSpacingModifier())
+                .modifier(ThemeBuilderTransparentNavigationBarModifier())
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarAppearance(
+                    backgroundColor: .clear,
+                    isTranslucent: true,
+                    shadowColor: .clear
+                )
+                .navigationTitle(title)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                            .tint(.secondary)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            save()
+                        }
+                        .disabled(!canSave)
+                    }
+                    if onDeleteRequest != nil {
+                        ToolbarItemGroup(placement: .bottomBar) {
+                            Button("Remove Theme", role: .destructive) {
+                                showingDeleteConfirmation = true
+                            }
+                            .tint(.red)
+
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
+            #else
+            VStack(spacing: 0) {
+                DialogSheetHeader(title: LocalizedStringKey(title)) {
+                    dismiss()
+                }
+
+                Divider()
+
+                formContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                Divider()
+
+                macActionRow
+            }
+            #endif
+        }
         .alert("Delete Custom Theme?", isPresented: $showingDeleteConfirmation) {
             Button("Delete", role: .destructive) {
                 onDeleteRequest?()
@@ -1102,7 +1516,7 @@ struct ThemeBuilderSheet: View {
         .adaptiveSoftScrollEdges()
     }
 
-    var formContent: some View {
+    private var formContent: some View {
         Form {
                 Section {
                     #if os(iOS)
@@ -1189,6 +1603,34 @@ struct ThemeBuilderSheet: View {
             }
         .formStyle(.grouped)
     }
+
+    #if os(macOS)
+    private var macActionRow: some View {
+        HStack(spacing: 10) {
+            if onDeleteRequest != nil {
+                Button("Remove Theme", role: .destructive) {
+                    showingDeleteConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+
+            Spacer(minLength: 0)
+
+            Button("Cancel") {
+                dismiss()
+            }
+
+            Button("Save") {
+                save()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canSave)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+    #endif
 
     private var terminalPreview: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1342,6 +1784,28 @@ struct ThemeBuilderSheet: View {
         #endif
     }
 
+    #if os(iOS)
+    private struct ThemeBuilderCompactListSectionSpacingModifier: ViewModifier {
+        func body(content: Content) -> some View {
+            if #available(iOS 17.0, *) {
+                content.listSectionSpacing(.compact)
+            } else {
+                content
+            }
+        }
+    }
+
+    private struct ThemeBuilderTransparentNavigationBarModifier: ViewModifier {
+        func body(content: Content) -> some View {
+            if #available(iOS 16.0, *) {
+                content.toolbarBackground(.hidden, for: .navigationBar)
+            } else {
+                content
+            }
+        }
+    }
+    #endif
+
     private static func parseThemeValues(from content: String?) -> ParsedThemeValues {
         guard let content, !content.isEmpty else {
             return ParsedThemeValues()
@@ -1399,7 +1863,7 @@ struct ThemeBuilderSheet: View {
         return parsed
     }
 
-    func save() {
+    private func save() {
         do {
             var lines: [String] = []
             lines.append("background = \(TerminalThemeValidator.normalizeHexColor(background) ?? background)")

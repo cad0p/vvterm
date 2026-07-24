@@ -6,10 +6,9 @@
 //  Adapted from Ghostty terminal emulator
 //
 
-import SwiftUI
 #if os(macOS)
+import SwiftUI
 import AppKit
-#endif
 
 /// Direction of the split
 enum SplitViewDirection: Codable {
@@ -25,7 +24,7 @@ struct SplitView<L: View, R: View>: View {
     let dividerColor: Color
 
     /// Minimum increment (in points) that this split can be resized by
-    let resizeIncrements: CGSize
+    let resizeIncrements: NSSize
 
     /// The left and right views to render.
     let left: L
@@ -81,7 +80,7 @@ struct SplitView<L: View, R: View>: View {
         _ direction: SplitViewDirection,
         _ split: Binding<CGFloat>,
         dividerColor: Color,
-        resizeIncrements: CGSize = .init(width: 1, height: 1),
+        resizeIncrements: NSSize = .init(width: 1, height: 1),
         @ViewBuilder left: (() -> L),
         @ViewBuilder right: (() -> R),
         onEqualize: @escaping () -> Void
@@ -231,28 +230,7 @@ extension SplitView {
             }
         }
 
-        @ViewBuilder
         var body: some View {
-            #if os(macOS)
-            accessibleContent
-                .onHover { isHovered in
-                    if isHovered {
-                        switch direction {
-                        case .horizontal:
-                            NSCursor.resizeLeftRight.push()
-                        case .vertical:
-                            NSCursor.resizeUpDown.push()
-                        }
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
-            #else
-            accessibleContent
-            #endif
-        }
-
-        private var accessibleContent: some View {
             ZStack {
                 Color.clear
                     .frame(width: invisibleWidth, height: invisibleHeight)
@@ -260,6 +238,18 @@ extension SplitView {
                 Rectangle()
                     .fill(color)
                     .frame(width: visibleWidth, height: visibleHeight)
+            }
+            .onHover { isHovered in
+                if (isHovered) {
+                    switch (direction) {
+                    case .horizontal:
+                        NSCursor.resizeLeftRight.push()
+                    case .vertical:
+                        NSCursor.resizeUpDown.push()
+                    }
+                } else {
+                    NSCursor.pop()
+                }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(axLabel)
@@ -298,3 +288,5 @@ extension SplitView {
         }
     }
 }
+
+#endif

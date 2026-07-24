@@ -9,70 +9,47 @@ enum TerminalKeyboardFocusReason {
 
 struct TerminalKeyboardFocusPolicy {
     private enum Mode {
-        case automaticTyping(restoreOnReconnect: Bool)
-        case forcedSoftwareTyping
+        case typing
         case browse
     }
 
-    private var mode: Mode = .automaticTyping(restoreOnReconnect: false)
+    private var mode: Mode = .typing
+    private(set) var shouldRestoreOnReconnect = false
 
     var allowsAutomaticFocus: Bool {
-        if case .browse = mode {
-            return false
-        }
-        return true
+        mode == .typing
     }
 
     var isBrowsing: Bool {
-        if case .browse = mode {
-            return true
-        }
-        return false
-    }
-
-    var shouldRestoreOnReconnect: Bool {
-        switch mode {
-        case .automaticTyping(let restoreOnReconnect):
-            return restoreOnReconnect
-        case .forcedSoftwareTyping:
-            return true
-        case .browse:
-            return false
-        }
-    }
-
-    var forcesSoftwareKeyboardPresentation: Bool {
-        if case .forcedSoftwareTyping = mode {
-            return true
-        }
-        return false
-    }
-
-    func shouldSuppressSoftwareKeyboard(hasHardwareKeyboardAttached: Bool) -> Bool {
-        isBrowsing || (hasHardwareKeyboardAttached && !forcesSoftwareKeyboardPresentation)
+        mode == .browse
     }
 
     mutating func requestFocus(for reason: TerminalKeyboardFocusReason) -> Bool {
         switch reason {
-        case .explicitUserRequest:
-            mode = .forcedSoftwareTyping
+        case .explicitUserRequest, .hardwareKeyboard:
+            mode = .typing
+            shouldRestoreOnReconnect = true
             return true
-        case .initialActivation, .directTouch, .selectionGesture, .hardwareKeyboard:
-            switch mode {
-            case .automaticTyping:
-                mode = .automaticTyping(restoreOnReconnect: true)
-                return true
-            case .forcedSoftwareTyping:
-                return true
-            case .browse:
-                return false
-            }
+        case .initialActivation, .directTouch, .selectionGesture:
+            guard mode == .typing else { return false }
+            shouldRestoreOnReconnect = true
+            return true
         case .reconnectRestore:
-            return shouldRestoreOnReconnect
+            return mode == .typing && shouldRestoreOnReconnect
         }
     }
 
     mutating func dismissForUser() {
         mode = .browse
+        shouldRestoreOnReconnect = false
+    }
+
+    mutating func markForReconnect() {
+        guard mode == .typing else { return }
+        shouldRestoreOnReconnect = true
+    }
+
+    mutating func clearReconnect() {
+        shouldRestoreOnReconnect = false
     }
 }

@@ -9,8 +9,6 @@ struct Server: Identifiable, Codable, Hashable {
     var name: String
     var host: String
     var port: Int
-    /// TCP port exposed by etserver. SSH still uses `port` for bootstrap.
-    var eternalTerminalPort: Int
     var username: String
     var connectionMode: SSHConnectionMode
     var authMethod: AuthMethod
@@ -36,7 +34,6 @@ struct Server: Identifiable, Codable, Hashable {
         name: String,
         host: String,
         port: Int = 22,
-        eternalTerminalPort: Int = 2022,
         username: String,
         connectionMode: SSHConnectionMode = .standard,
         authMethod: AuthMethod = .password,
@@ -59,9 +56,6 @@ struct Server: Identifiable, Codable, Hashable {
         self.name = name
         self.host = host
         self.port = port
-        self.eternalTerminalPort = (1...65535).contains(eternalTerminalPort)
-            ? eternalTerminalPort
-            : 2022
         self.username = username
         self.connectionMode = connectionMode
         self.authMethod = authMethod
@@ -93,7 +87,6 @@ struct Server: Identifiable, Codable, Hashable {
         case name
         case host
         case port
-        case eternalTerminalPort
         case username
         case connectionMode
         case authMethod
@@ -119,8 +112,6 @@ struct Server: Identifiable, Codable, Hashable {
         name = try container.decode(String.self, forKey: .name)
         host = try container.decode(String.self, forKey: .host)
         port = try container.decodeIfPresent(Int.self, forKey: .port) ?? 22
-        let decodedETPort = try container.decodeIfPresent(Int.self, forKey: .eternalTerminalPort) ?? 2022
-        eternalTerminalPort = (1...65535).contains(decodedETPort) ? decodedETPort : 2022
         username = try container.decode(String.self, forKey: .username)
         connectionMode = try container.decodeIfPresent(SSHConnectionMode.self, forKey: .connectionMode) ?? .standard
         authMethod = try container.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .password
@@ -154,7 +145,6 @@ struct Server: Identifiable, Codable, Hashable {
         try container.encode(name, forKey: .name)
         try container.encode(host, forKey: .host)
         try container.encode(port, forKey: .port)
-        try container.encode(eternalTerminalPort, forKey: .eternalTerminalPort)
         try container.encode(username, forKey: .username)
         try container.encode(connectionMode, forKey: .connectionMode)
         try container.encode(authMethod, forKey: .authMethod)
@@ -177,7 +167,6 @@ enum SSHConnectionMode: String, Codable, CaseIterable, Identifiable {
     case standard
     case tailscale
     case mosh
-    case eternalTerminal
     case cloudflare
 
     var id: String { rawValue }
@@ -238,7 +227,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
 
 // MARK: - Server Credentials (for authentication)
 
-struct ServerCredentials: Sendable {
+struct ServerCredentials {
     let serverId: UUID
     var password: String?
     var privateKey: Data?

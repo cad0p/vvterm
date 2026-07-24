@@ -11,13 +11,6 @@ final class MLXParakeetProvider {
 
     func transcribe(samples: [Float]) async throws -> String {
         #if arch(arm64)
-        guard Self.isSupported else {
-            throw NSError(
-                domain: "MLXParakeet",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: MLXAudioSupport.unavailableDescription]
-            )
-        }
         let modelId = TranscriptionSettingsStore.currentParakeetModelId()
         let modelDirectory = await MainActor.run {
             MLXModelManager.modelDirectory(for: .parakeetTDT, modelId: modelId)
@@ -32,11 +25,7 @@ final class MLXParakeetProvider {
             return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         }.value
         #else
-        throw NSError(
-            domain: "MLXParakeet",
-            code: -1,
-            userInfo: [NSLocalizedDescriptionKey: MLXAudioSupport.unavailableDescription]
-        )
+        throw NSError(domain: "MLXParakeet", code: -1, userInfo: [NSLocalizedDescriptionKey: "MLX Parakeet not supported on this architecture"])
         #endif
     }
 }

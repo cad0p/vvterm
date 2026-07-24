@@ -5,38 +5,6 @@ struct RemoteTerminalEnvironmentVariable: Hashable, Sendable {
     let value: String
 }
 
-/// Derives Kitty image-protocol availability from the active remote transport.
-/// SSH already exposes genuine `SSH_*` variables. ET is SSH-compatible from the
-/// application's perspective but needs Snacks' documented opt-in because its PTY
-/// is not created by sshd. Mosh does not preserve Kitty graphics sequences.
-enum RemoteKittyGraphicsPolicy: Equatable, Sendable {
-    nonisolated static let compatibilityEnvironmentName = "SNACKS_SSH"
-
-    case genuineSSH
-    case eternalTerminal
-    case unsupported
-
-    nonisolated init(transport: ShellTransport) {
-        switch transport {
-        case .ssh, .sshFallback:
-            self = .genuineSSH
-        case .eternalTerminal:
-            self = .eternalTerminal
-        case .mosh:
-            self = .unsupported
-        }
-    }
-
-    nonisolated var environment: [RemoteTerminalEnvironmentVariable] {
-        switch self {
-        case .genuineSSH, .unsupported:
-            []
-        case .eternalTerminal:
-            [RemoteTerminalEnvironmentVariable(name: Self.compatibilityEnvironmentName, value: "1")]
-        }
-    }
-}
-
 enum RemoteTerminalType: String, Hashable, Sendable {
     case xterm256Color = "xterm-256color"
     case xtermGhostty = "xterm-ghostty"
@@ -91,32 +59,16 @@ enum RemoteTerminalBootstrap {
         return nil
     }
 
-    nonisolated static func terminalEnvironment(
-        bundle: Bundle = .main,
-        transport: ShellTransport = .ssh
-    ) -> [RemoteTerminalEnvironmentVariable] {
+    nonisolated static func terminalEnvironment(bundle: Bundle = .main) -> [RemoteTerminalEnvironmentVariable] {
         [
             RemoteTerminalEnvironmentVariable(name: "COLORTERM", value: "truecolor"),
             RemoteTerminalEnvironmentVariable(name: "TERM_PROGRAM", value: termProgram),
             RemoteTerminalEnvironmentVariable(name: "TERM_PROGRAM_VERSION", value: appVersion(bundle: bundle))
-        ] + RemoteKittyGraphicsPolicy(transport: transport).environment
+        ]
     }
 
     nonisolated static func terminalEnvironmentNames(bundle: Bundle = .main) -> [String] {
         terminalEnvironment(bundle: bundle).map(\.name)
-    }
-
-    nonisolated static func terminalEnvironmentDictionary(
-        bundle: Bundle = .main,
-        terminalType: RemoteTerminalType,
-        transport: ShellTransport = .ssh
-    ) -> [String: String] {
-        var environment = Dictionary(
-            uniqueKeysWithValues: terminalEnvironment(bundle: bundle, transport: transport)
-                .map { ($0.name, $0.value) }
-        )
-        environment["TERM"] = terminalType.rawValue
-        return environment
     }
 
     nonisolated static func environmentExportScript(
@@ -161,7 +113,7 @@ enum RemoteTerminalBootstrap {
     }
 
     nonisolated static func wrapPOSIXShellCommand(_ script: String) -> String {
-        "/bin/sh -lc \(doubleQuotedShellArgument(script))"
+        "/bin/sh -lc \(shellQuoted(script))"
     }
 
     nonisolated static func wrapPowerShellCommand(_ script: String, executableName: String) -> String {
@@ -280,7 +232,8 @@ enum RemoteTerminalBootstrap {
             let start = payload.index(after: payload.startIndex)
             let end = payload.index(before: payload.endIndex)
             let quoted = String(payload[start..<end])
-            return unescapeDoubleQuotedShellArgument(quoted)
+            let unescapedQuotes = quoted.replacingOccurrences(of: "\\\"", with: "\"")
+            return unescapedQuotes.replacingOccurrences(of: "\\\\", with: "\\")
         }
 
         return payload
@@ -302,55 +255,6 @@ enum RemoteTerminalBootstrap {
             "/sbin"
         ]
         return paths.joined(separator: ":") + ":$PATH"
-    }
-
-    nonisolated private static func doubleQuotedShellArgument(_ value: String) -> String {
-        // Fish preserves \` inside double quotes, unlike POSIX shells.
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "$", with: "\\$")
-            .replacingOccurrences(of: "`", with: "\"'`'\"")
-        return "\"\(escaped)\""
-    }
-
-    nonisolated private static func unescapeDoubleQuotedShellArgument(_ value: String) -> String {
-        var result = ""
-        result.reserveCapacity(value.count)
-        var index = value.startIndex
-
-        while index < value.endIndex {
-            if value[index...].hasPrefix("\"'`'\"") {
-                result.append("`")
-                index = value.index(index, offsetBy: 5)
-                continue
-            }
-
-            let character = value[index]
-            guard character == "\\" else {
-                result.append(character)
-                index = value.index(after: index)
-                continue
-            }
-
-            let nextIndex = value.index(after: index)
-            guard nextIndex < value.endIndex else {
-                result.append(character)
-                break
-            }
-
-            let next = value[nextIndex]
-            switch next {
-            case "\\", "\"", "$":
-                result.append(next)
-                index = value.index(after: nextIndex)
-            default:
-                result.append(character)
-                index = nextIndex
-            }
-        }
-
-        return result
     }
 
     nonisolated private static func powerShellQuoted(_ value: String) -> String {

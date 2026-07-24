@@ -56,67 +56,28 @@ struct ThemeColorParser {
     /// Computes the split divider color based on the background color
     /// Uses Ghostty's algorithm: darken by 8% for light backgrounds, 40% for dark
     nonisolated static func splitDividerColor(for themeName: String) -> Color {
-        guard let content = themeContent(for: themeName),
-              let backgroundHex = value(for: "background", in: content),
-              let components = splitDividerComponents(for: backgroundHex) else {
+        guard let bgColor = backgroundColor(for: themeName) else {
             return Color(white: 0.3)
         }
 
-        return Color(
-            .sRGB,
-            red: components.red,
-            green: components.green,
-            blue: components.blue,
-            opacity: components.alpha
+        #if os(macOS)
+        let nsColor = NSColor(bgColor)
+        let brightness = nsColor.brightnessComponent
+        let isLight = brightness > 0.5
+
+        // Darken by 8% for light, 40% for dark (matching Ghostty)
+        let factor = isLight ? 0.92 : 0.6
+        let adjusted = NSColor(
+            hue: nsColor.hueComponent,
+            saturation: nsColor.saturationComponent,
+            brightness: nsColor.brightnessComponent * factor,
+            alpha: nsColor.alphaComponent
         )
-    }
-
-    nonisolated static func splitDividerComponents(
-        for backgroundHex: String
-    ) -> (red: Double, green: Double, blue: Double, alpha: Double)? {
-        let hex = backgroundHex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        guard [3, 6, 8].contains(hex.count) else { return nil }
-
-        var value: UInt64 = 0
-        guard Scanner(string: hex).scanHexInt64(&value) else { return nil }
-
-        let alpha, red, green, blue: UInt64
-        switch hex.count {
-        case 3:
-            (alpha, red, green, blue) = (
-                255,
-                (value >> 8) * 17,
-                ((value >> 4) & 0xF) * 17,
-                (value & 0xF) * 17
-            )
-        case 6:
-            (alpha, red, green, blue) = (
-                255,
-                value >> 16,
-                (value >> 8) & 0xFF,
-                value & 0xFF
-            )
-        default:
-            (alpha, red, green, blue) = (
-                value >> 24,
-                (value >> 16) & 0xFF,
-                (value >> 8) & 0xFF,
-                value & 0xFF
-            )
-        }
-
-        let redComponent = Double(red) / 255
-        let greenComponent = Double(green) / 255
-        let blueComponent = Double(blue) / 255
-        let brightness = max(redComponent, max(greenComponent, blueComponent))
-        let factor = brightness > 0.5 ? 0.92 : 0.6
-
-        return (
-            red: redComponent * factor,
-            green: greenComponent * factor,
-            blue: blueComponent * factor,
-            alpha: Double(alpha) / 255
-        )
+        return Color(adjusted)
+        #else
+        // iOS fallback
+        return Color(white: 0.3)
+        #endif
     }
 
     /// Returns tmux mode-style string for selection highlighting.
@@ -137,42 +98,9 @@ struct ThemeColorParser {
         return "fg=#\(fg),bg=#\(bg)"
     }
 
-    private struct CachedThemeContent {
-        let path: String
-        let modificationDate: Date?
-        let content: String
-    }
-
-    private nonisolated(unsafe) static var contentCache: [String: CachedThemeContent] = [:]
-    private static let contentCacheLock = NSLock()
-
-    nonisolated static func invalidateCache() {
-        contentCacheLock.lock()
-        contentCache.removeAll()
-        contentCacheLock.unlock()
-    }
-
     private nonisolated static func themeContent(for themeName: String) -> String? {
-        contentCacheLock.lock()
-        defer { contentCacheLock.unlock() }
-
-        if let cached = contentCache[themeName] {
-            return cached.content
-        }
-
-        guard let themeFile = themeFilePath(for: themeName),
-              let content = try? String(contentsOfFile: themeFile, encoding: .utf8) else {
-            contentCache.removeValue(forKey: themeName)
-            return nil
-        }
-
-        let modificationDate = (try? FileManager.default.attributesOfItem(atPath: themeFile))?[.modificationDate] as? Date
-        contentCache[themeName] = CachedThemeContent(
-            path: themeFile,
-            modificationDate: modificationDate,
-            content: content
-        )
-        return content
+        guard let themeFile = themeFilePath(for: themeName) else { return nil }
+        return try? String(contentsOfFile: themeFile, encoding: .utf8)
     }
 
     private nonisolated static func themeFilePath(for themeName: String) -> String? {

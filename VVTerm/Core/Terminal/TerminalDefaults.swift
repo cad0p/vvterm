@@ -28,98 +28,10 @@ enum TerminalCursorStyle: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-nonisolated enum TerminalZoomAction: Equatable, Sendable {
+enum TerminalZoomAction {
     case zoomIn
     case zoomOut
     case reset
-}
-
-nonisolated enum TerminalZoomShortcutKey: Sendable {
-    case equal
-    case literalPlus
-    case minus
-    case zero
-    case keypadPlus
-    case keypadMinus
-    case keypadZero
-}
-
-nonisolated enum TerminalZoomShortcutRouting {
-    nonisolated static func key(forCommandInput input: String) -> TerminalZoomShortcutKey? {
-        switch input {
-        case "=": .equal
-        case "+": .literalPlus
-        case "-": .minus
-        case "0": .zero
-        default: nil
-        }
-    }
-
-    nonisolated static func resolvedKey(
-        physicalKey: TerminalZoomShortcutKey?,
-        characters: String
-    ) -> TerminalZoomShortcutKey? {
-        if characters == "+" {
-            return .literalPlus
-        }
-        return physicalKey
-    }
-
-    nonisolated static func action(
-        for key: TerminalZoomShortcutKey,
-        hasCommandModifier: Bool,
-        hasShiftModifier: Bool,
-        hasControlModifier: Bool,
-        hasAlternateModifier: Bool
-    ) -> TerminalZoomAction? {
-        guard hasCommandModifier,
-              !hasControlModifier,
-              !hasAlternateModifier else {
-            return nil
-        }
-
-        switch key {
-        case .equal:
-            return .zoomIn
-        case .literalPlus, .keypadPlus:
-            return .zoomIn
-        case .minus, .keypadMinus:
-            return hasShiftModifier ? nil : .zoomOut
-        case .zero, .keypadZero:
-            return hasShiftModifier ? nil : .reset
-        }
-    }
-}
-
-enum TerminalOptionAsAltMode: String, CaseIterable, Identifiable {
-    case none
-    case left
-    case right
-    case both
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .none: return String(localized: "Neither Option Key")
-        case .left: return String(localized: "Left Option Key")
-        case .right: return String(localized: "Right Option Key")
-        case .both: return String(localized: "Both Option Keys")
-        }
-    }
-
-    func usesOptionKeyAsAlt(_ side: TerminalOptionKeySide) -> Bool {
-        switch (self, side) {
-        case (.none, _): false
-        case (.left, .left), (.right, .right), (.both, _): true
-        default: false
-        }
-    }
-}
-
-enum TerminalOptionKeySide {
-    case left
-    case right
 }
 
 struct TerminalZoomResult: Hashable {
@@ -127,8 +39,8 @@ struct TerminalZoomResult: Hashable {
     let effectiveFontSize: Double
 }
 
-struct TerminalPresentationOverrides: Codable, Hashable, Sendable {
-    nonisolated static let empty = TerminalPresentationOverrides()
+struct TerminalPresentationOverrides: Codable, Hashable {
+    static let empty = TerminalPresentationOverrides()
 
     var fontSize: Double?
 
@@ -186,17 +98,12 @@ enum TerminalDefaults {
     static let fontSizeKey = "terminalFontSize"
     static let cursorStyleKey = "terminalCursorStyle"
     static let cursorBlinkKey = "terminalCursorBlink"
-    static let sshAutoReconnectKey = "sshAutoReconnect"
-    static let keepScreenAwakeKey = "terminalKeepScreenAwake"
-    static let optionAsAltModeKey = "terminalOptionAsAltMode"
-    static let preserveTerminalSizeForKeyboardKey = "terminalPreserveSizeForKeyboard"
     static let legacyDefaultFontName = "JetBrainsMono Nerd Font"
     static let minimumFontSize = 4.0
     static let maximumFontSize = 32.0
     static let fontSizeStep = 1.0
     static let defaultCursorStyle: TerminalCursorStyle = .block
     static let defaultCursorBlink = true
-    static let defaultKeepScreenAwake = true
     #if os(macOS)
     static let defaultPrimaryFontName = "Menlo"
     static let macOSFallbackFontFamilies = [
@@ -226,19 +133,6 @@ enum TerminalDefaults {
     static func storedFontSize(defaults: UserDefaults = .standard) -> Double {
         let stored = defaults.object(forKey: fontSizeKey) as? Double ?? defaultFontSize
         return clampedFontSize(stored)
-    }
-
-    static func sshAutoReconnectEnabled(defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: sshAutoReconnectKey) as? Bool) ?? true
-    }
-
-    static func keepScreenAwakeEnabled(defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: keepScreenAwakeKey) as? Bool) ?? defaultKeepScreenAwake
-    }
-
-    static func optionAsAltMode(defaults: UserDefaults = .standard) -> TerminalOptionAsAltMode {
-        guard let rawValue = defaults.string(forKey: optionAsAltModeKey) else { return .none }
-        return TerminalOptionAsAltMode(rawValue: rawValue) ?? .none
     }
 
     static var defaultFontSize: Double {

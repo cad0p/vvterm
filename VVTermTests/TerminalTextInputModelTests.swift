@@ -56,20 +56,6 @@ struct TerminalTextInputModelTests {
     }
 
     @Test
-    func deleteBackwardInsideLongMarkedTextKeepsCompositionActive() {
-        var model = TerminalTextInputModel()
-
-        _ = model.handleSetMarkedText("nihon", selectedRangeLocation: 5)
-        let effects = model.handleDeleteBackward()
-
-        #expect(effects == [.willTextChange, .willSelectionChange, .syncPreedit("niho"), .didTextChange, .didSelectionChange])
-        #expect(model.hasActiveIMEComposition)
-        #expect(model.markedText == "niho")
-        #expect(model.text == "niho")
-        #expect(model.selectedRange == .init(location: 4, length: 0))
-    }
-
-    @Test
     func unmarkCommitsLatestMarkedTextIntoCommittedBuffer() {
         var model = TerminalTextInputModel(committedTextBeforeCursor: "日本", cursorIndex: 2)
 

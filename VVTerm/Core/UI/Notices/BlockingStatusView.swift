@@ -1,4 +1,9 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 struct BlockingStatusView<Content: View>: View {
     var maxWidth: CGFloat = NoticeMetrics.blockingMaxWidth
@@ -8,6 +13,8 @@ struct BlockingStatusView<Content: View>: View {
     let content: Content
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     init(
         maxWidth: CGFloat = NoticeMetrics.blockingMaxWidth,
         showsScrim: Bool = true,
@@ -30,21 +37,44 @@ struct BlockingStatusView<Content: View>: View {
                     .ignoresSafeArea()
             }
 
-            NoticeGlassGroup(spacing: 12) {
-                content
-                    .foregroundStyle(surfaceStyle.primaryForegroundColor)
-                    .frame(maxWidth: maxWidth)
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, contentVerticalPadding)
-                    .noticeSurface(
-                        style: surfaceStyle,
-                        cornerRadius: cornerRadius,
-                        shadowRadius: 18,
-                        shadowY: 10
-                    )
-                    .padding(24)
-            }
+            content
+                .frame(maxWidth: maxWidth)
+                .padding(.horizontal, 28)
+                .padding(.vertical, contentVerticalPadding)
+                .background(cardBackground)
+                .overlay(cardBorder)
+                .shadow(color: shadowColor, radius: 18, x: 0, y: 10)
+                .padding(24)
         }
+    }
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        switch surfaceStyle {
+        case .standard:
+            if reduceTransparency {
+                shape.fill(platformBaseColor)
+            } else {
+                shape.fill(.ultraThinMaterial)
+            }
+        case .terminal(let backgroundColor):
+            shape.fill(backgroundColor.opacity(colorScheme == .dark ? 0.96 : 0.98))
+        }
+    }
+
+    private var cardBorder: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .stroke(borderColor, lineWidth: 1)
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
+    }
+
+    private var shadowColor: Color {
+        Color.black.opacity(colorScheme == .dark ? 0.45 : 0.2)
     }
 
     private var contentVerticalPadding: CGFloat {
@@ -54,4 +84,15 @@ struct BlockingStatusView<Content: View>: View {
         return 22
         #endif
     }
+
+    private var platformBaseColor: Color {
+        #if os(iOS)
+        return Color(UIColor.secondarySystemBackground)
+        #elseif os(macOS)
+        return Color(NSColor.windowBackgroundColor)
+        #else
+        return .black
+        #endif
+    }
 }
+

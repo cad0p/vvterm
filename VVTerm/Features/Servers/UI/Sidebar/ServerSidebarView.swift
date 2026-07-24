@@ -9,9 +9,6 @@ struct ServerSidebarView: View {
 
     @ObservedObject private var storeManager = StoreManager.shared
     @ObservedObject private var tabManager = TerminalTabManager.shared
-    #if os(macOS)
-    @EnvironmentObject private var commandBridge: MacShellCommandBridge
-    #endif
 
     @State private var showingWorkspaceSwitcher = false
     @State private var showingAddServer = false
@@ -357,10 +354,10 @@ struct ServerSidebarView: View {
         // focusedValue above can't reach the scene Commands. Register the action
         // on the shell command bridge too; ContentView republishes it.
         .onAppear {
-            commandBridge.openLocalDiscovery = { showingLocalDiscovery = true }
+            MacShellCommandBridge.shared.openLocalDiscovery = { showingLocalDiscovery = true }
         }
         .onDisappear {
-            commandBridge.openLocalDiscovery = nil
+            MacShellCommandBridge.shared.openLocalDiscovery = nil
         }
         #endif
         .lockedItemAlert(
@@ -651,18 +648,11 @@ struct ServerSidebarView: View {
     }
 
     private func connectToServer(_ server: Server) {
-        Task {
+        Task { @MainActor in
             guard await AppLockManager.shared.ensureServerUnlocked(server) else { return }
-            do {
-                let tab = try await tabManager.openTab(for: server)
-                await MainActor.run {
-                    selectedServer = server
-                    tabManager.selectedViewByServer[server.id] = ViewTabConfigurationManager.shared.effectiveDefaultTab()
-                    tabManager.selectedTabByServer[server.id] = tab.id
-                }
-            } catch {
-                // No-op: user cancelled biometric auth or the tab limit blocked the open.
-            }
+            selectedServer = server
+            tabManager.selectedViewByServer[server.id] = ViewTabConfigurationManager.shared.effectiveDefaultTab()
+            tabManager.connectedServerIds.insert(server.id)
         }
     }
 

@@ -3,7 +3,3 @@
 "active" = "đang hoạt động";
 "1 active session" = "1 phiên hoạt động";
 "%lld active sessions" = "%lld phiên hoạt động";
-
-/* Lock Screen widget */
-"Open VVTerm" = "Mở VVTerm";
-"Open VVTerm from the Lock Screen." = "Mở VVTerm từ Màn hình khóa.";

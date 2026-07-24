@@ -9,7 +9,7 @@ struct NoticeAppHost<Content: View>: View {
     }
 
     private var topBannerNotice: NoticeItem? {
-        guard networkMonitor.isOffline else { return nil }
+        guard !networkMonitor.isConnected else { return nil }
 
         return NoticeItem(
             id: "app-offline",
@@ -25,6 +25,6 @@ struct NoticeAppHost<Content: View>: View {
         NoticeHost(topBanner: topBannerNotice, topInsetBehavior: .safeAreaTop) {
             content
         }
-        .animation(.easeInOut(duration: 0.2), value: networkMonitor.readiness)
+        .animation(.easeInOut(duration: 0.2), value: networkMonitor.isConnected)
     }
 }

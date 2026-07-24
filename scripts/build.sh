@@ -11,7 +11,7 @@ VENDOR_SSH="$PROJECT_ROOT/Vendor/libssh2"
 BUILD_DIR_SSH="$PROJECT_ROOT/.build/ssh"
 
 OPENSSL_VERSION="3.2.0"
-LIBSSH2_VERSION="1.11.1"
+LIBSSH2_VERSION="1.11.0"
 MACOS_DEPLOYMENT_TARGET="13.3"
 IOS_DEPLOYMENT_TARGET="16.0"
 
@@ -72,7 +72,6 @@ check_deps_ssh() {
     require_cmd tar
     require_cmd cmake
     require_cmd make
-    require_cmd rsync
     require_cmd xcrun
 }
 
@@ -174,7 +173,7 @@ PY
         -Demit-docs=false
         -Demit-webdata=false
         -Demit-helpgen=false
-        -Demit-terminfo=true
+        -Demit-terminfo=false
         -Demit-termcap=false
         -Demit-themes=false
         -Doptimize=ReleaseFast
@@ -183,21 +182,6 @@ PY
     )
 
     (cd "${workdir}/ghostty" && zig build "${zig_flags[@]}" -p "${workdir}/zig-out")
-
-    local generated_terminfo="${workdir}/zig-out/share/terminfo"
-    local bundled_terminfo="${PROJECT_ROOT}/VVTerm/Resources/terminfo"
-    if [ ! -f "${generated_terminfo}/ghostty.terminfo" ] || \
-       [ ! -f "${generated_terminfo}/67/ghostty" ] || \
-       [ ! -f "${generated_terminfo}/78/xterm-ghostty" ]; then
-        log_error "Generated Ghostty terminfo resources not found"
-        exit 1
-    fi
-
-    mkdir -p "${bundled_terminfo}/67" "${bundled_terminfo}/78"
-    cp "${generated_terminfo}/ghostty.terminfo" "${bundled_terminfo}/xterm-ghostty.src"
-    cp "${generated_terminfo}/67/ghostty" "${bundled_terminfo}/67/ghostty"
-    cp "${generated_terminfo}/78/xterm-ghostty" "${bundled_terminfo}/78/xterm-ghostty"
-    /bin/bash "${SCRIPT_DIR}/validate_terminfo.sh"
 
     local xcframework="${workdir}/ghostty/macos/GhosttyKit.xcframework"
     if [ ! -d "${xcframework}" ]; then
@@ -440,8 +424,6 @@ build_libssh2_simulator() {
 
 create_modulemap() {
     log_info "Writing libssh2 module map..."
-
-    rsync -a --delete "${VENDOR_SSH}/macos/include/" "${VENDOR_SSH}/include/"
 
     cat > "${VENDOR_SSH}/module.modulemap" << 'EOF_MODULE'
 module libssh2 {

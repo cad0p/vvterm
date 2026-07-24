@@ -3,25 +3,6 @@ import Combine
 import Speech
 import AVFoundation
 
-enum SpeechRecognitionOperationState: Equatable {
-    case idle
-    case running(UUID)
-    case finishing(UUID)
-
-    var generation: UUID? {
-        switch self {
-        case .idle:
-            return nil
-        case .running(let generation), .finishing(let generation):
-            return generation
-        }
-    }
-
-    func acceptsResult(for generation: UUID) -> Bool {
-        self.generation == generation
-    }
-}
-
 @MainActor
 class SpeechRecognitionService: ObservableObject {
     @Published var transcribedText = ""
@@ -31,9 +12,6 @@ class SpeechRecognitionService: ObservableObject {
     private var recognizerLanguageCode: String?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var recognitionState: SpeechRecognitionOperationState = .idle
-    private var recognitionCompletionStream: AsyncStream<Void>?
-    private var recognitionCompletionContinuation: AsyncStream<Void>.Continuation?
 
     var isAvailable: Bool {
         resolvedRecognizer()?.isAvailable ?? false
@@ -98,7 +76,7 @@ class SpeechRecognitionService: ObservableObject {
 
     // MARK: - Recognition Control
 
-    func startRecognition() throws {
+    func startRecognition() async throws {
         guard let speechRecognizer = resolvedRecognizer(), speechRecognizer.isAvailable else {
             throw SpeechRecognitionError.recognitionUnavailable
         }
@@ -108,13 +86,6 @@ class SpeechRecognitionService: ObservableObject {
 
         recognitionTask?.cancel()
         recognitionTask = nil
-        finishRecognitionCompletion()
-
-        let generation = UUID()
-        recognitionState = .running(generation)
-        let completion = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        recognitionCompletionStream = completion.stream
-        recognitionCompletionContinuation = completion.continuation
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         self.recognitionRequest = recognitionRequest
@@ -122,24 +93,22 @@ class SpeechRecognitionService: ObservableObject {
         recognitionRequest.requiresOnDeviceRecognition = false
 
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            let transcription = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal == true
-            let didComplete = error != nil || isFinal
-            guard transcription != nil || didComplete else { return }
+            guard let self = self else { return }
 
-            Task { @MainActor [weak self, completionContinuation = completion.continuation] in
-                guard let self, self.recognitionState.acceptsResult(for: generation) else { return }
-                if let transcription {
-                    if isFinal {
+            if let result = result {
+                let transcription = result.bestTranscription.formattedString
+
+                Task { @MainActor in
+                    if result.isFinal {
                         self.transcribedText = transcription
                     } else {
                         self.partialTranscription = transcription
                     }
                 }
-                if didComplete {
-                    completionContinuation.yield()
-                    completionContinuation.finish()
-                }
+            }
+
+            if error != nil || result?.isFinal == true {
+                // No audio engine to stop here; AudioCaptureService handles input
             }
         }
     }
@@ -149,31 +118,16 @@ class SpeechRecognitionService: ObservableObject {
     }
 
     func stopRecognition() async -> String {
-        guard let generation = recognitionState.generation else {
-            return transcribedText.isEmpty ? partialTranscription : transcribedText
-        }
-        recognitionState = .finishing(generation)
-        let completionStream = recognitionCompletionStream
         recognitionRequest?.endAudio()
-        recognitionTask?.finish()
+        recognitionTask?.cancel()
 
-        if let completionStream {
-            await Self.waitForRecognitionCompletion(
-                completionStream,
-                timeout: .milliseconds(500)
-            )
-        }
-
-        guard recognitionState == .finishing(generation) else { return "" }
-        guard !Task.isCancelled else {
-            cancelRecognition()
-            return ""
-        }
-        let finalText = transcribedText.isEmpty ? partialTranscription : transcribedText
-        recognitionState = .idle
         recognitionRequest = nil
         recognitionTask = nil
-        finishRecognitionCompletion()
+
+        // Wait for final transcription
+        try? await Task.sleep(for: .milliseconds(500))
+
+        let finalText = transcribedText.isEmpty ? partialTranscription : transcribedText
         return finalText
     }
 
@@ -184,9 +138,6 @@ class SpeechRecognitionService: ObservableObject {
 
         recognitionTask?.cancel()
         recognitionTask = nil
-        finishRecognitionCompletion()
-        let generation = UUID()
-        recognitionState = .running(generation)
 
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("vvterm-transcription-\(UUID().uuidString)")
@@ -222,9 +173,7 @@ class SpeechRecognitionService: ObservableObject {
                     finished = true
                     cleanup()
                     Task { @MainActor in
-                        guard self?.recognitionState.acceptsResult(for: generation) == true else { return }
                         self?.recognitionTask = nil
-                        self?.recognitionState = .idle
                     }
                     continuation.resume(throwing: error)
                     return
@@ -235,9 +184,7 @@ class SpeechRecognitionService: ObservableObject {
                     finished = true
                     cleanup()
                     Task { @MainActor in
-                        guard self?.recognitionState.acceptsResult(for: generation) == true else { return }
                         self?.recognitionTask = nil
-                        self?.recognitionState = .idle
                     }
                     continuation.resume(returning: result.bestTranscription.formattedString)
                 }
@@ -246,13 +193,11 @@ class SpeechRecognitionService: ObservableObject {
     }
 
     func cancelRecognition() {
-        recognitionState = .idle
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
 
         recognitionRequest = nil
         recognitionTask = nil
-        finishRecognitionCompletion()
 
         transcribedText = ""
         partialTranscription = ""
@@ -261,28 +206,6 @@ class SpeechRecognitionService: ObservableObject {
     func resetTranscriptions() {
         transcribedText = ""
         partialTranscription = ""
-    }
-
-    nonisolated static func waitForRecognitionCompletion(
-        _ stream: AsyncStream<Void>,
-        timeout: Duration
-    ) async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                for await _ in stream { break }
-            }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-            }
-            _ = await group.next()
-            group.cancelAll()
-        }
-    }
-
-    private func finishRecognitionCompletion() {
-        recognitionCompletionContinuation?.finish()
-        recognitionCompletionContinuation = nil
-        recognitionCompletionStream = nil
     }
 
     // MARK: - Errors

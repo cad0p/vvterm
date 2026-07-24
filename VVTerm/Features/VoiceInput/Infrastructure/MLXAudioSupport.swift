@@ -4,24 +4,21 @@ import Metal
 enum MLXAudioSupport {
     static var isSupported: Bool {
         #if arch(arm64)
-        #if os(iOS) || os(tvOS)
-        let platform = MLXAudioPlatform.appleMobile
-        #elseif os(macOS)
-        let platform = MLXAudioPlatform.macOS
-        #else
-        let platform = MLXAudioPlatform.unsupported
-        #endif
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
 
-        return MLXAudioCapabilityPolicy.isSupported(
-            platform: platform,
-            supportsNonuniformThreadgroups: MTLCreateSystemDefaultDevice()?.supportsFamily(.apple4)
-        )
+        #if os(iOS) || os(tvOS)
+        // MLX kernels rely on modern Metal features used by dispatchThreads.
+        // Older iOS/iPadOS GPU families can abort with
+        // "Dispatch Threads with Non-Uniform Threadgroup Size is not supported".
+        return device.supportsFamily(.apple4)
+        #elseif os(macOS)
+        _ = device
+        return true
         #else
         return false
         #endif
-    }
-
-    nonisolated static var unavailableDescription: String {
-        String(localized: "On-device MLX transcription isn't supported on this device. Apple Speech will be used instead.")
+        #else
+        return false
+        #endif
     }
 }

@@ -86,42 +86,6 @@ struct ServerConnectionModeTests {
     }
 
     @Test
-    func eternalTerminalRoundTripPreservesModeAndPort() throws {
-        var server = makeServer(connectionMode: .eternalTerminal, authMethod: .sshKey)
-        server.eternalTerminalPort = 22022
-
-        let data = try JSONEncoder().encode(server)
-        let decoded = try JSONDecoder().decode(Server.self, from: data)
-
-        #expect(decoded.connectionMode == .eternalTerminal)
-        #expect(decoded.eternalTerminalPort == 22022)
-        #expect(ServerTransportSelection(server: decoded) == .eternalTerminal)
-        #expect(ServerTransportSelection.eternalTerminal.connectionMode == .eternalTerminal)
-    }
-
-    @Test
-    func decodeWithoutEternalTerminalPortDefaultsTo2022() throws {
-        let server = makeServer(connectionMode: .eternalTerminal, authMethod: .password)
-        let data = try mutateJSON(server) { object in
-            object.removeValue(forKey: "eternalTerminalPort")
-        }
-
-        let decoded = try JSONDecoder().decode(Server.self, from: data)
-        #expect(decoded.eternalTerminalPort == 2022)
-    }
-
-    @Test
-    func invalidEternalTerminalPortDefaultsTo2022() throws {
-        let server = makeServer(connectionMode: .eternalTerminal, authMethod: .password)
-        let data = try mutateJSON(server) { object in
-            object["eternalTerminalPort"] = 100_000
-        }
-
-        let decoded = try JSONDecoder().decode(Server.self, from: data)
-        #expect(decoded.eternalTerminalPort == 2022)
-    }
-
-    @Test
     func decodeCloudflareConnectionMode() throws {
         let server = makeServer(connectionMode: .cloudflare, authMethod: .password)
         let data = try JSONEncoder().encode(server)
@@ -189,25 +153,6 @@ struct ServerConnectionModeTests {
         #expect(String(data: keyCredentials.privateKey ?? Data(), encoding: .utf8) == "PRIVATE_KEY")
         #expect(keyCredentials.passphrase == "phrase")
         #expect(String(data: keyCredentials.publicKey ?? Data(), encoding: .utf8) == "PUBLIC_KEY")
-    }
-
-    @Test
-    func eternalTerminalSelectionPreservesSSHCredentials() {
-        let credentials = ServerFormCredentialBuilder.build(
-            serverId: UUID(),
-            transportSelection: .eternalTerminal,
-            authMethod: .password,
-            password: "secret",
-            sshKey: "",
-            sshPassphrase: "",
-            sshPublicKey: "",
-            cloudflareAccessMode: nil,
-            cloudflareClientID: "",
-            cloudflareClientSecret: ""
-        )
-
-        #expect(credentials.password == "secret")
-        #expect(credentials.privateKey == nil)
     }
 
     @Test

@@ -139,44 +139,6 @@ For every feature:
 - prefer view-owned dependencies to be injected from the app/screen boundary instead of created inside leaf views
 - if shared cross-feature primitives are needed, extract them into `Core` instead of creating new app-wide bucket folders
 
-Apple platform UI split pattern:
-- Do not let shared SwiftUI files accumulate large inline `#if os(iOS)` / `#if os(macOS)` branches. If platform layout, lifecycle, modifiers, or state diverge, keep the shared feature shell neutral and move platform presentation into `Type+iOS.swift` and `Type+macOS.swift` files with file-level compile gates.
-- Because VVTerm uses one multiplatform target, platform-specific files must still be guarded with `#if os(...)` unless target membership is explicitly changed; folder names such as `iOS/` or `macOS/` are not enough.
-- Avoid `iOS`, `Mac`, `macOS`, and `MacOS` prefixes in product UI type names. Prefer feature/domain names and put platform ownership in the filename or folder.
-- Platform prefixes are acceptable for true platform adapters and app-shell bridges, such as `NSViewRepresentable`, `UIViewRepresentable`, AppKit/UIKit delegates, toolbar/window/menu bridges, and Ghostty platform terminal views.
-- Platform-specific stored SwiftUI state should usually live in platform child views or small platform models. Swift extensions cannot add stored properties, so do not keep long-term gated `@State` in shared views just to make an extension split compile.
-- After platform UI splits, validate both iOS and macOS builds unless the change is documentation-only.
-
-Stats UI ownership:
-- Keep `ServerStatsView.swift` as a thin root wrapper for injected inputs, app/storage state, sheet triggers, and composition. Do not add metric cards, charts, detail sheets, or collector operations back into this file.
-- Keep collection lifecycle, visibility handling, retry overlay, and collector action closures in `ServerStatsDashboard.swift`.
-- Keep block ordering, style selection, preview composition, and page layout in `StatsBlocksContent.swift`, `StatsDashboardCards.swift`, and `ClassicStatsContent.swift`.
-- Keep reusable cards, charts, gauges, and meters under `Features/Stats/UI/Components`, and detail sheets/rows under `Features/Stats/UI/Details`.
-- Keep platform sheet chrome and close/search presentation behind `DetailPresentation.swift`, `DetailPresentation+iOS.swift`, and `DetailPresentation+macOS.swift`. Product UI types inside those files should use neutral names such as `StatsDetailShell` or `StatsSearchField`; the filename carries the platform ownership.
-- Small inline platform gates are acceptable only for platform constants or narrow modifiers such as native colors, toolbar placement, or iOS detents. If a platform branch grows into a body/layout/lifecycle variant, split it into a platform file.
-
-Status presentation:
-- Keep blocking states local to the screen that owns them.
-- Use `Core/UI/Notices` for shared non-blocking presentation: one top banner for persistent or degraded state and ID-keyed bottom operations for user-initiated progress or failure.
-- Keep destructive decisions in native alerts and confirmation dialogs.
-- Scope notice hosts to their app or feature surface. Do not add a global toast bus or move feature policy into `Core/UI`.
-
-Remote shell and multiplexer ownership:
-- Resolve the remote platform and shell through `SSHClient.remoteEnvironment()` and build startup or working-directory commands through `RemoteShellProfile` and `RemoteTerminalBootstrap`.
-- UI and session orchestration must not construct POSIX, PowerShell, or `cmd.exe` syntax. Runtime capability fallback must not rewrite persisted transport or tmux preferences.
-- Windows tmux-compatible sessions use the explicit psmux backend and must not use POSIX tmux command construction.
-- Probe `psmux`, then `pmux`, and accept `tmux.exe` only after a psmux-specific compatibility check.
-- Apply VVTerm-generated tmux or psmux configuration only to VVTerm-managed sessions, never external user sessions.
-
-## Product Planning and Repository Documentation
-
-- Keep product ideas, future specifications, roadmap decisions, pricing or packaging strategy, and internal rollout plans in the VVTerm Linear project, not in this repository.
-- Search Linear before creating work. Reuse or update an existing issue when it owns the same scope.
-- Create a Linear issue before a large implementation begins, and keep its decisions, acceptance criteria, and status current as the scope changes.
-- Keep repository documentation limited to current architecture, build, test, security, contribution, protocol, and intentionally public user contracts that must evolve with code.
-- Enforce completed behavior with tests and concise current architecture rules instead of retaining speculative or completed implementation plans.
-- Linear is not a secret manager. Do not store credentials, tokens, private keys, customer data, or production secrets in either Linear or the repository.
-
 ## Refactoring Rules
 
 When doing architectural refactors:
@@ -192,19 +154,6 @@ Safe refactor expectation:
 - same interactions
 - same user-facing flows
 - smaller files, clearer boundaries, better ownership
-
-## Testing and Regression Policy
-
-- Every bug fix and regression fix must include automated test coverage unless it is genuinely not automatable. If coverage is not added, explain the blocker and the manual validation that was used.
-- For regressions, write or update a deterministic failing test first when feasible, then fix the production path.
-- Match test level to risk:
-  - use unit tests for domain rules, parser behavior, state machines, focus policies, coordinators, and model logic
-  - use UI tests/XCUITest for SwiftUI/UIKit lifecycle, keyboard behavior, navigation, accessibility, focus, sheet, and platform integration regressions
-  - use integration or end-to-end tests when behavior crosses SSH/session/terminal rendering boundaries and can be exercised locally or in simulator
-- Refactors must keep existing tests passing and should add coverage before simplifying risky or previously untested behavior.
-- Keyboard and terminal input changes require focused regression coverage. At minimum, cover the relevant policy/model path in unit tests and the user-visible iOS behavior in XCUITest when software keyboard, accessory bar, hardware keyboard, IME/preedit, backspace repeat, find UI, floating controls, focus, or tab/view switching behavior is touched.
-- Do not rely on "checked on my phone" or manual Xcode testing as the only validation for keyboard/input regressions. Keep simulator UI tests or unit tests that can be rerun by future agents.
-- Before finishing non-documentation code changes, run the narrowest reliable build/test commands that exercise the touched behavior and report exactly what was run. If a test cannot run because of tooling or environment issues, report that as a residual risk.
 
 ## Commits
 
