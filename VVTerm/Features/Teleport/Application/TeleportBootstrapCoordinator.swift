@@ -217,7 +217,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // the ID that identifies the headless request on both the POST
         // (/webapi/headless/login) and the web approval page (/web/headless/<id>).
         headlessID = HeadlessID.compute(sshAuthorizedKey: sshPubKey)
-        logger.info("headlessAuthenticationID=\(headlessID, privacy: .public)")
+        logger.info("headlessAuthenticationID=\(self.headlessID, privacy: .public)")
 
         // ── Step 3: start the blocking POST (async, doesn't await yet) ──
         // We start the POST, THEN open Safari. The POST blocks until the
@@ -246,7 +246,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                     tlsPubKeyB64: tlsPubKeyB64,
                     ttl: ttl
                 )
-                await self.handlePostSuccess(response: resp, cluster: cluster)
+                await self.handlePostSuccess(response: resp, cluster: cluster, sshPrivateKeyPEM: sshPrivateKeyPEM)
             } catch {
                 await self.handlePostFailure(error: error)
             }
@@ -320,7 +320,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
     // MARK: - POST result handling
 
-    private func handlePostSuccess(response: HeadlessLoginResponse, cluster: TeleportCluster) async {
+    private func handlePostSuccess(response: HeadlessLoginResponse, cluster: TeleportCluster, sshPrivateKeyPEM: String) async {
         guard let certB64 = response.cert, !certB64.isEmpty else {
             logger.error("POST returned 200 but no cert")
             state = .failed(.unknown("no cert in response"))

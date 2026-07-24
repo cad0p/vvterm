@@ -233,6 +233,14 @@ enum SSHCertExpiryParser {
 
     /// Parse the NotAfter validity from an X.509 PEM certificate via the
     /// Security framework. Returns nil if parsing fails.
+    ///
+    /// NOTE: `SecCertificateCopyValues` + the `kSecPropertyOID`/`kSecPropertyKeyValue`/
+    /// `kSecOIDX509V1ValidityNotAfter` constants are macOS-only and unavailable on
+    /// iOS. The SSH-cert parsing path (parseSSHCertValidBefore) is the primary
+    /// path and handles Teleport-issued certs; this X.509 fallback is a
+    /// best-effort macOS bonus. On iOS it returns nil and the caller falls back
+    /// to the 1h default.
+    #if os(macOS)
     private static func parseX509CertValidBefore(pem: String) -> Date? {
         // Strip PEM headers + base64-decode the DER body.
         let lines = pem.split(separator: "\n", omittingEmptySubsequences: true)
@@ -244,7 +252,7 @@ enum SSHCertExpiryParser {
 
         // SecCertificateCopyValues returns the cert's attributes. The
         // kSecOIDX509V1ValidityNotAfter key holds the expiry.
-        // On iOS/macOS this returns a CFArray of dictionaries.
+        // On macOS this returns a CFArray of dictionaries.
         guard let values = SecCertificateCopyValues(cert, nil, nil) as? [[String: Any]] else {
             return nil
         }
@@ -258,4 +266,11 @@ enum SSHCertExpiryParser {
         }
         return nil
     }
+    #else
+    private static func parseX509CertValidBefore(pem: String) -> Date? {
+        // iOS: SecCertificateCopyValues + the kSecProperty* constants are
+        // unavailable. Return nil so the caller falls back to the 1h default.
+        return nil
+    }
+    #endif
 }
