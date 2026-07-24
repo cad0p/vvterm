@@ -5,14 +5,25 @@
 #                    then uploads the compiled products as an artifact so the
 #                    fan-out ui-tests shards skip recompilation.
 #   2. unit-tests  — runs VVTermTests (fast, pure logic).
-#   3. ui-tests    — matrix of N parallel shard jobs, each downloading the
+#   3. ui-tests    — matrix of 4 parallel shard jobs, each downloading the
 #                    build artifact and running a subset of VVTermUITests via
 #                    -only-testing:. fail-fast is disabled so one failing shard
 #                    does not cancel the others.
 #
 # Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
-# feedback (unit tests finish in ~2 min) and isolates UI test failures/hangs
+# feedback (unit tests finish first) and isolates UI test failures/hangs
 # (which can be slow) from blocking unit test results.
+#
+# Concurrency-cap-aware shard count:
+#   - GitHub Actions caps this repo at 5 concurrent jobs. With build(1) +
+#     unit-tests(1) + 4 ui-tests = 6 jobs total, the build runs first alone,
+#     then the 5 test-phase jobs (4 UI + 1 unit) all fit within the cap with
+#     ZERO queueing. The previous 7-shard design overflowed to 9 jobs and
+#     queued 2-3 shards for ~8m.
+#   - 4 UI shards + unit-tests is preferred over 5 UI shards (dropping
+#     unit-tests) because: (a) unit-tests provides the fast feedback signal
+#     essential for the session-2.3 PR, (b) unit-tests runs in parallel and
+#     does not gate the UI shards, (c) the wall-time difference is small.
 #
 # Build-once-fanout architecture:
 #   - The `build` job compiles the app once and uploads Build/Products and
@@ -22,18 +33,26 @@
 #     app and skips compilation. Each shard then runs only its assigned tests
 #     via `-only-testing:Target/Class/method,...`.
 #   - Shard split is balanced via LPT bin-packing of measured per-method
-#     runtimes (max shard ~288s vs the old serialized 30-55m).
+#     runtimes from CI run 30069836793 (serialized) calibrated against the
+#     measured 7-shard totals from run 30092781079. All 56 UI test methods
+#     are distributed across 4 shards with max balance diff ~1s (raw est).
+#     Projected max shard ~15.6m (test-step) vs the old 7-shard max ~9.6m,
+#     but 4 shards fit the cap with zero queueing vs 7 shards queueing ~8m.
 #
 # Runner / toolchain:
 #   - All jobs run on `xcode-27` (macOS 26 + Xcode 27 public-preview, arm64).
 #     `xcode-27-xlarge` was tried first but is blocked by an account
 #     spending-limit gate; `xcode-27` uses the same Xcode 27 image without the
-#     billing gate, and the 7-shard fan-out compensates for the smaller
+#     billing gate, and the 4-shard fan-out compensates for the smaller
 #     per-runner core count.
 #   - The image defaults to Xcode 27, so no setup-xcode step is needed.
 #   - The xcode-27 preview image does NOT ship the Metal toolchain, which
 #     mlx-swift Cmlx shaders + libghostty's Metal renderer require. Each job
 #     runs `xcodebuild -downloadComponent MetalToolchain` before building.
+#     The download takes ~20s per job; caching it across jobs is not practical
+#     because it installs into the Xcode toolchain directory (part of the
+#     runner image, not a user-cacheable path). The SPM cache key already
+#     captures the toolchain version via the `xcode27-spm-` prefix.
 #   - SPM cache key is namespaced `xcode27-spm-` to match the new toolchain.
 #   - After restoring the SPM/DerivedData cache, a step removes the stale
 #     ModuleCache.noindex (PCM) directory. When the runner image updates, SDK
@@ -220,24 +239,23 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # 7 shards balanced via LPT bin-packing of measured per-method
-          # runtimes (CI run 30069836793). Max shard ~288s, min ~263s.
+          # 4 shards balanced via LPT bin-packing of measured per-method
+          # runtimes (CI run 30069836793, calibrated against the 7-shard
+          # totals from run 30092781079). 4 UI shards + unit-tests = 5 test
+          # jobs, fitting GitHub's 5-concurrent-macOS-job cap with ZERO
+          # queueing. Each shard: ~53s setup + ~880s tests ≈ 15.6m.
+          # Shard 1 holds the 226s testConcurrentOperationsStackAboveBottomToolbar
+          # outlier (hard floor) paired with the smallest other tests.
           # Each entry's `only-testing` is a comma-separated list of
           # Target/Class/method (or Target/Class for whole-class) — no spaces.
           - name: notice-outlier
-            only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/TerminalScreenAwakeUITests"
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/StatsAppearancePresentationUITests,VVTermUITests/VVTermUITests/testLaunchPerformance"
           - name: keyboard-a
-            only-testing: "VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/VVTermUITestsLaunchTests,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesBottomSheet"
+            only-testing: "VVTermUITests/StatsStorageUITests,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TerminalScreenAwakeUITests,VVTermUITests/VVTermUITestsLaunchTests"
           - name: keyboard-b
-            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/VVTermUITests,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild"
+            only-testing: "VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalZenModeUITests,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/NoticePresentationUITests/testInitialConnectionSheetYieldsToTmuxSelectionSheet"
           - name: keyboard-c
-            only-testing: "VVTermUITests/StatsStorageUITests,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect"
-          - name: keyboard-d
-            only-testing: "VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalZenModeUITests,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath"
-          - name: keyboard-e
-            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/StatsAppearancePresentationUITests,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/NoticePresentationUITests/testInitialConnectionSheetYieldsToTmuxSelectionSheet"
-          - name: keyboard-f
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure"
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesBottomSheet,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/VVTermUITests/testExample"
 
     steps:
       - name: Checkout
