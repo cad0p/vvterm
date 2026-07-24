@@ -19,6 +19,7 @@
 //
 
 import SwiftUI
+import Combine
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -32,8 +33,8 @@ import AppKit
 /// UI tests can script every failure case in the recovery matrix without a
 /// real Safari or Teleport server. Production callers pass a
 /// `TeleportBootstrapCoordinator` (the `Live` impl).
-struct TeleportBootstrapView: View {
-    @ObservedObject var coordinator: any TeleportBootstrapCoordinating
+struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
+    @ObservedObject var coordinator: Coordinator
 
     /// The cluster being bootstrapped. Held by the view so `retry()` can
     /// re-invoke `begin()` with the same config.
@@ -95,7 +96,7 @@ struct TeleportBootstrapView: View {
         VStack(spacing: 12) {
             Image(systemName: "safari")
                 .font(.system(size: 48))
-                .foregroundStyle(.accentColor)
+                .foregroundStyle(Color.accentColor)
 
             Text(String(localized: "Approve in Safari"))
                 .font(.title2.bold())
@@ -188,7 +189,7 @@ struct TeleportBootstrapView: View {
             } label: {
                 Text(approvalURL)
                     .font(.caption.monospaced())
-                    .foregroundStyle(.accentColor)
+                    .foregroundStyle(Color.accentColor)
                     .underline()
             }
             .buttonStyle(.plain)

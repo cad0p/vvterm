@@ -21,6 +21,7 @@
 //
 
 import SwiftUI
+import Combine
 import Security
 #if canImport(UIKit)
 import UIKit
@@ -35,8 +36,8 @@ import AppKit
 /// so UI tests can script the "already exists" error + the SEP-key-creation
 /// failure cases without a real gRPC client or real Face ID. Production
 /// callers pass a `TeleportRegistrationCoordinator` (the `Live` impl).
-struct TeleportRegistrationView: View {
-    @ObservedObject var coordinator: any TeleportRegistrationCoordinating
+struct TeleportRegistrationView<Coordinator: TeleportRegistrationCoordinating>: View {
+    @ObservedObject var coordinator: Coordinator
 
     /// The cluster being registered against.
     let cluster: TeleportCluster
@@ -61,7 +62,7 @@ struct TeleportRegistrationView: View {
     @State private var nameError: String?
 
     init(
-        coordinator: any TeleportRegistrationCoordinating,
+        coordinator: Coordinator,
         cluster: TeleportCluster,
         bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult,
         onSuccess: @escaping () -> Void,

@@ -21,6 +21,7 @@
 //
 
 import SwiftUI
+import Combine
 
 /// The Phase 3 login sheet. Presented when a Teleport server's readiness is
 /// `needsLogin` (SEP key present, cert missing or expired).
@@ -29,8 +30,8 @@ import SwiftUI
 /// tests can script the Face ID success/cancel/unavailable outcomes via a
 /// `MockSEPKeySigner` without a real Secure Enclave. Production callers pass
 /// a `TeleportLoginCoordinator` (the `Live` impl).
-struct TeleportLoginView: View {
-    @ObservedObject var coordinator: any TeleportLoginCoordinating
+struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
+    @ObservedObject var coordinator: Coordinator
 
     /// The cluster being logged in to.
     let cluster: TeleportCluster
@@ -88,7 +89,7 @@ struct TeleportLoginView: View {
         VStack(spacing: 12) {
             Image(systemName: "key.fill")
                 .font(.system(size: 48))
-                .foregroundStyle(.accentColor)
+                .foregroundStyle(Color.accentColor)
 
             Text(String(localized: "Sign in with Face ID"))
                 .font(.title2.bold())
