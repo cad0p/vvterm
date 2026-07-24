@@ -25,6 +25,7 @@
 //      (TeleportDeviceReadinessResolver)
 //
 
+import Combine
 import Foundation
 @testable import VVTerm
 

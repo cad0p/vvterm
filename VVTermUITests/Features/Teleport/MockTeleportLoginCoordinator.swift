@@ -22,6 +22,7 @@
 //      (the protocol + real coordinator)
 //
 
+import Combine
 import Foundation
 @testable import VVTerm
 
