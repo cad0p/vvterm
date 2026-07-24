@@ -164,8 +164,24 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         return data
     }
 
+    // MARK: - ed25519 SSH private key (in-memory for the mock)
+
+    /// The per-cluster ed25519 private key (OpenSSH PEM bytes). The real
+    /// `TeleportKeyRing` stores this in the keychain; the mock keeps it
+    /// in-memory so UI tests don't touch the keychain.
+    private var ed25519PrivateKeys: [UUID: Data] = [:]
+
+    func liveEd25519PrivateKey(for clusterId: UUID) -> Data? {
+        ed25519PrivateKeys[clusterId]
+    }
+
+    func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
+        ed25519PrivateKeys[clusterId] = pemData
+    }
+
     func clear(for clusterId: UUID) {
         credentials.removeValue(forKey: clusterId)
         fixtures.removeValue(forKey: clusterId)
+        ed25519PrivateKeys.removeValue(forKey: clusterId)
     }
 }

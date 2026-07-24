@@ -221,7 +221,7 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // (the server clamps it to the role's MaxSessionTTL — the actual
         // TTL is read from the returned cert's ValidBefore).
         state = .fetchingCert
-        let sshPubKey = SSHPubKey.generateEd25519AuthorizedKeys(comment: "vvterm-teleport-login")
+        let (sshPubKey, sshPrivateKeyPEM) = SSHPubKey.generateEd25519KeyPair(comment: "vvterm-teleport-login")
         let sshPubKeyBytes = Data((sshPubKey + "\n").utf8)
         let ttl: Int64 = 3_600_000_000_000  // 1h in ns (server clamps)
 
@@ -245,22 +245,42 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             return
         }
 
+        // The cert is base64(PEM) — Go's `[]byte` marshals as base64.
+        // Decode to the actual PEM string before storing (the bootstrap
+        // coordinator does the same; the SSHClient cert seam expects the
+        // raw authorized_keys/PEM string, not a base64 wrapper).
+        guard let certPEMData = Data(base64Encoded: cert),
+              let certPEM = String(data: certPEMData, encoding: .utf8) else {
+            logger.error("failed to base64-decode login cert")
+            state = .failed(.unknown("cert base64 decode failed"))
+            return
+        }
+
         // The cert's ValidBefore. The HTTP response doesn't include it
-        // directly — it's embedded in the PEM cert. Parsing it requires
-        // SecCertificateCreateWithData + SecCertificateCopyValues, which
-        // is non-trivial. For now, use a conservative default (1h from
-        // now) — the readiness state will flip to `needsLogin` when the
-        // cert expires, triggering a re-auth.
-        //
-        // TODO(phase-3): parse ValidBefore from the PEM cert so the
-        // "Certificate valid for …" copy is accurate. The spike's
-        // FullFlowRunner doesn't parse it either (it just logs the cert
-        // length), so this is a known gap carried over from the spike.
-        let certValidBefore = Date(timeIntervalSinceNow: 3600)  // 1h default
+        // directly — it's embedded in the PEM cert. Parse it from the SSH
+        // cert blob (OpenSSH cert format: valid_before is a uint64 Unix
+        // timestamp appended after the signature). Fall back to a
+        // conservative 1h default if parsing fails — the readiness state
+        // will flip to `needsLogin` when the cert expires, triggering a
+        // re-auth.
+        let certValidBefore = SSHCertExpiryParser.validBefore(pem: certPEM)
+            ?? Date(timeIntervalSinceNow: 3600)  // 1h fallback
 
         // Store the fresh cert in the key ring. Readiness flips to `ready`.
-        keyRing.storeLoginCert(cert, validBefore: certValidBefore, for: cluster.id)
-        logger.info("login succeeded — cert \(cert.count) chars, valid until \(certValidBefore.debugDescription, privacy: .public)")
+        // Also store the ed25519 private key — the SSHClient cert seam
+        // fetches it via `liveEd25519PrivateKey` to feed libssh2.
+        keyRing.storeLoginCert(certPEM, validBefore: certValidBefore, for: cluster.id)
+        if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
+            do {
+                try keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
+            } catch {
+                logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
+                // Non-fatal — the cert is stored, so readiness is correct.
+                // The SSH connect will fail with teleportCertMissing, which
+                // surfaces the right UX (re-login).
+            }
+        }
+        logger.info("login succeeded — cert \(certPEM.count) chars, valid until \(certValidBefore.debugDescription, privacy: .public)")
 
         state = .success(certValidUntil: certValidBefore)
     }

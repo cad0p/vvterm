@@ -195,12 +195,15 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // ── Step 1: generate the ephemeral SSH + TLS keypairs ────────────
         // The SSH keypair is ed25519 (for the cert subject + the eventual
         // SSH connection). The TLS keypair is EC P-256 (for the gRPC mTLS
-        // dial in Phase 2). Both are ephemeral — discarded after the cert
-        // is issued (the cert carries the pub key; the private key is kept
-        // only for the SSH connection, which is out of scope for Phase 1).
+        // dial in Phase 2). The SSH private key is retained (stored in the
+        // key ring) so the SSHClient cert seam can feed it to libssh2 —
+        // the cert is issued against the public key, but the private key
+        // proves ownership at SSH connect time. The TLS private key is
+        // kept in-memory for Phase 2's gRPC dial.
         let sshPubKey: String
+        let sshPrivateKeyPEM: String
         do {
-            sshPubKey = SSHPubKey.generateEd25519AuthorizedKeys(comment: "vvterm-teleport")
+            (sshPubKey, sshPrivateKeyPEM) = SSHPubKey.generateEd25519KeyPair(comment: "vvterm-teleport")
             tlsKeyPair = try TLSKeyPairGen.generate()
         } catch {
             logger.error("keypair generation failed: \(error.localizedDescription, privacy: .public)")
@@ -357,17 +360,14 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         }
 
         // The cert's ValidBefore. The HTTP response doesn't include it
-        // directly — it's embedded in the PEM cert. Parsing it requires
-        // SecCertificateCreateWithData + SecCertificateCopyValues, which
-        // is non-trivial. For now, use a conservative default (1h from
-        // now) — the login coordinator (Phase 3) will overwrite this with
-        // the real expiry when it issues a fresh cert. The bootstrap cert
-        // is short-lived anyway (it's only used to authenticate Phase 2).
-        //
-        // TODO(phase-2): parse ValidBefore from the PEM cert so the
-        // readiness state correctly flips to needsLogin when the bootstrap
-        // cert expires before Phase 2 completes.
-        let certValidBefore = Date(timeIntervalSinceNow: 3600)  // 1h
+        // directly — it's embedded in the PEM cert. Parse it from the SSH
+        // cert blob (OpenSSH cert format: valid_before is a uint64 Unix
+        // timestamp appended after the signature). Fall back to a
+        // conservative 1h default if parsing fails — the login
+        // coordinator (Phase 3) overwrites this with the real expiry when
+        // it issues a fresh cert.
+        let certValidBefore = SSHCertExpiryParser.validBefore(pem: certPEM)
+            ?? Date(timeIntervalSinceNow: 3600)  // 1h fallback
 
         // The TLS private key for the gRPC mTLS dial. `tlsKeyPair` is set
         // in step 1 (we return early on failure), so it's non-nil here.
@@ -388,8 +388,20 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         lastBootstrapResult = result
 
         // Store the bootstrap cert in the key ring so readiness flips to
-        // `needsRegistration` (cert present, no SEP key yet).
+        // `needsRegistration` (cert present, no SEP key yet). Also store
+        // the ed25519 private key — the SSHClient cert seam fetches it via
+        // `liveEd25519PrivateKey` to feed libssh2 at connect time.
         keyRing.storeBootstrapCert(certPEM, validBefore: certValidBefore, for: cluster.id)
+        if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
+            do {
+                try keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
+            } catch {
+                logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
+                // Non-fatal — the cert is stored, so readiness is correct.
+                // The SSH connect will fail with teleportCertMissing, which
+                // surfaces the right UX (re-bootstrap).
+            }
+        }
 
         logger.info("bootstrap succeeded — cert \(certPEM.count) chars, tls_cert \(tlsCertPEM.count) chars")
         state = .success

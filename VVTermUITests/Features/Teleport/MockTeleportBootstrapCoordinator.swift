@@ -81,6 +81,12 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
 
     @Published private(set) var state: TeleportBootstrapState = .idle
 
+    /// The Phase-1 result, set when the scenario reaches `.success`. The
+    /// protocol exposes this so the bootstrap view can pass it to the
+    /// registration view without casting to the concrete type. `nil` for
+    /// all non-success scenarios.
+    private(set) var lastBootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
+
     private let scenario: Scenario
     private let delay: TimeInterval
 
@@ -108,6 +114,11 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
 
         switch scenario {
         case .happyPath, .alreadyLoggedIn:
+            // Build a minimal bootstrap result so the view's `onSuccess`
+            // callback has something to pass to the registration view.
+            // The values are placeholders — the registration mock ignores
+            // them (it only asserts state transitions).
+            lastBootstrapResult = makeMockBootstrapResult()
             state = .success
         case .userCancelsInSafari:
             state = .failed(.userCancelled)
@@ -117,6 +128,7 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
             state = .failed(.networkLost)
         case .suspended:
             // Second call (after retry) → success.
+            lastBootstrapResult = makeMockBootstrapResult()
             state = .success
         case .safariUnavailable:
             state = .failed(.safariUnavailable)
@@ -135,5 +147,28 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
         state = .idle
         // The caller (the bootstrap sheet) re-invokes begin() with the same
         // cluster. We don't capture it here to avoid stale state.
+    }
+
+    /// Build a minimal `BootstrapResult` for the success scenarios. The
+    /// registration mock ignores the contents (it only asserts state
+    /// transitions), but the type is required by the protocol + the view's
+    /// `onSuccess` callback.
+    private func makeMockBootstrapResult() -> TeleportBootstrapCoordinator.BootstrapResult {
+        // The BootstrapResult has a SecKey field. Create a dummy software
+        // EC P-256 key so the type is constructible without a real SEP.
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+        ]
+        var error: Unmanaged<CFError>?
+        let secKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error)!
+        return TeleportBootstrapCoordinator.BootstrapResult(
+            sshCertPEM: "mock-bootstrap-cert-pem",
+            tlsCertPEM: "mock-tls-cert-pem",
+            tlsKeyPairPrivateKey: secKey,
+            clusterName: "teleport.pcad.it",
+            clusterCAPEMs: [],
+            certValidBefore: Date().addingTimeInterval(3600)
+        )
     }
 }
