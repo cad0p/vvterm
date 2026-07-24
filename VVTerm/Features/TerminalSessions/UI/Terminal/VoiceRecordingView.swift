@@ -9,7 +9,7 @@ import SwiftUI
 
 struct VoiceRecordingView: View {
     @ObservedObject var audioService: AudioService
-    let onSend: (String) -> Void
+    let onStop: () -> Void
     let onCancel: () -> Void
     @Binding var isProcessing: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -51,7 +51,6 @@ struct VoiceRecordingView: View {
                     accessibilityLabel: String(localized: "Cancel voice input")
                 ) {
                     isProcessing = false
-                    audioService.cancelRecording()
                     onCancel()
                 }
 
@@ -86,15 +85,7 @@ struct VoiceRecordingView: View {
                     accessibilityLabel: String(localized: "Send voice input")
                 ) {
                     guard !isProcessing else { return }
-                    isProcessing = true
-                    Task {
-                        let text = await audioService.stopRecording()
-                        let output = text.isEmpty ? audioService.partialTranscription : text
-                        await MainActor.run {
-                            isProcessing = false
-                            onSend(output)
-                        }
-                    }
+                    onStop()
                 }
             }
         }

@@ -17,6 +17,9 @@ final class CloudKitSyncCoordinator {
     static let terminalAccessoryProfileDidResolveNotification = Notification.Name(
         "TerminalAccessoryProfileDidResolveFromCloudKit"
     )
+    static let statsPreferencesDidResolveNotification = Notification.Name(
+        "StatsPreferencesDidResolveFromCloudKit"
+    )
 
     private init() {}
 
@@ -62,6 +65,10 @@ final class CloudKitSyncCoordinator {
 
     func enqueueTerminalAccessoryProfileUpsert(_ profile: TerminalAccessoryProfile) {
         queue.enqueue(.terminalAccessoryProfileUpsert(profile))
+    }
+
+    func enqueueStatsPreferencesUpsert(_ preferences: StatsPreferences) {
+        queue.enqueue(.statsPreferencesUpsert(preferences))
     }
 
     func drainPendingMutations() async {
@@ -160,6 +167,17 @@ final class CloudKitSyncCoordinator {
                 )
             }
         case (.terminalAccessoryProfile, .delete):
+            break
+        case (.statsPreferences, .upsert):
+            if let preferences = mutation.statsPreferences {
+                let resolvedPreferences = try await cloudKit.syncStatsPreferences(preferences)
+                NotificationCenter.default.post(
+                    name: Self.statsPreferencesDidResolveNotification,
+                    object: self,
+                    userInfo: ["preferences": resolvedPreferences]
+                )
+            }
+        case (.statsPreferences, .delete):
             break
         }
     }

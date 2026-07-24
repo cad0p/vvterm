@@ -1,0 +1,215 @@
+# VVTerm PR CI — build + unit/UI tests on iOS Simulator (parallel jobs).
+#
+# Runs on every PR to main. Three jobs:
+#   1. build      — compiles the VVTerm app for iOS Simulator (no signing)
+#   2. unit-tests — runs VVTermTests (fast, pure logic)
+#   3. ui-tests   — runs VVTermUITests (slower, launches app on simulator)
+#
+# Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
+# feedback (unit tests finish in ~2 min) and isolates UI test failures/hangs
+# (which can be slow) from blocking unit test results.
+#
+# What this verifies (CI-able, no device):
+#   - the VVTerm app compiles for iOS Simulator
+#   - VVTermTests (unit) pass — including the Teleport domain/readiness/
+#     device-name/Codable tests
+#   - VVTermUITests pass — including the Teleport mock-coordinator test
+#     matrices (bootstrap/registration/login/readiness, Face ID outcomes)
+#   - XCTAttachment screenshots are uploaded as artifacts for visual review
+#
+# What this does NOT verify (device-only):
+#   - real Face ID prompts (simulator has no Secure Enclave)
+#   - real Teleport server connectivity
+#   - real Safari/ASWebAuthenticationSession ceremonies
+#
+# The mock coordinators + mock SEP signer cover the failure-matrix UX in
+# the simulator. The device smoke test (per the 2.2 prompt's runtime
+# verification checklist item 6) is the final confidence check.
+#
+# See:
+#   2026-07-23-strategy-b-session2.2-teleport-ui-design.md (CI strategy)
+
+name: VVTerm PR CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Cache SPM packages + DerivedData
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ${{ runner.temp }}/DerivedData
+          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode26.3-spm-
+
+      - name: Build for iOS Simulator
+        run: |
+          set -euo pipefail
+
+          # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
+          # is arm64-only. iPhone 16 doesn't exist as a concrete simulator on Xcode 26.3
+          # (only the abstract "OS:latest" entry, which fails to match). iPhone 17 exists
+          # as a concrete simulator; arch=arm64 selects the arm64 slice (not x86_64).
+          xcodebuild build \
+            -scheme VVTerm \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/build.log"
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+
+  unit-tests:
+    runs-on: macos-26
+    timeout-minutes: 20
+    needs: build
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Cache SPM packages + DerivedData
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ${{ runner.temp }}/DerivedData
+          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode26.3-spm-
+
+      - name: Run unit tests (VVTermTests)
+        run: |
+          set -euo pipefail
+
+          # Run ONLY the VVTermTests target (unit tests) — fast, pure logic.
+          # The VVTermUnitTests scheme is scoped to VVTermTests only.
+          xcodebuild test \
+            -scheme VVTermUnitTests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -parallel-testing-enabled \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log"
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
+            ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+
+  ui-tests:
+    runs-on: macos-26
+    timeout-minutes: 30
+    needs: build
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Cache SPM packages + DerivedData
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ${{ runner.temp }}/DerivedData
+          key: ${{ runner.os }}-xcode26.3-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode26.3-spm-
+
+      - name: Run UI tests (VVTermUITests)
+        run: |
+          set -euo pipefail
+
+          # Run ONLY the VVTermUITests target — slower, launches the app on the simulator.
+          # Uses the VVTerm scheme (which includes both test targets) but filters to VVTermUITests
+          # via -only-testing.
+          xcodebuild test \
+            -scheme VVTerm \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -only-testing:VVTermUITests \
+            -parallel-testing-enabled \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log"
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-results
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
+            ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+
+      - name: Upload XCTAttachment screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-screenshots
+          path: |
+            ${{ runner.temp }}/DerivedData/Logs/Test/Attachments
+          if-no-files-found: ignore

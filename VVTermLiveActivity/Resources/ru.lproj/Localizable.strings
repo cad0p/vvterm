@@ -3,3 +3,7 @@
 "active" = "активно";
 "1 active session" = "1 активная сессия";
 "%lld active sessions" = "%lld активных сессий";
+
+/* Lock Screen widget */
+"Open VVTerm" = "Открыть VVTerm";
+"Open VVTerm from the Lock Screen." = "Открывайте VVTerm с экрана блокировки.";

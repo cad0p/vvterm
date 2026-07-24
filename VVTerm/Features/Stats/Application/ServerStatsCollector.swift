@@ -10,6 +10,11 @@ final class ServerStatsCollector: ObservableObject {
     @Published var stats = ServerStats()
     @Published var cpuHistory: [StatsPoint] = []
     @Published var memoryHistory: [StatsPoint] = []
+    @Published var networkRxHistory: [StatsPoint] = []
+    @Published var networkTxHistory: [StatsPoint] = []
+    @Published var gpuUtilizationHistoryByDeviceID: [String: [StatsPoint]] = [:]
+    @Published var dockerCPUHistory: [StatsPoint] = []
+    @Published var dockerMemoryHistory: [StatsPoint] = []
     @Published var isCollecting = false
     @Published var connectionError: String?
 
@@ -23,13 +28,24 @@ final class ServerStatsCollector: ObservableObject {
     // Platform detection and collector
     private var remotePlatform: RemotePlatform = .unknown
     private var platformCollector: PlatformStatsCollector?
+    private let dockerCollector = DockerStatsCollector()
     private let context = StatsCollectionContext()
+    private var hardwareProfile: HardwareProfile = .empty
+    private var isDockerCollectionEnabled = false
 
     // MARK: - Collection Control
 
-    func startCollecting(for server: Server, using sharedClient: SSHClient? = nil) async {
-        guard !isCollecting else { return }
+    func startCollecting(
+        for server: Server,
+        using sharedClient: SSHClient? = nil,
+        collectDocker: Bool = false
+    ) async {
+        guard !isCollecting else {
+            isDockerCollectionEnabled = collectDocker
+            return
+        }
         isCollecting = true
+        isDockerCollectionEnabled = collectDocker
         connectionError = nil
         resetCollectionState()
 
@@ -102,6 +118,162 @@ final class ServerStatsCollector: ObservableObject {
         clearConnectionState()
     }
 
+    func terminateProcess(_ process: ProcessInfo) async throws {
+        guard process.pid > 1 else {
+            throw ProcessControlError.protectedProcess
+        }
+
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+
+        let command: String
+        switch remotePlatform {
+        case .windows:
+            command = "taskkill /PID \(process.pid) /T /F"
+        case .linux, .darwin, .freebsd, .openbsd, .netbsd, .unknown:
+            command = "kill -TERM \(process.pid)"
+        }
+
+        _ = try await client.execute(command, timeout: .seconds(5))
+        await collectStats(client: client)
+    }
+
+    func loadProcesses() async throws -> [ProcessInfo] {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+        guard let platformCollector else {
+            return stats.topProcesses
+        }
+
+        let processes = try await platformCollector.collectProcesses(client: client, context: context)
+        return processes.isEmpty ? stats.topProcesses : processes
+    }
+
+    func loadDockerStats() async throws -> DockerStats {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+        let dockerStats = await dockerCollector.collect(
+            client: client,
+            platform: remotePlatform,
+            limit: nil,
+            fallback: stats.docker
+        )
+        context.updateDockerStats(dockerStats, timestamp: dockerStats.timestamp)
+        stats.docker = dockerStats
+        return dockerStats
+    }
+
+    /// Loads storage health only when the user opens a volume's detail view.
+    /// The selected volume must still belong to the latest Stats snapshot so a
+    /// stale sheet cannot probe an unrelated raw locator after a mount changes.
+    func loadStorageHealth(for volume: VolumeInfo) async throws -> StorageHealthResult {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+        guard let currentVolume = VolumeVisibilityPolicy.normalized(stats.volumes)
+            .first(where: { $0.identity == volume.identity }) else {
+            return .unavailable(.unmapped)
+        }
+
+        let platform: RemotePlatform
+        let collector: PlatformStatsCollector
+        if remotePlatform == .unknown {
+            platform = await client.remotePlatform()
+            guard platform != .unknown else { return .unavailable(.unsupported) }
+            let detectedCollector = platform.createCollector()
+            remotePlatform = platform
+            platformCollector = detectedCollector
+            collector = detectedCollector
+        } else {
+            platform = remotePlatform
+            guard let platformCollector else { return .unavailable(.unsupported) }
+            collector = platformCollector
+        }
+
+        let resolution = try await StorageHealthTargetResolver.resolve(
+            client: client,
+            platform: platform,
+            volume: currentVolume
+        )
+        switch resolution {
+        case .topology(let topology):
+            var members: [StorageHealthMemberReport] = []
+            members.reserveCapacity(topology.members.count)
+            for (ordinal, member) in topology.members.enumerated() {
+                try Task.checkCancellation()
+                let result: StorageDeviceHealthResult
+                let memberFindings: [StorageHealthFinding]
+                switch member {
+                case .target(_, let target, let topologyFindings):
+                    result = try await collector.collectStorageHealth(client: client, target: target)
+                    memberFindings = topologyFindings
+                case .unresolved(_, _, let reason):
+                    result = .unavailable(reason)
+                    memberFindings = []
+                }
+                members.append(StorageHealthMemberReport(
+                    id: member.id,
+                    role: member.role,
+                    ordinal: ordinal + 1,
+                    result: result,
+                    findings: memberFindings
+                ))
+            }
+            if topology.kind == .physicalDevice,
+               members.count == 1,
+               case .unavailable(let reason) = members[0].result {
+                return .unavailable(reason)
+            }
+
+            let hasUnavailableMember = members.contains { member in
+                if case .unavailable = member.result { return true }
+                return false
+            }
+            let coverage: StorageHealthCoverage = topology.coverage == .partial || hasUnavailableMember
+                ? .partial
+                : .complete
+            var findings = topology.findings
+            if coverage == .partial,
+               !findings.contains(where: { $0.kind == .partialCoverage }) {
+                findings.append(StorageHealthFinding(
+                    kind: .partialCoverage,
+                    severity: .information,
+                    source: topology.kind == .zfs ? .zfs : .btrfs
+                ))
+            }
+            return .report(StorageHealthVolumeReport(
+                topology: topology.kind,
+                name: topology.name,
+                coverage: coverage,
+                findings: findings,
+                members: members
+            ))
+        case .unavailable(let reason):
+            return .unavailable(reason)
+        }
+    }
+
+    func performDockerAction(_ action: DockerContainerAction, on container: DockerContainer) async throws -> DockerStats {
+        guard let client = sshClient else {
+            throw ProcessControlError.notConnected
+        }
+
+        try await dockerCollector.perform(action, container: container, client: client, platform: remotePlatform)
+        try? await Task.sleep(for: .milliseconds(500))
+        let dockerStats = await dockerCollector.collect(
+            client: client,
+            platform: remotePlatform,
+            limit: nil,
+            fallback: stats.docker
+        )
+        context.updateDockerStats(dockerStats, timestamp: dockerStats.timestamp)
+        stats.docker = dockerStats
+        return dockerStats
+    }
+
     // MARK: - Stats Collection
 
     private func collectStats(client: SSHClient) async {
@@ -113,10 +285,11 @@ final class ServerStatsCollector: ObservableObject {
 
                 logger.info("Detected remote platform: \(self.remotePlatform.rawValue)")
 
-                // Get initial system info
-                let systemInfo = try await platformCollector?.getSystemInfo(client: client)
+                // Get initial hardware profile. Individual platform collectors return
+                // partial profiles when optional probes are unavailable.
+                let profile = await self.collectInitialProfile(client: client)
                 await MainActor.run {
-                    self.applySystemInfo(systemInfo)
+                    self.applyProfile(profile)
                 }
             }
 
@@ -127,9 +300,20 @@ final class ServerStatsCollector: ObservableObject {
 
             // Preserve system info
             let existingStats = await MainActor.run { self.stats }
+            let collectedCpuCores = newStats.cpuCores
             newStats.hostname = existingStats.hostname
             newStats.osInfo = existingStats.osInfo
-            newStats.cpuCores = existingStats.cpuCores
+            newStats.cpuCores = Self.resolvedCPUCoreCount(
+                existing: existingStats.cpuCores,
+                collected: collectedCpuCores
+            )
+            newStats.hardware = existingStats.hardware
+            if newStats.gpuSamples.isEmpty, !existingStats.gpuSamples.isEmpty {
+                newStats.gpuSamples = existingStats.gpuSamples
+            }
+            if isDockerCollectionEnabled {
+                newStats.docker = await self.collectDockerStatsIfNeeded(client: client, timestamp: newStats.timestamp)
+            }
 
             // Update on main thread
             await MainActor.run {
@@ -148,6 +332,40 @@ final class ServerStatsCollector: ObservableObject {
         context.reset()
         remotePlatform = .unknown
         platformCollector = nil
+        hardwareProfile = .empty
+        cpuHistory = []
+        memoryHistory = []
+        networkRxHistory = []
+        networkTxHistory = []
+        gpuUtilizationHistoryByDeviceID = [:]
+        dockerCPUHistory = []
+        dockerMemoryHistory = []
+    }
+
+    private func collectInitialProfile(client: SSHClient) async -> HardwareProfile? {
+        guard let platformCollector else { return nil }
+
+        if let profile = try? await platformCollector.collectProfile(client: client) {
+            return profile
+        }
+
+        if let systemInfo = try? await platformCollector.getSystemInfo(client: client) {
+            return HardwareProfile(
+                hostname: systemInfo.hostname,
+                osInfo: systemInfo.osInfo,
+                architecture: "",
+                kernelVersion: "",
+                cpuModel: "",
+                cpuVendor: "",
+                cpuCores: systemInfo.cpuCores,
+                cpuThreads: systemInfo.cpuCores,
+                memoryTotal: 0,
+                gpus: [],
+                collectedAt: Date()
+            )
+        }
+
+        return nil
     }
 
     private func configureConnectionState(client: SSHClient, ownsClient: Bool) {
@@ -166,19 +384,87 @@ final class ServerStatsCollector: ObservableObject {
         clearConnectionState()
     }
 
-    private func applySystemInfo(_ systemInfo: (hostname: String, osInfo: String, cpuCores: Int)?) {
-        stats.hostname = systemInfo?.hostname ?? ""
-        stats.osInfo = systemInfo?.osInfo ?? ""
-        stats.cpuCores = systemInfo?.cpuCores ?? 1
+    private func applyProfile(_ profile: HardwareProfile?) {
+        hardwareProfile = profile ?? .empty
+        stats.hardware = hardwareProfile
+        stats.hostname = hardwareProfile.hostname
+        stats.osInfo = hardwareProfile.osInfo
+        let profileCPUCount = hardwareProfile.cpuThreads > 0 ? hardwareProfile.cpuThreads : hardwareProfile.cpuCores
+        if profileCPUCount > 0 {
+            stats.cpuCores = profileCPUCount
+        }
+        if stats.memoryTotal == 0 {
+            stats.memoryTotal = hardwareProfile.memoryTotal
+        }
     }
 
     private func applyCollectedStats(_ newStats: ServerStats) {
         stats = newStats
 
         cpuHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.cpuUsage))
-        memoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.memoryUsed)))
+        memoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.memoryPercent))
+        networkRxHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.networkRxSpeed)))
+        networkTxHistory.append(StatsPoint(timestamp: newStats.timestamp, value: Double(newStats.networkTxSpeed)))
+        dockerCPUHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.docker.aggregateCPUPercent))
+        dockerMemoryHistory.append(StatsPoint(timestamp: newStats.timestamp, value: newStats.docker.memoryPercent))
+        appendGPUHistory(from: newStats)
 
         if cpuHistory.count > 60 { cpuHistory.removeFirst() }
         if memoryHistory.count > 60 { memoryHistory.removeFirst() }
+        if networkRxHistory.count > 60 { networkRxHistory.removeFirst() }
+        if networkTxHistory.count > 60 { networkTxHistory.removeFirst() }
+        if dockerCPUHistory.count > 60 { dockerCPUHistory.removeFirst() }
+        if dockerMemoryHistory.count > 60 { dockerMemoryHistory.removeFirst() }
+    }
+
+    private func collectDockerStatsIfNeeded(client: SSHClient, timestamp: Date) async -> DockerStats {
+        guard context.shouldCollectDocker(now: timestamp) else {
+            return context.getDockerStats()
+        }
+
+        let dockerStats = await dockerCollector.collect(
+            client: client,
+            platform: remotePlatform,
+            limit: DockerStatsCollector.periodicContainerLimit,
+            fallback: context.getDockerStats()
+        )
+        context.updateDockerStats(dockerStats, timestamp: timestamp)
+        return dockerStats
+    }
+
+    private func appendGPUHistory(from newStats: ServerStats) {
+        for sample in newStats.gpuSamples {
+            guard let utilization = sample.utilizationPercent else { continue }
+            var history = gpuUtilizationHistoryByDeviceID[sample.deviceID] ?? []
+            history.append(StatsPoint(timestamp: newStats.timestamp, value: utilization))
+            if history.count > 60 {
+                history.removeFirst(history.count - 60)
+            }
+            gpuUtilizationHistoryByDeviceID[sample.deviceID] = history
+        }
+    }
+
+    nonisolated static func resolvedCPUCoreCount(existing: Int, collected: Int) -> Int {
+        if existing > 0, collected > 0 {
+            return max(existing, collected)
+        }
+        if existing > 0 {
+            return existing
+        }
+        return max(collected, 0)
+    }
+}
+
+private enum ProcessControlError: LocalizedError {
+    case notConnected
+    case protectedProcess
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            return String(localized: "Stats is not connected to the server.")
+        case .protectedProcess:
+            return String(localized: "This process cannot be killed from Stats.")
+        }
     }
 }

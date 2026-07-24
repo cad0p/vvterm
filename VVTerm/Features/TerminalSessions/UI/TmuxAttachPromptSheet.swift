@@ -4,8 +4,6 @@ struct TmuxAttachPromptSheet: View {
     let prompt: TmuxAttachPrompt
     let onConfirm: (TmuxAttachSelection) -> Void
 
-    @Environment(\.dismiss) private var dismiss
-
     private var hasSessions: Bool {
         !prompt.existingSessions.isEmpty
     }
@@ -46,7 +44,7 @@ struct TmuxAttachPromptSheet: View {
     #if os(macOS)
     private var macHeader: some View {
         DialogSheetHeader(title: "Choose tmux session") {
-            dismiss()
+            confirm(.skipTmux)
         }
     }
     #endif
@@ -212,12 +210,15 @@ struct TmuxAttachPromptSheet: View {
                     .frame(minHeight: 52)
                     .font(.headline)
                     .foregroundStyle(.white)
+                    .contentShape(Rectangle())
                     .background(
                         Capsule(style: .continuous)
                             .fill(Color.accentColor)
                     )
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("tmuxNewSessionButton")
 
             Button {
                 confirm(.skipTmux)
@@ -227,8 +228,11 @@ struct TmuxAttachPromptSheet: View {
                     .frame(minHeight: 52)
                     .font(.headline)
                     .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("tmuxSkipButton")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -237,7 +241,7 @@ struct TmuxAttachPromptSheet: View {
 
     private var closeButton: some View {
         Button {
-            dismiss()
+            confirm(.skipTmux)
         } label: {
             #if os(macOS)
             Image(systemName: "xmark")
@@ -283,6 +287,5 @@ struct TmuxAttachPromptSheet: View {
 
     private func confirm(_ selection: TmuxAttachSelection) {
         onConfirm(selection)
-        dismiss()
     }
 }
