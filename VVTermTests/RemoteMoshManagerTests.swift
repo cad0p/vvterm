@@ -338,20 +338,8 @@ struct RemoteMoshManagerTests {
         )
         let cleanup = Task { await lease.cleanup() }
 
-        var cleanupIsPending = false
-        for _ in 0..<1_000 {
-            if await lease.cleanupIsPendingForTesting() {
-                cleanupIsPending = true
-                break
-            }
-            await Task.yield()
-        }
-        guard cleanupIsPending else {
-            await lease.bootstrapFailed()
-            await cleanup.value
-            Issue.record("Lease cleanup did not wait for bootstrap resolution")
-            return
-        }
+        // Deterministically wait for cleanup to be requested (no Task.yield polling).
+        await lease.waitForCleanupPendingForTesting()
 
         await lease.activate(serverPID: 12_345)
         await cleanup.value
@@ -380,20 +368,8 @@ struct RemoteMoshManagerTests {
         release.continuation.yield()
         release.continuation.finish()
 
-        var cleanupIsPending = false
-        for _ in 0..<1_000 {
-            if await lease.cleanupIsPendingForTesting() {
-                cleanupIsPending = true
-                break
-            }
-            await Task.yield()
-        }
-        guard cleanupIsPending else {
-            await lease.bootstrapFailed()
-            _ = await cleanup.value
-            Issue.record("Disconnect cleanup did not wait for bootstrap resolution")
-            return
-        }
+        // Deterministically wait for cleanup to be requested (no Task.yield polling).
+        await lease.waitForCleanupPendingForTesting()
 
         await lease.activate(serverPID: 12_345)
         let result = await cleanup.value

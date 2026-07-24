@@ -188,17 +188,29 @@ struct AnalyticsAdmissionControllerTests {
 private actor BlockingAnalyticsDelivery {
     private var callCount = 0
     private var continuation: CheckedContinuation<Void, Never>?
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
 
     func send(_ event: TrackEventRequest) async {
         callCount += 1
         guard callCount == 1 else { return }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
+            resumeBlockedWaiters()
         }
     }
 
     func isBlocked() -> Bool {
         continuation != nil
+    }
+
+    /// Suspends until the delivery has reached its blocking point (the first
+    /// `send` is parked on its continuation). Replaces `Task.yield()` polling
+    /// in tests, which is unreliable under Swift 6.2's executor changes.
+    func waitForBlocked() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { continuation in
+            blockedWaiters.append(continuation)
+        }
     }
 
     func release() {
@@ -208,6 +220,12 @@ private actor BlockingAnalyticsDelivery {
 
     func calls() -> Int {
         callCount
+    }
+
+    private func resumeBlockedWaiters() {
+        let waiters = blockedWaiters
+        blockedWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
     }
 }
 
@@ -222,9 +240,9 @@ struct AnalyticsDeliveryQueueTests {
         let event = TrackEventRequest(source: .website("test"), name: "test")
 
         let first = Task { await queue.enqueue(event) }
-        for _ in 0..<100 where !(await delivery.isBlocked()) {
-            await Task.yield()
-        }
+        // Deterministically wait for the first delivery to reach its blocking
+        // point (no Task.yield polling).
+        await delivery.waitForBlocked()
         #expect(await delivery.isBlocked())
         #expect(await queue.enqueue(event))
         #expect(await queue.enqueue(event))
