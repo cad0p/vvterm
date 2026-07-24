@@ -9,9 +9,13 @@ struct RemoteFilePermissionTests {
         draft.set(true, capability: .execute, for: .owner)
         draft.set(false, capability: .read, for: .group)
 
-        #expect(draft.accessBits == 0o740)
-        #expect(draft.octalSummary == "740")
-        #expect(draft.symbolicSummary == "rwxr-----")
+        // 0o640 (rw-r-----) → set owner-x → 0o740 (rwxr-----) → clear group-r → 0o700 (rwx------).
+        // The earlier expected value (0o740 / "rwxr-----") contradicted the
+        // `set(false, .read, .group)` operation: it left group-read set, which
+        // is exactly what clearing group-read must not do.
+        #expect(draft.accessBits == 0o700)
+        #expect(draft.octalSummary == "700")
+        #expect(draft.symbolicSummary == "rwx------")
     }
 
     @Test
