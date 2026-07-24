@@ -159,11 +159,11 @@ final class StatsCardsLayoutUITests: XCTestCase {
     }
 
     private var container: XCUIElement {
-        app.descendants(matching: .any)["vvterm.stats.layout.container"]
+        app.descendants(matching: .any)["vvterm.stats.layout.container"].firstMatch
     }
 
     private func card(_ identifier: String) -> XCUIElement {
-        app.descendants(matching: .any)["vvterm.stats.card.\(identifier)"]
+        app.descendants(matching: .any)["vvterm.stats.card.\(identifier)"].firstMatch
     }
 
     private struct LayoutConfiguration {
