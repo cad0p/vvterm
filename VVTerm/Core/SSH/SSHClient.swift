@@ -1459,7 +1459,7 @@ actor SSHSession {
         try Task.checkCancellation()
         let authenticationToken = startupTrace?.begin(.authentication)
         do {
-            try authenticate()
+            try await authenticate()
             if let authenticationToken { startupTrace?.end(authenticationToken) }
         } catch {
             if let authenticationToken { startupTrace?.end(authenticationToken, outcome: "failed") }
@@ -1473,7 +1473,7 @@ actor SSHSession {
         logger.info("SSH session established")
     }
 
-    private func authenticate() throws {
+    private func authenticate() async throws {
         guard let session = libssh2Session else {
             throw SSHError.notConnected
         }
@@ -1506,6 +1506,49 @@ actor SSHSession {
         }
 
         switch config.authMethod {
+        case .faceIDTeleport:
+            // Teleport cert seam — feed the Teleport-issued SSH cert + the
+            // ed25519 private key to libssh2. The cert (authorized_keys
+            // format: `ssh-ed25519-cert-v01@openssh.com AAAA… comment`) goes
+            // in as `publicKeyData`; the ed25519 private key (OpenSSH PEM)
+            // goes in as `privateKeyData`. No passphrase (Teleport certs
+            // don't have one). Same `libssh2_userauth_publickey_frommemory`
+            // call the `.sshKey` case uses, just with different key material.
+            //
+            // The cert + key are fetched live from `TeleportKeyRing` so a
+            // refresh (Phase 3 re-auth) is picked up without rebuilding the
+            // config. If no live cert (expired/missing) or no private key,
+            // throw `teleportCertMissing` so the UI layer can trigger the
+            // `TeleportLoginCoordinator` flow.
+            let clusterId = config.credentials.serverId
+            let keyRing = TeleportKeyRing.shared
+            guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
+                  let certData = certPEM.data(using: .utf8),
+                  let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {
+                logger.error("No live Teleport cert or ed25519 key for cluster \(clusterId.uuidString, privacy: .public)")
+                throw SSHError.teleportCertMissing
+            }
+            logger.info("Attempting Teleport cert auth for user: \(username)")
+            authResult = certData.withUnsafeBytes { certBuffer -> Int32 in
+                guard let certBase = certBuffer.bindMemory(to: CChar.self).baseAddress else {
+                    return LIBSSH2_ERROR_ALLOC
+                }
+                return keyData.withUnsafeBytes { keyBuffer -> Int32 in
+                    guard let keyBase = keyBuffer.bindMemory(to: CChar.self).baseAddress else {
+                        return LIBSSH2_ERROR_ALLOC
+                    }
+                    return libssh2_userauth_publickey_frommemory(
+                        session,
+                        username,
+                        Int(username.utf8.count),
+                        certBase,
+                        Int(certData.count),
+                        keyBase,
+                        Int(keyData.count),
+                        nil
+                    )
+                }
+            }
         case .password:
             guard let password = config.credentials.password else {
                 logger.error("No password provided")
@@ -3506,6 +3549,7 @@ enum SSHError: LocalizedError {
     case shellRequestFailed
     case hostKeyVerificationFailed
     case socketError(String)
+    case teleportCertMissing
     case unknown(String)
 
     var allowsAutomaticReconnectRetry: Bool {
@@ -3530,6 +3574,7 @@ enum SSHError: LocalizedError {
              .moshBootstrapFailed,
              .moshInvalidEndpoint,
              .hostKeyVerificationFailed,
+             .teleportCertMissing,
              .unknown:
             return false
         }
@@ -3568,6 +3613,8 @@ enum SSHError: LocalizedError {
         case .hostKeyVerificationFailed:
             return "Host key verification failed. The saved SSH host fingerprint does not match the server's current key."
         case .socketError(let msg): return "Socket error: \(msg)"
+        case .teleportCertMissing:
+            return String(localized: "Teleport certificate is missing or expired. Sign in with Face ID to refresh it.")
         case .unknown(let msg): return "Unknown error: \(msg)"
         }
     }

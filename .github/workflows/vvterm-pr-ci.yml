@@ -156,6 +156,7 @@ jobs:
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/build.log"
 
       - name: Archive build products
@@ -259,6 +260,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/test.log"
 
       - name: Upload test results on failure
@@ -360,6 +362,7 @@ jobs:
             -only-testing:${{ matrix.shard.only-testing }} \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             | tee "$RUNNER_TEMP/test.log"
 
       - name: Upload test results on failure

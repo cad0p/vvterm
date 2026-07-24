@@ -92,6 +92,9 @@ struct ServerFormCredentialBuilder {
         }
 
         switch authMethod {
+        case .faceIDTeleport:
+            // No password/key credentials — Teleport uses SEP key + cert (TeleportKeyRing).
+            break
         case .password:
             credentials.password = password
         case .sshKey:
@@ -157,6 +160,10 @@ struct ServerFormSheet: View {
     @State private var showingServerLimitAlert = false
     @State private var showingCreateWorkspace = false
     @State private var showingAddKeySheet = false
+    @State private var showingTeleportBootstrap = false
+    @State private var showingTeleportRegistration = false
+    @State private var showingTeleportLogin = false
+    @State private var teleportBootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
     @State var isSaving = false
     @State private var isLoadingCredentials = false
     @State private var error: String?
@@ -364,6 +371,9 @@ struct ServerFormSheet: View {
 
                 if server.connectionMode != .tailscale {
                     switch server.authMethod {
+                    case .faceIDTeleport:
+                        // No password/key to load — Teleport creds live in TeleportKeyRing.
+                        break
                     case .password:
                         if let pwd = credentials.password {
                             password = pwd
@@ -444,6 +454,51 @@ struct ServerFormSheet: View {
                 }
                 .adaptiveSoftScrollEdges()
             }
+            .sheet(isPresented: $showingTeleportBootstrap) {
+                TeleportBootstrapView(
+                    coordinator: makeBootstrapCoordinator(),
+                    cluster: teleportCluster,
+                    onSuccess: { result in
+                        teleportBootstrapResult = result
+                        showingTeleportBootstrap = false
+                        showingTeleportRegistration = true
+                    },
+                    onCancel: {
+                        showingTeleportBootstrap = false
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            }
+            .sheet(isPresented: $showingTeleportRegistration) {
+                if let bootstrapResult = teleportBootstrapResult {
+                    TeleportRegistrationView(
+                        coordinator: makeRegistrationCoordinator(),
+                        cluster: teleportCluster,
+                        bootstrapResult: bootstrapResult,
+                        onSuccess: {
+                            showingTeleportRegistration = false
+                            showingTeleportLogin = true
+                        },
+                        onCancel: {
+                            showingTeleportRegistration = false
+                        }
+                    )
+                    .adaptiveSoftScrollEdges()
+                }
+            }
+            .sheet(isPresented: $showingTeleportLogin) {
+                TeleportLoginView(
+                    coordinator: makeLoginCoordinator(),
+                    cluster: teleportCluster,
+                    onSuccess: {
+                        showingTeleportLogin = false
+                    },
+                    onCancel: {
+                        showingTeleportLogin = false
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            }
             .limitReachedAlert(.servers, isPresented: $showingServerLimitAlert)
             .onAppear {
                 storedKeys = KeychainManager.shared.getStoredSSHKeys()
@@ -455,7 +510,10 @@ struct ServerFormSheet: View {
             .onChange(of: eternalTerminalPort) { _ in resetConnectionTestState() }
             .onChange(of: username) { _ in resetConnectionTestState() }
             .onChange(of: transportSelection) { _ in resetConnectionTestState() }
-            .onChange(of: selectedAuthMethod) { _ in resetConnectionTestState() }
+            .onChange(of: selectedAuthMethod) { newValue in
+                defaultPortForTeleport(newValue)
+                resetConnectionTestState()
+            }
             .onChange(of: selectedWorkspaceId) { _ in
                 reconcileAssignmentWorkspace()
                 resetConnectionTestState()
@@ -697,6 +755,8 @@ struct ServerFormSheet: View {
                 }
 
                 switch selectedAuthMethod {
+                case .faceIDTeleport:
+                    teleportSetupPanel
                 case .password:
                     SecureField("Password", text: $password, prompt: Text(String(localized: "Required")))
                         #if os(iOS)
@@ -879,6 +939,86 @@ struct ServerFormSheet: View {
         }
     }
 
+    // MARK: - Teleport Setup Panel
+
+    /// The Teleport setup panel (design doc mockup A). Shown when
+    /// `selectedAuthMethod == .faceIDTeleport` in place of the password/key
+    /// input area. Chains through the bootstrap → registration → login
+    /// sheets based on the cluster's derived readiness state.
+    @ViewBuilder
+    private var teleportSetupPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("\u{1F6E1}\u{FE0F}")
+                    .font(.title3)
+                Text(String(localized: "Teleport Cluster"))
+                    .font(.headline)
+            }
+
+            Text(String(localized: "Sign in to Teleport once in Safari to authorize this device, then approve once more in Safari to register the MFA key. Face ID saves the key to this device's Secure Enclave — it never leaves. After that, opening this server is seamless Face ID; re-authentication is only needed when the cert expires, and that's native Face ID too."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            teleportSetupButton
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// The setup button / status. Reflects the cluster's derived readiness:
+    ///   - `needsBootstrap` → "Begin setup in Safari"
+    ///   - `needsRegistration` → "Continue setup"
+    ///   - `needsLogin` → "Sign in with Face ID"
+    ///   - `ready` → "Setup complete" (success state)
+    @ViewBuilder
+    private var teleportSetupButton: some View {
+        if let server = server {
+            let readiness = TeleportKeyRing.shared.readiness(for: server.id)
+            switch readiness {
+            case .ready:
+                Label {
+                    Text(String(localized: "Setup complete"))
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                .font(.callout)
+            case .needsLogin:
+                Button {
+                    showingTeleportLogin = true
+                } label: {
+                    Label(String(localized: "Sign in with Face ID"), systemImage: "faceid")
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue)
+            case .needsRegistration:
+                Button {
+                    showingTeleportRegistration = true
+                } label: {
+                    Label(String(localized: "Continue setup"), systemImage: "lock.rotation")
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+            case .needsBootstrap:
+                Button {
+                    showingTeleportBootstrap = true
+                } label: {
+                    Label(String(localized: "Begin setup in Safari"), systemImage: "safari")
+                }
+                .buttonStyle(.bordered)
+                .tint(.accentColor)
+            }
+        } else {
+            // For a new server, the server ID isn't known until save. The
+            // Teleport setup stores creds against the server ID, so the user
+            // must save the server first, then run setup from the row or
+            // by re-opening the form.
+            Text(String(localized: "Save this server, then tap it to begin Teleport setup."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func loadStoredKey(_ entry: SSHKeyEntry) {
         do {
             if let keyData = try KeychainManager.shared.getStoredSSHKeyData(for: entry.id) {
@@ -954,6 +1094,9 @@ struct ServerFormSheet: View {
         }
 
         switch selectedAuthMethod {
+        case .faceIDTeleport:
+            // Readiness is derived from keychain state, not form fields.
+            return true
         case .password:
             return !password.isEmpty
         case .sshKey:
@@ -1045,6 +1188,64 @@ struct ServerFormSheet: View {
     private func normalizedCloudflareOverride(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - Teleport Helpers
+
+    /// The `TeleportCluster` derived from the form's host/port/username fields.
+    /// Used by the bootstrap/registration/login sheets.
+    private var teleportCluster: TeleportCluster {
+        TeleportCluster(
+            id: server?.id ?? UUID(),
+            host: host,
+            port: Int(port) ?? 443,
+            username: effectiveUsername
+        )
+    }
+
+    /// Default the port to 443 when `.faceIDTeleport` is selected and the
+    /// port is empty or still 22 (the SSH default). User-overridable — some
+    /// clusters use 3023 or a custom port.
+    private func defaultPortForTeleport(_ authMethod: AuthMethod) {
+        guard authMethod == .faceIDTeleport else { return }
+        let trimmed = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "22" {
+            port = "443"
+        }
+    }
+
+    /// Construct the bootstrap coordinator with production dependencies.
+    /// The coordinators are created fresh per sheet presentation so state
+    /// doesn't leak between attempts.
+    @MainActor
+    private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
+        TeleportBootstrapCoordinator(
+            httpClient: LiveTeleportHTTPClient(),
+            keyRing: TeleportKeyRing.shared,
+            safariPresenter: WebAuthenticationSessionPresenter.shared,
+            signer: SecureEnclaveSigner()
+        )
+    }
+
+    @MainActor
+    private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
+        TeleportRegistrationCoordinator(
+            grpcClient: LiveTeleportGRPCClient(),
+            browserMFACeremony: LiveBrowserMFACeremony(),
+            keyRing: TeleportKeyRing.shared,
+            signer: SecureEnclaveSigner(),
+            webAuthnBuilder: TeleportWebAuthnBuilder()
+        )
+    }
+
+    @MainActor
+    private func makeLoginCoordinator() -> TeleportLoginCoordinator {
+        TeleportLoginCoordinator(
+            httpClient: LiveTeleportHTTPClient(),
+            keyRing: TeleportKeyRing.shared,
+            signer: SecureEnclaveSigner(),
+            webAuthnBuilder: TeleportWebAuthnBuilder()
+        )
     }
 
     private func applyPrefill(_ prefill: ServerFormPrefill) {
@@ -1193,6 +1394,9 @@ struct ServerFormSheet: View {
                     let publicKeyData = sshPublicKey.isEmpty ? nil : sshPublicKey.data(using: .utf8)
                     if transportSelection != .tailscale {
                         switch selectedAuthMethod {
+                        case .faceIDTeleport:
+                            // No keychain creds to store — Teleport creds live in TeleportKeyRing.
+                            break
                         case .password:
                             if !password.isEmpty {
                                 try KeychainManager.shared.storePassword(for: newServer.id, password: password)

@@ -28,6 +28,8 @@ struct ServerSidebarView: View {
     @State private var serverToEdit: Server?
     @State private var serverToMove: Server?
     @State private var lockedServerAlert: Server?
+    @State private var teleportSetupServer: Server?
+    @State private var teleportSetupReadiness: TeleportDeviceReadiness?
     @State private var addServerPrefill: ServerFormPrefill?
     @State private var queuedDiscoveryPrefill: ServerFormPrefill?
 
@@ -169,7 +171,11 @@ struct ServerSidebarView: View {
                                 onEdit: { serverToEdit = $0 },
                                 onMove: { serverToMove = $0 },
                                 onConnect: { connectToServer($0) },
-                                onLockedTap: { lockedServerAlert = server }
+                                onLockedTap: { lockedServerAlert = server },
+                                onTeleportSetup: { srv, readiness in
+                                    teleportSetupServer = srv
+                                    teleportSetupReadiness = readiness
+                                }
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -263,6 +269,14 @@ struct ServerSidebarView: View {
                 maxHeight: 520
             )
             #endif
+        }
+        .sheet(isPresented: Binding(
+            get: { teleportSetupServer != nil },
+            set: { if !$0 { teleportSetupServer = nil; teleportSetupReadiness = nil } }
+        )) {
+            if let server = teleportSetupServer, let readiness = teleportSetupReadiness {
+                teleportSetupSheet(server: server, readiness: readiness)
+            }
         }
         .sheet(isPresented: $showingSupport) {
             SupportSheet()
@@ -664,6 +678,94 @@ struct ServerSidebarView: View {
                 // No-op: user cancelled biometric auth or the tab limit blocked the open.
             }
         }
+    }
+
+    /// The Teleport setup sheet, presented when a non-ready Teleport server is
+    /// tapped. Routes to the appropriate view (bootstrap/registration/login)
+    /// based on the readiness state.
+    @ViewBuilder
+    private func teleportSetupSheet(server: Server, readiness: TeleportDeviceReadiness) -> some View {
+        let cluster = TeleportCluster(
+            id: server.id,
+            host: server.host,
+            port: server.port,
+            username: server.username
+        )
+        switch readiness {
+        case .needsBootstrap:
+            TeleportBootstrapView(
+                coordinator: makeBootstrapCoordinator(),
+                cluster: cluster,
+                onSuccess: { _ in
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                },
+                onCancel: {
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                }
+            )
+            .adaptiveSoftScrollEdges()
+        case .needsRegistration:
+            // The bootstrap result's TLS keypair isn't persisted (it was
+            // ephemeral, held only for the gRPC mTLS dial). If the user
+            // cancelled between Phase 1 and Phase 2, they must redo Phase 1
+            // so the TLS keypair is regenerated.
+            //
+            // TODO(phase-2): persist the TLS keypair so registration can
+            // resume without redoing Phase 1. For now, route back to
+            // bootstrap so the TLS keypair is regenerated.
+            TeleportBootstrapView(
+                coordinator: makeBootstrapCoordinator(),
+                cluster: cluster,
+                onSuccess: { _ in
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                },
+                onCancel: {
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                }
+            )
+            .adaptiveSoftScrollEdges()
+        case .needsLogin:
+            TeleportLoginView(
+                coordinator: makeLoginCoordinator(),
+                cluster: cluster,
+                onSuccess: {
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                },
+                onCancel: {
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                }
+            )
+            .adaptiveSoftScrollEdges()
+        case .ready:
+            // Shouldn't happen — ready servers don't trigger the setup sheet.
+            EmptyView()
+        }
+    }
+
+    @MainActor
+    private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
+        TeleportBootstrapCoordinator(
+            httpClient: LiveTeleportHTTPClient(),
+            keyRing: TeleportKeyRing.shared,
+            safariPresenter: WebAuthenticationSessionPresenter.shared,
+            signer: SecureEnclaveSigner()
+        )
+    }
+
+    @MainActor
+    private func makeLoginCoordinator() -> TeleportLoginCoordinator {
+        TeleportLoginCoordinator(
+            httpClient: LiveTeleportHTTPClient(),
+            keyRing: TeleportKeyRing.shared,
+            signer: SecureEnclaveSigner(),
+            webAuthnBuilder: TeleportWebAuthnBuilder()
+        )
     }
 
     private func handleSavedServer(_ server: Server, originalServer: Server) {

@@ -216,14 +216,25 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
     case password
     case sshKey
     case sshKeyWithPassphrase
+    case faceIDTeleport
 
     var id: String { rawValue }
+
+    init(from decoder: Decoder) throws {
+        // Fall back to .password for unknown raw values so old clients that
+        // encounter a future auth method (added after this build was compiled)
+        // don't crash — they decode to the safe default instead.
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        self = AuthMethod(rawValue: raw) ?? .password
+    }
 
     var displayName: String {
         switch self {
         case .password: return String(localized: "Password")
         case .sshKey: return String(localized: "SSH Key")
         case .sshKeyWithPassphrase: return String(localized: "SSH Key + Passphrase")
+        case .faceIDTeleport: return String(localized: "Face ID (Teleport)")
         }
     }
 
@@ -232,6 +243,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
         case .password: return "key.fill"
         case .sshKey: return "lock.doc.fill"
         case .sshKeyWithPassphrase: return "lock.shield.fill"
+        case .faceIDTeleport: return "faceid"
         }
     }
 }
