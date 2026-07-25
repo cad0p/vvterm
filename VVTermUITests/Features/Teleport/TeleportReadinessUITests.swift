@@ -159,8 +159,7 @@ final class TeleportReadinessUITests: XCTestCase {
         serverRow(app).tap()
         let loginHeader = app.staticTexts["vvterm.teleport.login.header"]
         XCTAssertTrue(loginHeader.waitForExistence(timeout: 5), "login sheet header should appear after tapping a needsLogin row")
-        // The login header is the cluster host — assert it exists (label varies).
-        XCTAssertTrue(loginHeader.exists)
+        XCTAssertEqual(loginHeader.label, "Sign in with Face ID")
         attachScreenshot(app, named: "readiness-needsLogin-login-sheet")
     }
 
