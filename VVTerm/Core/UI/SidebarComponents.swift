@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Server Row
 
-struct ServerRow: View {
+struct ServerRow<KeyRing: TeleportKeyRingStoring>: View {
     let server: Server
     let isSelected: Bool
     let onSelect: () -> Void
@@ -17,7 +17,7 @@ struct ServerRow: View {
 
     @ObservedObject private var tabManager = TerminalTabManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
-    @ObservedObject private var keyRing: TeleportKeyRingStoring
+    @ObservedObject private var keyRing: KeyRing
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
 
     /// Testability hook: when non-nil, overrides the `ServerManager` lock
@@ -26,9 +26,9 @@ struct ServerRow: View {
     /// (which would trigger CloudKit). Production callers leave this nil.
     private let isLockedOverride: Bool?
 
-    /// Testability hook: the key ring is injected so UI tests can drive the
-    /// readiness matrix via `MockTeleportKeyRing`. Production callers pass
-    /// `.shared` (the default), so there is no behavior change.
+    /// The key ring is injected so UI tests can drive the readiness matrix
+    /// via `MockTeleportKeyRing`. Production callers pass `.shared` (the
+    /// default), so there is no behavior change.
     init(
         server: Server,
         isSelected: Bool,
@@ -38,9 +38,9 @@ struct ServerRow: View {
         onConnect: ((Server) -> Void)? = nil,
         onLockedTap: (() -> Void)? = nil,
         onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
-        keyRing: TeleportKeyRingStoring = TeleportKeyRing.shared,
+        keyRing: KeyRing,
         isLockedOverride: Bool? = nil
-    ) {
+    ) where KeyRing: ObservableObject {
         self.server = server
         self.isSelected = isSelected
         self.onSelect = onSelect

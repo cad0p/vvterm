@@ -180,7 +180,8 @@ struct ServerSidebarView: View {
                                 onTeleportSetup: { srv, readiness in
                                     teleportSetupServer = srv
                                     teleportSetupReadiness = readiness
-                                }
+                                },
+                                keyRing: TeleportKeyRing.shared
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
