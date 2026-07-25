@@ -120,15 +120,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache SPM packages + DerivedData
-        uses: actions/cache@v6
+      - name: Restore source mtimes
+        # Git does not store file mtimes; `actions/checkout` writes files
+        # with the clone timestamp. Xcode keys incremental validity on
+        # nanosecond-resolution mtimes, so freshly-checked-out source files
+        # appear newer than cached DerivedData artifacts → full recompile.
+        # This sets each file's mtime to its last-commit time, making them
+        # consistent across runs. Requires fetch-depth: 0 (set above).
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
+        # Replace actions/cache with irgaly/xcode-cache, which is purpose-built
+        # for Xcode DerivedData caching. It stores a sidecar
+        # `xcode-cache-mtime.json` mapping {path, mtime, sha256} and re-applies
+        # mtimes via File.utime after restore (only when SHA-256 matches).
+        # It also handles the SourcePackages cache key separately. This fixes
+        # the cross-runner mtime+inode invalidation that caused full SPM
+        # recompiles even on cache hits.
+        uses: irgaly/xcode-cache@v1
         with:
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
-            ${{ runner.temp }}/DerivedData
-          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-xcode27-spm-
+            xcode27-deriveddata-${{ github.workflow }}-
+          deriveddata-directory: ${{ runner.temp }}/DerivedData
+          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          swiftpm-cache-restore-keys: |
+            xcode27-spm-
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
@@ -210,23 +227,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache SPM packages + DerivedData
-        # Cache SourcePackages AND the full DerivedData tree (matching the
-        # build job). unit-tests has `needs: build`, so build saves this
-        # cache before unit-tests runs; unit-tests restores it and skips
-        # re-resolving/recompiling SPM deps. The build artifact (downloaded
-        # next) overwrites Build/Products with the current build, so the
-        # final state is: cached SourcePackages + current build products.
-        # Zero extra storage cost — actions/cache skips the post-step save
-        # on a primary-key cache hit (caches are immutable).
-        uses: actions/cache@v6
+      - name: Restore source mtimes
+        # Git does not store file mtimes; `actions/checkout` writes files
+        # with the clone timestamp. Xcode keys incremental validity on
+        # nanosecond-resolution mtimes, so freshly-checked-out source files
+        # appear newer than cached DerivedData artifacts → full recompile.
+        # This sets each file's mtime to its last-commit time, making them
+        # consistent across runs. Requires fetch-depth: 0 (set above).
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
+        # Restore the DerivedData cache saved by the `build` job. irgaly/xcode-cache
+        # re-applies nanosecond mtimes from the sidecar `xcode-cache-mtime.json`
+        # (only when SHA-256 matches), so the restored artifacts are not seen as
+        # stale by Xcode. Combined with `git-restore-mtime` above and
+        # `IgnoreFileSystemDeviceInodeChanges=YES` below, this lets Xcode
+        # recognize that only VVTermTests changed → recompiles only the test
+        # target (~3m) instead of all SPM deps (~6m).
+        uses: irgaly/xcode-cache@v1
         with:
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
-            ${{ runner.temp }}/DerivedData
-          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-xcode27-spm-
+            xcode27-deriveddata-${{ github.workflow }}-
+          deriveddata-directory: ${{ runner.temp }}/DerivedData
+          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          swiftpm-cache-restore-keys: |
+            xcode27-spm-
 
       - name: Download build products
         # Download the tarball from the build job and extract it into the
@@ -279,6 +305,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
+            IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/test.log"
 
       - name: Upload test results on failure
@@ -331,6 +358,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Restore source mtimes
+        # Git does not store file mtimes; `actions/checkout` writes files
+        # with the clone timestamp. Restore each file's mtime to its
+        # last-commit time for consistency across runs.
+        uses: chetan/git-restore-mtime-action@v2
 
       - name: Download build products
         # Download the tarball from the build job and extract it into the
