@@ -363,6 +363,11 @@ jobs:
           # -only-testing: restricts execution to this shard's tests.
           XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
           echo "Using xctestrun manifest: $XCRUN"
+          # Screenshots are written here by the tests as loose PNG files
+          # (see attachScreenshot in TeleportUITests.swift). Upload this dir
+          # for visual verification — more reliable than xcresult attachments.
+          export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
+          mkdir -p "$SCREENSHOT_DIR"
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
@@ -381,29 +386,6 @@ jobs:
             ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
           if-no-files-found: ignore
-
-      - name: Export + upload XCTAttachment screenshots
-        # XCUITest attachments (XCTAttachment with .keepAlways) are embedded in
-        # the TestResults.xcresult bundle, not loose files in Logs/Test/Attachments
-        # (that path only exists for the legacy `test` command, not
-        # `test-without-building`). Extract them on the macOS runner with
-        # `xcrun xcresulttool` so they're viewable as PNG artifacts.
-        if: always()
-        run: |
-          set -euo pipefail
-          export_dir="$RUNNER_TEMP/screenshots"
-          mkdir -p "$export_dir"
-          if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
-            xcrun xcresulttool export attachments \
-              --path "$RUNNER_TEMP/TestResults.xcresult" \
-              --output-path "$export_dir" \
-              --test-id "" 2>/dev/null || true
-          fi
-          # If xcresulttool didn't work, try the legacy Attachments path.
-          if [ -d "$RUNNER_TEMP/DerivedData/Logs/Test/Attachments" ]; then
-            cp -R "$RUNNER_TEMP/DerivedData/Logs/Test/Attachments/." "$export_dir/" 2>/dev/null || true
-          fi
-          find "$export_dir" -type f 2>/dev/null | head -5 || true
 
       - name: Upload screenshots artifact
         if: always()

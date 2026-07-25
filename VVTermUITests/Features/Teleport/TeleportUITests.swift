@@ -58,14 +58,23 @@ final class TeleportUITests: XCTestCase {
         return app
     }
 
-    /// Capture + attach a screenshot of the current app state.
-    /// `.keepAlways` so CI uploads the artifact for visual review.
-    /// Uses the explicit PNG payload form (not XCTAttachment(screenshot:))
-    /// because the latter's reference is dropped under
-    /// `test-without-building` + parallel testing — the PNG bytes are
-    /// embedded directly in the xcresult and survive extraction.
+    /// Capture a screenshot and persist it two ways:
+    ///   1. Write the PNG to `$SCREENSHOT_DIR/<name>.png` as a loose file
+    ///      (the workflow uploads this directory directly — most reliable).
+    ///   2. Add an `XCTAttachment` with the PNG payload + `.keepAlways` as a
+    ///      fallback (survives if xcresult aggregation works).
+    /// We need both because `test-without-building` + parallel testing
+    /// sometimes drops XCTAttachments from the aggregated xcresult.
     private func attachScreenshot(_ app: XCUIApplication, named name: String) {
         let png = app.screenshot().pngRepresentation
+
+        // 1. Loose file (reliable for CI upload)
+        if let dir = ProcessInfo.processInfo.environment["SCREENSHOT_DIR"] {
+            let url = URL(fileURLWithPath: dir).appendingPathComponent("\(name).png")
+            try? png.write(to: url)
+        }
+
+        // 2. XCTAttachment fallback
         let attachment = XCTAttachment(
             uniformTypeIdentifier: "public.png",
             name: "\(name).png",
