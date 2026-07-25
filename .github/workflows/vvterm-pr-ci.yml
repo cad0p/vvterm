@@ -382,11 +382,33 @@ jobs:
             ${{ runner.temp }}/test.log
           if-no-files-found: ignore
 
-      - name: Upload XCTAttachment screenshots
+      - name: Export + upload XCTAttachment screenshots
+        # XCUITest attachments (XCTAttachment with .keepAlways) are embedded in
+        # the TestResults.xcresult bundle, not loose files in Logs/Test/Attachments
+        # (that path only exists for the legacy `test` command, not
+        # `test-without-building`). Extract them on the macOS runner with
+        # `xcrun xcresulttool` so they're viewable as PNG artifacts.
+        if: always()
+        run: |
+          set -euo pipefail
+          export_dir="$RUNNER_TEMP/screenshots"
+          mkdir -p "$export_dir"
+          if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
+            xcrun xcresulttool export attachments \
+              --path "$RUNNER_TEMP/TestResults.xcresult" \
+              --output-path "$export_dir" \
+              --test-id "" 2>/dev/null || true
+          fi
+          # If xcresulttool didn't work, try the legacy Attachments path.
+          if [ -d "$RUNNER_TEMP/DerivedData/Logs/Test/Attachments" ]; then
+            cp -R "$RUNNER_TEMP/DerivedData/Logs/Test/Attachments/." "$export_dir/" 2>/dev/null || true
+          fi
+          find "$export_dir" -type f 2>/dev/null | head -5 || true
+
+      - name: Upload screenshots artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ui-test-screenshots-${{ matrix.shard.name }}
-          path: |
-            ${{ runner.temp }}/DerivedData/Logs/Test/Attachments
+          path: ${{ runner.temp }}/screenshots
           if-no-files-found: ignore
