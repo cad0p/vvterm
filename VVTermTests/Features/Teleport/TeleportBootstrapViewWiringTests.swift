@@ -41,6 +41,7 @@
 //
 
 import SwiftUI
+import Combine
 import XCTest
 @testable import VVTerm
 
@@ -67,7 +68,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
             // MockSEPKeySigner conforms to TeleportSEPSigning; the bootstrap
             // coordinator keeps a signer for symmetry but doesn't use it in
             // Phase 1, so a default mock is fine.
-            signer: MockSEPKeySigner()
+            signer: MockSEPKeySigner(outcome: .success)
         )
     }
 
@@ -116,7 +117,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 httpClient: http,
                 keyRing: keyRing,
                 safariPresenter: safari,
-                signer: MockSEPKeySigner()
+                signer: MockSEPKeySigner(outcome: .success)
             )
         }
     }
@@ -181,7 +182,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 httpClient: http,
                 keyRing: keyRing,
                 safariPresenter: safari,
-                signer: MockSEPKeySigner()
+                signer: MockSEPKeySigner(outcome: .success)
             )
         }
     }
