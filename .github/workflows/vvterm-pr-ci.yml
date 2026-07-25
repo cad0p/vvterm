@@ -385,6 +385,15 @@ jobs:
         # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
         run: xcodebuild -downloadComponent MetalToolchain
 
+      - name: Install xcparse
+        # Install xcparse to extract XCTAttachment screenshots from the
+        # xcresult bundle. `xcrun xcresulttool export attachments` produces
+        # no PNGs when tests run with -parallel-testing-enabled (parallel
+        # testing creates separate simulator clones whose attachments don't
+        # aggregate into the main xcresult). xcparse also handles the Xcode 11+
+        # nested xcresult format more robustly than xcresulttool.
+        run: brew install chargepoint/xcparse/xcparse
+
       - name: Run UI tests (shard ${{ matrix.shard.name }})
         shell: bash
         run: |
@@ -440,7 +449,6 @@ jobs:
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:${{ matrix.shard.only-testing }} \
-            -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
           # Preserve xcodebuild's exit code for the step status, but don't
@@ -459,10 +467,11 @@ jobs:
 
       - name: Extract + upload screenshots
         # Now that UserAttachmentLifetime + SystemAttachmentLifetime are set
-        # to 'keepAlways' in the xctestrun (see Run UI tests step),
-        # XCTAttachment screenshots survive into the xcresult bundle.
-        # Extract them with `xcrun xcresulttool export attachments` so they're
-        # viewable as PNG artifacts. Also search for loose files as a fallback.
+        # to 'keepAlways' in the xctestrun (see Run UI tests step) AND
+        # -parallel-testing-enabled is removed (parallel clones don't
+        # aggregate attachments into the main xcresult), XCTAttachment
+        # screenshots survive into the xcresult bundle. Extract them with
+        # `xcparse screenshots` so they're viewable as PNG artifacts.
         if: always()
         run: |
           set +e
@@ -470,10 +479,10 @@ jobs:
           mkdir -p "$export_dir"
           # Extract XCTAttachment screenshots from the xcresult bundle.
           if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
-            xcrun xcresulttool export attachments \
-              --path "$RUNNER_TEMP/TestResults.xcresult" \
-              --output-path "$export_dir" 2>/dev/null
-            echo "xcresulttool exit: $?"
+            xcparse screenshots \
+              "$RUNNER_TEMP/TestResults.xcresult" \
+              "$export_dir" 2>/dev/null
+            echo "xcparse exit: $?"
           fi
           echo "=== Extracted files ==="
           find "$export_dir" -type f 2>/dev/null | head -30 || true
