@@ -212,9 +212,10 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     /// "Signed in. Certificate valid for <relative time> (until <absolute time>)."
     /// Computed from `certValidBefore` — never hardcoded.
     private func certificateValidityText(certValidUntil: Date) -> String {
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .full
-        let relativeString = relative.localizedString(for: certValidUntil, relativeTo: Date())
+        let relativeString = TeleportValidityCopy.relativeValidityString(
+            for: certValidUntil,
+            relativeTo: Date()
+        )
 
         let absoluteFormatter = DateFormatter()
         absoluteFormatter.dateStyle = .short
@@ -336,4 +337,59 @@ private final class PreviewLoginCoordinator: ObservableObject, TeleportLoginCoor
 
     func begin(cluster: TeleportCluster) async {}
     func cancel() async {}
+}
+
+// MARK: - Certificate validity copy formatting
+
+/// Formats the relative-time portion of the "Certificate valid for …" copy
+/// shown in the login sheet's success state.
+///
+/// `RelativeDateTimeFormatter` floors the remaining interval to the largest
+/// whole unit (e.g. 11h 59m 59s → "in 11 hours", 59m 59s → "in 59 minutes").
+/// Because the cert's `validBefore` is captured when the coordinator issues
+/// it but the copy is formatted a moment later when SwiftUI re-renders, a
+/// cert issued with an exact N-hour TTL can display as "N-1 hours" purely
+/// due to sub-second render drift.
+///
+/// To avoid that misleading off-by-one, the remaining interval is rounded to
+/// the nearest whole minute before formatting. A 12h TTL that has drifted by
+/// a few seconds (11h 59m 59s) rounds up to 12h 00m and renders as
+/// "in 12 hours"; a 1h TTL (59m 59s) rounds up to 1h 00m and renders as
+/// "in 1 hour". Genuine elapsed time (>= 30s past a minute boundary) still
+/// rounds down as expected.
+enum TeleportValidityCopy {
+    /// The rounding granularity in seconds. Sub-minute drift from UI render
+    /// latency is absorbed by rounding to the nearest minute.
+    private static let roundingGranularity: TimeInterval = 60
+
+    /// Returns a localized relative-time string for `certValidUntil` relative
+    /// to `referenceDate`, with the remaining interval rounded to the nearest
+    /// minute to avoid off-by-one flooring.
+    ///
+    /// - Parameters:
+    ///   - certValidUntil: the cert's `validBefore` date.
+    ///   - referenceDate: the "now" to compute the remaining interval against
+    ///     (defaults to `Date()` at call time in production).
+    /// - Returns: a localized string such as "in 12 hours" or "in 1 hour".
+    static func relativeValidityString(
+        for certValidUntil: Date,
+        relativeTo referenceDate: Date
+    ) -> String {
+        let remaining = certValidUntil.timeIntervalSince(referenceDate)
+        // Round to the nearest minute to absorb sub-minute render drift
+        // (the cert's `validBefore` is captured when the coordinator issues
+        // it, but the copy is formatted a moment later when SwiftUI
+        // re-renders). Without this, a 12h TTL that drifted to 11h59m59s
+        // would floor to "in 11 hours".
+        //
+        // Uses the default `.toNearestOrEven` (banker's) rounding; for the
+        // realistic TTL range (>= 1 minute) this is equivalent to schoolbook
+        // rounding because the sub-minute remainder is never exactly 0.5.
+        let roundedRemaining = (remaining / roundingGranularity).rounded() * roundingGranularity
+        let roundedExpiry = referenceDate.addingTimeInterval(roundedRemaining)
+
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: roundedExpiry, relativeTo: referenceDate)
+    }
 }
