@@ -353,13 +353,13 @@ final class TeleportUITests: XCTestCase {
         XCTAssertEqual(successTitle.label, "Signed in")
         let successMessage = app.staticTexts["vvterm.teleport.login.successMessage"]
         XCTAssertTrue(successMessage.exists)
-        // The message format is "Certificate valid for <relative> (until <absolute>)."
+        // The message format is "Certificate valid in <relative> (until <absolute>)."
         // The relative string for 12h is "in 12 hours" (RelativeDateTimeFormatter,
         // unitsStyle: .full). We assert the message starts with the prefix +
         // contains "12 hours" to allow for formatter locale variance.
         XCTAssertTrue(
-            successMessage.label.hasPrefix("Certificate valid for"),
-            "success message should start with 'Certificate valid for': \(successMessage.label)"
+            successMessage.label.hasPrefix("Certificate valid in"),
+            "success message should start with 'Certificate valid in': \(successMessage.label)"
         )
         XCTAssertTrue(
             successMessage.label.contains("12 hours") || successMessage.label.contains("12 Hour"),
@@ -377,8 +377,8 @@ final class TeleportUITests: XCTestCase {
         let successMessage = app.staticTexts["vvterm.teleport.login.successMessage"]
         XCTAssertTrue(successMessage.exists)
         XCTAssertTrue(
-            successMessage.label.hasPrefix("Certificate valid for"),
-            "success message should start with 'Certificate valid for': \(successMessage.label)"
+            successMessage.label.hasPrefix("Certificate valid in"),
+            "success message should start with 'Certificate valid in': \(successMessage.label)"
         )
         // The 1h TTL proves the validity text is dynamic (not hardcoded to 12h).
         XCTAssertTrue(

@@ -131,6 +131,53 @@ final class TeleportValidityCopyTests: XCTestCase {
         )
     }
 
+    // MARK: - Full copy string (regression: "valid for in" duplication)
+
+    /// Regression guard: the full success copy must NOT contain "for in"
+    /// (the bug where "Certificate valid for % @" + relativeString="in 12 hours"
+    /// produced "valid for in 12 hours").
+    func testCertificateValidityCopy_12hTTL_doesNotContainForIn() {
+        let now = Date()
+        let certValidUntil = now.addingTimeInterval(12 * 3600 - 2)
+
+        let copy = TeleportValidityCopy.certificateValidityText(
+            certValidUntil: certValidUntil,
+            relativeTo: now
+        )
+
+        XCTAssertFalse(
+            copy.contains("for in"),
+            "copy must not contain the duplicated 'for in': \(copy)"
+        )
+        XCTAssertTrue(
+            copy.hasPrefix("Certificate valid in"),
+            "copy should start with 'Certificate valid in': \(copy)"
+        )
+        XCTAssertTrue(
+            copy.contains("12 hours"),
+            "copy should mention 12 hours: \(copy)"
+        )
+    }
+
+    func testCertificateValidityCopy_1hTTL_doesNotContainForIn() {
+        let now = Date()
+        let certValidUntil = now.addingTimeInterval(3600 - 2)
+
+        let copy = TeleportValidityCopy.certificateValidityText(
+            certValidUntil: certValidUntil,
+            relativeTo: now
+        )
+
+        XCTAssertFalse(
+            copy.contains("for in"),
+            "copy must not contain the duplicated 'for in': \(copy)"
+        )
+        XCTAssertTrue(
+            copy.hasPrefix("Certificate valid in"),
+            "copy should start with 'Certificate valid in': \(copy)"
+        )
+    }
+
     /// A sub-minute TTL (e.g. 45 seconds) rounds up to 1 minute, not 0 minutes.
     /// (45s = 0.75 min, which rounds to 1 under any rounding rule.)
     func testRelativeValidityString_45Seconds_says1Minute() {

@@ -209,23 +209,16 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
     // MARK: - Certificate validity text
 
-    /// "Signed in. Certificate valid for <relative time> (until <absolute time>)."
+    /// "Signed in. Certificate valid in <relative time> (until <absolute time>)."
     /// Computed from `certValidBefore` — never hardcoded.
+    ///
+    /// `RelativeDateTimeFormatter` includes the leading preposition "in" in
+    /// its output (e.g. "in 12 hours"), so the format string omits "for" to
+    /// avoid the duplicated "valid for in 12 hours".
     private func certificateValidityText(certValidUntil: Date) -> String {
-        let relativeString = TeleportValidityCopy.relativeValidityString(
-            for: certValidUntil,
+        TeleportValidityCopy.certificateValidityText(
+            certValidUntil: certValidUntil,
             relativeTo: Date()
-        )
-
-        let absoluteFormatter = DateFormatter()
-        absoluteFormatter.dateStyle = .short
-        absoluteFormatter.timeStyle = .short
-        let absoluteString = absoluteFormatter.string(from: certValidUntil)
-
-        return String(
-            format: String(localized: "Certificate valid for %@ (until %@)."),
-            relativeString,
-            absoluteString
         )
     }
 
@@ -391,5 +384,41 @@ enum TeleportValidityCopy {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: roundedExpiry, relativeTo: referenceDate)
+    }
+
+    /// Builds the full success-copy string shown in the login sheet's success
+    /// state: "Certificate valid in <relative> (until <absolute>)."
+    ///
+    /// `relativeValidityString(for:relativeTo:)` returns a string that already
+    /// includes the leading preposition "in" (e.g. "in 12 hours"), so the
+    /// format string MUST NOT prepend "for" — that would produce the
+    /// ungrammatical "Certificate valid for in 12 hours".
+    ///
+    /// - Parameters:
+    ///   - certValidUntil: the cert's `validBefore` date.
+    ///   - referenceDate: the "now" to compute the relative interval against.
+    ///   - absoluteFormatter: the formatter for the absolute timestamp portion.
+    ///     Defaults to a short date + short time formatter.
+    /// - Returns: the localized success copy.
+    static func certificateValidityText(
+        certValidUntil: Date,
+        relativeTo referenceDate: Date,
+        absoluteFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.dateStyle = .short
+            f.timeStyle = .short
+            return f
+        }()
+    ) -> String {
+        let relativeString = relativeValidityString(
+            for: certValidUntil,
+            relativeTo: referenceDate
+        )
+        let absoluteString = absoluteFormatter.string(from: certValidUntil)
+        return String(
+            format: String(localized: "Certificate valid %@ (until %@)."),
+            relativeString,
+            absoluteString
+        )
     }
 }
