@@ -31,6 +31,17 @@ struct ServerListScreen: View {
     @State private var lockedServerAlert: Server?
     @State private var showingCustomEnvironmentAlert = false
     @State private var addServerPrefill: ServerFormPrefill?
+    /// The server being set up via the Teleport prompt-on-connect flow.
+    /// Set when a non-ready Teleport server is tapped; drives the sheet.
+    @State private var teleportSetupServer: Server?
+    /// The readiness state for the current Teleport setup sheet. Flipped
+    /// by each phase's `onSuccess` to chain bootstrap → registration → login
+    /// (mirrors `ServerSidebarView`).
+    @State private var teleportSetupReadiness: TeleportDeviceReadiness?
+    /// The Phase-1 bootstrap result, held in memory so the Phase-2
+    /// registration sheet can resume without redoing Phase 1. Mirrors
+    /// `ServerSidebarView.teleportBootstrapResult`.
+    @State private var teleportBootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
 
     private var canAddServer: Bool {
         !serverManager.workspaces.isEmpty
@@ -226,6 +237,14 @@ struct ServerListScreen: View {
                 addServerPrefill = nil
             }
         }
+        .sheet(isPresented: Binding(
+            get: { teleportSetupServer != nil },
+            set: { if !$0 { teleportSetupServer = nil; teleportSetupReadiness = nil; teleportBootstrapResult = nil } }
+        )) {
+            if let server = teleportSetupServer, let readiness = teleportSetupReadiness {
+                teleportSetupSheet(server: server, readiness: readiness)
+            }
+        }
     }
 
     private func handleSavedServer(_ server: Server, originalServer: Server) {
@@ -306,7 +325,11 @@ struct ServerListScreen: View {
                         onTap: { onServerSelected(server) },
                         onEdit: { serverToEdit = server },
                         onMove: { serverToMove = server },
-                        onLockedTap: { lockedServerAlert = server }
+                        onLockedTap: { lockedServerAlert = server },
+                        onTeleportSetup: { srv, readiness in
+                            teleportSetupServer = srv
+                            teleportSetupReadiness = readiness
+                        }
                     )
                     .accessibilityIdentifier(
                         "vvterm.serverList.server.\(server.id.uuidString)"
@@ -461,6 +484,146 @@ struct ServerListScreen: View {
 
     private func server(for serverId: UUID) -> Server? {
         serverManager.servers.first { $0.id == serverId }
+    }
+
+    // MARK: - Teleport Setup Sheet (mirrors ServerSidebarView.teleportSetupSheet)
+
+    /// The Teleport setup sheet, presented when a non-ready Teleport server
+    /// is tapped. Routes to the appropriate view (bootstrap/registration/login)
+    /// based on the readiness state.
+    ///
+    /// Phase chaining: the sheet is presented once (driven by
+    /// `teleportSetupServer` + `teleportSetupReadiness`). When a phase
+    /// succeeds, its `onSuccess` flips `teleportSetupReadiness` to the next
+    /// phase instead of dismissing — SwiftUI re-renders the same sheet as
+    /// the next phase's view. The `BootstrapResult` is held in
+    /// `teleportBootstrapResult` so the registration sheet can resume
+    /// without redoing Phase 1 (the TLS keypair is ephemeral and not
+    /// persisted to the keychain). Mirrors the `ServerSidebarView` pattern.
+    @ViewBuilder
+    private func teleportSetupSheet(server: Server, readiness: TeleportDeviceReadiness) -> some View {
+        let cluster = TeleportCluster(
+            id: server.id,
+            host: server.host,
+            port: server.port,
+            username: server.username
+        )
+        switch readiness {
+        case .needsBootstrap:
+            TeleportBootstrapView(
+                coordinator: makeBootstrapCoordinator(),
+                cluster: cluster,
+                onSuccess: { result in
+                    // Phase 1 → Phase 2: hold the result (TLS keypair) in
+                    // memory and flip readiness so the sheet re-renders as
+                    // the registration view. Do NOT dismiss — the user
+                    // should flow straight into Phase 2.
+                    teleportBootstrapResult = result
+                    teleportSetupReadiness = .needsRegistration
+                },
+                onCancel: {
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                    teleportBootstrapResult = nil
+                }
+            )
+            .adaptiveSoftScrollEdges()
+        case .needsRegistration:
+            // The Phase-1 TLS keypair is ephemeral (held only for the gRPC
+            // mTLS dial) and is NOT persisted to the keychain. Instead, the
+            // `BootstrapResult` is held in `teleportBootstrapResult` so the
+            // registration sheet can resume directly without redoing Phase 1.
+            // If the result is missing (e.g. the app was killed between
+            // Phase 1 and Phase 2), fall back to re-bootstrapping.
+            if let bootstrapResult = teleportBootstrapResult {
+                TeleportRegistrationView(
+                    coordinator: makeRegistrationCoordinator(),
+                    cluster: cluster,
+                    bootstrapResult: bootstrapResult,
+                    onSuccess: {
+                        // Phase 2 → Phase 3: the SEP key is now registered,
+                        // but the live cert hasn't been issued yet. Flip to
+                        // the login sheet so the user gets a fresh cert via
+                        // native Face ID.
+                        teleportSetupReadiness = .needsLogin
+                    },
+                    onCancel: {
+                        teleportSetupServer = nil
+                        teleportSetupReadiness = nil
+                        teleportBootstrapResult = nil
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            } else {
+                // No in-memory bootstrap result — re-bootstrap to regenerate
+                // the TLS keypair, then chain to registration on success.
+                TeleportBootstrapView(
+                    coordinator: makeBootstrapCoordinator(),
+                    cluster: cluster,
+                    onSuccess: { result in
+                        teleportBootstrapResult = result
+                        teleportSetupReadiness = .needsRegistration
+                    },
+                    onCancel: {
+                        teleportSetupServer = nil
+                        teleportSetupReadiness = nil
+                        teleportBootstrapResult = nil
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            }
+        case .needsLogin:
+            TeleportLoginView(
+                coordinator: makeLoginCoordinator(),
+                cluster: cluster,
+                onSuccess: {
+                    // Phase 3 complete — the live cert is issued. Dismiss.
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                    teleportBootstrapResult = nil
+                },
+                onCancel: {
+                    teleportSetupServer = nil
+                    teleportSetupReadiness = nil
+                    teleportBootstrapResult = nil
+                }
+            )
+            .adaptiveSoftScrollEdges()
+        case .ready:
+            // Shouldn't happen — ready servers don't trigger the setup sheet.
+            EmptyView()
+        }
+    }
+
+    @MainActor
+    private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
+        TeleportBootstrapCoordinator(
+            httpClient: LiveTeleportHTTPClient(),
+            keyRing: TeleportKeyRing.shared,
+            safariPresenter: WebAuthenticationSessionPresenter.shared,
+            signer: SecureEnclaveSigner()
+        )
+    }
+
+    @MainActor
+    private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
+        TeleportRegistrationCoordinator(
+            grpcClient: LiveTeleportGRPCClient(),
+            browserMFACeremony: LiveBrowserMFACeremony(),
+            keyRing: TeleportKeyRing.shared,
+            signer: SecureEnclaveSigner(),
+            webAuthnBuilder: TeleportWebAuthnBuilder()
+        )
+    }
+
+    @MainActor
+    private func makeLoginCoordinator() -> TeleportLoginCoordinator {
+        TeleportLoginCoordinator(
+            httpClient: LiveTeleportHTTPClient(),
+            keyRing: TeleportKeyRing.shared,
+            signer: SecureEnclaveSigner(),
+            webAuthnBuilder: TeleportWebAuthnBuilder()
+        )
     }
 }
 #endif
