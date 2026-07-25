@@ -444,11 +444,25 @@ jobs:
           echo "xctestrun plist after injection:"
           python3 -c "import plistlib; d=plistlib.load(open('$XCRUN','rb')); [print(f'  target {i}: SCREENSHOT_DIR={t.get(\"EnvironmentVariables\",{}).get(\"SCREENSHOT_DIR\",\"<MISSING>\")}') for cfg in d.get('TestConfigurations',[]) for i,t in enumerate(cfg.get('TestTargets',[]))]"
 
+          # Build the -only-testing args. The matrix `only-testing` value is
+          # a comma-separated list, but xcodebuild requires ONE identifier per
+          # -only-testing flag (repeatable). A single comma-separated string
+          # silently resolves to an empty test set on Xcode 27 beta —
+          # xcodebuild runs 0 tests and exits success. Transform the string
+          # into repeated -only-testing: flags.
+          ONLY_TESTING_ARGS=""
+          IFS=',' read -ra TEST_IDS <<< "${{ matrix.shard.only-testing }}"
+          for id in "${TEST_IDS[@]}"; do
+            ONLY_TESTING_ARGS="$ONLY_TESTING_ARGS -only-testing:$id"
+          done
+          echo "Shard test args:$ONLY_TESTING_ARGS"
+
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            -only-testing:${{ matrix.shard.only-testing }} \
+            $ONLY_TESTING_ARGS \
+            -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
           # Preserve xcodebuild's exit code for the step status, but don't
@@ -466,12 +480,13 @@ jobs:
           if-no-files-found: ignore
 
       - name: Extract + upload screenshots
-        # Now that UserAttachmentLifetime + SystemAttachmentLifetime are set
-        # to 'keepAlways' in the xctestrun (see Run UI tests step) AND
-        # -parallel-testing-enabled is removed (parallel clones don't
-        # aggregate attachments into the main xcresult), XCTAttachment
-        # screenshots survive into the xcresult bundle. Extract them with
-        # `xcparse screenshots` so they're viewable as PNG artifacts.
+        # UserAttachmentLifetime + SystemAttachmentLifetime are set to
+        # 'keepAlways' in the xctestrun (see Run UI tests step), so
+        # XCTAttachment screenshots survive into the xcresult bundle even
+        # when tests pass. Parallel testing writes a single merged xcresult
+        # at -resultBundlePath (no merge step needed). Extract the PNGs with
+        # `xcparse screenshots` so they're viewable as artifacts. Also search
+        # for loose files as a fallback.
         if: always()
         run: |
           set +e
