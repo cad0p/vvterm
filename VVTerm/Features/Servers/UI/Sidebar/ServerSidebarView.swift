@@ -30,6 +30,11 @@ struct ServerSidebarView: View {
     @State private var lockedServerAlert: Server?
     @State private var teleportSetupServer: Server?
     @State private var teleportSetupReadiness: TeleportDeviceReadiness?
+    /// The Phase-1 bootstrap result, held in memory so the Phase-2
+    /// registration sheet can resume without redoing Phase 1. Set by the
+    /// bootstrap sheet's `onSuccess`; consumed by the registration sheet.
+    /// Mirrors `ServerFormSheet.teleportBootstrapResult`.
+    @State private var teleportBootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
     @State private var addServerPrefill: ServerFormPrefill?
     @State private var queuedDiscoveryPrefill: ServerFormPrefill?
 
@@ -272,7 +277,7 @@ struct ServerSidebarView: View {
         }
         .sheet(isPresented: Binding(
             get: { teleportSetupServer != nil },
-            set: { if !$0 { teleportSetupServer = nil; teleportSetupReadiness = nil } }
+            set: { if !$0 { teleportSetupServer = nil; teleportSetupReadiness = nil; teleportBootstrapResult = nil } }
         )) {
             if let server = teleportSetupServer, let readiness = teleportSetupReadiness {
                 teleportSetupSheet(server: server, readiness: readiness)
@@ -683,6 +688,15 @@ struct ServerSidebarView: View {
     /// The Teleport setup sheet, presented when a non-ready Teleport server is
     /// tapped. Routes to the appropriate view (bootstrap/registration/login)
     /// based on the readiness state.
+    ///
+    /// Phase chaining: the sheet is presented once (driven by
+    /// `teleportSetupServer` + `teleportSetupReadiness`). When a phase
+    /// succeeds, its `onSuccess` flips `teleportSetupReadiness` to the next
+    /// phase instead of dismissing — SwiftUI re-renders the same sheet as
+    /// the next phase's view. The `BootstrapResult` is held in
+    /// `teleportBootstrapResult` so the registration sheet can resume
+    /// without redoing Phase 1 (the TLS keypair is ephemeral and not
+    /// persisted to the keychain). Mirrors the `ServerFormSheet` pattern.
     @ViewBuilder
     private func teleportSetupSheet(server: Server, readiness: TeleportDeviceReadiness) -> some View {
         let cluster = TeleportCluster(
@@ -696,49 +710,79 @@ struct ServerSidebarView: View {
             TeleportBootstrapView(
                 coordinator: makeBootstrapCoordinator(),
                 cluster: cluster,
-                onSuccess: { _ in
-                    teleportSetupServer = nil
-                    teleportSetupReadiness = nil
+                onSuccess: { result in
+                    // Phase 1 → Phase 2: hold the result (TLS keypair) in
+                    // memory and flip readiness so the sheet re-renders as
+                    // the registration view. Do NOT dismiss — the user
+                    // should flow straight into Phase 2.
+                    teleportBootstrapResult = result
+                    teleportSetupReadiness = .needsRegistration
                 },
                 onCancel: {
                     teleportSetupServer = nil
                     teleportSetupReadiness = nil
+                    teleportBootstrapResult = nil
                 }
             )
             .adaptiveSoftScrollEdges()
         case .needsRegistration:
-            // The bootstrap result's TLS keypair isn't persisted (it was
-            // ephemeral, held only for the gRPC mTLS dial). If the user
-            // cancelled between Phase 1 and Phase 2, they must redo Phase 1
-            // so the TLS keypair is regenerated.
-            //
-            // TODO(phase-2): persist the TLS keypair so registration can
-            // resume without redoing Phase 1. For now, route back to
-            // bootstrap so the TLS keypair is regenerated.
-            TeleportBootstrapView(
-                coordinator: makeBootstrapCoordinator(),
-                cluster: cluster,
-                onSuccess: { _ in
-                    teleportSetupServer = nil
-                    teleportSetupReadiness = nil
-                },
-                onCancel: {
-                    teleportSetupServer = nil
-                    teleportSetupReadiness = nil
-                }
-            )
-            .adaptiveSoftScrollEdges()
+            // The Phase-1 TLS keypair is ephemeral (held only for the gRPC
+            // mTLS dial) and is NOT persisted to the keychain. Instead, the
+            // `BootstrapResult` is held in `teleportBootstrapResult` so the
+            // registration sheet can resume directly without redoing Phase 1.
+            // If the result is missing (e.g. the app was killed between
+            // Phase 1 and Phase 2), fall back to re-bootstrapping.
+            if let bootstrapResult = teleportBootstrapResult {
+                TeleportRegistrationView(
+                    coordinator: makeRegistrationCoordinator(),
+                    cluster: cluster,
+                    bootstrapResult: bootstrapResult,
+                    onSuccess: {
+                        // Phase 2 → Phase 3: the SEP key is now registered,
+                        // but the live cert hasn't been issued yet. Flip to
+                        // the login sheet so the user gets a fresh cert via
+                        // native Face ID.
+                        teleportSetupReadiness = .needsLogin
+                    },
+                    onCancel: {
+                        teleportSetupServer = nil
+                        teleportSetupReadiness = nil
+                        teleportBootstrapResult = nil
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            } else {
+                // No in-memory bootstrap result — re-bootstrap to regenerate
+                // the TLS keypair, then chain to registration on success.
+                TeleportBootstrapView(
+                    coordinator: makeBootstrapCoordinator(),
+                    cluster: cluster,
+                    onSuccess: { result in
+                        teleportBootstrapResult = result
+                        teleportSetupReadiness = .needsRegistration
+                    },
+                    onCancel: {
+                        teleportSetupServer = nil
+                        teleportSetupReadiness = nil
+                        teleportBootstrapResult = nil
+                    }
+                )
+                .adaptiveSoftScrollEdges()
+            }
         case .needsLogin:
             TeleportLoginView(
                 coordinator: makeLoginCoordinator(),
                 cluster: cluster,
                 onSuccess: {
+                    // Phase 3 complete — the live cert is issued. Dismiss.
                     teleportSetupServer = nil
                     teleportSetupReadiness = nil
+                    teleportBootstrapResult = nil
                 },
                 onCancel: {
                     teleportSetupServer = nil
                     teleportSetupReadiness = nil
+                    teleportBootstrapResult = nil
                 }
             )
             .adaptiveSoftScrollEdges()
@@ -755,6 +799,17 @@ struct ServerSidebarView: View {
             keyRing: TeleportKeyRing.shared,
             safariPresenter: WebAuthenticationSessionPresenter.shared,
             signer: SecureEnclaveSigner()
+        )
+    }
+
+    @MainActor
+    private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
+        TeleportRegistrationCoordinator(
+            grpcClient: LiveTeleportGRPCClient(),
+            browserMFACeremony: LiveBrowserMFACeremony(),
+            keyRing: TeleportKeyRing.shared,
+            signer: SecureEnclaveSigner(),
+            webAuthnBuilder: TeleportWebAuthnBuilder()
         )
     }
 
