@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -50,7 +50,7 @@ jobs:
           xcodebuild -version
 
       - name: Install Go (for fixture generation)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # The fixture generator is self-contained — it inlines the one
           # Teleport function it needed (ecdsaPublicKeyFromRaw) so it doesn't

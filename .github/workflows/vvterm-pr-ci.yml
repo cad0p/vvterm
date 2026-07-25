@@ -114,12 +114,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Cache SPM packages + DerivedData
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
@@ -174,7 +174,7 @@ jobs:
           tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" Products Intermediates.noindex
 
       - name: Upload build products
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vvterm-build
           path: ${{ runner.temp }}/vvterm-build.tar.gz
@@ -182,7 +182,7 @@ jobs:
 
       - name: Upload build log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-log
           path: ${{ runner.temp }}/build.log
@@ -197,7 +197,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -205,7 +205,7 @@ jobs:
         # Cache only SourcePackages (not DerivedData) — this job downloads
         # the build artifact from the build job into $RUNNER_TEMP/DerivedData,
         # mirroring the ui-tests shards.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
           key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
@@ -216,7 +216,7 @@ jobs:
         # Download the tarball from the build job and extract it into the
         # same -derivedDataPath the build used. Tar preserves the symlinks
         # inside .app bundles that actions/download-artifact would flatten.
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: vvterm-build
           path: ${{ runner.temp }}
@@ -267,7 +267,7 @@ jobs:
 
       - name: Upload test results on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-results
           path: |
@@ -312,14 +312,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Cache SPM packages
         # Cache only SourcePackages (not DerivedData) — each shard downloads
         # the build artifact from the build job into $RUNNER_TEMP/DerivedData.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
           key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
@@ -330,7 +330,7 @@ jobs:
         # Download the tarball from the build job and extract it into the
         # same -derivedDataPath the build used. Tar preserves the symlinks
         # inside .app bundles that actions/download-artifact would flatten.
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: vvterm-build
           path: ${{ runner.temp }}
@@ -383,7 +383,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-test-results-${{ matrix.shard.name }}
           path: |
@@ -402,7 +402,7 @@ jobs:
           ls -la "$RUNNER_TEMP/screenshots" 2>/dev/null || echo "(empty or missing)"
       - name: Upload screenshots artifact (files)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-test-screenshots-${{ matrix.shard.name }}
           path: |
