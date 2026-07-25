@@ -60,9 +60,18 @@ final class TeleportUITests: XCTestCase {
 
     /// Capture + attach a screenshot of the current app state.
     /// `.keepAlways` so CI uploads the artifact for visual review.
+    /// Uses the explicit PNG payload form (not XCTAttachment(screenshot:))
+    /// because the latter's reference is dropped under
+    /// `test-without-building` + parallel testing — the PNG bytes are
+    /// embedded directly in the xcresult and survive extraction.
     private func attachScreenshot(_ app: XCUIApplication, named name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
+        let png = app.screenshot().pngRepresentation
+        let attachment = XCTAttachment(
+            uniformTypeIdentifier: "public.png",
+            name: "\(name).png",
+            payload: png,
+            userInfo: nil
+        )
         attachment.lifetime = .keepAlways
         add(attachment)
     }
