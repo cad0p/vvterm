@@ -111,13 +111,20 @@ struct VVTermApp: App {
     private var usesTerminalZenModeUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-zen-mode-harness")
     }
+
+    private var usesTeleportUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-harness")
+    }
     #endif
 
     #if os(iOS)
     @ViewBuilder
     private var iOSRootContent: some View {
         #if DEBUG
-        if usesNoticePresentationUITestHarness {
+        if usesTeleportUITestHarness {
+            TeleportUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesNoticePresentationUITestHarness {
             NoticePresentationUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesStatsCardsLayoutUITestHarness {
