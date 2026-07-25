@@ -115,6 +115,13 @@ struct VVTermApp: App {
     private var usesTeleportUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-harness")
     }
+
+    /// True when ANY UI test harness launch arg is present. Used to skip
+    /// app-side singletons (ServerManager → CloudKitManager) that trap in
+    /// the simulator without iCloud entitlements.
+    static var isUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("--vvterm-ui-test-") }
+    }
     #endif
 
     #if os(iOS)
@@ -216,11 +223,20 @@ struct VVTermApp: App {
                     .environment(\.privacyModeEnabled, privacyModeEnabled)
                     .onAppear {
                         AppLanguage.applySelection(appLanguage)
-                        ServerManager.shared.handleAppLanguageChange()
+                        // Skip ServerManager access under UI test harnesses —
+                        // ServerManager.shared lazily inits CloudKitManager,
+                        // which calls CKContainer(identifier:) and traps
+                        // (EXC_BREAKPOINT) in the simulator without iCloud
+                        // entitlements. The harnesses don't need sync.
+                        if !Self.isUITestHarness {
+                            ServerManager.shared.handleAppLanguageChange()
+                        }
                     }
                     .onChange(of: appLanguage) { newValue in
                         AppLanguage.applySelection(newValue)
-                        ServerManager.shared.handleAppLanguageChange()
+                        if !Self.isUITestHarness {
+                            ServerManager.shared.handleAppLanguageChange()
+                        }
                     }
                 }
             }

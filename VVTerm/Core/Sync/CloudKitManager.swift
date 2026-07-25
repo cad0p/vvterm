@@ -64,7 +64,27 @@ final class CloudKitManager: ObservableObject {
     private var ensureZoneTask: Task<Void, Error>?
     private var zoneReady: Bool
 
+    /// True when running under a UI test harness (any `--vvterm-ui-test-*`
+    /// launch arg). Under XCUITest the app is built with
+    /// `CODE_SIGNING_ALLOWED=NO`, so the iCloud entitlement isn't applied
+    /// and `CKContainer(identifier:)` traps with `EXC_BREAKPOINT`. Skip
+    /// the container init in that case — harnesses don't sync.
+    private static var isUITesting: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(where: {
+            $0.hasPrefix("--vvterm-ui-test-")
+        })
+    }
+
     private init() {
+        if Self.isUITesting {
+            // CKContainer.default() doesn't require an entitlement — use it
+            // as a no-op placeholder so the let properties are initialized
+            // without trapping. Harnesses never call sync operations.
+            container = .default()
+            database = container.privateCloudDatabase
+            zoneReady = false
+            return
+        }
         container = CKContainer(identifier: CloudKitSyncConstants.cloudKitContainerIdentifier)
         database = container.privateCloudDatabase
         zoneReady = UserDefaults.standard.bool(forKey: CloudKitSyncConstants.zoneReadyKey(for: recordZoneName))
