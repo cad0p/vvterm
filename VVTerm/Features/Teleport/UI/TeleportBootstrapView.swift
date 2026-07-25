@@ -205,6 +205,12 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                 .foregroundStyle(Color.accentColor)
                 .underline()
                 .accessibilityIdentifier("vvterm.teleport.bootstrap.approvalURL")
+                // Explicit label guarantees the accessibility element's label
+                // equals the URL string exactly, regardless of how SwiftUI
+                // composes labels from Text content + modifiers. Without this,
+                // the label can include surrounding context or formatting
+                // markers, causing the UI test's XCTAssertEqual to fail.
+                .accessibilityLabel(approvalURL)
                 .accessibilityAddTraits(.isButton)
                 .onTapGesture {
                     #if os(iOS)
