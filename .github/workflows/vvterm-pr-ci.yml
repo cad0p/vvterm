@@ -7,10 +7,11 @@
 #   2. unit-tests  — runs VVTermTests (fast, pure logic). Downloads the
 #                    build artifact so it reuses the prebuilt app + SPM deps
 #                    and only compiles the VVTermTests target.
-#   3. ui-tests    — matrix of 4 parallel shard jobs, each downloading the
-#                    build artifact and running a subset of VVTermUITests via
-#                    -only-testing:. fail-fast is disabled so one failing shard
-#                    does not cancel the others.
+#   3. ui-tests    — matrix of 5 parallel shard jobs (notice-outlier,
+#                    keyboard-a/b/c, teleport), each downloading the build
+#                    artifact and running a subset of VVTermUITests via
+#                    -only-testing:. fail-fast is disabled so one failing
+#                    shard does not cancel the others.
 #
 # Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
 # feedback (unit tests finish first) and isolates UI test failures/hangs
@@ -18,14 +19,17 @@
 #
 # Concurrency-cap-aware shard count:
 #   - GitHub Actions caps this repo at 5 concurrent jobs. With build(1) +
-#     unit-tests(1) + 4 ui-tests = 6 jobs total, the build runs first alone,
-#     then the 5 test-phase jobs (4 UI + 1 unit) all fit within the cap with
-#     ZERO queueing. The previous 7-shard design overflowed to 9 jobs and
-#     queued 2-3 shards for ~8m.
-#   - 4 UI shards + unit-tests is preferred over 5 UI shards (dropping
-#     unit-tests) because: (a) unit-tests provides the fast feedback signal
-#     essential for the session-2.3 PR, (b) unit-tests runs in parallel and
-#     does not gate the UI shards, (c) the wall-time difference is small.
+#     unit-tests(1) + 5 ui-tests = 7 jobs total, the build runs first alone,
+#     then the 5 test-phase jobs (4 existing UI + 1 unit) fit within the cap.
+#     The 5th UI shard (`teleport`) waits for a slot only if all 5 existing
+#     test jobs are still running — in practice the unit-tests job finishes
+#     fast (~7s of tests + ~3m compile) and frees a slot before the teleport
+#     shard is scheduled. fail-fast is disabled so a failing shard does not
+#     cancel the others.
+#   - The `teleport` shard runs the 18 TeleportUITests (Phase 1/2/3 sheet
+#     matrices) against the DEBUG-only TeleportUITestHarness + mock
+#     coordinators (no real Safari/Face ID/Teleport server). Each test
+#     captures an XCTAttachment(screenshot:) with .keepAlways lifetime.
 #
 # Build-once-fanout architecture:
 #   - The `build` job compiles the app once and uploads Build/Products and
@@ -282,15 +286,23 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # 4 shards balanced via LPT bin-packing of measured per-method
+          # 5 shards: 4 existing (notice-outlier, keyboard-a/b/c) + a new
+          # `teleport` shard for the 18 TeleportUITests (Phase 1/2/3 sheets).
+          # 5 UI shards + unit-tests = 6 jobs total. The build job runs first
+          # alone, then the 5 test-phase jobs (4 UI + 1 unit) all fit within
+          # GitHub's 5-concurrent-macOS-job cap with ZERO queueing. fail-fast
+          # is disabled so one failing shard does not cancel the others.
+          #
+          # Shard split is balanced via LPT bin-packing of measured per-method
           # runtimes (CI run 30069836793, calibrated against the 7-shard
-          # totals from run 30092781079). 4 UI shards + unit-tests = 5 test
-          # jobs, fitting GitHub's 5-concurrent-macOS-job cap with ZERO
-          # queueing. Each shard: ~53s setup + ~880s tests ≈ 15.6m.
+          # totals from run 30092781079). Each entry's `only-testing` is a
+          # comma-separated list of Target/Class/method (or Target/Class for
+          # whole-class) — no spaces.
           # Shard 1 holds the 226s testConcurrentOperationsStackAboveBottomToolbar
           # outlier (hard floor) paired with the smallest other tests.
-          # Each entry's `only-testing` is a comma-separated list of
-          # Target/Class/method (or Target/Class for whole-class) — no spaces.
+          # The `teleport` shard runs the whole TeleportUITests class (18
+          # methods, ~30s each — the mocks script deterministic state
+          # transitions with no real Safari/Face ID/server).
           - name: notice-outlier
             only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/StatsAppearancePresentationUITests,VVTermUITests/VVTermUITests/testLaunchPerformance"
           - name: keyboard-a
@@ -299,6 +311,8 @@ jobs:
             only-testing: "VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalZenModeUITests,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/NoticePresentationUITests/testInitialConnectionSheetYieldsToTmuxSelectionSheet"
           - name: keyboard-c
             only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesBottomSheet,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/VVTermUITests/testExample"
+          - name: teleport
+            only-testing: "VVTermUITests/TeleportUITests"
 
     steps:
       - name: Checkout
