@@ -361,15 +361,30 @@ jobs:
           # -only-testing: restricts execution to this shard's tests.
           XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
           echo "Using xctestrun manifest: $XCRUN"
-          # Screenshots are written here by the tests as loose PNG files
-          # (see attachScreenshot in TeleportUITests.swift). Upload this dir
-          # for visual verification — more reliable than xcresult attachments.
-          # TEST_RUNNER_ prefix (Xcode 13+) forwards the var (prefix stripped)
-          # into the XCTest runner process so ProcessInfo.processInfo can read
-          # SCREENSHOT_DIR from inside the UI test.
+
+          # Inject SCREENSHOT_DIR into the xctestrun plist's
+          # EnvironmentVariables dictionary. The TEST_RUNNER_ env-var prefix
+          # only works with `xcodebuild test` (which re-resolves the scheme),
+          # NOT with `test-without-building -xctestrun` (which uses the
+          # pre-baked plist from build-for-testing). PlistBuddy writes
+          # SCREENSHOT_DIR into the plist so the UI test runner process sees
+          # it via ProcessInfo.processInfo.environment.
           export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
           mkdir -p "$SCREENSHOT_DIR"
-          export TEST_RUNNER_SCREENSHOT_DIR="$SCREENSHOT_DIR"
+          # The xctestrun plist has one top-level key per test target. Find
+          # the VVTermUITests key and add SCREENSHOT_DIR to its
+          # EnvironmentVariables dict (create the dict if missing).
+          TARGET_KEY=$(/usr/libexec/PlistBuddy -c "Print" "$XCRUN" 2>/dev/null \
+            | grep -E '^[A-Za-z0-9_.-]+ =' | awk -F' = ' '{print $1}' \
+            | grep -i 'UITest' | head -1)
+          if [ -n "$TARGET_KEY" ]; then
+            /usr/libexec/PlistBuddy -c "Add :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR string $SCREENSHOT_DIR" "$XCRUN" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR $SCREENSHOT_DIR" "$XCRUN" 2>/dev/null || true
+            echo "Injected SCREENSHOT_DIR=$SCREENSHOT_DIR into $TARGET_KEY"
+          else
+            echo "WARNING: could not find UITest target key in xctestrun; screenshots will fall back to NSTemporaryDirectory"
+          fi
+
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
