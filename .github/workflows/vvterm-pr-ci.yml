@@ -201,13 +201,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache SPM packages
-        # Cache only SourcePackages (not DerivedData) — this job downloads
-        # the build artifact from the build job into $RUNNER_TEMP/DerivedData,
-        # mirroring the ui-tests shards.
+      - name: Cache SPM packages + DerivedData
+        # Cache SourcePackages AND the full DerivedData tree (matching the
+        # build job). unit-tests has `needs: build`, so build saves this
+        # cache before unit-tests runs; unit-tests restores it and skips
+        # re-resolving/recompiling SPM deps. The build artifact (downloaded
+        # next) overwrites Build/Products with the current build, so the
+        # final state is: cached SourcePackages + current build products.
+        # Zero extra storage cost — actions/cache skips the post-step save
+        # on a primary-key cache hit (caches are immutable).
         uses: actions/cache@v6
         with:
-          path: ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ${{ runner.temp }}/DerivedData
           key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-xcode27-spm-
