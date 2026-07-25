@@ -19,6 +19,11 @@
 //  (the form waits for the user to confirm the device name) — the tests
 //  tap the Continue button via its accessibility identifier.
 //
+//  Each phase's coordinator is held by a dedicated wrapper view via
+//  `@StateObject` so SwiftUI does NOT recreate it on body re-evaluation
+//  (recreating it would reset the `@Published state` and break the
+//  `.task` lifecycle that drives `begin()`).
+//
 //  See:
 //    - VVTerm/App/iOS/NoticePresentationUITestHarness+iOS.swift (harness pattern)
 //    - VVTermUITests/Features/Teleport/TeleportUITests.swift (the XCUITests)
@@ -33,76 +38,56 @@ struct TeleportUITestHarness: View {
     /// `cluster.host` and `cluster.username` for display copy.
     private let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
 
-    /// The Phase-2 registration sheet needs a Phase-1 result to construct.
-    /// Build a minimal fixture (the registration mock ignores the contents).
-    private let bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult = {
-        let attributes: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String: 256,
-        ]
-        var error: Unmanaged<CFError>?
-        let secKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error)!
-        return TeleportBootstrapCoordinator.BootstrapResult(
-            sshCertPEM: "harness-cert-pem",
-            tlsCertPEM: "harness-tls-cert-pem",
-            tlsKeyPairPrivateKey: secKey,
-            clusterName: "teleport.pcad.it",
-            clusterCAPEMs: [],
-            certValidBefore: Date().addingTimeInterval(3600)
-        )
-    }()
-
     var body: some View {
         Group {
             switch phase {
             case .bootstrap:
-                bootstrapSheet
+                BootstrapHarnessSheet(scenario: bootstrapScenario, cluster: cluster)
             case .registration:
-                registrationSheet
+                RegistrationHarnessSheet(
+                    scenario: registrationScenario,
+                    cluster: cluster,
+                    bootstrapResult: bootstrapResult
+                )
             case .login:
-                loginSheet
+                LoginHarnessSheet(scenario: loginScenario, cluster: cluster)
             }
         }
         .preferredColorScheme(.dark)
     }
 
-    // MARK: - Phase 1: bootstrap
+    // MARK: - Phase 2 bootstrap result fixture
 
-    @ViewBuilder
-    private var bootstrapSheet: some View {
-        let coordinator = MockTeleportBootstrapCoordinator(scenario: bootstrapScenario)
-        TeleportBootstrapView(
-            coordinator: coordinator,
-            cluster: cluster,
-            onSuccess: { _ in },
-            onCancel: {}
-        )
-    }
-
-    // MARK: - Phase 2: registration
-
-    @ViewBuilder
-    private var registrationSheet: some View {
-        let coordinator = MockTeleportRegistrationCoordinator(scenario: registrationScenario)
-        TeleportRegistrationView(
-            coordinator: coordinator,
-            cluster: cluster,
-            bootstrapResult: bootstrapResult,
-            onSuccess: {},
-            onCancel: {}
-        )
-    }
-
-    // MARK: - Phase 3: login
-
-    @ViewBuilder
-    private var loginSheet: some View {
-        let coordinator = MockTeleportLoginCoordinator(scenario: loginScenario)
-        TeleportLoginView(
-            coordinator: coordinator,
-            cluster: cluster,
-            onSuccess: {},
-            onCancel: {}
+    /// The Phase-2 registration sheet needs a Phase-1 result to construct.
+    /// Build a minimal fixture on demand (computed so it's only evaluated
+    /// when the registration phase is active). The registration mock ignores
+    /// the result's contents — only the type is required to satisfy
+    /// `TeleportRegistrationView`'s initializer.
+    private var bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult {
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+        ]
+        var error: Unmanaged<CFError>?
+        var secKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error)
+        if secKey == nil {
+            var retryError: Unmanaged<CFError>?
+            secKey = SecKeyCreateRandomKey(attributes as CFDictionary, &retryError)
+        }
+        guard let key = secKey else {
+            // SecKeyCreateRandomKey failed twice — this shouldn't happen in
+            // the simulator, but if it does the registration sheet can't be
+            // constructed. Crash with a clear message so the test surfaces
+            // the real cause instead of a nil-force-unwrap.
+            fatalError("TeleportUITestHarness: SecKeyCreateRandomKey failed for bootstrap result fixture")
+        }
+        return TeleportBootstrapCoordinator.BootstrapResult(
+            sshCertPEM: "harness-cert-pem",
+            tlsCertPEM: "harness-tls-cert-pem",
+            tlsKeyPairPrivateKey: key,
+            clusterName: "teleport.pcad.it",
+            clusterCAPEMs: [],
+            certValidBefore: Date().addingTimeInterval(3600)
         )
     }
 
@@ -225,6 +210,87 @@ struct TeleportUITestHarness: View {
     private enum LoginScenario: String {
         case happyPath12h, happyPath1h, certExpiredOnTap
         case faceIDCancelled, faceIDUnavailable, serverUnreachable
+    }
+}
+
+// MARK: - Phase wrapper sheets
+//
+// Each phase's coordinator is held in `@StateObject` so SwiftUI creates it
+// once and preserves it across body re-evaluations. If the coordinator were
+// created in a `@ViewBuilder` computed property, SwiftUI would recreate it
+// on every re-evaluation, resetting `@Published state` and breaking the
+// `.task` lifecycle that drives `begin()`.
+
+private struct BootstrapHarnessSheet: View {
+    let scenario: MockTeleportBootstrapCoordinator.Scenario
+    let cluster: TeleportCluster
+
+    @StateObject private var coordinator: MockTeleportBootstrapCoordinator
+
+    init(scenario: MockTeleportBootstrapCoordinator.Scenario, cluster: TeleportCluster) {
+        self.scenario = scenario
+        self.cluster = cluster
+        _coordinator = StateObject(wrappedValue: MockTeleportBootstrapCoordinator(scenario: scenario))
+    }
+
+    var body: some View {
+        TeleportBootstrapView(
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: { _ in },
+            onCancel: {}
+        )
+    }
+}
+
+private struct RegistrationHarnessSheet: View {
+    let scenario: MockTeleportRegistrationCoordinator.Scenario
+    let cluster: TeleportCluster
+    let bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
+
+    @StateObject private var coordinator: MockTeleportRegistrationCoordinator
+
+    init(
+        scenario: MockTeleportRegistrationCoordinator.Scenario,
+        cluster: TeleportCluster,
+        bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
+    ) {
+        self.scenario = scenario
+        self.cluster = cluster
+        self.bootstrapResult = bootstrapResult
+        _coordinator = StateObject(wrappedValue: MockTeleportRegistrationCoordinator(scenario: scenario))
+    }
+
+    var body: some View {
+        TeleportRegistrationView(
+            coordinator: coordinator,
+            cluster: cluster,
+            bootstrapResult: bootstrapResult,
+            onSuccess: {},
+            onCancel: {}
+        )
+    }
+}
+
+private struct LoginHarnessSheet: View {
+    let scenario: MockTeleportLoginCoordinator.Scenario
+    let cluster: TeleportCluster
+
+    @StateObject private var coordinator: MockTeleportLoginCoordinator
+
+    init(scenario: MockTeleportLoginCoordinator.Scenario, cluster: TeleportCluster) {
+        self.scenario = scenario
+        self.cluster = cluster
+        _coordinator = StateObject(wrappedValue: MockTeleportLoginCoordinator(scenario: scenario))
+    }
+
+    var body: some View {
+        TeleportLoginView(
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: {},
+            onCancel: {}
+        )
     }
 }
 #endif
