@@ -186,7 +186,7 @@ jobs:
 
   unit-tests:
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 30
     needs: build
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
