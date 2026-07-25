@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //  MockTeleportLoginCoordinator.swift
-//  VVTermUITests
+//  VVTerm
 //
 //  A mock `TeleportLoginCoordinating` implementation for UI tests.
 //
@@ -22,13 +22,13 @@
 //      (the protocol + real coordinator)
 //
 
+#if DEBUG
 import Combine
 import Foundation
-@testable import VVTerm
 
 /// A mock Phase-3 login coordinator that scripts state transitions based on
-/// a `Scenario`. Used by `TeleportLoginUITests` to assert the recovery UX
-/// for every case in mockup E, including the Face ID outcomes.
+/// a `Scenario`. Used by `TeleportUITestHarness` to drive the login sheet's
+/// recovery UX for every case in mockup E, including the Face ID outcomes.
 @MainActor
 final class MockTeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinating {
     /// The scripted login scenario.
@@ -110,3 +110,4 @@ final class MockTeleportLoginCoordinator: ObservableObject, TeleportLoginCoordin
         state = .failed(.faceIDCancelled)
     }
 }
+#endif

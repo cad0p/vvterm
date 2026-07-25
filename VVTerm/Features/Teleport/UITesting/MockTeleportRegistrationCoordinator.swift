@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //  MockTeleportRegistrationCoordinator.swift
-//  VVTermUITests
+//  VVTerm
 //
 //  A mock `TeleportRegistrationCoordinating` implementation for UI tests.
 //
@@ -23,13 +23,13 @@
 //      (the protocol + real coordinator)
 //
 
+#if DEBUG
 import Combine
 import Foundation
-@testable import VVTerm
 
 /// A mock Phase-2 registration coordinator that scripts state transitions
-/// based on a `Scenario`. Used by `TeleportRegistrationUITests` to assert
-/// the recovery UX for every case in mockup D.
+/// based on a `Scenario`. Used by `TeleportUITestHarness` to drive the
+/// registration sheet's recovery UX for every case in mockup D.
 @MainActor
 final class MockTeleportRegistrationCoordinator: ObservableObject, TeleportRegistrationCoordinating {
     /// The scripted registration scenario.
@@ -115,3 +115,4 @@ final class MockTeleportRegistrationCoordinator: ObservableObject, TeleportRegis
         state = .failed(.unknown("cancelled"))
     }
 }
+#endif

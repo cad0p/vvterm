@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //  MockTeleportBootstrapCoordinator.swift
-//  VVTermUITests
+//  VVTerm
 //
 //  A mock `TeleportBootstrapCoordinating` implementation for UI tests.
 //
@@ -28,13 +28,13 @@
 //      (the protocol + real coordinator)
 //
 
+#if DEBUG
 import Combine
 import Foundation
-@testable import VVTerm
 
 /// A mock Phase-1 bootstrap coordinator that scripts state transitions
-/// based on a `Scenario`. Used by `TeleportBootstrapUITests` to assert the
-/// recovery UX for every failure case in mockup C.
+/// based on a `Scenario`. Used by `TeleportUITestHarness` to drive the
+/// bootstrap sheet's recovery UX for every failure case in mockup C.
 @MainActor
 final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoordinating {
     /// The scripted bootstrap scenario. Each maps to a specific recovery UX.
@@ -173,3 +173,4 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
         )
     }
 }
+#endif

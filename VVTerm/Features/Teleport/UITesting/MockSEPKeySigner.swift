@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //  MockSEPKeySigner.swift
-//  VVTermUITests
+//  VVTerm
 //
 //  A mock `SEPKeySigning` + `WebAuthnSigner` implementation for UI tests.
 //
@@ -30,10 +30,10 @@
 //      (TeleportSEPSigning = WebAuthnSigner & SEPKeySigning & AnyObject)
 //
 
+#if DEBUG
 import Foundation
 import Security
 import CryptoKit
-@testable import VVTerm
 
 /// A mock SEP signer that scripts Face ID outcomes for UI tests.
 ///
@@ -182,3 +182,4 @@ final class MockSEPKeySigner: TeleportSEPSigning {
         }
     }
 }
+#endif

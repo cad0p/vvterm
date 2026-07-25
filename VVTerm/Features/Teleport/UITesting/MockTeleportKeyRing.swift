@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //  MockTeleportKeyRing.swift
-//  VVTermUITests
+//  VVTerm
 //
 //  A mock `TeleportKeyRingStoring` implementation for UI tests.
 //
@@ -25,12 +25,12 @@
 //      (TeleportDeviceReadinessResolver)
 //
 
+#if DEBUG
 import Combine
 import Foundation
-@testable import VVTerm
 
 /// A mock Teleport key ring that scripts per-cluster credential state for
-/// UI tests. Used by `TeleportReadinessUITests` to drive the 5-row readiness
+/// UI tests. Used by `TeleportUITestHarness` to drive the 5-row readiness
 /// matrix (ready / needsLogin / needsRegistration / needsBootstrap /
 /// cross-device).
 @MainActor
@@ -195,3 +195,4 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         ed25519PrivateKeys.removeValue(forKey: clusterId)
     }
 }
+#endif
