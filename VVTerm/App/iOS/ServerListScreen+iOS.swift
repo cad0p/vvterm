@@ -510,8 +510,8 @@ struct ServerListScreen: View {
         )
         switch readiness {
         case .needsBootstrap:
-            TeleportBootstrapView(
-                coordinator: makeBootstrapCoordinator(),
+            TeleportBootstrapSheet(
+                makeCoordinator: { makeBootstrapCoordinator() },
                 cluster: cluster,
                 onSuccess: { result in
                     // Phase 1 → Phase 2: hold the result (TLS keypair) in
@@ -536,8 +536,8 @@ struct ServerListScreen: View {
             // If the result is missing (e.g. the app was killed between
             // Phase 1 and Phase 2), fall back to re-bootstrapping.
             if let bootstrapResult = teleportBootstrapResult {
-                TeleportRegistrationView(
-                    coordinator: makeRegistrationCoordinator(),
+                TeleportRegistrationSheet(
+                    makeCoordinator: { makeRegistrationCoordinator() },
                     cluster: cluster,
                     bootstrapResult: bootstrapResult,
                     onSuccess: {
@@ -557,8 +557,8 @@ struct ServerListScreen: View {
             } else {
                 // No in-memory bootstrap result — re-bootstrap to regenerate
                 // the TLS keypair, then chain to registration on success.
-                TeleportBootstrapView(
-                    coordinator: makeBootstrapCoordinator(),
+                TeleportBootstrapSheet(
+                    makeCoordinator: { makeBootstrapCoordinator() },
                     cluster: cluster,
                     onSuccess: { result in
                         teleportBootstrapResult = result
@@ -573,8 +573,8 @@ struct ServerListScreen: View {
                 .adaptiveSoftScrollEdges()
             }
         case .needsLogin:
-            TeleportLoginView(
-                coordinator: makeLoginCoordinator(),
+            TeleportLoginSheet(
+                makeCoordinator: { makeLoginCoordinator() },
                 cluster: cluster,
                 onSuccess: {
                     // Phase 3 complete — the live cert is issued. Dismiss.
@@ -623,6 +623,119 @@ struct ServerListScreen: View {
             keyRing: TeleportKeyRing.shared,
             signer: SecureEnclaveSigner(),
             webAuthnBuilder: TeleportWebAuthnBuilder()
+        )
+    }
+}
+
+// MARK: - Teleport phase sheet wrappers
+//
+// Each Teleport phase view (bootstrap / registration / login) observes its
+// coordinator via `@ObservedObject`. The coordinator MUST be held in a
+// `@StateObject`-backed wrapper so SwiftUI creates it once (when the sheet
+// first appears) and preserves its identity across the PARENT view's body
+// re-evaluations. Constructing the coordinator inline in `teleportSetupSheet`
+// (the previous wiring) orphaned the coordinator that reached `.success`
+// when the parent re-rendered during the async POST — the sheet's
+// `.onChange(of: coordinator.state)` then observed a fresh `.idle`
+// coordinator, so `onSuccess` never fired (the live-device "stuck on Waiting
+// for Safari approval" bug).
+
+private struct TeleportBootstrapSheet: View {
+    let makeCoordinator: () -> TeleportBootstrapCoordinator
+    let cluster: TeleportCluster
+    let onSuccess: (TeleportBootstrapCoordinator.BootstrapResult) -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var coordinator: TeleportBootstrapCoordinator
+
+    @MainActor
+    init(
+        makeCoordinator: @escaping () -> TeleportBootstrapCoordinator,
+        cluster: TeleportCluster,
+        onSuccess: @escaping (TeleportBootstrapCoordinator.BootstrapResult) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.makeCoordinator = makeCoordinator
+        self.cluster = cluster
+        self.onSuccess = onSuccess
+        self.onCancel = onCancel
+        _coordinator = StateObject(wrappedValue: makeCoordinator())
+    }
+
+    var body: some View {
+        TeleportBootstrapView(
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: onSuccess,
+            onCancel: onCancel
+        )
+    }
+}
+
+private struct TeleportRegistrationSheet: View {
+    let makeCoordinator: () -> TeleportRegistrationCoordinator
+    let cluster: TeleportCluster
+    let bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
+    let onSuccess: () -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var coordinator: TeleportRegistrationCoordinator
+
+    @MainActor
+    init(
+        makeCoordinator: @escaping () -> TeleportRegistrationCoordinator,
+        cluster: TeleportCluster,
+        bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult,
+        onSuccess: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.makeCoordinator = makeCoordinator
+        self.cluster = cluster
+        self.bootstrapResult = bootstrapResult
+        self.onSuccess = onSuccess
+        self.onCancel = onCancel
+        _coordinator = StateObject(wrappedValue: makeCoordinator())
+    }
+
+    var body: some View {
+        TeleportRegistrationView(
+            coordinator: coordinator,
+            cluster: cluster,
+            bootstrapResult: bootstrapResult,
+            onSuccess: onSuccess,
+            onCancel: onCancel
+        )
+    }
+}
+
+private struct TeleportLoginSheet: View {
+    let makeCoordinator: () -> TeleportLoginCoordinator
+    let cluster: TeleportCluster
+    let onSuccess: () -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var coordinator: TeleportLoginCoordinator
+
+    @MainActor
+    init(
+        makeCoordinator: @escaping () -> TeleportLoginCoordinator,
+        cluster: TeleportCluster,
+        onSuccess: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.makeCoordinator = makeCoordinator
+        self.cluster = cluster
+        self.onSuccess = onSuccess
+        self.onCancel = onCancel
+        _coordinator = StateObject(wrappedValue: makeCoordinator())
+    }
+
+    var body: some View {
+        TeleportLoginView(
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: onSuccess,
+            onCancel: onCancel
         )
     }
 }

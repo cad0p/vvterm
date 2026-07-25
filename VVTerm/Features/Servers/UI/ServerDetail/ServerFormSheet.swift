@@ -455,8 +455,8 @@ struct ServerFormSheet: View {
                 .adaptiveSoftScrollEdges()
             }
             .sheet(isPresented: $showingTeleportBootstrap) {
-                TeleportBootstrapView(
-                    coordinator: makeBootstrapCoordinator(),
+                TeleportBootstrapSheet(
+                    makeCoordinator: { makeBootstrapCoordinator() },
                     cluster: teleportCluster,
                     onSuccess: { result in
                         teleportBootstrapResult = result
@@ -471,8 +471,8 @@ struct ServerFormSheet: View {
             }
             .sheet(isPresented: $showingTeleportRegistration) {
                 if let bootstrapResult = teleportBootstrapResult {
-                    TeleportRegistrationView(
-                        coordinator: makeRegistrationCoordinator(),
+                    TeleportRegistrationSheet(
+                        makeCoordinator: { makeRegistrationCoordinator() },
                         cluster: teleportCluster,
                         bootstrapResult: bootstrapResult,
                         onSuccess: {
@@ -487,8 +487,8 @@ struct ServerFormSheet: View {
                 }
             }
             .sheet(isPresented: $showingTeleportLogin) {
-                TeleportLoginView(
-                    coordinator: makeLoginCoordinator(),
+                TeleportLoginSheet(
+                    makeCoordinator: { makeLoginCoordinator() },
                     cluster: teleportCluster,
                     onSuccess: {
                         showingTeleportLogin = false
@@ -1446,6 +1446,119 @@ struct ServerFormSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Teleport phase sheet wrappers
+//
+// Each Teleport phase view (bootstrap / registration / login) observes its
+// coordinator via `@ObservedObject`. The coordinator MUST be held in a
+// `@StateObject`-backed wrapper so SwiftUI creates it once (when the sheet
+// first appears) and preserves its identity across the PARENT view's body
+// re-evaluations. Constructing the coordinator inline in the `.sheet` content
+// (the previous wiring) orphaned the coordinator that reached `.success`
+// when the parent re-rendered during the async POST — the sheet's
+// `.onChange(of: coordinator.state)` then observed a fresh `.idle`
+// coordinator, so `onSuccess` never fired (the live-device "stuck on Waiting
+// for Safari approval" bug).
+
+private struct TeleportBootstrapSheet: View {
+    let makeCoordinator: () -> TeleportBootstrapCoordinator
+    let cluster: TeleportCluster
+    let onSuccess: (TeleportBootstrapCoordinator.BootstrapResult) -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var coordinator: TeleportBootstrapCoordinator
+
+    @MainActor
+    init(
+        makeCoordinator: @escaping () -> TeleportBootstrapCoordinator,
+        cluster: TeleportCluster,
+        onSuccess: @escaping (TeleportBootstrapCoordinator.BootstrapResult) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.makeCoordinator = makeCoordinator
+        self.cluster = cluster
+        self.onSuccess = onSuccess
+        self.onCancel = onCancel
+        _coordinator = StateObject(wrappedValue: makeCoordinator())
+    }
+
+    var body: some View {
+        TeleportBootstrapView(
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: onSuccess,
+            onCancel: onCancel
+        )
+    }
+}
+
+private struct TeleportRegistrationSheet: View {
+    let makeCoordinator: () -> TeleportRegistrationCoordinator
+    let cluster: TeleportCluster
+    let bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
+    let onSuccess: () -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var coordinator: TeleportRegistrationCoordinator
+
+    @MainActor
+    init(
+        makeCoordinator: @escaping () -> TeleportRegistrationCoordinator,
+        cluster: TeleportCluster,
+        bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult,
+        onSuccess: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.makeCoordinator = makeCoordinator
+        self.cluster = cluster
+        self.bootstrapResult = bootstrapResult
+        self.onSuccess = onSuccess
+        self.onCancel = onCancel
+        _coordinator = StateObject(wrappedValue: makeCoordinator())
+    }
+
+    var body: some View {
+        TeleportRegistrationView(
+            coordinator: coordinator,
+            cluster: cluster,
+            bootstrapResult: bootstrapResult,
+            onSuccess: onSuccess,
+            onCancel: onCancel
+        )
+    }
+}
+
+private struct TeleportLoginSheet: View {
+    let makeCoordinator: () -> TeleportLoginCoordinator
+    let cluster: TeleportCluster
+    let onSuccess: () -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var coordinator: TeleportLoginCoordinator
+
+    @MainActor
+    init(
+        makeCoordinator: @escaping () -> TeleportLoginCoordinator,
+        cluster: TeleportCluster,
+        onSuccess: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.makeCoordinator = makeCoordinator
+        self.cluster = cluster
+        self.onSuccess = onSuccess
+        self.onCancel = onCancel
+        _coordinator = StateObject(wrappedValue: makeCoordinator())
+    }
+
+    var body: some View {
+        TeleportLoginView(
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: onSuccess,
+            onCancel: onCancel
+        )
     }
 }
 
