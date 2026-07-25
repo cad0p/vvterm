@@ -120,6 +120,10 @@ struct VVTermApp: App {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-serverlist")
     }
 
+    private var usesTeleportIOSServerListUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-ios-serverlist")
+    }
+
     private var usesTeleportPhaseChainUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-phase-chain")
     }
@@ -138,6 +142,9 @@ struct VVTermApp: App {
         #if DEBUG
         if usesTeleportServerListUITestHarness {
             TeleportServerListUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTeleportIOSServerListUITestHarness {
+            TeleportIOSServerListUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesTeleportPhaseChainUITestHarness {
             TeleportPhaseChainUITestHarness()
