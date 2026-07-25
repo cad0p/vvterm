@@ -287,8 +287,18 @@ final class TeleportUITests: XCTestCase {
 
     // MARK: - Phase 3: Login matrix (mockup E — 6 scenarios)
 
+    /// Tap the "Sign in with Face ID" button to start the login flow.
+    /// Unlike bootstrap (which auto-begins via .task), the login sheet starts
+    /// in .idle and requires a user tap to trigger coordinator.begin().
+    private func tapSignInButton(_ app: XCUIApplication) {
+        let signIn = app.buttons["vvterm.teleport.login.signInButton"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 5), "Sign in button should be visible in idle state")
+        signIn.tap()
+    }
+
     func testLogin_happyPath12h_showsSuccessCopyWith12hValidity() {
         let app = launch(phase: "login", scenario: "happyPath12h")
+        tapSignInButton(app)
         let successTitle = app.staticTexts["vvterm.teleport.login.successTitle"]
         XCTAssertTrue(successTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(successTitle.label, "Signed in")
@@ -311,6 +321,7 @@ final class TeleportUITests: XCTestCase {
 
     func testLogin_happyPath1h_showsSuccessCopyWith1hValidity() {
         let app = launch(phase: "login", scenario: "happyPath1h")
+        tapSignInButton(app)
         let successTitle = app.staticTexts["vvterm.teleport.login.successTitle"]
         XCTAssertTrue(successTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(successTitle.label, "Signed in")
@@ -330,6 +341,7 @@ final class TeleportUITests: XCTestCase {
 
     func testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL() {
         let app = launch(phase: "login", scenario: "certExpiredOnTap")
+        tapSignInButton(app)
         let successTitle = app.staticTexts["vvterm.teleport.login.successTitle"]
         XCTAssertTrue(successTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(successTitle.label, "Signed in")
@@ -345,6 +357,7 @@ final class TeleportUITests: XCTestCase {
 
     func testLogin_faceIDCancelled_showsFaceIDCancelledCopy() {
         let app = launch(phase: "login", scenario: "faceIDCancelled")
+        tapSignInButton(app)
         let errorTitle = app.staticTexts["vvterm.teleport.login.errorTitle"]
         XCTAssertTrue(errorTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(errorTitle.label, "Face ID Cancelled")
@@ -359,6 +372,7 @@ final class TeleportUITests: XCTestCase {
 
     func testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy() {
         let app = launch(phase: "login", scenario: "faceIDUnavailable")
+        tapSignInButton(app)
         let errorTitle = app.staticTexts["vvterm.teleport.login.errorTitle"]
         XCTAssertTrue(errorTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(errorTitle.label, "Face ID Unavailable")
@@ -375,6 +389,7 @@ final class TeleportUITests: XCTestCase {
 
     func testLogin_serverUnreachable_showsNetworkLostCopy() {
         let app = launch(phase: "login", scenario: "serverUnreachable")
+        tapSignInButton(app)
         let errorTitle = app.staticTexts["vvterm.teleport.login.errorTitle"]
         XCTAssertTrue(errorTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(errorTitle.label, "Network Connection Lost")
