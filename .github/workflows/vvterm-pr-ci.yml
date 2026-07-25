@@ -376,8 +376,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
 
-      - name: Upload test results on failure
-        if: failure()
+      - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ui-test-results-${{ matrix.shard.name }}

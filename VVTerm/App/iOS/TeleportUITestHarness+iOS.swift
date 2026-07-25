@@ -227,6 +227,7 @@ private struct BootstrapHarnessSheet: View {
 
     @StateObject private var coordinator: MockTeleportBootstrapCoordinator
 
+    @MainActor
     init(scenario: MockTeleportBootstrapCoordinator.Scenario, cluster: TeleportCluster) {
         self.scenario = scenario
         self.cluster = cluster
@@ -250,6 +251,7 @@ private struct RegistrationHarnessSheet: View {
 
     @StateObject private var coordinator: MockTeleportRegistrationCoordinator
 
+    @MainActor
     init(
         scenario: MockTeleportRegistrationCoordinator.Scenario,
         cluster: TeleportCluster,
@@ -278,6 +280,7 @@ private struct LoginHarnessSheet: View {
 
     @StateObject private var coordinator: MockTeleportLoginCoordinator
 
+    @MainActor
     init(scenario: MockTeleportLoginCoordinator.Scenario, cluster: TeleportCluster) {
         self.scenario = scenario
         self.cluster = cluster
