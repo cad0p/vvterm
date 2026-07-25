@@ -393,10 +393,20 @@ jobs:
 
       - name: Upload screenshots artifact
         if: always()
+        run: |
+          echo "=== Searching for test-written files ==="
+          find "$RUNNER_TEMP" -name 'setUp-marker.txt' -o -name 'bootstrap-*.png' -o -name 'registration-*.png' -o -name 'login-*.png' 2>/dev/null | head -50 || true
+          echo "=== Searching simulator containers ==="
+          find ~/Library/Developer/CoreSimulator/Devices -name 'setUp-marker.txt' 2>/dev/null | head -10 || true
+          echo "=== SCREENSHOT_DIR contents ==="
+          ls -la "$RUNNER_TEMP/screenshots" 2>/dev/null || echo "(empty or missing)"
+      - name: Upload screenshots artifact (files)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ui-test-screenshots-${{ matrix.shard.name }}
           path: |
             ${{ runner.temp }}/screenshots
             ${{ runner.temp }}/DerivedData/**/screenshots
+            ${{ runner.temp }}/DerivedData/**/vvterm-test-markers
           if-no-files-found: ignore

@@ -34,6 +34,18 @@ final class TeleportUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // Diagnostic: write a marker file so CI can confirm the test process
+        // can write files at all, and log the env to the test console.
+        let env = ProcessInfo.processInfo.environment
+        let markerDir = env["SCREENSHOT_DIR"] ?? "\(NSTemporaryDirectory())vvterm-test-markers"
+        try? FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: markerDir),
+            withIntermediateDirectories: true
+        )
+        let marker = URL(fileURLWithPath: markerDir).appendingPathComponent("setUp-marker.txt")
+        let envDump = "SCREENSHOT_DIR=\(env["SCREENSHOT_DIR"] ?? "<nil>")\nTEST_RUNNER_SCREENSHOT_DIR=\(env["TEST_RUNNER_SCREENSHOT_DIR"] ?? "<nil>")\nNSTemporaryDirectory=\(NSTemporaryDirectory())\nNSHomeDirectory=\(NSHomeDirectory())"
+        try? envDump.data(using: .utf8)?.write(to: marker)
+        print("VVTERM_TELEPORT_TEST: env=\(envDump)")
     }
 
     // MARK: - Launch helper
