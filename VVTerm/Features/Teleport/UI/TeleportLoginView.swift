@@ -72,6 +72,7 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                         Task { await coordinator.cancel() }
                         onCancel()
                     }
+                    .accessibilityIdentifier("vvterm.teleport.login.cancelButton")
                 }
             }
         }
@@ -93,6 +94,7 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
             Text(String(localized: "Sign in with Face ID"))
                 .font(.title2.bold())
+                .accessibilityIdentifier("vvterm.teleport.login.header")
         }
     }
 
@@ -103,9 +105,11 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
             Text(cluster.host)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("vvterm.teleport.login.clusterHost")
             Text(String(format: String(localized: "user: %@"), cluster.username))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("vvterm.teleport.login.clusterUser")
         }
     }
 
@@ -118,6 +122,7 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
             ProgressView()
                 .progressViewStyle(.circular)
                 .controlSize(.large)
+                .accessibilityIdentifier("vvterm.teleport.login.inFlight")
         case .success(let certValidUntil):
             successView(certValidUntil: certValidUntil)
         case .failed(let error):
@@ -130,6 +135,7 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("vvterm.teleport.login.signInButton")
         }
     }
 
@@ -143,12 +149,14 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
             Text(String(localized: "Signed in"))
                 .font(.headline)
+                .accessibilityIdentifier("vvterm.teleport.login.successTitle")
 
             Text(certificateValidityText(certValidUntil: certValidUntil))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vvterm.teleport.login.successMessage")
         }
     }
 
@@ -162,12 +170,14 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
             Text(errorTitle(error))
                 .font(.headline)
+                .accessibilityIdentifier("vvterm.teleport.login.errorTitle")
 
             Text(errorMessage(error))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vvterm.teleport.login.errorMessage")
 
             Button {
                 Task { await coordinator.begin(cluster: cluster) }
@@ -176,6 +186,7 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .accessibilityIdentifier("vvterm.teleport.login.retryButton")
         }
     }
 
@@ -192,6 +203,7 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vvterm.teleport.login.footer")
         }
     }
 

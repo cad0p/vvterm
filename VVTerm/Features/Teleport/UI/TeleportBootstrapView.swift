@@ -76,6 +76,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                         Task { await coordinator.cancel() }
                         onCancel()
                     }
+                    .accessibilityIdentifier("vvterm.teleport.bootstrap.cancelButton")
                 }
             }
         }
@@ -100,6 +101,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
 
             Text(String(localized: "Approve in Safari"))
                 .font(.title2.bold())
+                .accessibilityIdentifier("vvterm.teleport.bootstrap.header")
         }
     }
 
@@ -124,6 +126,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vvterm.teleport.bootstrap.explanation")
 
             HStack(spacing: 10) {
                 ProgressView()
@@ -135,6 +138,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .accessibilityIdentifier("vvterm.teleport.bootstrap.waiting")
         }
     }
 
@@ -145,6 +149,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                 .foregroundStyle(.green)
             Text(String(localized: "Approved. Continuing…"))
                 .font(.headline)
+                .accessibilityIdentifier("vvterm.teleport.bootstrap.success")
         }
     }
 
@@ -157,12 +162,14 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
 
             Text(errorTitle(error))
                 .font(.headline)
+                .accessibilityIdentifier("vvterm.teleport.bootstrap.errorTitle")
 
             Text(errorMessage(error))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vvterm.teleport.bootstrap.errorMessage")
 
             if case .safariUnavailable = error {
                 manualSafariLink
@@ -193,6 +200,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                     .underline()
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("vvterm.teleport.bootstrap.approvalURL")
             Text(String(localized: "Copied to clipboard."))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -212,6 +220,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("vvterm.teleport.bootstrap.retryButton")
         default:
             EmptyView()
         }

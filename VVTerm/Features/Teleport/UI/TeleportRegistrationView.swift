@@ -99,6 +99,7 @@ struct TeleportRegistrationView<Coordinator: TeleportRegistrationCoordinating>: 
                         Task { await coordinator.cancel() }
                         onCancel()
                     }
+                    .accessibilityIdentifier("vvterm.teleport.registration.cancelButton")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
@@ -112,6 +113,7 @@ struct TeleportRegistrationView<Coordinator: TeleportRegistrationCoordinating>: 
                         }
                     }
                     .disabled(!isNameValid || isRegistering)
+                    .accessibilityIdentifier("vvterm.teleport.registration.continueButton")
                 }
             }
             .onChange(of: coordinator.state) { newValue in
@@ -133,13 +135,13 @@ struct TeleportRegistrationView<Coordinator: TeleportRegistrationCoordinating>: 
             }
         }
     }
-
     private var explanationSection: some View {
         Section {
             Text(String(localized: "Now register this device's Secure Enclave key so future logins are seamless Face ID. Safari will open once more for you to approve, then you'll be prompted for Face ID here to save the key."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vvterm.teleport.registration.explanation")
         }
     }
 
@@ -156,6 +158,7 @@ struct TeleportRegistrationView<Coordinator: TeleportRegistrationCoordinating>: 
                         nameError = nil
                     }
                 }
+                .accessibilityIdentifier("vvterm.teleport.registration.deviceNameField")
 
             Text(String(localized: "Used to identify this device in Teleport's admin panel. You can rename it freely."))
                 .font(.caption)
@@ -177,6 +180,7 @@ struct TeleportRegistrationView<Coordinator: TeleportRegistrationCoordinating>: 
                         .foregroundStyle(.red)
                 }
             }
+            .accessibilityIdentifier("vvterm.teleport.registration.nameError")
         }
     }
 
