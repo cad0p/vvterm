@@ -61,10 +61,19 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         fixtures[clusterId] = fixture
         // Build the TeleportCredential that matches (for the `credentials`
         // property + the registeredCredentialID/registeredUserHandle lookups).
+        // When there's no SEP key, leave credentialID/userHandle empty so
+        // registeredCredentialID(for:) returns nil (mirroring a real keychain
+        // with no registered key).
+        let credID: String = fixture.hasSEPKey
+            ? fixture.credentialID.base64URLEncodedString()
+            : ""
+        let userHandle: String = fixture.hasSEPKey
+            ? fixture.userHandle.base64URLEncodedString()
+            : ""
         var cred = TeleportCredential(
             clusterId: clusterId,
-            credentialID: fixture.credentialID.base64URLEncodedString(),
-            userHandle: fixture.userHandle.base64URLEncodedString(),
+            credentialID: credID,
+            userHandle: userHandle,
             publicKeyRaw: "",
             deviceName: fixture.deviceName
         )
