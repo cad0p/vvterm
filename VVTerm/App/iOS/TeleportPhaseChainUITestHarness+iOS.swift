@@ -55,7 +55,8 @@ struct TeleportPhaseChainUITestHarness: View {
                     readiness = read
                     presentingSheet = true
                 },
-                keyRing: keyRing
+                keyRing: keyRing,
+                isLockedOverride: false
             )
             .padding()
 
