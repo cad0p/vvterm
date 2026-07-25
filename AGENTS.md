@@ -170,12 +170,12 @@ Remote shell and multiplexer ownership:
 
 ## Product Planning and Repository Documentation
 
-- Keep product ideas, future specifications, roadmap decisions, pricing or packaging strategy, and internal rollout plans in the VVTerm Linear project, not in this repository.
-- Search Linear before creating work. Reuse or update an existing issue when it owns the same scope.
-- Create a Linear issue before a large implementation begins, and keep its decisions, acceptance criteria, and status current as the scope changes.
+- Keep product ideas, future specifications, roadmap decisions, pricing or packaging strategy, and internal rollout plans in GitHub Issues, not in this repository.
+- Search GitHub Issues before creating work. Reuse or update an existing issue when it owns the same scope.
+- Create a GitHub Issue before a large implementation begins, and keep its decisions, acceptance criteria, and status current as the scope changes.
 - Keep repository documentation limited to current architecture, build, test, security, contribution, protocol, and intentionally public user contracts that must evolve with code.
 - Enforce completed behavior with tests and concise current architecture rules instead of retaining speculative or completed implementation plans.
-- Linear is not a secret manager. Do not store credentials, tokens, private keys, customer data, or production secrets in either Linear or the repository.
+- GitHub Issues is not a secret manager. Do not store credentials, tokens, private keys, customer data, or production secrets in either GitHub Issues or the repository.
 
 ## Refactoring Rules
 
