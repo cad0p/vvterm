@@ -180,27 +180,34 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     /// The "Open Safari manually" recovery: a tappable URL that copies to
     /// the clipboard. Shown when `ASWebAuthenticationSession.start()` failed
     /// (Safari disabled / unavailable).
+    ///
+    /// The URL is rendered as a `Text` (not a `Button`) so it is exposed as
+    /// a StaticText accessibility element — UI tests query
+    /// `app.staticTexts["vvterm.teleport.bootstrap.approvalURL"]` and assert
+    /// its label equals the URL string. A `Button` would surface as a Button
+    /// element and the StaticText query would never resolve. Tap-to-copy is
+    /// preserved via `.onTapGesture`, which does not change the element's
+    /// accessibility role away from StaticText.
     private var manualSafariLink: some View {
         let approvalURL = "https://\(cluster.host)/web/headless/"
         return VStack(spacing: 6) {
             Text(String(localized: "Open Safari manually:"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button {
-                #if os(iOS)
-                UIPasteboard.general.string = approvalURL
-                #elseif os(macOS)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(approvalURL, forType: .string)
-                #endif
-            } label: {
-                Text(approvalURL)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Color.accentColor)
-                    .underline()
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("vvterm.teleport.bootstrap.approvalURL")
+            Text(approvalURL)
+                .font(.caption.monospaced())
+                .foregroundStyle(Color.accentColor)
+                .underline()
+                .accessibilityIdentifier("vvterm.teleport.bootstrap.approvalURL")
+                .accessibilityAddTraits(.isButton)
+                .onTapGesture {
+                    #if os(iOS)
+                    UIPasteboard.general.string = approvalURL
+                    #elseif os(macOS)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(approvalURL, forType: .string)
+                    #endif
+                }
             Text(String(localized: "Copied to clipboard."))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
