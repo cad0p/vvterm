@@ -51,7 +51,7 @@ import os.log
 /// `Live` impl is the `TeleportKeyRing` class; the protocol is
 /// `TeleportKeyRingStoring`.
 @MainActor
-protocol TeleportKeyRingStoring: AnyObject {
+protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
     /// All known credentials, keyed by cluster ID.
     var credentials: [UUID: TeleportCredential] { get }
 

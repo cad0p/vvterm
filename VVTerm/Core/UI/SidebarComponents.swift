@@ -17,8 +17,33 @@ struct ServerRow: View {
 
     @ObservedObject private var tabManager = TerminalTabManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
-    @ObservedObject private var keyRing = TeleportKeyRing.shared
+    @ObservedObject private var keyRing: TeleportKeyRingStoring
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
+
+    /// Testability hook: the key ring is injected so UI tests can drive the
+    /// readiness matrix via `MockTeleportKeyRing`. Production callers pass
+    /// `.shared` (the default), so there is no behavior change.
+    init(
+        server: Server,
+        isSelected: Bool,
+        onSelect: @escaping () -> Void,
+        onEdit: @escaping (Server) -> Void,
+        onMove: ((Server) -> Void)? = nil,
+        onConnect: ((Server) -> Void)? = nil,
+        onLockedTap: (() -> Void)? = nil,
+        onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
+        keyRing: TeleportKeyRingStoring = TeleportKeyRing.shared
+    ) {
+        self.server = server
+        self.isSelected = isSelected
+        self.onSelect = onSelect
+        self.onEdit = onEdit
+        self.onMove = onMove
+        self.onConnect = onConnect
+        self.onLockedTap = onLockedTap
+        self.onTeleportSetup = onTeleportSetup
+        self._keyRing = ObservedObject(wrappedValue: keyRing)
+    }
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     #endif
@@ -71,6 +96,7 @@ struct ServerRow: View {
             .background(selectionBackground)
             .opacity(isLocked ? 0.7 : 1.0)
             .contentShape(Rectangle())
+            .accessibilityIdentifier("vvterm.serverRow.\(server.id.uuidString)")
             .onTapGesture {
                 if isLocked {
                     onLockedTap?()
@@ -222,8 +248,10 @@ struct ServerRow: View {
             }
         case .needsBootstrap, .needsRegistration:
             PillBadge(text: String(localized: "Setup"), color: .orange)
+                .accessibilityIdentifier("vvterm.serverRow.readinessPill.setup")
         case .needsLogin:
             PillBadge(text: String(localized: "Sign in"), color: .blue)
+                .accessibilityIdentifier("vvterm.serverRow.readinessPill.signIn")
         }
     }
 }
