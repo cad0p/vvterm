@@ -351,7 +351,9 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Run UI tests (shard ${{ matrix.shard.name }})
+        shell: bash
         run: |
+          set +e  # GitHub Actions defaults to `bash -e`; disable so PlistBuddy/grep non-zero exits don't abort.
           set -uo pipefail
 
           # test-without-building with -xctestrun: run the prebuilt
