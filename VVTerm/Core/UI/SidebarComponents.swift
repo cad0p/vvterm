@@ -20,6 +20,12 @@ struct ServerRow: View {
     @ObservedObject private var keyRing: TeleportKeyRingStoring
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
 
+    /// Testability hook: when non-nil, overrides the `ServerManager` lock
+    /// check. UI test harnesses pass `false` so the row's tap → connect /
+    /// tap → setup routing is exercisable without seeding `ServerManager`
+    /// (which would trigger CloudKit). Production callers leave this nil.
+    private let isLockedOverride: Bool?
+
     /// Testability hook: the key ring is injected so UI tests can drive the
     /// readiness matrix via `MockTeleportKeyRing`. Production callers pass
     /// `.shared` (the default), so there is no behavior change.
@@ -32,7 +38,8 @@ struct ServerRow: View {
         onConnect: ((Server) -> Void)? = nil,
         onLockedTap: (() -> Void)? = nil,
         onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
-        keyRing: TeleportKeyRingStoring = TeleportKeyRing.shared
+        keyRing: TeleportKeyRingStoring = TeleportKeyRing.shared,
+        isLockedOverride: Bool? = nil
     ) {
         self.server = server
         self.isSelected = isSelected
@@ -43,13 +50,17 @@ struct ServerRow: View {
         self.onLockedTap = onLockedTap
         self.onTeleportSetup = onTeleportSetup
         self._keyRing = ObservedObject(wrappedValue: keyRing)
+        self.isLockedOverride = isLockedOverride
     }
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     #endif
 
     private var isLocked: Bool {
-        serverManager.isServerLocked(server)
+        if let override = isLockedOverride {
+            return override
+        }
+        return serverManager.isServerLocked(server)
     }
 
     /// The derived Teleport readiness for this server. Only computed for

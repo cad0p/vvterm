@@ -66,7 +66,8 @@ struct TeleportServerListUITestHarness: View {
                 onTeleportSetup: { _, readiness in
                     presentingSheet = sheetKind(for: readiness)
                 },
-                keyRing: keyRing
+                keyRing: keyRing,
+                isLockedOverride: false
             )
             .padding()
 
