@@ -120,6 +120,10 @@ struct VVTermApp: App {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-serverlist")
     }
 
+    private var usesTeleportPhaseChainUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-phase-chain")
+    }
+
     /// True when ANY UI test harness launch arg is present. Used to skip
     /// app-side singletons (ServerManager → CloudKitManager) that trap in
     /// the simulator without iCloud entitlements.
@@ -134,6 +138,9 @@ struct VVTermApp: App {
         #if DEBUG
         if usesTeleportServerListUITestHarness {
             TeleportServerListUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTeleportPhaseChainUITestHarness {
+            TeleportPhaseChainUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesTeleportUITestHarness {
             TeleportUITestHarness()
