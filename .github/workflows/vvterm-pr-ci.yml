@@ -352,7 +352,7 @@ jobs:
 
       - name: Run UI tests (shard ${{ matrix.shard.name }})
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           # test-without-building with -xctestrun: run the prebuilt
           # VVTermUITests.xctest from the build artifact with ZERO compilation.
@@ -371,19 +371,28 @@ jobs:
           # it via ProcessInfo.processInfo.environment.
           export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
           mkdir -p "$SCREENSHOT_DIR"
-          # The xctestrun plist has one top-level key per test target. Find
-          # the VVTermUITests key and add SCREENSHOT_DIR to its
-          # EnvironmentVariables dict (create the dict if missing).
-          TARGET_KEY=$(/usr/libexec/PlistBuddy -c "Print" "$XCRUN" 2>/dev/null \
-            | grep -E '^[A-Za-z0-9_.-]+ =' | awk -F' = ' '{print $1}' \
-            | grep -i 'UITest' | head -1)
-          if [ -n "$TARGET_KEY" ]; then
-            /usr/libexec/PlistBuddy -c "Add :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR string $SCREENSHOT_DIR" "$XCRUN" 2>/dev/null || \
-            /usr/libexec/PlistBuddy -c "Set :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR $SCREENSHOT_DIR" "$XCRUN" 2>/dev/null || true
-            echo "Injected SCREENSHOT_DIR=$SCREENSHOT_DIR into $TARGET_KEY"
-          else
-            echo "WARNING: could not find UITest target key in xctestrun; screenshots will fall back to NSTemporaryDirectory"
-          fi
+          # The xctestrun plist has one top-level key per test target. List
+          # all top-level keys and inject SCREENSHOT_DIR into each one's
+          # EnvironmentVariables dict (create the dict if missing). Use a
+          # subshell + grep that never fails so set -e (if enabled elsewhere)
+          # doesn't abort. We deliberately do NOT use set -e here because
+          # PlistBuddy returns non-zero on missing keys (expected) and we
+          # handle that with || true.
+          /usr/libexec/PlistBuddy -c "Print" "$XCRUN" 2>/dev/null \
+            | grep -E '^[A-Za-z0-9_.-]+ =' \
+            | awk -F' = ' '{print $1}' \
+            | while IFS= read -r TARGET_KEY; do
+                echo "Injecting SCREENSHOT_DIR into target: $TARGET_KEY"
+                /usr/libexec/PlistBuddy \
+                  -c "Add :${TARGET_KEY}:EnvironmentVariables dict" \
+                  -c "Add :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR string $SCREENSHOT_DIR" \
+                  "$XCRUN" 2>/dev/null || \
+                /usr/libexec/PlistBuddy \
+                  -c "Set :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR $SCREENSHOT_DIR" \
+                  "$XCRUN" 2>/dev/null || true
+              done
+          echo "xctestrun plist after injection:"
+          /usr/libexec/PlistBuddy -c "Print" "$XCRUN" 2>/dev/null | grep -A1 -i 'screenshot' || true
 
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
@@ -393,6 +402,9 @@ jobs:
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
+          # Preserve xcodebuild's exit code for the step status, but don't
+          # abort before the upload steps (which run on always()).
+          exit ${PIPESTATUS[0]}
 
       - name: Upload test results
         if: always()
