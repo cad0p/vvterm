@@ -2,7 +2,14 @@ import SwiftUI
 
 // MARK: - Server Row
 
-struct ServerRow<KeyRing: TeleportKeyRingStoring>: View {
+/// Generic over `KeyRing` so the row can observe a concrete
+/// `ObservableObject` (either the real `TeleportKeyRing` or a test
+/// `MockTeleportKeyRing`) while still being injectable. An existential
+/// `any TeleportKeyRingStoring` cannot conform to `ObservableObject`, so
+/// `@ObservedObject` requires a concrete type parameter. The
+/// `ObservableObject` constraint is on the struct (not just the init) so the
+/// `@ObservedObject` property wrapper can synthesize its conformance.
+struct ServerRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: TeleportKeyRingStoring {
     let server: Server
     let isSelected: Bool
     let onSelect: () -> Void
@@ -27,8 +34,7 @@ struct ServerRow<KeyRing: TeleportKeyRingStoring>: View {
     private let isLockedOverride: Bool?
 
     /// The key ring is injected so UI tests can drive the readiness matrix
-    /// via `MockTeleportKeyRing`. Production callers pass `.shared` (the
-    /// default), so there is no behavior change.
+    /// via `MockTeleportKeyRing`. Production callers pass `.shared`.
     init(
         server: Server,
         isSelected: Bool,
@@ -40,7 +46,7 @@ struct ServerRow<KeyRing: TeleportKeyRingStoring>: View {
         onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
         keyRing: KeyRing,
         isLockedOverride: Bool? = nil
-    ) where KeyRing: ObservableObject {
+    ) {
         self.server = server
         self.isSelected = isSelected
         self.onSelect = onSelect
