@@ -146,8 +146,16 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
     func retry() async {
         retryCallCount += 1
         state = .idle
-        // The caller (the bootstrap sheet) re-invokes begin() with the same
-        // cluster. We don't capture it here to avoid stale state.
+        // The view's retry button calls retry() but does not re-invoke begin().
+        // The real coordinator's retry() relies on the caller re-invoking
+        // begin() (the sheet holds the cluster). For the suspended scenario,
+        // the second begin() is supposed to succeed — re-trigger it here so
+        // the XCUITest can assert the recovery UX end-to-end (retry → success).
+        // Other scenarios stay at .idle after retry (the tests for those don't
+        // assert a post-retry state transition).
+        if scenario == .suspended, let cluster = lastCluster {
+            await begin(cluster: cluster)
+        }
     }
 
     /// Build a minimal `BootstrapResult` for the success scenarios. The
