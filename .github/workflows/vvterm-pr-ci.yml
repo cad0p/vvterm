@@ -396,5 +396,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ui-test-screenshots-${{ matrix.shard.name }}
-          path: ${{ runner.temp }}/screenshots
+          path: |
+            ${{ runner.temp }}/screenshots
+            ${{ runner.temp }}/DerivedData/**/screenshots
           if-no-files-found: ignore

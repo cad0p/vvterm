@@ -68,13 +68,32 @@ final class TeleportUITests: XCTestCase {
     private func attachScreenshot(_ app: XCUIApplication, named name: String) {
         let png = app.screenshot().pngRepresentation
 
-        // 1. Loose file (reliable for CI upload)
-        if let dir = ProcessInfo.processInfo.environment["SCREENSHOT_DIR"] {
+        // 1. Loose file (reliable for CI upload). Try SCREENSHOT_DIR env var
+        // (set by CI via TEST_RUNNER_SCREENSHOT_DIR), with fallbacks to a few
+        // well-known writable locations so we always capture the screenshot
+        // somewhere the workflow can find.
+        let env = ProcessInfo.processInfo.environment
+        let candidateDirs: [String] = [
+            env["SCREENSHOT_DIR"] ?? "",
+            env["CI_SCREENSHOT_DIR"] ?? "",
+            "\(NSTemporaryDirectory())screenshots",
+            "\(NSHomeDirectory())/screenshots"
+        ]
+        for dir in candidateDirs where !dir.isEmpty {
             let url = URL(fileURLWithPath: dir).appendingPathComponent("\(name).png")
-            try? png.write(to: url)
+            try? FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: dir),
+                withIntermediateDirectories: true
+            )
+            do {
+                try png.write(to: url)
+                break
+            } catch {
+                continue
+            }
         }
 
-        // 2. XCTAttachment fallback
+        // 2. XCTAttachment fallback (for local Xcode runs)
         let attachment = XCTAttachment(
             uniformTypeIdentifier: "public.png",
             name: "\(name).png",
