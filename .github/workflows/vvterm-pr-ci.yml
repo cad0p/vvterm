@@ -366,8 +366,12 @@ jobs:
           # Screenshots are written here by the tests as loose PNG files
           # (see attachScreenshot in TeleportUITests.swift). Upload this dir
           # for visual verification — more reliable than xcresult attachments.
+          # TEST_RUNNER_ prefix (Xcode 13+) forwards the var (prefix stripped)
+          # into the XCTest runner process so ProcessInfo.processInfo can read
+          # SCREENSHOT_DIR from inside the UI test.
           export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
           mkdir -p "$SCREENSHOT_DIR"
+          export TEST_RUNNER_SCREENSHOT_DIR="$SCREENSHOT_DIR"
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
