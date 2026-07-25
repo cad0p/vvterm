@@ -194,6 +194,12 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
             Text(String(localized: "Open Safari manually:"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                // Prevent SwiftUI from merging this Text with the URL Text
+                // below into a single accessibility element — the UI test
+                // queries `app.staticTexts["…approvalURL"]` and asserts its
+                // label equals the URL string, which would fail if the label
+                // were the merged "Open Safari manually:, https://…, Copied…".
+                .accessibilityElement()
             Text(approvalURL)
                 .font(.caption.monospaced())
                 .foregroundStyle(Color.accentColor)
@@ -211,6 +217,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
             Text(String(localized: "Copied to clipboard."))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+                .accessibilityElement()
         }
     }
 
