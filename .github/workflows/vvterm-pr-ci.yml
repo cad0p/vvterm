@@ -32,8 +32,10 @@
 #     captures an XCTAttachment(screenshot:) with .keepAlways lifetime.
 #
 # Build-once-fanout architecture:
-#   - The `build` job compiles the app once and uploads Build/Products and
-#     Build/Intermediates.noindex from DerivedData.
+#   - The `build` job compiles the app once and uploads Build/Products from
+#     DerivedData (Intermediates.noindex is excluded — ui-tests uses
+#     test-without-building and unit-tests gets compiled SPM intermediates
+#     from the SPM cache).
 #   - Each `ui-tests` shard downloads that artifact into the same
 #     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
 #     app and skips compilation. Each shard then runs only its assigned tests
@@ -163,15 +165,20 @@ jobs:
             | tee "$RUNNER_TEMP/build.log"
 
       - name: Archive build products
-        # Tar Build/Products + Build/Intermediates.noindex into a single
-        # archive. actions/upload-artifact does NOT preserve symlinks inside
-        # .app bundles (Frameworks symlinks, etc.), which breaks
-        # `test-without-building` ("Cannot launch simulated executable: no
-        # file found at .../VVTerm.app"). Tar preserves symlinks + permissions.
+        # Tar only Build/Products. actions/upload-artifact does NOT preserve
+        # symlinks inside .app bundles (Frameworks symlinks, etc.), which
+        # breaks `test-without-building` ("Cannot launch simulated executable:
+        # no file found at .../VVTerm.app"). Tar preserves symlinks + permissions.
+        #
+        # Intermediates.noindex (.o files, build intermediates) is excluded —
+        # ui-tests uses test-without-building (zero compilation, needs only
+        # Products), and unit-tests gets compiled SPM intermediates from the
+        # SPM cache (Change 1) and recompiles only VVTermTests from scratch.
+        # This shrinks the artifact from ~245MB to ~80-100MB.
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/DerivedData/Build"
-          tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" Products Intermediates.noindex
+          tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" Products
 
       - name: Upload build products
         uses: actions/upload-artifact@v7
