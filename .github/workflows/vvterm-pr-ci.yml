@@ -353,7 +353,7 @@ jobs:
       - name: Run UI tests (shard ${{ matrix.shard.name }})
         shell: bash
         run: |
-          set +e  # GitHub Actions defaults to `bash -e`; disable so PlistBuddy/grep non-zero exits don't abort.
+          set +e  # GitHub Actions defaults to `bash -e`; disable so non-zero exits don't abort.
           set -uo pipefail
 
           # test-without-building with -xctestrun: run the prebuilt
@@ -368,33 +368,29 @@ jobs:
           # EnvironmentVariables dictionary. The TEST_RUNNER_ env-var prefix
           # only works with `xcodebuild test` (which re-resolves the scheme),
           # NOT with `test-without-building -xctestrun` (which uses the
-          # pre-baked plist from build-for-testing). PlistBuddy writes
-          # SCREENSHOT_DIR into the plist so the UI test runner process sees
-          # it via ProcessInfo.processInfo.environment.
+          # pre-baked plist from build-for-testing). The xctestrun v2 format
+          # nests env vars at:
+          #   TestConfigurations[0].TestTargets[*].EnvironmentVariables
+          # Use python (plistlib) to inject into every test target's dict.
           export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
           mkdir -p "$SCREENSHOT_DIR"
-          # The xctestrun plist has one top-level key per test target. List
-          # all top-level keys and inject SCREENSHOT_DIR into each one's
-          # EnvironmentVariables dict (create the dict if missing). Use a
-          # subshell + grep that never fails so set -e (if enabled elsewhere)
-          # doesn't abort. We deliberately do NOT use set -e here because
-          # PlistBuddy returns non-zero on missing keys (expected) and we
-          # handle that with || true.
-          /usr/libexec/PlistBuddy -c "Print" "$XCRUN" 2>/dev/null \
-            | grep -E '^[A-Za-z0-9_.-]+ =' \
-            | awk -F' = ' '{print $1}' \
-            | while IFS= read -r TARGET_KEY; do
-                echo "Injecting SCREENSHOT_DIR into target: $TARGET_KEY"
-                /usr/libexec/PlistBuddy \
-                  -c "Add :${TARGET_KEY}:EnvironmentVariables dict" \
-                  -c "Add :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR string $SCREENSHOT_DIR" \
-                  "$XCRUN" 2>/dev/null || \
-                /usr/libexec/PlistBuddy \
-                  -c "Set :${TARGET_KEY}:EnvironmentVariables:SCREENSHOT_DIR $SCREENSHOT_DIR" \
-                  "$XCRUN" 2>/dev/null || true
-              done
+          python3 - "$XCRUN" "$SCREENSHOT_DIR" <<'PY'
+          import plistlib, sys
+          path, screenshot_dir = sys.argv[1], sys.argv[2]
+          with open(path, "rb") as f:
+              data = plistlib.load(f)
+          injected = 0
+          for cfg in data.get("TestConfigurations", []):
+              for target in cfg.get("TestTargets", []):
+                  env = target.setdefault("EnvironmentVariables", {})
+                  env["SCREENSHOT_DIR"] = screenshot_dir
+                  injected += 1
+          with open(path, "wb") as f:
+              plistlib.dump(data, f)
+          print(f"Injected SCREENSHOT_DIR into {injected} test target(s)")
+          PY
           echo "xctestrun plist after injection:"
-          /usr/libexec/PlistBuddy -c "Print" "$XCRUN" 2>/dev/null | grep -A1 -i 'screenshot' || true
+          python3 -c "import plistlib; d=plistlib.load(open('$XCRUN','rb')); [print(f'  target {i}: SCREENSHOT_DIR={t.get(\"EnvironmentVariables\",{}).get(\"SCREENSHOT_DIR\",\"<MISSING>\")}') for cfg in d.get('TestConfigurations',[]) for i,t in enumerate(cfg.get('TestTargets',[]))]"
 
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
