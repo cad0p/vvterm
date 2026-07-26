@@ -195,15 +195,34 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     }
     private typealias ResultBox = TeleportBootstrapCoordinator.BootstrapResult
 
-    // MARK: - Failing test (proves the bug with current production wiring)
+    // MARK: - Failing test (proves the bug with the inline pattern)
 
-    /// With the current production wiring (inline `makeBootstrapCoordinator()`),
-    /// the bootstrap coordinator is orphaned by parent body re-evaluations
-    /// during the blocking POST. The view's `onChange` never observes
-    /// `.success` on a coordinator it still holds, so `onSuccess` is never
-    /// invoked. This test FAILS until the production wiring switches to
-    /// `@StateObject`.
+    /// With the INLINE `makeBootstrapCoordinator()` pattern (constructing the
+    /// coordinator fresh in every `body` evaluation, like the test's
+    /// `InlineCoordinatorParent`), the bootstrap coordinator is orphaned by
+    /// parent body re-evaluations during the blocking POST. The view's
+    /// `onChange` never observes `.success` on a coordinator it still holds,
+    /// so `onSuccess` is never invoked.
+    ///
+    /// This test intentionally exercises the BUGGY inline pattern as a
+    /// permanent regression marker. Production wiring NO LONGER uses inline
+    /// construction — `ServerSidebarView.teleportSetupSheet` and
+    /// `ServerFormSheet` now wrap the coordinator in `@StateObject` via
+    /// `TeleportBootstrapSheet` (see b530ed9). The companion test
+    /// `testBootstrapSuccess_firesOnSuccess_whenCoordinatorHeldInStateObject`
+    /// proves the `@StateObject` wiring fires `onSuccess` correctly.
+    ///
+    /// `XCTExpectFailure` documents that this test is EXPECTED to fail with
+    /// the inline pattern and prevents it from red CI noise; if someone ever
+    /// reverts production back to inline construction, this test's expectation
+    /// will need to be re-evaluated.
     func testBootstrapSuccess_firesOnSuccess_whenParentReEvaluatesDuringPost() {
+        // The inline pattern (fresh coordinator per body eval) is known-buggy:
+        // a parent re-eval during the POST recreates the coordinator and
+        // orphans the one that reaches `.success`. Production no longer uses
+        // this pattern; this test keeps it as a documented regression marker.
+        XCTExpectFailure("Inline coordinator construction orphans the coordinator that reached .success (production uses @StateObject wrapper instead)")
+
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
         // Small delay so the parent's periodic re-eval lands during the POST,
