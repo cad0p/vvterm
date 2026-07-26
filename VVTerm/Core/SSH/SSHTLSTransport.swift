@@ -215,6 +215,26 @@ actor SSHTLSTransport {
         // Start the NWConnection (state machine + queue).
         connection.start(queue: .global(qos: .userInitiated))
 
+        // Start the bidirectional pump BEFORE waiting for `.ready`.
+        //
+        // The Teleport proxy sends its SSH banner (`SSH-2.0-Teleport-...`)
+        // immediately after the TLS handshake completes. If the pump's first
+        // `NWConnection.receive` is not already posted when that banner
+        // arrives, the bytes sit in NWConnection's internal buffer and — in
+        // the prior ordering (pump started after `.ready`) — libssh2's
+        // blocking `read()` on the socketpair could race the pump's first
+        // receive, causing an immediate KEX_FAILURE (`-5: Unable to exchange
+        // encryption keys`) because libssh2 saw no server banner.
+        //
+        // Posting the pump's receive loop before `.ready` guarantees the
+        // NWConnection is being drained from the instant data is available,
+        // and libssh2's banner (written to libssh2FD) is forwarded to the
+        // server as soon as the TLS tunnel is up.
+        pumpTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.runPump(connection: connection, pair: pair)
+        }
+
         // Wait for the connection to be ready (TLS handshake complete).
         do {
             try await waitForReady(connection: connection)
@@ -222,23 +242,14 @@ actor SSHTLSTransport {
             // TLS handshake failed — clean up the socketpair + NWConnection
             // so no FDs leak.
             logger.error("tls_transport_connect_failed host=\(self.host, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            pumpTask?.cancel()
+            pumpTask = nil
             connection.cancel()
             self.connection = nil
             Darwin.close(pair.libssh2FD)
             Darwin.close(pair.pumpFD)
             socketPair = nil
             throw SSHError.connectionFailed("TLS transport connect failed: \(error.localizedDescription)")
-        }
-
-        // Start the bidirectional pump: NWConnection <-> pumpFD.
-        // libssh2 reads/writes libssh2FD; the pump forwards between pumpFD
-        // and the NWConnection. Run on a detached task so the blocking
-        // `read()`/`write()` syscalls on the pump FD don't stall the
-        // cooperative thread pool — the pump is I/O-bound and long-lived.
-        // `runPump` is nonisolated, so it doesn't hop back onto the actor.
-        pumpTask = Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            await self.runPump(connection: connection, pair: pair)
         }
 
         return pair.libssh2FD
@@ -323,14 +334,19 @@ actor SSHTLSTransport {
     /// the detached task's thread without hopping onto the actor (which would
     /// serialize + stall the pump).
     nonisolated private func runPump(connection: NWConnection, pair: SocketPair) async {
+        let pumpLog = Logger(
+            subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
+            category: "SSH-TLS-Pump"
+        )
+        pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
         await withTaskGroup(of: Void.self) { group in
             // NWConnection -> pumpFD
             group.addTask {
-                await self.pumpNWToFD(connection: connection, pumpFD: pair.pumpFD)
+                await self.pumpNWToFD(connection: connection, pumpFD: pair.pumpFD, log: pumpLog)
             }
             // pumpFD -> NWConnection
             group.addTask {
-                await self.pumpFDToNW(pumpFD: pair.pumpFD, connection: connection)
+                await self.pumpFDToNW(pumpFD: pair.pumpFD, connection: connection, log: pumpLog)
             }
             // When either loop exits, cancel the other + close the pump end.
             // (The loops close pumpFD on their own EOF; closing again here is
@@ -345,7 +361,9 @@ actor SSHTLSTransport {
 
     /// NWConnection -> pumpFD: receive bytes, write them to the pump FD for
     /// libssh2 to read. Loops until receive returns nil (EOF/error).
-    nonisolated private func pumpNWToFD(connection: NWConnection, pumpFD: Int32) async {
+    nonisolated private func pumpNWToFD(connection: NWConnection, pumpFD: Int32, log: Logger) async {
+        var nwToFDBytes: Int = 0
+        var loggedFirst = false
         while !Task.isCancelled {
             // NWConnection.receive has only a completion-handler form; bridge
             // it to async via a continuation. The completion is @Sendable.
@@ -363,14 +381,21 @@ actor SSHTLSTransport {
             } catch {
                 // NWConnection receive error — EOF or reset. Close the pump
                 // FD so libssh2 sees the broken connection.
+                log.error("pump_nw_to_fd_error bytes=\(nwToFDBytes) error=\(String(describing: error), privacy: .public)")
                 Darwin.close(pumpFD)
                 return
             }
             guard let data = received, !data.isEmpty else {
                 // EOF.
+                log.info("pump_nw_to_fd_eof bytes=\(nwToFDBytes)")
                 Darwin.close(pumpFD)
                 return
             }
+            if !loggedFirst {
+                loggedFirst = true
+                log.info("pump_nw_to_fd_first len=\(data.count) hex=\(Self.hexDump(data, maxBytes: 32), privacy: .public)")
+            }
+            nwToFDBytes += data.count
             // Write all bytes to the pump FD (may need multiple writes).
             var written = 0
             data.withUnsafeBytes { rawBuffer in
@@ -379,27 +404,37 @@ actor SSHTLSTransport {
                     let n = Darwin.write(pumpFD, base.advanced(by: written), data.count - written)
                     if n <= 0 {
                         // Write error (EPIPE / EBADF) — pump FD is broken.
+                        log.error("pump_nw_to_fd_write_fail errno=\(Darwin.errno) written=\(written)/\(data.count)")
                         return
                     }
                     written += n
                 }
             }
         }
+        log.info("pump_nw_to_fd_cancelled bytes=\(nwToFDBytes)")
     }
 
     /// pumpFD -> NWConnection: read bytes from the pump FD (written by
     /// libssh2), send them via the NWConnection. Loops until read returns
     /// EOF or the task is cancelled.
-    nonisolated private func pumpFDToNW(pumpFD: Int32, connection: NWConnection) async {
+    nonisolated private func pumpFDToNW(pumpFD: Int32, connection: NWConnection, log: Logger) async {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
+        var fdToNWBytes: Int = 0
+        var loggedFirst = false
         while !Task.isCancelled {
             let n = Darwin.read(pumpFD, buffer, 64 * 1024)
             if n <= 0 {
                 // EOF or error — stop sending.
+                log.info("pump_fd_to_nw_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToNWBytes)")
                 return
             }
             let data = Data(bytes: buffer, count: n)
+            if !loggedFirst {
+                loggedFirst = true
+                log.info("pump_fd_to_nw_first len=\(n) hex=\(Self.hexDump(data, maxBytes: 32), privacy: .public)")
+            }
+            fdToNWBytes += n
             // NWConnection.send has only a completion-handler form. Bridge to
             // async + treat the completion error as a stop signal.
             let sendError: NWError? = await withCheckedContinuation { (continuation: CheckedContinuation<NWError?, Never>) in
@@ -409,9 +444,35 @@ actor SSHTLSTransport {
             }
             if sendError != nil {
                 // NWConnection send error — stop.
+                log.error("pump_fd_to_nw_send_error bytes=\(fdToNWBytes) error=\(String(describing: sendError), privacy: .public)")
                 return
             }
         }
+        log.info("pump_fd_to_nw_cancelled bytes=\(fdToNWBytes)")
+    }
+
+    /// Hex-dump the first `maxBytes` of `data` for diagnostic logging.
+    /// Used to confirm the SSH banner (`SSH-2.0-...`) is flowing through
+    /// the pump in each direction.
+    nonisolated private static func hexDump(_ data: Data, maxBytes: Int) -> String {
+        let limit = min(data.count, maxBytes)
+        guard limit > 0 else { return "" }
+        var hex = ""
+        hex.reserveCapacity(limit * 2)
+        for i in 0..<limit {
+            hex += String(format: "%02x", data[i])
+        }
+        // Also include the printable ASCII prefix (helps spot `SSH-2.0-`).
+        var ascii = ""
+        for i in 0..<limit {
+            let c = data[i]
+            if c >= 0x20 && c < 0x7f {
+                ascii += String(UnicodeScalar(c))
+            } else {
+                ascii += "."
+            }
+        }
+        return "\(hex) | \(ascii)"
     }
 
     // MARK: - PEM helpers
