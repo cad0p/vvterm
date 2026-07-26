@@ -1,11 +1,13 @@
 import Foundation
 
 /// Configuration for a Teleport cluster. Stored as part of a `Server` record
-/// (the Server's host/port/username are reused for the Teleport proxy).
+/// (the Server's host is the TARGET NODE; the Teleport PROXY host lives here
+/// on `TeleportCluster.host`, captured during the bootstrap phase).
 /// CloudKit-synced via the parent `Server` record.
 struct TeleportCluster: Codable, Hashable, Identifiable {
     let id: UUID
-    /// The Teleport proxy host (e.g. "teleport.pcad.it"). Mirrors Server.host.
+    /// The Teleport proxy host (e.g. "teleport.pcad.it"). Captured at
+    /// bootstrap. Distinct from `Server.host`, which is the target node.
     var host: String
     /// The Teleport proxy port (e.g. 443). Mirrors Server.port.
     var port: Int
