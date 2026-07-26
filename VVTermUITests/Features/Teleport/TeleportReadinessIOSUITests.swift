@@ -108,7 +108,7 @@ final class TeleportReadinessIOSUITests: XCTestCase {
         let app = launch(readiness: "needsBootstrap")
 
         // The amber "Setup" pill should be visible.
-        let setupPill = app.staticTexts["vvterm.serverRow.readinessPill.setup"]
+        let setupPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"]
         if !setupPill.waitForExistence(timeout: 5) {
             // DEBUG: dump the full accessibility tree so CI logs reveal
             // whether ServerListRow rendered, whether the pill Text exists,
@@ -139,7 +139,7 @@ final class TeleportReadinessIOSUITests: XCTestCase {
     func testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration() {
         let app = launch(readiness: "needsRegistration")
 
-        let setupPill = app.staticTexts["vvterm.serverRow.readinessPill.setup"]
+        let setupPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"]
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for needsRegistration")
 
         serverRow(app).tap()
@@ -162,7 +162,7 @@ final class TeleportReadinessIOSUITests: XCTestCase {
     func testReadinessIOS_needsLogin_tapShowsLoginSheet() {
         let app = launch(readiness: "needsLogin")
 
-        let signInPill = app.staticTexts["vvterm.serverRow.readinessPill.signIn"]
+        let signInPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.signIn"]
         XCTAssertTrue(signInPill.waitForExistence(timeout: 5), "blue 'Sign in' pill should be visible for needsLogin")
 
         serverRow(app).tap()
@@ -178,8 +178,8 @@ final class TeleportReadinessIOSUITests: XCTestCase {
         let app = launch(readiness: "ready")
 
         // No readiness pill should be visible for a ready server.
-        XCTAssertFalse(app.staticTexts["vvterm.serverRow.readinessPill.setup"].exists, "no 'Setup' pill for ready server")
-        XCTAssertFalse(app.staticTexts["vvterm.serverRow.readinessPill.signIn"].exists, "no 'Sign in' pill for ready server")
+        XCTAssertFalse(app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"].exists, "no 'Setup' pill for ready server")
+        XCTAssertFalse(app.descendants(matching: .any)["vvterm.serverRow.readinessPill.signIn"].exists, "no 'Sign in' pill for ready server")
 
         // Tap the row → the connect marker should appear (the harness wires
         // onTap to a visible "Connected" marker).
@@ -201,7 +201,7 @@ final class TeleportReadinessIOSUITests: XCTestCase {
 
         // An empty keychain (simulating a server record arriving via iCloud
         // on a fresh device) should resolve to needsBootstrap.
-        let setupPill = app.staticTexts["vvterm.serverRow.readinessPill.setup"]
+        let setupPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"]
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for crossDevice (empty keychain → needsBootstrap)")
 
         // Tapping should offer setup (bootstrap sheet).
