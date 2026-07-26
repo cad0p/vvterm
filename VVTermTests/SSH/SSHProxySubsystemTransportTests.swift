@@ -221,7 +221,7 @@ struct SSHProxySubsystemTransportTests {
 
         // After EOF, a read on the libssh2FD should return 0 (EOF) rather than
         // blocking indefinitely. Give the pump a moment to close the pump end.
-        let result = try await readWithTimeout(fd: fd, timeoutSeconds: 3)
+        let result = try await readWithTimeout(fd: fd, count: 1, timeoutSeconds: 3)
         #expect(result == 0, "expected EOF (0) on libssh2FD after channel EOF")
     }
 
