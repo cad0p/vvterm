@@ -218,11 +218,17 @@ struct ServerListRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: Te
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         case .needsBootstrap, .needsRegistration:
-            PillBadge(text: String(localized: "Setup"), color: .orange)
-                .accessibilityIdentifier("vvterm.serverRow.readinessPill.setup")
+            PillBadge(
+                text: String(localized: "Setup"),
+                color: .orange,
+                accessibilityID: "vvterm.serverRow.readinessPill.setup"
+            )
         case .needsLogin:
-            PillBadge(text: String(localized: "Sign in"), color: .blue)
-                .accessibilityIdentifier("vvterm.serverRow.readinessPill.signIn")
+            PillBadge(
+                text: String(localized: "Sign in"),
+                color: .blue,
+                accessibilityID: "vvterm.serverRow.readinessPill.signIn"
+            )
         }
     }
 }

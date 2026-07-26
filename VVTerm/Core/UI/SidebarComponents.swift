@@ -264,11 +264,17 @@ struct ServerRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: Telepo
                 .foregroundStyle(sessionIndicatorColor)
             }
         case .needsBootstrap, .needsRegistration:
-            PillBadge(text: String(localized: "Setup"), color: .orange)
-                .accessibilityIdentifier("vvterm.serverRow.readinessPill.setup")
+            PillBadge(
+                text: String(localized: "Setup"),
+                color: .orange,
+                accessibilityID: "vvterm.serverRow.readinessPill.setup"
+            )
         case .needsLogin:
-            PillBadge(text: String(localized: "Sign in"), color: .blue)
-                .accessibilityIdentifier("vvterm.serverRow.readinessPill.signIn")
+            PillBadge(
+                text: String(localized: "Sign in"),
+                color: .blue,
+                accessibilityID: "vvterm.serverRow.readinessPill.signIn"
+            )
         }
     }
 }
@@ -278,6 +284,14 @@ struct ServerRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: Telepo
 struct PillBadge: View {
     let text: String
     let color: Color
+    /// Optional accessibility identifier applied INSIDE `body`, on the same
+    /// element as `.accessibilityElement(children: .ignore)`. Applying the
+    /// identifier at the call site (on the outer `PillBadge` view) does NOT
+    /// propagate to the inner `Text`'s standalone accessibility element
+    /// created by `.accessibilityElement(children: .ignore)`, so UI tests
+    /// querying `app.staticTexts["<id>"]` failed to resolve it. Passing the
+    /// identifier here guarantees it lands on the element XCUITest sees.
+    var accessibilityID: String? = nil
 
     var body: some View {
         Text(text)
@@ -298,6 +312,12 @@ struct PillBadge: View {
             // from Text content + modifiers (mirrors b4df7da).
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
+            // Apply the identifier INSIDE body so it attaches to the same
+            // standalone accessibility element created above. An identifier
+            // applied to the outer `PillBadge` view at the call site lands on
+            // a different (often empty/merged) element that XCUITest never
+            // queries via `app.staticTexts["<id>"]`.
+            .accessibilityIdentifier(accessibilityID)
     }
 }
 
