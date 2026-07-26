@@ -307,17 +307,18 @@ struct PillBadge: View {
             // this, app.staticTexts["vvterm.serverRow.readinessPill.*"] can't
             // resolve because the pill is folded into a parent element.
             // Mirrors the fix pattern from 4b58801 (safariUnavailable URL).
-            // An explicit accessibilityLabel guarantees the element's label
-            // equals `text` exactly, regardless of how SwiftUI composes labels
-            // from Text content + modifiers (mirrors b4df7da).
+            //
+            // The identifier is applied immediately after
+            // `.accessibilityElement(children: .ignore)` and before the label
+            // so it unambiguously attaches to the standalone accessibility
+            // element created above (not to the outer `PillBadge` view, which
+            // XCUITest never queries). An explicit accessibilityLabel then
+            // guarantees the element's label equals `text` exactly,
+            // regardless of how SwiftUI composes labels from Text content +
+            // modifiers (mirrors b4df7da).
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(text)
-            // Apply the identifier INSIDE body so it attaches to the same
-            // standalone accessibility element created above. An identifier
-            // applied to the outer `PillBadge` view at the call site lands on
-            // a different (often empty/merged) element that XCUITest never
-            // queries via `app.staticTexts["<id>"]`.
             .modifier(OptionalAccessibilityIdentifier(identifier: accessibilityID))
+            .accessibilityLabel(text)
     }
 }
 
