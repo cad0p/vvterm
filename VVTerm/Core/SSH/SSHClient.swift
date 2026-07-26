@@ -1511,8 +1511,8 @@ actor SSHSession {
 
         // Log the negotiated KEX + hostkey algorithms so future live KEX
         // mismatches surface what libssh2 actually agreed on with the peer.
-        let negotiatedKex = SSHClient.negotiatedMethod(session, method: LIBSSH2_METHOD_KEX)
-        let negotiatedHostkey = SSHClient.negotiatedMethod(session, method: LIBSSH2_METHOD_HOSTKEY)
+        let negotiatedKex = SSHSession.negotiatedMethod(session, method: LIBSSH2_METHOD_KEX)
+        let negotiatedHostkey = SSHSession.negotiatedMethod(session, method: LIBSSH2_METHOD_HOSTKEY)
         logger.info(
             "ssh_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) fd=\(fd) peer=\(peer, privacy: .public)"
         )
