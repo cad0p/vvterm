@@ -287,6 +287,17 @@ struct PillBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.15), in: Capsule())
+            // Prevent SwiftUI from merging this Text with adjacent elements in
+            // the enclosing HStack/VStack (e.g. ServerRow.serverLabel,
+            // ServerListRow) into a single accessibility element. Without
+            // this, app.staticTexts["vvterm.serverRow.readinessPill.*"] can't
+            // resolve because the pill is folded into a parent element.
+            // Mirrors the fix pattern from 4b58801 (safariUnavailable URL).
+            // An explicit accessibilityLabel guarantees the element's label
+            // equals `text` exactly, regardless of how SwiftUI composes labels
+            // from Text content + modifiers (mirrors b4df7da).
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
     }
 }
 
