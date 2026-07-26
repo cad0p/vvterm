@@ -149,14 +149,39 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
         clusterName: String,
         clusterCAPEMs: [String]
     ) async throws {
-        connection = try await TeleportGRPCConnection.connect(
-            host: host,
-            port: 443,
-            clientCertPEM: clientCertPEM,
-            privateKey: privateKey,
-            clusterName: clusterName,
-            clusterCAPEMs: clusterCAPEMs
-        )
+        // Log the dial parameters before connecting so a live-device Phase-2
+        // failure shows the exact host/port/cluster/CA bundle + cert lengths,
+        // not just the opaque `GRPCError error 1`. The gRPC transport code is
+        // identical to the working iotest spike, so a `.transport` failure
+        // here means an input mismatch (empty cert, wrong cluster name, missing
+        // CA bundle) or a reachability/TLS issue at the NWConnection layer.
+        let certLen = clientCertPEM.utf8.count
+        let caCount = clusterCAPEMs.count
+        logger.info("gRPC dial host=\(host, privacy: .public):443 cluster=\(clusterName, privacy: .public) ca_certs=\(caCount) cert_len=\(certLen)")
+        if certLen == 0 {
+            logger.error("gRPC dial rejected: empty client cert (tls_cert missing from Phase 1)")
+            throw GRPCError.tls("empty client cert PEM — Phase 1 returned no tls_cert")
+        }
+        if clusterName.isEmpty {
+            logger.error("gRPC dial rejected: empty cluster name (host_signers.domain_name missing from Phase 1)")
+            throw GRPCError.transport("empty cluster name — cannot build auth ALPN route")
+        }
+        do {
+            connection = try await TeleportGRPCConnection.connect(
+                host: host,
+                port: 443,
+                clientCertPEM: clientCertPEM,
+                privateKey: privateKey,
+                clusterName: clusterName,
+                clusterCAPEMs: clusterCAPEMs
+            )
+        } catch {
+            // Surface the concrete error (NWError/TLS) rather than letting the
+            // coordinator log `error.localizedDescription` → "error 1".
+            let detail = (error as? CustomStringConvertible).map { $0.description } ?? error.localizedDescription
+            logger.error("gRPC dial failed host=\(host, privacy: .public):443 cluster=\(clusterName, privacy: .public) error=\(detail, privacy: .public)")
+            throw error
+        }
         logger.info("gRPC connected to \(host, privacy: .public)")
     }
 

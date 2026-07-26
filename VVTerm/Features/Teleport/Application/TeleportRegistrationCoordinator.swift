@@ -174,8 +174,15 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
                 clusterCAPEMs: bootstrapResult.clusterCAPEMs
             )
         } catch {
-            logger.error("gRPC connect failed: \(error.localizedDescription, privacy: .public)")
-            state = .failed(.server("gRPC connect failed: \(error.localizedDescription)"))
+            // Use `String(describing:)` to surface the concrete GRPCError case +
+            // message (e.g. "transport: posix(54)") rather than the opaque
+            // "GRPCError error 1" that `error.localizedDescription` produces for
+            // a non-LocalizedError enum. GRPCError now conforms to LocalizedError,
+            // so `localizedDescription` would also work — `String(describing:)`
+            // is kept as a belt-and-suspenders diagnostic.
+            let detail = String(describing: error)
+            logger.error("gRPC connect failed: \(detail, privacy: .public)")
+            state = .failed(.server("gRPC connect failed: \(detail)"))
             return
         }
 

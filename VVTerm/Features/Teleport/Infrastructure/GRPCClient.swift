@@ -28,7 +28,7 @@ import Foundation
 
 // MARK: - Errors
 
-enum GRPCError: Error, CustomStringConvertible {
+enum GRPCError: Error, CustomStringConvertible, LocalizedError {
     case transport(String)
     case tls(String)
     case http2(String)
@@ -43,6 +43,24 @@ enum GRPCError: Error, CustomStringConvertible {
         case .http2(let m):       return "http2: \(m)"
         case .grpc(let s, let m): return "grpc(\(s)): \(m)"
         case .decode(let m):      return "decode: \(m)"
+        case .timeout:            return "timeout"
+        }
+    }
+
+    // Surface the concrete case + associated message in `localizedDescription`
+    // so coordinators that log `error.localizedDescription` (the Swift default
+    // for `Error`) show "transport: <NWError>" instead of the opaque
+    // "The operation couldn't be completed. (VVTerm.GRPCError error 1.)".
+    // Without this, a Phase-2 gRPC dial failure reports only the case ordinal,
+    // hiding the real NWError/TLS error from the device log.
+    var errorDescription: String? { description }
+    var failureReason: String? {
+        switch self {
+        case .transport(let m):   return m
+        case .tls(let m):         return m
+        case .http2(let m):       return m
+        case .grpc(let s, let m): return "gRPC status \(s): \(m)"
+        case .decode(let m):      return m
         case .timeout:            return "timeout"
         }
     }
