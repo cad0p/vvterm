@@ -1981,8 +1981,8 @@ actor SSHSession {
             innerSocket = -1
         }
         stopInnerIOLoop()
-        if let innerTransport = innerTransport {
-            Task { await innerTransport.close() }
+        if let transport = innerTransport {
+            Task { await transport.close() }
             innerTransport = nil
         }
         if let proxyChannel = proxySubsystemChannel {
