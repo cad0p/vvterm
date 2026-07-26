@@ -1634,8 +1634,13 @@ actor SSHSession {
             throw SSHError.teleportCertMissing
         }
 
+        // For Teleport, `config.host`/`config.dialHost` is the TARGET NODE
+        // (e.g. pcad-dev.teleport.pcad.it), not the proxy. The proxy host is
+        // the cluster name captured at bootstrap, stored in `TeleportClusterTLSState`.
+        // Dial the proxy (clusterName) on port 443 with TLS+ALPN.
+        let proxyHost = tlsState.clusterName
         let transport = SSHTLSTransport(
-            host: config.dialHost,
+            host: proxyHost,
             port: config.dialPort,
             clusterName: tlsState.clusterName,
             clusterCAPEMs: tlsState.clusterCAPEMs
@@ -1651,11 +1656,9 @@ actor SSHSession {
             throw error
         }
         tlsTransport = transport
-        let dialHost = config.dialHost
-        let dialPort = config.dialPort
         let caCertCount = tlsState.clusterCAPEMs.count
         logger.info(
-            "teleport TLS transport connected dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
+            "teleport TLS transport connected dial=\(proxyHost, privacy: .private(mask: .hash)):\(config.dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
         )
         return fd
     }
