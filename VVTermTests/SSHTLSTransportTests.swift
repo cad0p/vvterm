@@ -123,6 +123,126 @@ struct SSHTLSTransportTests {
         #expect(in2 == 0xCD)
     }
 
+    // MARK: - Server KEX_INIT parser
+
+    /// Build a synthetic SSH banner + KEX_INIT chunk matching RFC 4253 §6/§7.1
+    /// so the parser can be validated without a live Teleport server.
+    private static func makeKexInitChunk(
+        banner: String = "SSH-2.0-Teleport",
+        kex: String = "curve25519-sha256,curve25519-sha256@libssh.org",
+        hostkey: String = "ssh-ed25519,rsa-sha2-256,rsa-sha2-512",
+        cryptC2S: String = "aes128-gcm@openssh.com,aes256-gcm@openssh.com",
+        cryptS2C: String = "aes128-gcm@openssh.com,aes256-gcm@openssh.com",
+        macC2S: String = "hmac-sha2-256-etm@openssh.com",
+        macS2C: String = "hmac-sha2-256-etm@openssh.com",
+        compC2S: String = "none,zlib@openssh.com",
+        compS2C: String = "none,zlib@openssh.com"
+    ) -> Data {
+        var payloadBody = Data()
+        payloadBody.append(20) // SSH_MSG_KEXINIT
+        payloadBody.append(contentsOf: [UInt8](repeating: 0, count: 16)) // cookie
+        for list in [kex, hostkey, cryptC2S, cryptS2C, macC2S, macS2C, compC2S, compS2C] {
+            appendNameList(&payloadBody, list)
+        }
+        // languages_c2s + languages_s2c (empty name-lists)
+        appendNameList(&payloadBody, "")
+        appendNameList(&payloadBody, "")
+        // first_kex_packet_follows (false) + reserved (uint32)
+        payloadBody.append(0)
+        payloadBody.append(contentsOf: [0, 0, 0, 0])
+        // Pad so (packet_length_field + padding_length_byte + payloadBody +
+        // padding) is a multiple of the block size (8 for the no-cipher
+        // phase), with at least 4 bytes of padding (RFC 4253 §6).
+        // packet_length = 1 (padding_len byte) + payloadBody.count + padding.
+        let blockSize = 8
+        let paddingMin = 4
+        let fixedOverhead = 4 + 1 + payloadBody.count // packet_length + padding_len + payloadBody
+        var paddingLength = blockSize - (fixedOverhead % blockSize)
+        if paddingLength < paddingMin { paddingLength += blockSize }
+        let packetLength = UInt32(1 + payloadBody.count + paddingLength)
+        var packet = Data()
+        appendUInt32BE(&packet, packetLength)
+        packet.append(UInt8(paddingLength))
+        packet.append(payloadBody)
+        packet.append(contentsOf: [UInt8](repeating: 0, count: paddingLength))
+        var chunk = Data()
+        chunk.append(contentsOf: Array("\(banner)\r\n".utf8))
+        chunk.append(packet)
+        return chunk
+    }
+
+    private static func appendNameList(_ data: inout Data, _ list: String) {
+        let bytes = Array(list.utf8)
+        appendUInt32BE(&data, UInt32(bytes.count))
+        data.append(contentsOf: bytes)
+    }
+
+    private static func appendUInt32BE(_ data: inout Data, _ value: UInt32) {
+        data.append(UInt8((value >> 24) & 0xFF))
+        data.append(UInt8((value >> 16) & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+        data.append(UInt8(value & 0xFF))
+    }
+
+    @Test
+    func parseServerKexInitExtractsAlgorithmNameLists() throws {
+        // A correctly-formed banner + KEX_INIT must yield all eight
+        // algorithm name-lists the server offered. This is the diagnostic
+        // path that surfaces "what Teleport offered" next to "what libssh2
+        // offered" when a KEX mismatch is reported live.
+        let chunk = Self.makeKexInitChunk()
+        let parsed = try #require(SSHTLSTransport.parseServerKexInit(chunk))
+        #expect(parsed.kex == "curve25519-sha256,curve25519-sha256@libssh.org")
+        #expect(parsed.hostkey == "ssh-ed25519,rsa-sha2-256,rsa-sha2-512")
+        #expect(parsed.cryptC2S == "aes128-gcm@openssh.com,aes256-gcm@openssh.com")
+        #expect(parsed.cryptS2C == "aes128-gcm@openssh.com,aes256-gcm@openssh.com")
+        #expect(parsed.macC2S == "hmac-sha2-256-etm@openssh.com")
+        #expect(parsed.macS2C == "hmac-sha2-256-etm@openssh.com")
+        #expect(parsed.compC2S == "none,zlib@openssh.com")
+        #expect(parsed.compS2C == "none,zlib@openssh.com")
+    }
+
+    @Test
+    func parseServerKexInitReturnsNilForUnexpectedMessageType() {
+        // If the first packet after the banner is not SSH_MSG_KEXINIT (20)
+        // the parser must return nil so the pump logs a skip reason rather
+        // than mis-parsing a different message as algorithm name-lists.
+        var chunk = Self.makeKexInitChunk()
+        // Banner ends right before the packet_length; the msg-type byte is
+        // at offset (banner.len + \r\n) + 4 (packet_length) + 1 (padding_len).
+        let bannerEnd = "SSH-2.0-Teleport\r\n".utf8.count
+        let msgTypeOffset = bannerEnd + 4 + 1
+        chunk[msgTypeOffset] = 21 // not 20
+        #expect(SSHTLSTransport.parseServerKexInit(chunk) == nil)
+    }
+
+    @Test
+    func parseServerKexInitReturnsNilForTruncatedChunk() {
+        // A chunk that ends inside the packet_length field must return nil
+        // (pump logs `truncated_packet_length`) rather than reading past the
+        // buffer.
+        let full = Self.makeKexInitChunk()
+        let bannerEnd = "SSH-2.0-Teleport\r\n".utf8.count
+        let truncated = full.prefix(bannerEnd + 2) // only 2 of 4 length bytes
+        #expect(SSHTLSTransport.parseServerKexInit(Data(truncated)) == nil)
+    }
+
+    @Test
+    func parseServerKexInitHandlesEmptyNameLists() throws {
+        // Some servers (or a misconfigured Teleport) may offer an empty
+        // name-list for a category. The parser must return "" for that
+        // field and keep parsing the rest, so the log shows the gap.
+        let chunk = Self.makeKexInitChunk(
+            kex: "curve25519-sha256",
+            hostkey: "", // server offers no hostkey algorithms
+            cryptC2S: "aes128-gcm@openssh.com"
+        )
+        let parsed = try #require(SSHTLSTransport.parseServerKexInit(chunk))
+        #expect(parsed.kex == "curve25519-sha256")
+        #expect(parsed.hostkey == "")
+        #expect(parsed.cryptC2S == "aes128-gcm@openssh.com")
+    }
+
     // MARK: - Helpers
 
     /// A throwaway self-signed CA PEM (content is irrelevant — the verify

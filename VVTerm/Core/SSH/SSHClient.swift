@@ -1454,13 +1454,13 @@ actor SSHSession {
         // Prefer fast ciphers - AES-GCM and ChaCha20 are hardware-accelerated on Apple Silicon
         // This reduces CPU overhead for encryption/decryption
         let fastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_CS, fastCiphers)
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_SC, fastCiphers)
+        applyMethodPref(session, method: LIBSSH2_METHOD_CRYPT_CS, prefs: fastCiphers, label: "crypt_cs")
+        applyMethodPref(session, method: LIBSSH2_METHOD_CRYPT_SC, prefs: fastCiphers, label: "crypt_sc")
 
         // Prefer fast MACs (message authentication codes)
         let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_MAC_CS, fastMACs)
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_MAC_SC, fastMACs)
+        applyMethodPref(session, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "mac_cs")
+        applyMethodPref(session, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "mac_sc")
 
         // Force modern KEX + hostkey algorithms (Teleport proxy may reject ssh-rsa).
         // libssh2 1.11.1 with the OpenSSL backend (linked via libcrypto.a)
@@ -1469,8 +1469,16 @@ actor SSHSession {
         // `ssh-rsa` (SHA-1) by default, so offering it first causes a KEX
         // failure (LIBSSH2_ERROR_KEX_FAILURE / -5). Order the preferences so
         // modern, SHA-2 based algorithms are tried before legacy `ssh-rsa`.
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_KEX, SSHMethodPreferences.kex)
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_HOSTKEY, SSHMethodPreferences.hostkey)
+        applyMethodPref(session, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "kex")
+        applyMethodPref(session, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "hostkey")
+
+        // Log the algorithm name-lists libssh2 will actually offer in its
+        // KEX_INIT. `libssh2_session_methods` returns the effective (post-pref)
+        // lists before the handshake runs, so a KEX mismatch surfaces exactly
+        // what we proposed versus what the server offered. Without this the
+        // `code=-5` failure only says "no common algorithm" without naming
+        // either side's offer.
+        logOfferedMethods(session)
 
         // Set blocking mode for handshake
         libssh2_session_set_blocking(session, 1)
@@ -3624,6 +3632,55 @@ actor SSHSession {
             return "unknown"
         }
         return String(cString: raw)
+    }
+
+    /// Apply a libssh2 method preference and log the result (0 = success).
+    ///
+    /// A non-zero return means libssh2 rejected the preference string (e.g.
+    /// none of the listed algorithms are compiled in, or a name is
+    /// misspelled). The caller does not abort on failure — libssh2 will fall
+    /// back to its built-in defaults — but the log surfaces the rejection so a
+    /// KEX mismatch is not misdiagnosed as a server problem.
+    private func applyMethodPref(
+        _ session: OpaquePointer,
+        method: Int32,
+        prefs: String,
+        label: String
+    ) {
+        let rc = prefs.withCString { libssh2_session_method_pref(session, method, $0) }
+        if rc == 0 {
+            logger.info("ssh_method_pref_ok label=\(label, privacy: .public) rc=\(rc)")
+        } else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "ssh_method_pref_fail label=\(label, privacy: .public) rc=\(rc) libssh2=\(errorMsg, privacy: .public)"
+            )
+        }
+    }
+
+    /// Log the algorithm name-lists libssh2 will offer in its KEX_INIT packet,
+    /// read via `libssh2_session_methods` after method preferences are applied
+    /// and before the handshake starts. This is the effective offer, so a KEX
+    /// mismatch surfaces exactly what we proposed alongside what the server
+    /// proposed (parsed from the pump's hex dump of the server KEX_INIT).
+    private func logOfferedMethods(_ session: OpaquePointer) {
+        let methods: [(label: String, method: Int32)] = [
+            ("kex", LIBSSH2_METHOD_KEX),
+            ("hostkey", LIBSSH2_METHOD_HOSTKEY),
+            ("crypt_cs", LIBSSH2_METHOD_CRYPT_CS),
+            ("crypt_sc", LIBSSH2_METHOD_CRYPT_SC),
+            ("mac_cs", LIBSSH2_METHOD_MAC_CS),
+            ("mac_sc", LIBSSH2_METHOD_MAC_SC),
+            ("comp_cs", LIBSSH2_METHOD_COMP_CS),
+            ("comp_sc", LIBSSH2_METHOD_COMP_SC)
+        ]
+        for entry in methods {
+            let value = SSHSession.negotiatedMethod(session, method: entry.method)
+            logger.info("ssh_offered_method label=\(entry.label, privacy: .public) value=\(value, privacy: .public)")
+        }
     }
 
     private static func remoteFileError(
