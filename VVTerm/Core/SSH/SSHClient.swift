@@ -1447,8 +1447,12 @@ actor SSHSession {
         // Capture the libssh2 error string so the live failure surfaces it.
         try Task.checkCancellation()
         let handshakeToken = startupTrace?.begin(.sshHandshake)
+        let dialHost = config.dialHost
+        let dialPort = config.dialPort
+        let peer = connectedPeerAddress ?? "unknown"
+        let fd = socket
         logger.info(
-            "ssh_handshake_begin fd=\(socket) peer=\(connectedPeerAddress ?? "unknown", privacy: .public) dial=\(config.dialHost, privacy: .private(mask: .hash)):\(config.dialPort)"
+            "ssh_handshake_begin fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
         )
         let handshakeResult = libssh2_session_handshake(session, socket)
         guard handshakeResult == 0 else {
@@ -1457,7 +1461,7 @@ actor SSHSession {
             libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
             let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
             logger.error(
-                "ssh_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) fd=\(socket) peer=\(connectedPeerAddress ?? "unknown", privacy: .public) dial=\(config.dialHost, privacy: .private(mask: .hash)):\(config.dialPort)"
+                "ssh_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
             )
             if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "failed", detail: "code_\(handshakeResult)") }
             cleanup()
