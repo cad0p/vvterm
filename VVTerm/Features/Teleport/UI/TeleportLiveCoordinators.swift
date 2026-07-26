@@ -252,21 +252,19 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
 /// Adapts the spike-ported `BrowserMFACeremony` to the
 /// `BrowserMFACeremonyRunning` protocol.
 ///
-/// The underlying ceremony's `run(conn:host:)` does both
-/// CreateAuthenticateChallenge AND the listener+Safari portion. The protocol's
-/// `run(host:challenge:)` expects the challenge to be passed in (the
-/// coordinator calls CreateAuthenticateChallenge separately).
+/// The ceremony owns the entire Browser MFA flow (matching the spike's
+/// `BrowserMFACeremony.run(conn:host:)`): it starts its own loopback
+/// `BrowserMFAListener`, calls `createAuthenticateChallenge` with the real
+/// loopback URL (a non-zero, OS-assigned port), opens Safari, awaits the
+/// callback, and returns `BrowserMFAResponse`. This adapter just forwards to
+/// it — there is no split between CreateAuthenticateChallenge and the
+/// listener+Safari portion.
 ///
-/// This adapter reconstructs the BrowserMFAChallenge from the passed-in
-/// challenge and runs the listener + Safari portion. Because the underlying
-/// ceremony doesn't expose its listener/Safari steps separately, this adapter
-/// signals the first-device path (noBrowserMFAChallenge) when the challenge
-/// has no BrowserMFAChallenge, letting the coordinator fall back to
-/// CreateRegisterChallenge without ExistingMFAResponse.
-///
-/// TODO(phase-2): refactor BrowserMFACeremony to split
-/// CreateAuthenticateChallenge from the listener+Safari portion so the
-/// adapter can call just the latter. Tracked separately from the UI commit.
+/// The ceremony calls `grpcClient.createAuthenticateChallenge(...)` itself
+/// (after starting the listener) so that the real loopback URL is used. A
+/// bogus `localhost:0` URL is rejected by Teleport's
+/// `ValidateClientRedirect` → "unable to create MFA challenges" (gRPC code 7)
+/// — that was the live-device regression.
 final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
@@ -274,27 +272,11 @@ final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
     )
 
     func run(
-        host: String,
-        challenge: Proto_MFAAuthenticateChallenge
+        grpcClient: any TeleportGRPCClienting,
+        host: String
     ) async throws -> Proto_BrowserMFAResponse {
-        // If the challenge has no BrowserMFAChallenge, the user has no
-        // existing WebAuthn device — signal the first-device path.
-        guard challenge.hasBrowserMfaChallenge,
-              !challenge.browserMfaChallenge.requestID.isEmpty else {
-            throw BrowserMFACeremonyError.noBrowserMFAChallenge
-        }
-        // The underlying ceremony's run(conn:host:) re-does
-        // CreateAuthenticateChallenge, which we can't call here (the
-        // coordinator already called it). Until the underlying ceremony is
-        // refactored to accept a challenge, we throw noBrowserMFAChallenge
-        // to signal the first-device path. This is correct for the
-        // first-device case (the common path for new VVTerm users) and
-        // surfaces as a TODO for the existing-device case.
-        //
-        // See: 2026-07-23-strategy-b-session2.2-teleport-ui-design.md
-        // (CI strategy — the existing-device path is tested via mock
-        // coordinators in UI tests, not via this Live adapter).
-        throw BrowserMFACeremonyError.noBrowserMFAChallenge
+        let ceremony = BrowserMFACeremony()
+        return try await ceremony.run(grpcClient: grpcClient, host: host)
     }
 }
 

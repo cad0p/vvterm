@@ -186,25 +186,29 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
             return
         }
 
-        // ── Step 2: CreateAuthenticateChallenge + Browser MFA ceremony ──
-        // The ceremony owns both: it starts the loopback NWListener, calls
-        // CreateAuthenticateChallenge with BrowserMFATSHRedirectURL, opens
-        // Safari to /web/mfa/browser/<id>, awaits the loopback callback,
-        // and returns ExistingMFAResponse.Browser.
+        // ── Step 2: Browser MFA ceremony (owns listener + createAuthenticateChallenge + Safari + callback) ──
+        // The ceremony owns the entire Browser MFA flow, mirroring the spike's
+        // `BrowserMFACeremony.run(conn:host:)`: it starts its own loopback
+        // `BrowserMFAListener`, calls `createAuthenticateChallenge` with the
+        // REAL loopback URL (a non-zero, OS-assigned port), opens Safari to
+        // `/web/mfa/browser/<request_id>`, awaits the loopback callback, and
+        // returns `ExistingMFAResponse.Browser`.
+        //
+        // The ceremony MUST call `createAuthenticateChallenge` itself (after
+        // starting the listener) — a pre-fetched challenge with a bogus
+        // `localhost:0` URL is rejected by Teleport's
+        // `ValidateClientRedirect` → "unable to create MFA challenges"
+        // (gRPC code 7). That was the live-device regression.
         //
         // If the user has no existing WebAuthn device, the ceremony throws
-        // noBrowserMFAChallenge and we fall back to the first-device path
+        // `noBrowserMFAChallenge` and we fall back to the first-device path
         // (ExistingMFAResponse = nil).
         state = .awaitingExistingAssertion
-        let loopbackURL = "http://localhost:0/callback"  // the concrete ceremony picks the port
         var existingMfaResponse: Proto_MFAAuthenticateResponse?
         do {
-            let challenge = try await grpcClient.createAuthenticateChallenge(
-                browserMFATSHRedirectURL: loopbackURL
-            )
             let browserResp = try await browserMFACeremony.run(
-                host: cluster.host,
-                challenge: challenge
+                grpcClient: grpcClient,
+                host: cluster.host
             )
             var mfaResp = Proto_MFAAuthenticateResponse()
             mfaResp.browser = browserResp
@@ -212,18 +216,24 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
             logger.info("Browser MFA ceremony complete")
         } catch {
             // noBrowserMFAChallenge is the first-device path — not an error.
-            // The concrete ceremony surfaces it as a specific error; we
-            // string-match here because BrowserMFACeremonyError isn't
-            // available yet (parallel agent's file).
-            let msg = error.localizedDescription
-            if msg.contains("noBrowserMFAChallenge") || msg.contains("no BrowserMFAChallenge") {
+            // The concrete `BrowserMFACeremony` surfaces it as
+            // `BrowserMFACeremonyError.noBrowserMFAChallenge`. We type-match
+            // first (the error is in-module), and string-match as a fallback
+            // for any future ceremony impl that wraps the error.
+            if case BrowserMFACeremonyError.noBrowserMFAChallenge = error {
                 logger.info("no BrowserMFAChallenge — first-device path")
                 existingMfaResponse = nil
             } else {
-                logger.error("Browser MFA ceremony failed: \(msg, privacy: .public)")
-                state = .failed(.browserMFAFailed(msg))
-                await grpcClient.disconnect()
-                return
+                let msg = error.localizedDescription
+                if msg.contains("noBrowserMFAChallenge") || msg.contains("no BrowserMFAChallenge") || msg.contains("did not return a BrowserMFAChallenge") {
+                    logger.info("no BrowserMFAChallenge — first-device path")
+                    existingMfaResponse = nil
+                } else {
+                    logger.error("Browser MFA ceremony failed: \(msg, privacy: .public)")
+                    state = .failed(.browserMFAFailed(msg))
+                    await grpcClient.disconnect()
+                    return
+                }
             }
         }
 

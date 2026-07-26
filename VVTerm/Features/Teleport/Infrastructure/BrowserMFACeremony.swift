@@ -32,8 +32,6 @@ import os.log
 import AuthenticationServices
 import UIKit
 #if canImport(Network)
-import NIOCore
-import SwiftProtobuf
 import Network
 #endif
 
@@ -72,11 +70,31 @@ final class BrowserMFACeremony: NSObject {
     /// Run the ceremony. Returns the ExistingMFAResponse.Browser to send in
     /// CreateRegisterChallenge.
     ///
+    /// The ceremony OWNS the entire Browser MFA flow, mirroring the spike's
+    /// `BrowserMFACeremony.run(conn:host:)`:
+    ///   1. Start the loopback `BrowserMFAListener` → get a real
+    ///      `clientCallbackURL` (e.g. `http://localhost:<port>/callback`).
+    ///   2. Call `grpcClient.createAuthenticateChallenge(...)` with the real
+    ///      loopback URL in `browserMfaTshRedirectURL` (field 9).
+    ///   3. Read `BrowserMFAChallenge.requestID` from the response.
+    ///   4. Open Safari to `/web/mfa/browser/<request_id>`.
+    ///   5. Await the loopback listener callback.
+    ///   6. Build + return `Proto_BrowserMFAResponse`.
+    ///
+    /// The ceremony MUST call `createAuthenticateChallenge` itself (after
+    /// starting the listener), not receive a pre-fetched challenge — a bogus
+    /// `localhost:0` URL is rejected by Teleport's `ValidateClientRedirect`
+    /// → "unable to create MFA challenges" (gRPC code 7).
+    ///
     /// - Parameters:
-    ///   - conn: the gRPC connection (already dialed in step 1).
+    ///   - grpcClient: the connected Teleport gRPC client (used for the
+    ///     `CreateAuthenticateChallenge` call with the real loopback URL).
     ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it").
     /// - Returns: the ExistingMFAResponse.Browser (RequestId + WebauthnResponse).
-    func run(conn: TeleportGRPCConnection, host: String) async throws -> Proto_BrowserMFAResponse {
+    func run(
+        grpcClient: any TeleportGRPCClienting,
+        host: String
+    ) async throws -> Proto_BrowserMFAResponse {
         #if canImport(Network)
         // ── 1. Start the loopback listener ────────────────────────────────
         let listener = BrowserMFAListener()
@@ -90,17 +108,12 @@ final class BrowserMFACeremony: NSObject {
         BrowserMFACeremonyLog.logger.info("listener on \(clientCallbackURL, privacy: .public)")
 
         // ── 2. CreateAuthenticateChallenge with BrowserMFATSHRedirectURL ──
-        var authReq = Proto_CreateAuthenticateChallengeRequest()
-        authReq.contextUser = Proto_ContextUser()
-        authReq.challengeExtensions = Proto_ChallengeExtensions()
-        authReq.challengeExtensions.scope = .manageDevices
-        authReq.browserMfaTshRedirectURL = clientCallbackURL  // field 9
+        // The ceremony passes the REAL loopback URL (a non-zero, OS-assigned
+        // port) — never the bogus localhost:0 sentinel that broke the live
+        // device. Teleport's ValidateClientRedirect rejects invalid URLs.
         BrowserMFACeremonyLog.logger.info("create_auth_challenge ContextUser MANAGE_DEVICES + BrowserMFATSHRedirectURL")
-
-        let authChal: Proto_MFAAuthenticateChallenge = try await conn.unary(
-            path: "/proto.AuthService/CreateAuthenticateChallenge",
-            request: authReq,
-            responseType: Proto_MFAAuthenticateChallenge.self
+        let authChal = try await grpcClient.createAuthenticateChallenge(
+            browserMFATSHRedirectURL: clientCallbackURL
         )
 
         // ── 3. Read the BrowserMFAChallenge ──────────────────────────────

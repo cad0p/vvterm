@@ -121,26 +121,36 @@ protocol TeleportGRPCClienting: AnyObject {
 // MARK: - Browser MFA ceremony (Phase 2, step 2)
 
 /// The existing-device WebAuthn assertion via Safari (the Browser MFA
-/// ceremony). Starts a loopback NWListener, opens Safari to
-/// `/web/mfa/browser/<request_id>`, awaits the loopback callback, and
-/// returns the decrypted CredentialAssertionResponse.
+/// ceremony). The ceremony OWNS the entire Browser MFA flow — it starts a
+/// loopback `BrowserMFAListener`, calls `CreateAuthenticateChallenge` with
+/// the real loopback URL (field 9 `browserMfaTshRedirectURL`), opens Safari to
+/// `/web/mfa/browser/<request_id>`, awaits the loopback callback, and returns
+/// the decrypted CredentialAssertionResponse.
 ///
-/// The concrete `BrowserMFACeremony` (ported by the parallel agent) is
-/// verbatim from the 1.11 spike.
+/// This matches the spike's `BrowserMFACeremony.run(conn:host:)` exactly —
+/// the ceremony must own the listener + the gRPC call together, because the
+/// `browserMfaTshRedirectURL` passed to `CreateAuthenticateChallenge` must be
+/// the real URL of an already-started listener (a bogus `localhost:0` URL is
+/// rejected by Teleport's `ValidateClientRedirect` → "unable to create MFA
+/// challenges", gRPC code 7).
+///
+/// The ceremony calls `grpcClient.createAuthenticateChallenge(...)` itself
+/// (after starting the listener) rather than receiving a pre-fetched
+/// challenge, so that the real loopback URL is used.
 protocol BrowserMFACeremonyRunning: AnyObject {
     /// Run the Browser MFA ceremony.
     ///
     /// - Parameters:
-    ///   - host: the Teleport proxy hostname
-    ///   - challenge: the CreateAuthenticateChallenge response (carries
-    ///     the request_id)
+    ///   - grpcClient: the connected Teleport gRPC client (used for the
+    ///     `CreateAuthenticateChallenge` call with the real loopback URL).
+    ///   - host: the Teleport proxy hostname (e.g. "teleport.pcad.it").
     /// - Returns: the BrowserMFAResponse (request_id + webauthn_response).
     /// - Throws: `BrowserMFACeremonyError.noBrowserMFAChallenge` if the user
     ///   has no existing WebAuthn device (first-device path — the coordinator
     ///   falls back to CreateRegisterChallenge without ExistingMFAResponse).
     func run(
-        host: String,
-        challenge: Proto_MFAAuthenticateChallenge
+        grpcClient: any TeleportGRPCClienting,
+        host: String
     ) async throws -> Proto_BrowserMFAResponse
 }
 
