@@ -18,8 +18,10 @@
 //
 //  The harness replicates `ServerListScreen`'s `teleportSetupSheet`
 //  routing (which mirrors `ServerSidebarView`'s routing) so the
-//  tap → sheet path is exercised end-to-end, including the phase-
-//  chaining fix (bootstrap → registration → login).
+//  tap → sheet path is exercised end-to-end. It does NOT phase-chain
+//  (bootstrap → registration → login): the readiness tests only assert
+//  which sheet a tap opens, and auto-advancing on bootstrap success raced
+//  the test's `waitForExistence` on the bootstrap header.
 //
 //  Launch-arg contract (read by this harness + by VVTermApp.swift):
 //    --vvterm-ui-test-teleport-ios-serverlist   enables this harness
@@ -46,8 +48,6 @@ struct TeleportIOSServerListUITestHarness: View {
     @StateObject private var keyRing: MockTeleportKeyRing
     @State private var presentingSheet: SheetKind?
     @State private var didConnect = false
-    /// Held in memory so the registration sheet can resume (phase chaining).
-    @State private var bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
 
     @MainActor
     init() {
@@ -181,45 +181,21 @@ struct TeleportIOSServerListUITestHarness: View {
         case .bootstrap:
             // Use the mock bootstrap coordinator (happyPath) so the sheet
             // renders its header without reaching a real server.
-            ReadinessBootstrapSheet(cluster: makeCluster()) { result in
-                // Phase 1 → Phase 2: hold the result, advance to registration.
-                bootstrapResult = result
-                presentingSheet = .registration
-            } onCancel: {
-                presentingSheet = nil
-                bootstrapResult = nil
-            }
-        case .registration:
-            if let bootstrapResult {
-                ReadinessRegistrationSheet(
-                    cluster: makeCluster(),
-                    bootstrapResult: bootstrapResult
-                ) {
-                    // Phase 2 → Phase 3: advance to login.
-                    presentingSheet = .login
-                } onCancel: {
-                    presentingSheet = nil
-                    self.bootstrapResult = nil
-                }
-            } else {
-                // No in-memory result — re-bootstrap (matches production fallback).
-                ReadinessBootstrapSheet(cluster: makeCluster()) { result in
-                    bootstrapResult = result
-                    presentingSheet = .registration
-                } onCancel: {
-                    presentingSheet = nil
-                    bootstrapResult = nil
-                }
-            }
+            //
+            // `onSuccess` is a true no-op (matching `TeleportServerListUITestHarness`):
+            // the harness does NOT phase-chain bootstrap → registration → login
+            // and does NOT dismiss the sheet on success. The readiness tests only
+            // assert which sheet a tap opens, not the phase transitions. Auto-
+            // advancing (or dismissing) on success raced the test's
+            // `waitForExistence` on the bootstrap header: the mock happyPath
+            // reaches `.success` in ~150ms, so the header vanished before the
+            // assertion could see it, and needsBootstrap / crossDevice /
+            // needsRegistration all failed. Advancing also contradicted
+            // `testReadinessIOS_needsRegistration`, which asserts the
+            // registration sheet must NOT appear.
+            ReadinessBootstrapSheet(cluster: makeCluster())
         case .login:
-            ReadinessLoginSheet(cluster: makeCluster()) {
-                // Phase 3 complete — dismiss.
-                presentingSheet = nil
-                bootstrapResult = nil
-            } onCancel: {
-                presentingSheet = nil
-                bootstrapResult = nil
-            }
+            ReadinessLoginSheet(cluster: makeCluster())
         case .none:
             EmptyView()
         }
@@ -266,11 +242,10 @@ struct TeleportIOSServerListUITestHarness: View {
     }
 
     private enum SheetKind: Identifiable {
-        case bootstrap, registration, login, none
+        case bootstrap, login, none
         var id: String {
             switch self {
             case .bootstrap: return "bootstrap"
-            case .registration: return "registration"
             case .login: return "login"
             case .none: return "none"
             }
@@ -288,91 +263,47 @@ struct TeleportIOSServerListUITestHarness: View {
 
 private struct ReadinessBootstrapSheet: View {
     let cluster: TeleportCluster
-    let onSuccess: (TeleportBootstrapCoordinator.BootstrapResult) -> Void
-    let onCancel: () -> Void
 
     @StateObject private var coordinator: MockTeleportBootstrapCoordinator
 
     @MainActor
-    init(
-        cluster: TeleportCluster,
-        onSuccess: @escaping (TeleportBootstrapCoordinator.BootstrapResult) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
+    init(cluster: TeleportCluster) {
         self.cluster = cluster
-        self.onSuccess = onSuccess
-        self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: MockTeleportBootstrapCoordinator(scenario: .happyPath))
     }
 
     var body: some View {
+        // `onSuccess` / `onCancel` are no-ops: the harness only needs the sheet
+        // to render its header so the readiness test can assert it exists. See
+        // `sheetContent` for why phase-chaining is intentionally NOT replicated.
         TeleportBootstrapView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: onSuccess,
-            onCancel: onCancel
-        )
-    }
-}
-
-private struct ReadinessRegistrationSheet: View {
-    let cluster: TeleportCluster
-    let bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
-    let onSuccess: () -> Void
-    let onCancel: () -> Void
-
-    @StateObject private var coordinator: MockTeleportRegistrationCoordinator
-
-    @MainActor
-    init(
-        cluster: TeleportCluster,
-        bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult,
-        onSuccess: @escaping () -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.cluster = cluster
-        self.bootstrapResult = bootstrapResult
-        self.onSuccess = onSuccess
-        self.onCancel = onCancel
-        _coordinator = StateObject(wrappedValue: MockTeleportRegistrationCoordinator(scenario: .happyPath))
-    }
-
-    var body: some View {
-        TeleportRegistrationView(
-            coordinator: coordinator,
-            cluster: cluster,
-            bootstrapResult: bootstrapResult,
-            onSuccess: onSuccess,
-            onCancel: onCancel
+            onSuccess: { _ in },
+            onCancel: { }
         )
     }
 }
 
 private struct ReadinessLoginSheet: View {
     let cluster: TeleportCluster
-    let onSuccess: () -> Void
-    let onCancel: () -> Void
 
     @StateObject private var coordinator: MockTeleportLoginCoordinator
 
     @MainActor
-    init(
-        cluster: TeleportCluster,
-        onSuccess: @escaping () -> Void,
-        onCancel: @escaping () -> Void
-    ) {
+    init(cluster: TeleportCluster) {
         self.cluster = cluster
-        self.onSuccess = onSuccess
-        self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: MockTeleportLoginCoordinator(scenario: .happyPath(certTTL: 12 * 3600)))
     }
 
     var body: some View {
+        // `onSuccess` / `onCancel` are no-ops: the harness only needs the sheet
+        // to render its header so the readiness test can assert it exists.
         TeleportLoginView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: onSuccess,
-            onCancel: onCancel
+            onSuccess: { },
+            onCancel: { }
         )
     }
 }
