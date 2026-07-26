@@ -228,6 +228,45 @@ struct SSHTLSTransportTests {
     }
 
     @Test
+    func parseServerKexInitReturnsNilForBannerOnlyChunk() {
+        // Regression: the first NWConnection.receive callback may deliver
+        // ONLY the SSH banner (`SSH-2.0-...\r\n`, ~18 bytes for Teleport),
+        // with the KEX_INIT packet arriving in a later callback. The parser
+        // must return nil for the banner-only buffer (no packet yet) so the
+        // pump's caller knows to accumulate and retry on the next chunk.
+        // Before the buffering fix, the pump logged
+        // `parse=skipped reason=truncated_packet_length` against this
+        // banner-only first chunk and never retried, so the server's KEX_INIT
+        // was never surfaced.
+        let bannerOnly = Data("SSH-2.0-Teleport\r\n".utf8)
+        #expect(SSHTLSTransport.parseServerKexInit(bannerOnly) == nil)
+    }
+
+    @Test
+    func parseServerKexInitSucceedsOnBannerPlusKexInitConcatenated() throws {
+        // Regression: when the banner and KEX_INIT arrive in separate
+        // NWConnection.receive callbacks, the pump accumulates them into one
+        // buffer before parsing. The parser must succeed on the
+        // concatenation (banner + full KEX_INIT packet) and yield the same
+        // name-lists as the single-chunk case. This pins the behavior the
+        // buffering caller relies on: retry parseServerKexInit on the growing
+        // accumulator until it returns non-nil.
+        let full = Self.makeKexInitChunk()
+        let bannerEnd = "SSH-2.0-Teleport\r\n".utf8.count
+        let banner = full.prefix(bannerEnd)
+        let kexInit = full.dropFirst(bannerEnd)
+        // Simulate two separate receive callbacks: first the banner, then
+        // the KEX_INIT. The accumulator is the concatenation.
+        var accumulator = Data(banner)
+        #expect(SSHTLSTransport.parseServerKexInit(accumulator) == nil)
+        accumulator.append(kexInit)
+        let parsed = try #require(SSHTLSTransport.parseServerKexInit(accumulator))
+        #expect(parsed.kex == "curve25519-sha256,curve25519-sha256@libssh.org")
+        #expect(parsed.hostkey == "ssh-ed25519,rsa-sha2-256,rsa-sha2-512")
+        #expect(parsed.cryptC2S == "aes128-gcm@openssh.com,aes256-gcm@openssh.com")
+    }
+
+    @Test
     func parseServerKexInitHandlesEmptyNameLists() throws {
         // Some servers (or a misconfigured Teleport) may offer an empty
         // name-list for a category. The parser must return "" for that

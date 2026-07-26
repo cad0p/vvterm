@@ -361,9 +361,26 @@ actor SSHTLSTransport {
 
     /// NWConnection -> pumpFD: receive bytes, write them to the pump FD for
     /// libssh2 to read. Loops until receive returns nil (EOF/error).
+    ///
+    /// KEX_INIT buffering: the server's first packet after the banner is its
+    /// `SSH_MSG_KEXINIT` (~704 bytes for Teleport). `NWConnection.receive`
+    /// may deliver the banner (18 bytes) and the KEX_INIT in separate
+    /// callbacks, so parsing only the first chunk sees just the banner and
+    /// fails with `truncated_packet_length`. To surface the server's offered
+    /// algorithms as soon as they arrive, every received chunk is appended
+    /// to `kexAccumulator` and `parseServerKexInit` is retried on the
+    /// accumulated buffer until it succeeds (or the buffer clearly cannot
+    /// contain a KEX_INIT). Parsing is diagnostic only — all bytes are
+    /// forwarded to `pumpFD` regardless.
     nonisolated private func pumpNWToFD(connection: NWConnection, pumpFD: Int32, log: Logger) async {
         var nwToFDBytes: Int = 0
         var loggedFirst = false
+        var kexParsed = false
+        // Cap the accumulator so a server that never sends a parseable
+        // KEX_INIT doesn't grow it unbounded. 8 KiB is well above a typical
+        // KEX_INIT (~700 bytes) but small enough to bound memory.
+        var kexAccumulator = Data()
+        let kexAccumulatorLimit = 8 * 1024
         while !Task.isCancelled {
             // NWConnection.receive has only a completion-handler form; bridge
             // it to async via a continuation. The completion is @Sendable.
@@ -394,16 +411,36 @@ actor SSHTLSTransport {
             if !loggedFirst {
                 loggedFirst = true
                 // The first NW→FD chunk carries the server's SSH banner
-                // (`SSH-2.0-...\r\n`) immediately followed by its
-                // KEX_INIT packet (~704 bytes for Teleport). Dump the first
-                // 512 bytes as hex so the KEX_INIT algorithm name-lists are
-                // visible in the live device log, and parse the KEX_INIT to
-                // surface the offered kex + hostkey algorithms directly.
+                // (`SSH-2.0-...\r\n`) and may or may not also carry the
+                // KEX_INIT packet (Teleport's KEX_INIT is ~704 bytes, but
+                // `NWConnection.receive` may split banner + KEX_INIT across
+                // callbacks). Dump the first 512 bytes as hex so the banner
+                // (and any KEX_INIT bytes that did arrive) are visible in the
+                // live device log. The KEX_INIT parse happens against the
+                // accumulator below, which spans chunks.
                 log.info("pump_nw_to_fd_first len=\(data.count) hex=\(Self.hexDump(data, maxBytes: 512), privacy: .public)")
-                if let parsed = Self.parseServerKexInit(data) {
+            }
+            // Diagnostic-only KEX_INIT parse. Append to the accumulator and
+            // retry as long as we haven't parsed it yet (the packet may span
+            // several `receive` callbacks). Once parsed, stop so we don't
+            // re-log the same packet every chunk. This never gates the byte
+            // forward to libssh2 — it only emits log lines.
+            if !kexParsed {
+                kexAccumulator.append(data)
+                if let parsed = Self.parseServerKexInit(kexAccumulator) {
                     log.info("server_kex_init kex=\(parsed.kex, privacy: .public) hostkey=\(parsed.hostkey, privacy: .public) crypt_c2s=\(parsed.cryptC2S, privacy: .public) crypt_s2c=\(parsed.cryptS2C, privacy: .public) mac_c2s=\(parsed.macC2S, privacy: .public) mac_s2c=\(parsed.macS2C, privacy: .public) comp_c2s=\(parsed.compC2S, privacy: .public) comp_s2c=\(parsed.compS2C, privacy: .public)")
+                    kexParsed = true
+                    kexAccumulator.removeAll(keepingCapacity: false)
+                } else if kexAccumulator.count > kexAccumulatorLimit {
+                    // The accumulator has grown well past any plausible
+                    // KEX_INIT without a successful parse; give up and log
+                    // the skip reason against what we have so far so a live
+                    // mismatch isn't masked forever.
+                    log.info("server_kex_init parse=skipped reason=\(Self.kexInitParseSkipReason(kexAccumulator), privacy: .public) accumulated=\(kexAccumulator.count)")
+                    kexParsed = true
+                    kexAccumulator.removeAll(keepingCapacity: false)
                 } else {
-                    log.info("server_kex_init parse=skipped reason=\(Self.kexInitParseSkipReason(data), privacy: .public)")
+                    log.info("server_kex_init parse=pending reason=\(Self.kexInitParseSkipReason(kexAccumulator), privacy: .public) accumulated=\(kexAccumulator.count)")
                 }
             }
             nwToFDBytes += data.count
@@ -501,12 +538,18 @@ actor SSHTLSTransport {
         let compS2C: String
     }
 
-    /// Best-effort parse of the server's first KEX_INIT from a raw NW→FD
-    /// chunk. The chunk starts with the SSH banner
+    /// Best-effort parse of the server's first KEX_INIT from an accumulated
+    /// NW→FD byte buffer. The buffer starts with the SSH banner
     /// (`SSH-2.0-...\r\n`), then the first binary packet, which must be
-    /// `SSH_MSG_KEXINIT` (20). Returns `nil` if the chunk is too short or
-    /// the message type is unexpected; `kexInitParseSkipReason` explains
-    /// why for the log.
+    /// `SSH_MSG_KEXINIT` (20). Returns `nil` if the buffer does not yet
+    /// contain a complete KEX_INIT (e.g. only the banner, or the packet is
+    /// still being delivered across `NWConnection.receive` callbacks) or the
+    /// message type is unexpected; `kexInitParseSkipReason` explains why for
+    /// the log.
+    ///
+    /// Designed to be called repeatedly as the pump accumulates chunks: it is
+    /// pure and side-effect free, and returns `nil` until the full packet is
+    /// present, at which point the caller logs the result and stops parsing.
     ///
     /// SSH binary packet layout (RFC 4253 §6):
     ///   uint32  packet_length   (excludes itself + MAC)

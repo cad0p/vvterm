@@ -1472,13 +1472,25 @@ actor SSHSession {
         applyMethodPref(session, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "kex")
         applyMethodPref(session, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "hostkey")
 
-        // Log the algorithm name-lists libssh2 will actually offer in its
-        // KEX_INIT. `libssh2_session_methods` returns the effective (post-pref)
-        // lists before the handshake runs, so a KEX mismatch surfaces exactly
-        // what we proposed versus what the server offered. Without this the
-        // `code=-5` failure only says "no common algorithm" without naming
-        // either side's offer.
-        logOfferedMethods(session)
+        // Log the algorithm name-lists libssh2 will offer in its KEX_INIT.
+        // `libssh2_session_methods` returns nil until the handshake completes
+        // (it reports *negotiated* methods, not offered), so logging it pre-
+        // handshake shows "unknown". Instead, log the preference strings we
+        // just set via `libssh2_session_method_pref` — those are what libssh2
+        // will offer (intersected with its compiled-in algorithms). A KEX
+        // mismatch thus surfaces exactly what we proposed alongside what the
+        // server proposed (parsed from the pump's hex dump of the server
+        // KEX_INIT).
+        logOfferedMethods(OfferedMethodPrefs(
+            kex: SSHMethodPreferences.kex,
+            hostkey: SSHMethodPreferences.hostkey,
+            cryptCS: fastCiphers,
+            cryptSC: fastCiphers,
+            macCS: fastMACs,
+            macSC: fastMACs,
+            compCS: nil,
+            compSC: nil
+        ))
 
         // Set blocking mode for handshake
         libssh2_session_set_blocking(session, 1)
@@ -3661,25 +3673,50 @@ actor SSHSession {
         }
     }
 
-    /// Log the algorithm name-lists libssh2 will offer in its KEX_INIT packet,
-    /// read via `libssh2_session_methods` after method preferences are applied
-    /// and before the handshake starts. This is the effective offer, so a KEX
-    /// mismatch surfaces exactly what we proposed alongside what the server
-    /// proposed (parsed from the pump's hex dump of the server KEX_INIT).
-    private func logOfferedMethods(_ session: OpaquePointer) {
-        let methods: [(label: String, method: Int32)] = [
-            ("kex", LIBSSH2_METHOD_KEX),
-            ("hostkey", LIBSSH2_METHOD_HOSTKEY),
-            ("crypt_cs", LIBSSH2_METHOD_CRYPT_CS),
-            ("crypt_sc", LIBSSH2_METHOD_CRYPT_SC),
-            ("mac_cs", LIBSSH2_METHOD_MAC_CS),
-            ("mac_sc", LIBSSH2_METHOD_MAC_SC),
-            ("comp_cs", LIBSSH2_METHOD_COMP_CS),
-            ("comp_sc", LIBSSH2_METHOD_COMP_SC)
+    /// The algorithm preference strings libssh2 was asked to offer in its
+    /// KEX_INIT packet. These are the name-lists passed to
+    /// `libssh2_session_method_pref` before the handshake — they are what
+    /// libssh2 will offer (intersected with what its OpenSSL backend has
+    /// compiled in). `libssh2_session_methods` returns nil until the
+    /// handshake completes (it reports *negotiated* methods, not offered),
+    /// so the pre-handshake "what did we offer" log must come from the
+    /// preference strings we set, not from the libssh2 session.
+    private struct OfferedMethodPrefs {
+        let kex: String
+        let hostkey: String
+        let cryptCS: String
+        let cryptSC: String
+        let macCS: String
+        let macSC: String
+        /// `nil` means no preference was set; libssh2 offers its built-in
+        /// default for that direction (logged as "default").
+        let compCS: String?
+        let compSC: String?
+    }
+
+    /// Log the algorithm name-lists libssh2 will offer in its KEX_INIT packet.
+    /// These are the preference strings passed to
+    /// `libssh2_session_method_pref` before the handshake (kex + hostkey come
+    /// from `SSHMethodPreferences`; cipher + MAC come from the fast-cipher /
+    /// fast-MAC locals in `connect`). `libssh2_session_methods` returns nil
+    /// before the handshake completes (it reports *negotiated* methods, not
+    /// offered), so logging it pre-handshake shows "unknown" — the preference
+    /// strings are the accurate pre-handshake offer. A KEX mismatch thus
+    /// surfaces exactly what we proposed alongside what the server proposed
+    /// (parsed from the pump's hex dump of the server KEX_INIT).
+    private func logOfferedMethods(_ prefs: OfferedMethodPrefs) {
+        let entries: [(label: String, value: String)] = [
+            ("kex", prefs.kex),
+            ("hostkey", prefs.hostkey),
+            ("crypt_cs", prefs.cryptCS),
+            ("crypt_sc", prefs.cryptSC),
+            ("mac_cs", prefs.macCS),
+            ("mac_sc", prefs.macSC),
+            ("comp_cs", prefs.compCS ?? "default"),
+            ("comp_sc", prefs.compSC ?? "default")
         ]
-        for entry in methods {
-            let value = SSHSession.negotiatedMethod(session, method: entry.method)
-            logger.info("ssh_offered_method label=\(entry.label, privacy: .public) value=\(value, privacy: .public)")
+        for entry in entries {
+            logger.info("ssh_offered_method label=\(entry.label, privacy: .public) value=\(entry.value, privacy: .public)")
         }
     }
 
