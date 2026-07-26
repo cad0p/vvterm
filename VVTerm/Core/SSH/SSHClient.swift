@@ -557,10 +557,29 @@ actor SSHClient {
         }
 
         let connectionMode = connectedServer?.connectionMode ?? .standard
-        let environment = await remoteEnvironment()
-        try validateShellStartupSession(sshSession)
-        let terminalType = await remoteTerminalType()
-        try validateShellStartupSession(sshSession)
+        let isTeleport = connectedServer?.authMethod == .faceIDTeleport
+        // For Teleport, the outer session is the PROXY — it rejects exec/pty/shell.
+        // remoteEnvironment() and remoteTerminalType() exec on the outer session,
+        // which fails with -22 and leaves the session in a bad state. Skip them
+        // here; they'll run on the inner (target node) session after the second
+        // handshake inside startValidatedSSHShell.
+        let environment: RemoteEnvironment
+        let terminalType: RemoteTerminalType
+        if isTeleport {
+            environment = RemoteEnvironment(
+                platform: .unknown,
+                shellProfile: .init(family: .unknown, executableName: nil, shellName: nil),
+                activeShellName: nil,
+                powerShellExecutable: nil
+            )
+            terminalType = .xterm256Color
+            try validateShellStartupSession(sshSession)
+        } else {
+            environment = await remoteEnvironment()
+            try validateShellStartupSession(sshSession)
+            terminalType = await remoteTerminalType()
+            try validateShellStartupSession(sshSession)
+        }
         if connectionMode != .mosh {
             let sshShell = try await startValidatedSSHShell(
                 using: sshSession,
