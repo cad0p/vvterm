@@ -34,9 +34,60 @@
 
 import Testing
 import Foundation
+import os
 @testable import VVTerm
 
-@MainActor
+/// Thread-safe byte buffer for the fake channel closures. `@Sendable`
+/// closures can't capture mutable `var` arrays, so the fake channel's
+/// buffered bytes + the bytes received from the pump live behind a lock.
+final class LockedByteQueue: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: [UInt8]())
+    private let isOpen = OSAllocatedUnfairLock(initialState: true)
+
+    /// Enqueue bytes to be read by the fake `channelRead`.
+    func enqueue(_ bytes: [UInt8]) {
+        lock.withLock { queue in queue.append(contentsOf: bytes) }
+    }
+
+    /// Dequeue up to `maxLen` bytes for `channelRead`, blocking (spinning
+    /// with usleep) until data is available or the channel is closed.
+    /// Returns the dequeued bytes, or an empty array when the queue is empty
+    /// AND the channel is closed (EOF). Mirrors a blocking
+    /// `libssh2_channel_read_ex` that returns EAGAIN internally and retries
+    /// until data or EOF.
+    func blockingDequeue(maxLen: Int) -> [UInt8] {
+        while true {
+            let chunk = lock.withLock { queue -> [UInt8] in
+                if !queue.isEmpty {
+                    let n = min(maxLen, queue.count)
+                    let dequeued = Array(queue.prefix(n))
+                    queue.removeFirst(n)
+                    return dequeued
+                }
+                return []
+            }
+            if !chunk.isEmpty { return chunk }
+            // Queue empty — is the channel closed?
+            if !isOpen.withLock({ $0 }) { return [] }  // EOF
+            // Open + empty — spin (the real libssh2 path returns EAGAIN and
+            // the makeForChannel adapter sleeps 1ms before retrying).
+            usleep(1_000)
+        }
+    }
+
+    func hasBytes(_ count: Int) -> Bool {
+        lock.withLock { $0.count >= count }
+    }
+
+    func snapshot() -> [UInt8] {
+        lock.withLock { $0 }
+    }
+
+    func close() {
+        isOpen.withLock { $0 = false }
+    }
+}
+
 struct SSHProxySubsystemTransportTests {
 
     // MARK: - Socketpair creation
@@ -88,25 +139,25 @@ struct SSHProxySubsystemTransportTests {
         // the channel and write those bytes to the libssh2FD so the inner
         // libssh2 session's blocking read sees the banner.
         let banner: [UInt8] = Array("SSH-2.0-OpenSSH_8.9\r\n".utf8)
-        var channelBuffer = banner
-        let channelRead: @Sendable (UnsafeMutablePointer<UInt8>, Int) -> Int = { buf, maxLen in
-            guard !channelBuffer.isEmpty else { return 0 }  // EOF
-            let n = min(maxLen, channelBuffer.count)
-            for i in 0..<n { buf[i] = channelBuffer.removeFirst() }
-            return n
-        }
-        let channelWrite: @Sendable (UnsafePointer<UInt8>, Int) -> Int = { _, _ in 0 }
+        let queue = LockedByteQueue()
+        queue.enqueue(banner)
+        queue.close()  // EOF after the banner
 
         let transport = SSHProxySubsystemTransport(
-            channelRead: channelRead,
-            channelWrite: channelWrite
+            channelRead: { buf, maxLen in
+                let chunk = queue.blockingDequeue(maxLen: maxLen)
+                if chunk.isEmpty { return 0 }  // EOF
+                for (i, b) in chunk.enumerated() { buf[i] = b }
+                return chunk.count
+            },
+            channelWrite: { _, _ in 0 }
         )
         let fd = try await transport.start()
         defer { Task { await transport.close() } }
 
         // The pump is async; give it a moment to drain the channel into the
         // socketpair, then read the banner back from the libssh2FD.
-        let received = try await readBytesAsync(fd: fd, count: banner.count, timeoutSeconds: 2)
+        let received = try await readBytesAsync(fd: fd, count: banner.count, timeoutSeconds: 3)
         #expect(received == banner)
     }
 
@@ -116,16 +167,26 @@ struct SSHProxySubsystemTransportTests {
         // the pump's second job is to read that and forward it to the channel
         // (which sends it to the target node via the proxy tunnel).
         let clientBanner: [UInt8] = Array("SSH-2.0-libssh2_1.11.1\r\n".utf8)
-        var receivedByChannel: [UInt8] = []
-        let channelRead: @Sendable (UnsafeMutablePointer<UInt8>, Int) -> Int = { _, _ in 0 }
-        let channelWrite: @Sendable (UnsafePointer<UInt8>, Int) -> Int = { buf, len in
-            for i in 0..<len { receivedByChannel.append(buf[i]) }
-            return len
-        }
+        let received = LockedByteQueue()
+        // Keep the channel open (no EOF) so the pump stays alive long enough
+        // to forward the client banner. The channelRead blocks (spins) on an
+        // empty-but-open queue, mirroring a real channel with no inbound
+        // data yet.
+        let inbound = LockedByteQueue()  // stays open + empty -> channelRead blocks
 
         let transport = SSHProxySubsystemTransport(
-            channelRead: channelRead,
-            channelWrite: channelWrite
+            channelRead: { buf, maxLen in
+                let chunk = inbound.blockingDequeue(maxLen: maxLen)
+                if chunk.isEmpty { return 0 }  // EOF
+                for (i, b) in chunk.enumerated() { buf[i] = b }
+                return chunk.count
+            },
+            channelWrite: { buf, len in
+                var bytes = [UInt8]()
+                for i in 0..<len { bytes.append(buf[i]) }
+                received.enqueue(bytes)
+                return len
+            }
         )
         let fd = try await transport.start()
         defer { Task { await transport.close() } }
@@ -135,10 +196,14 @@ struct SSHProxySubsystemTransportTests {
         _ = try writeAll(fd: fd, bytes: clientBanner)
 
         // Wait for the pump to forward the bytes.
-        try await waitForCondition(timeoutSeconds: 2) {
-            receivedByChannel.count >= clientBanner.count
+        try await waitForCondition(timeoutSeconds: 3) {
+            received.hasBytes(clientBanner.count)
         }
-        #expect(Array(receivedByChannel.prefix(clientBanner.count)) == clientBanner)
+        #expect(Array(received.snapshot().prefix(clientBanner.count)) == clientBanner)
+
+        // Close the inbound queue so the pump's channel->FD loop exits and
+        // the detached pump task can terminate (avoids leaking the task).
+        inbound.close()
     }
 
     @Test
@@ -147,19 +212,16 @@ struct SSHProxySubsystemTransportTests {
         // the pump must close the pumpFD so the inner libssh2 session's reads
         // also see EOF (otherwise `libssh2_session_handshake` would hang
         // forever waiting for a banner that will never arrive).
-        let channelRead: @Sendable (UnsafeMutablePointer<UInt8>, Int) -> Int = { _, _ in 0 }  // immediate EOF
-        let channelWrite: @Sendable (UnsafePointer<UInt8>, Int) -> Int = { _, _ in 0 }
-
         let transport = SSHProxySubsystemTransport(
-            channelRead: channelRead,
-            channelWrite: channelWrite
+            channelRead: { _, _ in 0 },  // immediate EOF
+            channelWrite: { _, _ in 0 }
         )
         let fd = try await transport.start()
         defer { Task { await transport.close() } }
 
         // After EOF, a read on the libssh2FD should return 0 (EOF) rather than
         // blocking indefinitely. Give the pump a moment to close the pump end.
-        let result = try await readWithTimeout(fd: fd, count: 1, timeoutSeconds: 2)
+        let result = try await readWithTimeout(fd: fd, timeoutSeconds: 3)
         #expect(result == 0, "expected EOF (0) on libssh2FD after channel EOF")
     }
 
@@ -199,30 +261,32 @@ struct SSHProxySubsystemTransportTests {
     }
 
     /// Read up to `count` bytes from a fd with a timeout. Returns the number
-    /// of bytes read (0 = EOF, or timeout with no data).
+    /// of bytes read (0 = EOF). Uses a non-blocking poll to avoid blocking
+    /// the test forever if the pump never closes the FD.
     private func readWithTimeout(fd: Int32, count: Int, timeoutSeconds: TimeInterval) async throws -> Int {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Int, Error>) in
-            let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
-            // Use a poll-based approach with a small sleep loop to avoid blocking.
-            DispatchQueue.global().async {
-                var waited: TimeInterval = 0
-                let step: useconds_t = 5_000  // 5ms
-                while true {
-                    let n = Darwin.read(fd, buf, count)
-                    if n >= 0 {
-                        buf.deallocate()
-                        cont.resume(returning: n)
-                        return
-                    }
-                    // EAGAIN / EWOULDBLOCK — keep waiting.
-                    usleep(step)
-                    waited += Double(step) / 1_000_000.0
-                    if waited >= timeoutSeconds {
-                        buf.deallocate()
-                        cont.resume(returning: -1)
-                        return
-                    }
-                }
+        // Set the fd non-blocking so a read with no data returns EAGAIN
+        // instead of blocking.
+        let flags = Darwin.fcntl(fd, F_GETFL, 0)
+        _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        defer { _ = Darwin.fcntl(fd, F_SETFL, flags) }  // restore
+
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
+        defer { buf.deallocate() }
+        var waited: TimeInterval = 0
+        let step: useconds_t = 5_000  // 5ms
+        while true {
+            let n = Darwin.read(fd, buf, count)
+            if n >= 0 {
+                return n  // bytes read or EOF (0)
+            }
+            // n < 0 — check for EAGAIN/EWOULDBLOCK
+            if errno != EAGAIN && errno != EWOULDBLOCK {
+                return -1  // hard error
+            }
+            usleep(step)
+            waited += Double(step) / 1_000_000.0
+            if waited >= timeoutSeconds {
+                return -1  // timed out
             }
         }
     }
@@ -231,11 +295,14 @@ struct SSHProxySubsystemTransportTests {
     /// for them to arrive (the pump is async, so the bytes may not be
     /// available immediately).
     private func readBytesAsync(fd: Int32, count: Int, timeoutSeconds: TimeInterval) async throws -> [UInt8] {
-        var buffer = [UInt8](repeating: 0, count: count)
-        var read = 0
+        // Set the fd non-blocking so we can poll without blocking forever.
+        let flags = Darwin.fcntl(fd, F_GETFL, 0)
+        _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        defer { _ = Darwin.fcntl(fd, F_SETFL, flags) }  // restore
+
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
         defer { buf.deallocate() }
-
+        var read = 0
         var waited: TimeInterval = 0
         let step: useconds_t = 5_000  // 5ms
         while read < count {
@@ -245,17 +312,19 @@ struct SSHProxySubsystemTransportTests {
             } else if n == 0 {
                 // EOF before count bytes — the pump closed early.
                 break
-            } else {
+            } else if errno == EAGAIN || errno == EWOULDBLOCK {
                 usleep(step)
                 waited += Double(step) / 1_000_000.0
                 if waited >= timeoutSeconds {
-                    for i in 0..<read { buffer[i] = buf[i] }
                     throw SSHError.socketError("readBytesAsync: timed out after \(waited)s, read \(read)/\(count)")
                 }
+            } else {
+                throw SSHError.socketError("readBytesAsync: read returned \(n) errno=\(errno)")
             }
         }
+        var buffer = [UInt8](repeating: 0, count: read)
         for i in 0..<read { buffer[i] = buf[i] }
-        return Array(buffer.prefix(read))
+        return buffer
     }
 
     /// Poll a condition until it returns true or the timeout elapses.
