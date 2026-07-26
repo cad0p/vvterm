@@ -1656,9 +1656,10 @@ actor SSHSession {
             throw error
         }
         tlsTransport = transport
+        let dialPort = config.dialPort
         let caCertCount = tlsState.clusterCAPEMs.count
         logger.info(
-            "teleport TLS transport connected dial=\(proxyHost, privacy: .private(mask: .hash)):\(config.dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
+            "teleport TLS transport connected dial=\(proxyHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
         )
         return fd
     }
