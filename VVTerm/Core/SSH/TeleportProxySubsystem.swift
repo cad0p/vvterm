@@ -47,12 +47,36 @@ import Foundation
 
 enum TeleportProxySubsystem {
 
+    /// Normalizes a user-entered node name to what Teleport's proxy expects.
+    ///
+    /// Teleport registers nodes by short name (e.g. `pcad-dev`), not FQDN.
+    /// But users naturally enter the FQDN (`pcad-dev.teleport.pcad.it`) —
+    /// it's self-documenting and matches `tsh ssh pcad-dev.teleport.pcad.it`.
+    /// The proxy's route matcher matches against `GetName()`/`GetHostname()`,
+    /// both of which are the short name for tunnel nodes, so the FQDN must
+    /// be stripped.
+    ///
+    /// - If `node` ends with `.<clusterHost>`, the suffix is stripped:
+    ///   `pcad-dev.teleport.pcad.it` + `teleport.pcad.it` → `pcad-dev`.
+    /// - Otherwise, `node` is returned unchanged (already a short name).
+    static func resolveNodeName(_ node: String, clusterHost: String) -> String {
+        let trimmed = node.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = ".\(clusterHost)"
+        if trimmed.hasSuffix(suffix) {
+            return String(trimmed.dropLast(suffix.count))
+        }
+        return trimmed
+    }
+
     /// Builds the `proxy:<node>:<port>[@<cluster>]` subsystem string for
     /// Teleport's proxy.
     ///
     /// - Parameters:
-    ///   - targetNode: The target node hostname (e.g. `pcad-dev.teleport.pcad.it`).
-    ///     This is `Server.host` for a `.faceIDTeleport` server.
+    ///   - targetNode: The target node name (e.g. `pcad-dev` or
+    ///     `pcad-dev.teleport.pcad.it` — the cluster suffix is stripped if
+    ///     present).
+    ///   - clusterHost: The proxy host (e.g. `teleport.pcad.it`), used to
+    ///     strip the FQDN suffix from `targetNode`.
     ///   - port: The target node's SSH port. `0` (the default) tells the proxy
     ///     to choose the node's real SSH port — VVTerm does not know it ahead
     ///     of time, and `tsh ssh` passes `0` for the same reason.
@@ -64,15 +88,17 @@ enum TeleportProxySubsystem {
     ///   `libssh2_channel_process_startup(channel, "subsystem", 9, ...)`.
     static func request(
         for targetNode: String,
+        clusterHost: String,
         port: Int = 0,
         cluster: String? = nil
     ) -> String {
+        let nodeName = resolveNodeName(targetNode, clusterHost: clusterHost)
         // A nil or empty cluster means "the local cluster" — the proxy derives
         // the cluster name from the user cert, so the `@<cluster>` suffix must
         // be omitted entirely. Appending `@` alone would be malformed.
         if let cluster, !cluster.isEmpty {
-            return "proxy:\(targetNode):\(port)@\(cluster)"
+            return "proxy:\(nodeName):\(port)@\(cluster)"
         }
-        return "proxy:\(targetNode):\(port)"
+        return "proxy:\(nodeName):\(port)"
     }
 }

@@ -1389,6 +1389,12 @@ actor SSHSession {
     /// the raw-TCP path leaves this nil. Retained so `cleanup()` can close it
     /// (closing the libssh2 FD alone would leak the NWConnection + pump task).
     private var tlsTransport: SSHTLSTransport?
+    /// The Teleport proxy host (e.g. `teleport.pcad.it`), captured at bootstrap
+    /// in `TeleportClusterTLSState.clusterName`. Used to strip the FQDN suffix
+    /// from the target node name (`pcad-dev.teleport.pcad.it` → `pcad-dev`) so
+    /// the user can enter the self-documenting FQDN while the proxy receives the
+    /// short name it registered. Non-nil only for `.faceIDTeleport`.
+    private var teleportProxyHost: String?
     /// The second (target-node) libssh2 session for the Teleport proxy-subsystem
     /// path. Non-nil only when `config.authMethod == .faceIDTeleport` and the
     /// shell was started via `startShellViaTeleportProxy`. Owned by this
@@ -1658,6 +1664,7 @@ actor SSHSession {
         // the cluster name captured at bootstrap, stored in `TeleportClusterTLSState`.
         // Dial the proxy (clusterName) on port 443 with TLS+ALPN.
         let proxyHost = tlsState.clusterName
+        teleportProxyHost = proxyHost
         let transport = SSHTLSTransport(
             host: proxyHost,
             port: config.dialPort,
@@ -2782,8 +2789,15 @@ actor SSHSession {
         // 2. Request the proxy:<node>:0 subsystem. libssh2 returns 0 on
         //    success, LIBSSH2_ERROR_CHANNEL_FAILURE if the proxy rejects the
         //    subsystem name, or EAGAIN (handled by performShellStartupCall).
+        //    The node name is normalized: `pcad-dev.teleport.pcad.it` → `pcad-dev`
+        //    (Teleport registers nodes by short name, but users enter the FQDN
+        //    for self-documentation). Falls back to the raw host if the proxy
+        //    host isn't known (shouldn't happen post-bootstrap).
         let targetNode = config.host
-        let subsystem = TeleportProxySubsystem.request(for: targetNode)
+        let subsystem = TeleportProxySubsystem.request(
+            for: targetNode,
+            clusterHost: teleportProxyHost ?? ""
+        )
         let subsystemResult: Int32
         do {
             subsystemResult = try await performShellStartupCall(session: outerSession) {
