@@ -50,12 +50,23 @@ enum SSHMethodPreferences {
         "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521," +
         "diffie-hellman-group-exchange-sha256"
 
-    /// Hostkey algorithms preferred for every SSH connection. `ssh-rsa`
-    /// (SHA-1) is intentionally last so Teleport/OpenSSH 8.8+ peers that
-    /// disable it still negotiate a SHA-2 or Ed25519 hostkey.
+    /// Hostkey algorithms preferred for every SSH connection.
+    ///
+    /// Certificate variants (`*-cert-v01@openssh.com`) MUST be listed because
+    /// Teleport's proxy structurally refuses plain hostkeys — it advertises
+    /// only a certificate hostkey algorithm (e.g. `ecdsa-sha2-nistp256-cert-v01@openssh.com`
+    /// for the FIPS suite, `ssh-ed25519-cert-v01@openssh.com` for balanced/hsm,
+    /// `ssh-rsa-cert-v01@openssh.com` for legacy). Without a cert variant in
+    /// our offer, KEX fails with `LIBSSH2_ERROR_KEX_FAILURE` (-5). libssh2
+    /// 1.11.1 (OpenSSL backend) supports all of these. `ssh-rsa` (SHA-1) is
+    /// intentionally last so Teleport/OpenSSH 8.8+ peers that disable it still
+    /// negotiate a SHA-2 or Ed25519 hostkey.
     static let hostkey =
-        "ssh-ed25519,rsa-sha2-512,rsa-sha2-256," +
+        "ssh-ed25519,ssh-ed25519-cert-v01@openssh.com," +
+        "rsa-sha2-512,rsa-sha2-256," +
+        "rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-rsa-cert-v01@openssh.com," +
         "ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256," +
+        "ecdsa-sha2-nistp521-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com," +
         "ssh-rsa"
 }
 

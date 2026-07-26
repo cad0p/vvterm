@@ -55,6 +55,23 @@ struct SSHMethodPreferencesTests {
     }
 
     @Test
+    func hostkeyIncludesCertificateVariants() {
+        // Teleport's proxy structurally refuses plain hostkeys (see
+        // lib/sshutils/server.go validateHostSigner) and advertises ONLY a
+        // certificate hostkey algorithm. If we don't offer at least one
+        // `-cert-v01@openssh.com` variant, KEX fails with -5. libssh2 1.11.1
+        // supports all of these with the OpenSSL backend.
+        let hostkey = SSHMethodPreferences.hostkey
+        #expect(hostkey.contains("ssh-ed25519-cert-v01@openssh.com"))
+        #expect(hostkey.contains("ecdsa-sha2-nistp256-cert-v01@openssh.com"))
+        #expect(hostkey.contains("ecdsa-sha2-nistp384-cert-v01@openssh.com"))
+        #expect(hostkey.contains("ecdsa-sha2-nistp521-cert-v01@openssh.com"))
+        #expect(hostkey.contains("rsa-sha2-256-cert-v01@openssh.com"))
+        #expect(hostkey.contains("rsa-sha2-512-cert-v01@openssh.com"))
+        #expect(hostkey.contains("ssh-rsa-cert-v01@openssh.com"))
+    }
+
+    @Test
     func preferencesAreNonEmptyAndCommaDelimited() {
         #expect(!SSHMethodPreferences.kex.isEmpty)
         #expect(!SSHMethodPreferences.hostkey.isEmpty)
