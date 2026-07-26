@@ -201,7 +201,8 @@ actor SSHProxySubsystemTransport {
 
         // Start the pump before returning the FD. Both loops run concurrently
         // in a detached task; either loop exiting cancels the other + closes
-        // the pump end (so the libssh2 session sees EOF on its reads).\        let task = Task.detached(priority: .userInitiated) { [weak self] in
+        // the pump end (so the libssh2 session sees EOF on its reads).
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.runPump(pair: pair)
         }
