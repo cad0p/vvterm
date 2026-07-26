@@ -2806,8 +2806,16 @@ actor SSHSession {
             var errmsgLen: Int32 = 0
             libssh2_session_last_error(outerSession, &errmsg, &errmsgLen, 0)
             let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            // Read any extended data (stderr) the proxy may have sent before
+            // rejecting. Teleport sometimes writes a human-readable error to
+            // channel stderr before the CHANNEL_FAILURE.
+            var stderrBuf = [UInt8](repeating: 0, count: 4096)
+            let stderrLen = libssh2_channel_read_stderr(outerChannel, &stderrBuf, UInt32(stderrBuf.count))
+            let stderrMsg = stderrLen > 0
+                ? String(bytes: stderrBuf.prefix(Int(stderrLen)), encoding: .utf8) ?? "<non-utf8>"
+                : "<no stderr>"
             logger.error(
-                "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public)"
+                "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(stderrMsg, privacy: .public)"
             )
             shouldInvalidateTransport = true
             throw SSHError.shellRequestFailed
