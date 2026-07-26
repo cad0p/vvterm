@@ -181,13 +181,13 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     /// the clipboard. Shown when `ASWebAuthenticationSession.start()` failed
     /// (Safari disabled / unavailable).
     ///
-    /// The URL is rendered as a `Text` (not a `Button`) so it is exposed as
-    /// a StaticText accessibility element — UI tests query
-    /// `app.staticTexts["vvterm.teleport.bootstrap.approvalURL"]` and assert
-    /// its label equals the URL string. A `Button` would surface as a Button
-    /// element and the StaticText query would never resolve. Tap-to-copy is
-    /// preserved via `.onTapGesture`, which does not change the element's
-    /// accessibility role away from StaticText.
+    /// The URL is rendered as a `Text` (not a `Button`) and given the
+    /// `.isButton` accessibility trait so VoiceOver announces it as
+    /// actionable. The trait causes XCUITest to surface the element as a
+    /// Button (not a StaticText), so UI tests must query it via
+    /// `app.descendants(matching: .any)["vvterm.teleport.bootstrap.approvalURL"]`
+    /// rather than `app.staticTexts[...]`. Tap-to-copy is preserved via
+    /// `.onTapGesture`.
     private var manualSafariLink: some View {
         let approvalURL = "https://\(cluster.host)/web/headless/"
         return VStack(spacing: 6) {

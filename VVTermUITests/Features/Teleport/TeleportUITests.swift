@@ -198,7 +198,12 @@ final class TeleportUITests: XCTestCase {
             "Safari couldn't open automatically. Open the URL below in Safari to approve."
         )
         // The manual-link recovery URL (not a retry button) should be present.
-        let approvalURL = app.staticTexts["vvterm.teleport.bootstrap.approvalURL"]
+        // The URL is rendered as a `Text` with `.accessibilityAddTraits(.isButton)`
+        // (tap-to-copy), so XCUITest may surface it as a Button element rather
+        // than a StaticText depending on the SDK version. Query via
+        // `descendants(matching: .any)` so the lookup resolves regardless of
+        // whether the element is reported as StaticText or Button.
+        let approvalURL = app.descendants(matching: .any)["vvterm.teleport.bootstrap.approvalURL"]
         XCTAssertTrue(approvalURL.waitForExistence(timeout: 3))
         // Use contains instead of exact equality — SwiftUI may compose the
         // accessibility label with surrounding context (formatting markers,
