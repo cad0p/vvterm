@@ -215,7 +215,8 @@ actor SSHClient {
             username: server.username,
             connectionMode: server.connectionMode,
             authMethod: server.authMethod,
-            credentials: credentials
+            credentials: credentials,
+            teleportNodeName: server.name
         )
 
         let pendingSession = SSHSession(config: config, startupTrace: startupTrace)
@@ -1389,12 +1390,6 @@ actor SSHSession {
     /// the raw-TCP path leaves this nil. Retained so `cleanup()` can close it
     /// (closing the libssh2 FD alone would leak the NWConnection + pump task).
     private var tlsTransport: SSHTLSTransport?
-    /// The Teleport proxy host (e.g. `teleport.pcad.it`), captured at bootstrap
-    /// in `TeleportClusterTLSState.clusterName`. Used to strip the FQDN suffix
-    /// from the target node name (`pcad-dev.teleport.pcad.it` → `pcad-dev`) so
-    /// the user can enter the self-documenting FQDN while the proxy receives the
-    /// short name it registered. Non-nil only for `.faceIDTeleport`.
-    private var teleportProxyHost: String?
     /// The second (target-node) libssh2 session for the Teleport proxy-subsystem
     /// path. Non-nil only when `config.authMethod == .faceIDTeleport` and the
     /// shell was started via `startShellViaTeleportProxy`. Owned by this
@@ -1659,14 +1654,12 @@ actor SSHSession {
             throw SSHError.teleportCertMissing
         }
 
-        // For Teleport, `config.host`/`config.dialHost` is the TARGET NODE
-        // (e.g. pcad-dev.teleport.pcad.it), not the proxy. The proxy host is
-        // the cluster name captured at bootstrap, stored in `TeleportClusterTLSState`.
-        // Dial the proxy (clusterName) on port 443 with TLS+ALPN.
-        let proxyHost = tlsState.clusterName
-        teleportProxyHost = proxyHost
+        // For Teleport, `config.host`/`config.dialHost` is the PROXY host
+        // (e.g. teleport.pcad.it). The target node name is `Server.name`
+        // (the display name), used only for the `proxy:<node>:0` subsystem
+        // string. Dial the proxy with TLS+ALPN.
         let transport = SSHTLSTransport(
-            host: proxyHost,
+            host: config.dialHost,
             port: config.dialPort,
             clusterName: tlsState.clusterName,
             clusterCAPEMs: tlsState.clusterCAPEMs
@@ -1685,7 +1678,7 @@ actor SSHSession {
         let dialPort = config.dialPort
         let caCertCount = tlsState.clusterCAPEMs.count
         logger.info(
-            "teleport TLS transport connected dial=\(proxyHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
+            "teleport TLS transport connected dial=\(config.dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
         )
         return fd
     }
@@ -2790,14 +2783,10 @@ actor SSHSession {
         //    success, LIBSSH2_ERROR_CHANNEL_FAILURE if the proxy rejects the
         //    subsystem name, or EAGAIN (handled by performShellStartupCall).
         //    The node name is normalized: `pcad-dev.teleport.pcad.it` → `pcad-dev`
-        //    (Teleport registers nodes by short name, but users enter the FQDN
-        //    for self-documentation). Falls back to the raw host if the proxy
-        //    host isn't known (shouldn't happen post-bootstrap).
-        let targetNode = config.host
-        let subsystem = TeleportProxySubsystem.request(
-            for: targetNode,
-            clusterHost: teleportProxyHost ?? ""
-        )
+        //    The node name is `Server.name` (the display name) — for Teleport
+        //    servers, the display name IS the node name (e.g. "pcad-dev").
+        let nodeName = config.teleportNodeName ?? config.host
+        let subsystem = TeleportProxySubsystem.request(for: nodeName)
         let subsystemResult: Int32
         do {
             subsystemResult = try await performShellStartupCall(session: outerSession) {
@@ -2835,7 +2824,7 @@ actor SSHSession {
             throw SSHError.shellRequestFailed
         }
         logger.info(
-            "teleport_proxy_subsystem_ok subsystem=\(subsystem, privacy: .public) target=\(targetNode, privacy: .private(mask: .hash))"
+            "teleport_proxy_subsystem_ok subsystem=\(subsystem, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
         )
 
         // 3. Bridge the outer channel to a socketpair for the inner session.
@@ -2889,7 +2878,7 @@ actor SSHSession {
             libssh2_session_last_error(innerSession, &errmsg, &errmsgLen, 0)
             let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
             logger.error(
-                "teleport_inner_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) target=\(targetNode, privacy: .private(mask: .hash))"
+                "teleport_inner_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
             )
             shouldInvalidateTransport = true
             throw SSHError.connectionFailed(
@@ -2899,12 +2888,12 @@ actor SSHSession {
         let negotiatedKex = SSHSession.negotiatedMethod(innerSession, method: LIBSSH2_METHOD_KEX)
         let negotiatedHostkey = SSHSession.negotiatedMethod(innerSession, method: LIBSSH2_METHOD_HOSTKEY)
         logger.info(
-            "teleport_inner_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) target=\(targetNode, privacy: .private(mask: .hash))"
+            "teleport_inner_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
         )
 
         // 6. Verify the inner hostkey against the target node hostname.
         do {
-            try verifyInnerHostKey(session: innerSession, host: config.host, port: config.port)
+            try verifyInnerHostKey(session: innerSession, host: nodeName, port: config.port)
         } catch {
             shouldInvalidateTransport = true
             throw error
@@ -4510,6 +4499,12 @@ actor SSHSession {
 
 struct SSHSessionConfig {
     let host: String
+    /// For `.faceIDTeleport`, the Teleport target node name (e.g. `pcad-dev`).
+    /// This is `Server.name` (the display name) — for Teleport servers, the
+    /// display name IS the node name the user wants to connect to. Used to
+    /// build the `proxy:<node>:0` subsystem string. Ignored for other auth
+    /// methods.
+    let teleportNodeName: String?
     let port: Int
     let dialHost: String
     let dialPort: Int
@@ -4534,10 +4529,12 @@ struct SSHSessionConfig {
         connectionMode: SSHConnectionMode,
         authMethod: AuthMethod,
         credentials: ServerCredentials,
+        teleportNodeName: String? = nil,
         connectionTimeout: TimeInterval = 30,
         keepAliveInterval: TimeInterval = 30
     ) {
         self.host = host
+        self.teleportNodeName = teleportNodeName
         self.port = port
         self.dialHost = dialHost ?? host
         self.dialPort = dialPort ?? port

@@ -9,16 +9,18 @@ struct Server: Identifiable, Codable, Hashable {
     var name: String
     /// The connection target.
     ///
-    /// For `.faceIDTeleport` servers this is the TARGET NODE the user wants
-    /// to reach (e.g. `pcad-dev.teleport.pcad.it`), mirroring `tsh ssh
-    /// pier@pcad-dev` — the user names the node, and the Teleport PROXY
-    /// host comes from the associated `TeleportCluster.host` (captured at
-    /// bootstrap). For all other auth methods this is the direct SSH host.
+    /// For `.faceIDTeleport` servers, `name` is the Teleport NODE name
+    /// (e.g. `pcad-dev`) — the display name doubles as the node name for the
+    /// `proxy:<node>:0` subsystem string. `host` is the PROXY host
+    /// (e.g. `teleport.pcad.it`). This mirrors `tsh ssh pier@pcad-dev`:
+    /// the user names the node, the proxy is separate.
+    ///
+    /// For all other auth methods, `name` is just the display name and
+    /// `host` is the direct SSH target.
     ///
     /// This is a model reinterpretation, not a schema change: `Server`'s
     /// `Codable` is unchanged. Existing Teleport servers (whose `host`
     /// currently holds the proxy host) require a one-time migration to
-    /// populate the target node + stored cluster — NOT implemented here.
     var host: String
     var port: Int
     /// TCP port exposed by etserver. SSH still uses `port` for bootstrap.

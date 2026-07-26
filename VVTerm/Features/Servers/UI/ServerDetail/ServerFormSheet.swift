@@ -175,12 +175,6 @@ struct ServerFormSheet: View {
     @State private var connectionTestSucceeded = false
     @State private var lastTestSnapshot: ConnectionTestSnapshot?
     @State private var showingLocalDiscoverySheet = false
-    /// The Teleport proxy host captured at bootstrap (see `teleportCluster`).
-    /// `nil` until bootstrap runs; set from the cluster the bootstrap sheet
-    /// was invoked with so later phases (registration/login) reuse the same
-    /// proxy host instead of the form's `host` field (which is the target
-    /// node for `.faceIDTeleport` servers).
-    @State private var storedTeleportProxyHost: String?
 
     var isEditing: Bool { server != nil }
 
@@ -465,11 +459,6 @@ struct ServerFormSheet: View {
                     makeCoordinator: { makeBootstrapCoordinator() },
                     cluster: teleportCluster,
                     onSuccess: { result in
-                        // Capture the proxy host the bootstrap sheet ran with
-                        // so the subsequent registration/login phases reuse
-                        // it (and don't fall back to the form's `host` field,
-                        // which is the target node for .faceIDTeleport).
-                        storedTeleportProxyHost = teleportCluster.host
                         teleportBootstrapResult = result
                         showingTeleportBootstrap = false
                         showingTeleportRegistration = true
@@ -660,34 +649,17 @@ struct ServerFormSheet: View {
                 #endif
 
             HStack(spacing: 12) {
-                if isFaceIDTeleport {
-                    // For .faceIDTeleport, `host` is the target node
-                    // (e.g. pcad-dev.teleport.pcad.it); the proxy host is
-                    // captured at bootstrap and shown read-only below.
-                    TextField(
-                        "Node",
-                        text: $host,
-                        prompt: Text(String(localized: "pcad-dev.teleport.pcad.it"))
-                    )
-                    #if os(iOS)
-                    .textContentType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    #endif
-                    .autocorrectionDisabled()
-                } else {
-                    TextField(
-                        "Host",
-                        text: $host,
-                        prompt: Text(String(localized: "203.0.113.10"))
-                    )
-                    #if os(iOS)
-                    .textContentType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    #endif
-                    .autocorrectionDisabled()
-                }
+                TextField(
+                    "Host",
+                    text: $host,
+                    prompt: Text(String(localized: "teleport.pcad.it"))
+                )
+                #if os(iOS)
+                .textContentType(.URL)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                #endif
+                .autocorrectionDisabled()
 
                 TextField("Port", text: $port, prompt: Text(String(localized: "22")))
                     #if os(iOS)
@@ -697,18 +669,6 @@ struct ServerFormSheet: View {
                     .frame(width: 76)
             }
 
-            if isFaceIDTeleport, let proxyHost = resolvedTeleportProxyHost {
-                // The Teleport proxy host is captured at bootstrap (from
-                // `TeleportCluster.host`); the user doesn't type it here.
-                HStack {
-                    Text(String(localized: "Proxy"))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(proxyHost)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
 
             TextField("Username", text: $username, prompt: Text(String(localized: "root")))
                 #if os(iOS)
@@ -1238,52 +1198,19 @@ struct ServerFormSheet: View {
     /// The `TeleportCluster` derived from the form's username + the resolved
     /// proxy host. Used by the bootstrap/registration/login sheets.
     ///
-    /// The proxy host is resolved by `proxyHost(storedProxyHost:formHost:)`:
-    /// it prefers `storedTeleportProxyHost` (captured at bootstrap) over the
-    /// form's `host` field, because for `.faceIDTeleport` servers `host` is
-    /// the TARGET NODE (e.g. `pcad-dev.teleport.pcad.it`), not the proxy.
+    /// proxy host. Used by the bootstrap/registration/login sheets.
     private var teleportCluster: TeleportCluster {
         TeleportCluster(
             id: server?.id ?? UUID(),
-            host: Self.proxyHost(
-                storedProxyHost: storedTeleportProxyHost,
-                formHost: host
-            ),
+            host: host,
             port: Int(port) ?? 443,
             username: effectiveUsername
         )
     }
 
-    /// Resolves the Teleport proxy host for `teleportCluster`.
-    ///
-    /// - When a stored proxy host was captured at bootstrap (non-empty), it
-    ///   is used — so the form's `host` field (the target node) is NOT
-    ///   reused as the proxy host.
-    /// - Otherwise the form's `host` field is the fallback, preserving the
-    ///   bootstrap flow where the user enters the proxy host in the bootstrap
-    ///   sheet (the form's `host` field at bootstrap time).
-    ///
-    /// Extracted as a static, testable helper so the resolution rule can be
-    /// asserted without hosting the full SwiftUI form.
-    static func proxyHost(storedProxyHost: String?, formHost: String) -> String {
-        let trimmed = storedProxyHost?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? formHost : trimmed
-    }
-
-    /// Whether the form is configuring a Teleport (Face ID) server. Drives
-    /// the host-field label ("Node" vs "Host") and the read-only proxy row.
+    /// Whether the form is configuring a Teleport (Face ID) server.
     private var isFaceIDTeleport: Bool {
         selectedAuthMethod == .faceIDTeleport
-    }
-
-    /// The proxy host to display read-only in the form, if any. Non-nil only
-    /// when a stored proxy host was captured at bootstrap (so it can be shown
-    /// without falling back to the target-node `host` field).
-    private var resolvedTeleportProxyHost: String? {
-        let trimmed = storedTeleportProxyHost?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Default the port to 443 when `.faceIDTeleport` is selected and the
