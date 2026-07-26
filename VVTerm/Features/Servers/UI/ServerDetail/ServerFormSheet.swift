@@ -667,7 +667,7 @@ struct ServerFormSheet: View {
                     TextField(
                         "Node",
                         text: $host,
-                        prompt: Text(String(localized: "pcad-dev.teleport.pcad.it"))
+                        prompt: Text(String(localized: "pcad-dev"))
                     )
                     #if os(iOS)
                     .textContentType(.URL)
