@@ -11,7 +11,13 @@ VENDOR_SSH="$PROJECT_ROOT/Vendor/libssh2"
 BUILD_DIR_SSH="$PROJECT_ROOT/.build/ssh"
 
 OPENSSL_VERSION="3.2.0"
-LIBSSH2_VERSION="1.11.1"
+# libssh2 fork with ECDSA/RSA certificate hostkey verification (init/sig_verify
+# callbacks that are NULL stubs in upstream 1.11.1 and master). Required for
+# Teleport's proxy, which offers only ecdsa-sha2-nistp256-cert-v01@openssh.com.
+# See: https://github.com/cad0p/libssh2/pull/1
+#      https://github.com/cad0p/libssh2/releases/tag/hostkey-cert-verify-20260726T194929Z
+LIBSSH2_VERSION="hostkey-cert-verify-20260726T194929Z"
+LIBSSH2_SOURCE_URL="https://github.com/cad0p/libssh2/archive/refs/tags/${LIBSSH2_VERSION}.tar.gz"
 MACOS_DEPLOYMENT_TARGET="13.3"
 IOS_DEPLOYMENT_TARGET="16.0"
 
@@ -270,7 +276,7 @@ download_sources() {
 
     if [ ! -d "libssh2-${LIBSSH2_VERSION}" ]; then
         log_info "Downloading libssh2 ${LIBSSH2_VERSION}..."
-        curl -L -O "https://www.libssh2.org/download/libssh2-${LIBSSH2_VERSION}.tar.gz"
+        curl -L -O "${LIBSSH2_SOURCE_URL}"
         tar xzf "libssh2-${LIBSSH2_VERSION}.tar.gz"
     fi
 }
