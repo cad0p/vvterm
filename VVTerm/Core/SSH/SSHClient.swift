@@ -1978,8 +1978,8 @@ actor SSHSession {
             proxySubsystemChannel = nil
         }
 
-        if let innerTransport = innerTransport {
-            Task { await innerTransport.close() }
+        if let transport = innerTransport {
+            Task { await transport.close() }
             innerTransport = nil
         }
 

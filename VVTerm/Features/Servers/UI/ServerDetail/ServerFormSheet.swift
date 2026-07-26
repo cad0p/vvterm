@@ -669,21 +669,25 @@ struct ServerFormSheet: View {
                         text: $host,
                         prompt: Text(String(localized: "pcad-dev.teleport.pcad.it"))
                     )
+                    #if os(iOS)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+                    .autocorrectionDisabled()
                 } else {
                     TextField(
                         "Host",
                         text: $host,
                         prompt: Text(String(localized: "203.0.113.10"))
                     )
+                    #if os(iOS)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+                    .autocorrectionDisabled()
                 }
-                #if os(iOS)
-                .textContentType(.URL)
-                #endif
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
 
                 TextField("Port", text: $port, prompt: Text(String(localized: "22")))
                     #if os(iOS)
