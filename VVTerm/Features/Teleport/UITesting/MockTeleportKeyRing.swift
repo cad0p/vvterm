@@ -181,6 +181,10 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
     /// in-memory so UI tests don't touch the keychain.
     private var ed25519PrivateKeys: [UUID: Data] = [:]
 
+    /// The per-cluster TLS state (cluster name + CA PEMs). In-memory for the
+    /// mock (the real impl persists to UserDefaults).
+    private var clusterTLSStates: [UUID: TeleportClusterTLSState] = [:]
+
     func liveEd25519PrivateKey(for clusterId: UUID) -> Data? {
         ed25519PrivateKeys[clusterId]
     }
@@ -189,10 +193,19 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         ed25519PrivateKeys[clusterId] = pemData
     }
 
+    func clusterTLSState(for clusterId: UUID) -> TeleportClusterTLSState? {
+        clusterTLSStates[clusterId]
+    }
+
+    func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID) {
+        clusterTLSStates[clusterId] = state
+    }
+
     func clear(for clusterId: UUID) {
         credentials.removeValue(forKey: clusterId)
         fixtures.removeValue(forKey: clusterId)
         ed25519PrivateKeys.removeValue(forKey: clusterId)
+        clusterTLSStates.removeValue(forKey: clusterId)
     }
 }
 #endif

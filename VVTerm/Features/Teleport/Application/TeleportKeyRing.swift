@@ -89,6 +89,24 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
     /// Required by the server's passwordless login verify path.
     func registeredUserHandle(for clusterId: UUID) -> Data?
 
+    /// The cluster name (from host_signers[0].domain_name) + cluster TLS CA
+    /// certs (from host_signers[0].tls_certs) captured at Phase 1 bootstrap.
+    /// Required by the SSH TLS+ALPN transport (`SSHTLSTransport`) to verify
+    /// the Teleport proxy's TLS cert when dialing SSH on port 443 (TLS
+    /// Routing, ALPN `teleport-proxy-ssh`). The SSH path fetches this to
+    /// build the NWProtocolTLS.Options trust anchors — same cluster CA
+    /// the gRPC path uses for the auth-service ALPN dial.
+    ///
+    /// NOT CloudKit-synced (per-device) — mirrors the ed25519 private key.
+    /// A server that arrives via iCloud on a fresh device has no cluster
+    /// CA until the user completes the per-device bootstrap.
+    func clusterTLSState(for clusterId: UUID) -> TeleportClusterTLSState?
+
+    /// Store the cluster name + TLS CA certs for a cluster. Called by the
+    /// bootstrap coordinator when Phase 1 returns host_signers. Overwrites
+    /// any prior state.
+    func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID)
+
     /// The ed25519 private key (OpenSSH PEM format) paired with the live
     /// cert, or nil if none. Stored in the keychain (NOT UserDefaults —
     /// the private key is secret). The coordinators store this alongside
@@ -119,6 +137,11 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
 
     /// The UserDefaults key for the encoded `[UUID: TeleportCredential]` map.
     private let credentialsKey = "vvterm.teleport.credentials"
+
+    /// The UserDefaults key for the encoded `[String: TeleportClusterTLSState]` map
+    /// (UUID string keys, same as `credentials`). Stores the cluster name +
+    /// TLS CA certs per cluster for the SSH TLS+ALPN transport.
+    private let clusterTLSStateKey = "vvterm.teleport.clusterTLSState"
 
     /// The injected signer — used to probe the Secure Enclave for key presence
     /// (readiness computation). Defaults to a real `SecureEnclaveSigner`;
@@ -317,6 +340,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
 
     func clear(for clusterId: UUID) {
         credentials.removeValue(forKey: clusterId)
+        clusterTLSState.removeValue(forKey: clusterId)
         // Also delete the ed25519 private key from the keychain.
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -325,7 +349,25 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         ]
         SecItemDelete(query as CFDictionary)
         save()
+        saveClusterTLSState()
         logger.info("cleared credentials for cluster \(clusterId.uuidString, privacy: .public)")
+    }
+
+    // MARK: - Cluster TLS state (SSH transport)
+
+    /// The in-memory cache of cluster TLS state, loaded from UserDefaults.
+    private var clusterTLSState: [UUID: TeleportClusterTLSState] = [:]
+
+    func clusterTLSState(for clusterId: UUID) -> TeleportClusterTLSState? {
+        clusterTLSState[clusterId]
+    }
+
+    func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID) {
+        clusterTLSState[clusterId] = state
+        saveClusterTLSState()
+        logger.info(
+            "stored cluster TLS state for cluster \(clusterId.uuidString, privacy: .public) name=\(state.clusterName, privacy: .public) ca_certs=\(state.clusterCAPEMs.count)"
+        )
     }
 
     // MARK: - Persistence
@@ -349,6 +391,20 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
                 return (uuid, value)
             }
         )
+
+        // Load cluster TLS state too.
+        if let tlsData = UserDefaults.standard.data(forKey: clusterTLSStateKey),
+           let tlsDecoded = try? JSONDecoder().decode(
+            [String: TeleportClusterTLSState].self,
+            from: tlsData
+           ) {
+            clusterTLSState = Dictionary(
+                uniqueKeysWithValues: tlsDecoded.compactMap { (key, value) -> (UUID, TeleportClusterTLSState)? in
+                    guard let uuid = UUID(uuidString: key) else { return nil }
+                    return (uuid, value)
+                }
+            )
+        }
     }
 
     private func save() {
@@ -360,6 +416,18 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
             UserDefaults.standard.set(data, forKey: credentialsKey)
         } catch {
             logger.error("failed to encode credentials: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func saveClusterTLSState() {
+        let encoded = Dictionary(
+            uniqueKeysWithValues: clusterTLSState.map { ($0.key.uuidString, $0.value) }
+        )
+        do {
+            let data = try JSONEncoder().encode(encoded)
+            UserDefaults.standard.set(data, forKey: clusterTLSStateKey)
+        } catch {
+            logger.error("failed to encode cluster TLS state: \(error.localizedDescription, privacy: .public)")
         }
     }
 

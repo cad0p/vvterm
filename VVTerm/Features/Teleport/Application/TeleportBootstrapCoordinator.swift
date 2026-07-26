@@ -404,6 +404,18 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
             }
         }
 
+        // Persist the cluster name + TLS CA certs for the SSH TLS+ALPN
+        // transport. The SSH path (`SSHTLSTransport`) dials the proxy on
+        // port 443 with ALPN `teleport-proxy-ssh` inside a TLS tunnel, and
+        // needs the cluster CA certs as trust anchors — same cluster CA the
+        // gRPC path uses for the auth-service ALPN dial. Stored here so the
+        // SSH connect can rebuild the TLS options without a network round-trip.
+        let tlsState = TeleportClusterTLSState(
+            clusterName: clusterName,
+            clusterCAPEMs: clusterCAPEMs
+        )
+        keyRing.storeClusterTLSState(tlsState, for: cluster.id)
+
         logger.info("bootstrap succeeded — cert \(certPEM.count) chars, tls_cert \(tlsCertPEM.count) chars")
         state = .success
 

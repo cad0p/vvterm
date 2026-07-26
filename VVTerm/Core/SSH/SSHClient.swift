@@ -1317,6 +1317,11 @@ actor SSHSession {
     private var shellChannels: [UUID: ShellChannelState] = [:]
     private var shellStartupsInFlight: Set<UUID> = []
     private var socket: Int32 = -1
+    /// The TLS+ALPN transport backing `socket` when the session connects to a
+    /// Teleport proxy (`.faceIDTeleport`). Non-nil only for the TLS path;
+    /// the raw-TCP path leaves this nil. Retained so `cleanup()` can close it
+    /// (closing the libssh2 FD alone would leak the NWConnection + pump task).
+    private var tlsTransport: SSHTLSTransport?
     private var isActive = false
     private var ioTask: Task<Void, Never>?
     private var execRequests: [UUID: ExecRequest] = [:]
@@ -1384,28 +1389,23 @@ actor SSHSession {
         socket = -1
         connectedPeerAddress = nil
 
-        socket = try await SSHAddressConnector.connect(
-            host: config.dialHost,
-            port: config.dialPort,
-            trace: startupTrace
-        )
-
-        // Disable Nagle's algorithm for low-latency interactive typing
-        // Without this, small packets (keystrokes) are batched causing 40-200ms delays
-        var noDelay: Int32 = 1
-        setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
-
-        // Optimize socket buffers for interactive SSH:
-        // - Small send buffer (8KB) reduces buffering delay for keystrokes
-        // - Larger receive buffer (64KB) improves throughput for command output
-        var sendBufSize: Int32 = 8192
-        var recvBufSize: Int32 = 65536
-        setsockopt(socket, SOL_SOCKET, SO_SNDBUF, &sendBufSize, socklen_t(MemoryLayout<Int32>.size))
-        setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, socklen_t(MemoryLayout<Int32>.size))
-
-        // Prevent SIGPIPE on broken connections (handle errors in code instead)
-        var noSigPipe: Int32 = 1
-        setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        // Teleport proxies (default since Teleport 13) host SSH on port 443
+        // behind a TLS listener with ALPN `teleport-proxy-ssh` (TLS Routing,
+        // RFD 39). A raw TCP socket receives TLS bytes, not an SSH banner,
+        // so `libssh2_session_handshake` fails immediately. For Teleport
+        // servers we dial TLS+ALPN via `SSHTLSTransport`, which bridges
+        // `NWConnection` to libssh2 through a socketpair + pump. The
+        // non-Teleport path keeps the raw TCP connector unchanged.
+        if config.authMethod == .faceIDTeleport {
+            socket = try await connectTeleportTLS()
+        } else {
+            socket = try await SSHAddressConnector.connect(
+                host: config.dialHost,
+                port: config.dialPort,
+                trace: startupTrace
+            )
+            applyRawTCPSocketOptions(socket)
+        }
 
         // Store in atomic storage for emergency I/O interruption.
         atomicSocket.install(socket)
@@ -1495,6 +1495,80 @@ actor SSHSession {
 
         isActive = true
         logger.info("SSH session established")
+    }
+
+    // MARK: - Teleport TLS transport
+
+    /// Dial the Teleport proxy over TLS+ALPN and return the libssh2-facing FD.
+    ///
+    /// Fetches the cluster name + TLS CA certs (captured at Phase 1 bootstrap,
+    /// persisted in `TeleportKeyRing`) to build the NWProtocolTLS trust
+    /// anchors. The transport is retained for the session lifetime so the
+    /// pump + NWConnection stay alive; `cleanup()` closes it.
+    ///
+    /// If no cluster TLS state is persisted (e.g. the server arrived via
+    /// iCloud on a fresh device, or the bootstrap didn't capture
+    /// host_signers), throw `teleportCertMissing` so the UI layer triggers
+    /// re-bootstrap — the SSH path can't construct the TLS trust store
+    /// without the cluster CA.
+    private func connectTeleportTLS() async throws -> Int32 {
+        let clusterId = config.credentials.serverId
+        let keyRing = TeleportKeyRing.shared
+        guard let tlsState = await keyRing.clusterTLSState(for: clusterId) else {
+            logger.error(
+                "teleport TLS state missing for cluster \(clusterId.uuidString, privacy: .public) — re-bootstrap required"
+            )
+            throw SSHError.teleportCertMissing
+        }
+
+        let transport = SSHTLSTransport(
+            host: config.dialHost,
+            port: config.dialPort,
+            clusterName: tlsState.clusterName,
+            clusterCAPEMs: tlsState.clusterCAPEMs
+        )
+        let fd: Int32
+        do {
+            fd = try await transport.connect()
+        } catch {
+            // connect() already cleaned up its own FDs + NWConnection on
+            // failure (see SSHTLSTransport.connect). Close once more to be
+            // safe, then rethrow — don't retain the transport.
+            await transport.close()
+            throw error
+        }
+        tlsTransport = transport
+        let dialHost = config.dialHost
+        let dialPort = config.dialPort
+        let caCertCount = tlsState.clusterCAPEMs.count
+        logger.info(
+            "teleport TLS transport connected dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
+        )
+        return fd
+    }
+
+    /// Apply TCP-specific socket options (Nagle, buffer sizes, NOSIGPIPE)
+    /// to a raw TCP socket from `SSHAddressConnector`. Not called for the
+    /// Teleport TLS path — the socket there is an AF_UNIX socketpair end,
+    /// not a TCP socket.
+    private func applyRawTCPSocketOptions(_ fd: Int32) {
+        // Disable Nagle's algorithm for low-latency interactive typing.
+        // Without this, small packets (keystrokes) are batched causing
+        // 40-200ms delays.
+        var noDelay: Int32 = 1
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
+
+        // Optimize socket buffers for interactive SSH:
+        // - Small send buffer (8KB) reduces buffering delay for keystrokes
+        // - Larger receive buffer (64KB) improves throughput for command output
+        var sendBufSize: Int32 = 8192
+        var recvBufSize: Int32 = 65536
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendBufSize, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &recvBufSize, socklen_t(MemoryLayout<Int32>.size))
+
+        // Prevent SIGPIPE on broken connections (handle errors in code instead).
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
     }
 
     private func authenticate() async throws {
@@ -1769,9 +1843,28 @@ actor SSHSession {
     }
 
     private func cleanup() {
-        // Close socket first to abort any blocking I/O
-        atomicSocket.interrupt()
-        socket = -1
+        // Close the TLS transport first (if present). The transport owns the
+        // NWConnection + pump task + the pump-end FD; its `close()` cancels
+        // all three. The libssh2-facing FD is owned by `AtomicSocket`
+        // (closed by `cleanupLibssh2()` after `libssh2_session_free`), so
+        // `transport.close()` does NOT close it — avoiding a double-close.
+        // We still call `atomicSocket.interrupt()` to `shutdown(SHUT_RDWR)`
+        // the libssh2 FD, which unblocks any in-flight libssh2 I/O so the
+        // session free can complete.
+        if let transport = tlsTransport {
+            atomicSocket.interrupt()  // shutdown(libssh2FD) unblocks libssh2 I/O
+            // Detach the transport close so `cleanup()` stays synchronous.
+            // The Task captures `transport` strongly, so it lives until close()
+            // completes even though `tlsTransport` is nilled below. This is
+            // safe because `cleanup()` runs after I/O has stopped.
+            Task { await transport.close() }
+            tlsTransport = nil
+            socket = -1
+        } else {
+            // Close socket first to abort any blocking I/O.
+            atomicSocket.interrupt()
+            socket = -1
+        }
         connectedPeerAddress = nil
         cleanupLibssh2()
     }
