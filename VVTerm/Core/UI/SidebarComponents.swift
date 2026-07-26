@@ -317,7 +317,24 @@ struct PillBadge: View {
             // applied to the outer `PillBadge` view at the call site lands on
             // a different (often empty/merged) element that XCUITest never
             // queries via `app.staticTexts["<id>"]`.
-            .accessibilityIdentifier(accessibilityID)
+            .modifier(OptionalAccessibilityIdentifier(identifier: accessibilityID))
+    }
+}
+
+/// Applies `.accessibilityIdentifier` only when the identifier is non-nil.
+/// `SwiftUI.AccessibilityIdentifierModifier` requires a non-optional `String`,
+/// so a `nil` value (e.g. `PillBadge` used without an ID for plain count
+/// badges) must be skipped rather than passing an empty string (which would
+/// set a real empty identifier).
+private struct OptionalAccessibilityIdentifier: ViewModifier {
+    let identifier: String?
+
+    func body(content: Content) -> some View {
+        if let identifier {
+            content.accessibilityIdentifier(identifier)
+        } else {
+            content
+        }
     }
 }
 
