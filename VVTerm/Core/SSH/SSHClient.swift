@@ -1918,6 +1918,11 @@ actor SSHSession {
         failAllExecRequests(error: SSHError.notConnected)
         atomicSocket.interrupt()
         innerAtomicSocket.interrupt()
+        // Synchronously stop the bridge transport's pump so it stops
+        // reading/writing the outer proxy-subsystem channel (the outer
+        // session is freed next by cleanupLibssh2). The full actor-isolated
+        // close() is deferred to cleanupLibssh2 for bookkeeping.
+        innerTransport?.cancelPumpSync()
         socket = -1
         innerSocket = -1
     }
@@ -1929,6 +1934,54 @@ actor SSHSession {
         // Prevent double cleanup
         guard !hasBeenCleaned else { return }
         sftpSession = nil
+
+        // Free the Teleport inner (target-node) session first, before the
+        // outer session. The inner session's I/O was already interrupted by
+        // invalidateTransport (innerAtomicSocket.interrupt), and its bridge
+        // transport pump was stopped there too, so freeing it is safe. The
+        // inner FD is closed via innerAtomicSocket after the free (mirrors
+        // the outer session's AtomicSocket close ordering).
+        if let innerSession = innerLibssh2Session {
+            var innerFreeResult = Int32(LIBSSH2_ERROR_EAGAIN)
+            for _ in 0..<1_024 {
+                innerFreeResult = libssh2_session_free(innerSession)
+                if innerFreeResult != LIBSSH2_ERROR_EAGAIN {
+                    break
+                }
+            }
+            if innerFreeResult != 0 {
+                logger.error("Abandoning incomplete inner libssh2 session cleanup: \(innerFreeResult)")
+            }
+            innerLibssh2Session = nil
+            innerAtomicSocket.close()
+            innerSocket = -1
+        }
+
+        // Synchronously stop the bridge transport's pump BEFORE freeing the
+        // outer session. The pump reads/writes the outer proxy-subsystem
+        // channel via libssh2_channel_read_ex / libssh2_channel_write_ex;
+        // freeing the outer session underneath a live pump would be a
+        // use-after-free. cancelPumpSync() cancels the pump task + closes the
+        // pump FD (the loops exit on EBADF). The full actor-isolated close()
+        // is also scheduled (below) for the libssh2FD bookkeeping, but the
+        // synchronous cancel is what makes freeing the outer session safe.
+        if let innerTransport = innerTransport {
+            innerTransport.cancelPumpSync()
+        }
+
+        // Free the outer proxy-subsystem channel if it's still around (the
+        // outer session free below may reap it, but close it explicitly to
+        // avoid leaking it if the outer free is abandoned).
+        if let proxyChannel = proxySubsystemChannel {
+            _ = libssh2_channel_close(proxyChannel)
+            _ = libssh2_channel_free(proxyChannel)
+            proxySubsystemChannel = nil
+        }
+
+        if let innerTransport = innerTransport {
+            Task { await innerTransport.close() }
+            innerTransport = nil
+        }
 
         guard let session = libssh2Session else {
             hasBeenCleaned = true
@@ -1959,50 +2012,19 @@ actor SSHSession {
     }
 
     private func cleanup() {
-        // Tear down the Teleport inner (target-node) session + bridge
-        // transport first, mirroring the outer TLS transport ordering: the
-        // inner libssh2 session must be freed before its bridge FD is closed,
-        // and the bridge transport (pump on the outer channel) must stop
-        // before the outer proxy-subsystem channel is freed.
-        if let innerSession = innerLibssh2Session {
-            innerAtomicSocket.interrupt()  // shutdown(innerFD) unblocks inner I/O
-            var freeResult = Int32(LIBSSH2_ERROR_EAGAIN)
-            for _ in 0..<1_024 {
-                freeResult = libssh2_session_free(innerSession)
-                if freeResult != LIBSSH2_ERROR_EAGAIN {
-                    break
-                }
-            }
-            if freeResult != 0 {
-                logger.error("Abandoning incomplete inner libssh2 session cleanup: \(freeResult)")
-            }
-            innerLibssh2Session = nil
-            innerAtomicSocket.close()
-            innerSocket = -1
-        }
-        stopInnerIOLoop()
-        if let transport = innerTransport {
-            Task { await transport.close() }
-            innerTransport = nil
-        }
-        if let proxyChannel = proxySubsystemChannel {
-            // Best-effort close+free on the outer session. The outer session
-            // is freed by cleanupLibssh2() below; closing the channel here
-            // avoids leaking it if the outer session free doesn't reap it.
-            // libssh2_channel_close/free may return EAGAIN on the non-blocking
-            // outer session — ignore, the session free will reap the channel.
-            _ = libssh2_channel_close(proxyChannel)
-            _ = libssh2_channel_free(proxyChannel)
-            proxySubsystemChannel = nil
-        }
-        // Close the TLS transport first (if present). The transport owns the
-        // NWConnection + pump task + the pump-end FD; its `close()` cancels
-        // all three. The libssh2-facing FD is owned by `AtomicSocket`
-        // (closed by `cleanupLibssh2()` after `libssh2_session_free`), so
-        // `transport.close()` does NOT close it — avoiding a double-close.
-        // We still call `atomicSocket.interrupt()` to `shutdown(SHUT_RDWR)`
-        // the libssh2 FD, which unblocks any in-flight libssh2 I/O so the
-        // session free can complete.
+        // Tear down the Teleport inner session + bridge transport BEFORE the
+        // outer session: the bridge pump must stop before the outer
+        // proxy-subsystem channel is freed (it reads/writes that channel),
+        // and the inner libssh2 session must be interrupted before it is
+        // freed. invalidateTransport() (called by the startShell error path)
+        // stops the inner I/O + closes the bridge transport + interrupts
+        // both sockets; cleanupLibssh2() (called below) then frees the inner
+        // + outer sessions in order. We do NOT duplicate the inner
+        // session/transport/channel teardown here — cleanupLibssh2() owns it.
+        //
+        // The outer TLS transport is closed here (it is not touched by
+        // cleanupLibssh2 because its lifecycle mirrors the outer socket's,
+        // which is owned by AtomicSocket).
         if let transport = tlsTransport {
             atomicSocket.interrupt()  // shutdown(libssh2FD) unblocks libssh2 I/O
             // Detach the transport close so `cleanup()` stays synchronous.

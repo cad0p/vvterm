@@ -60,6 +60,22 @@ import Foundation
 import os.log
 import os
 
+/// Standalone cancellation token captured by the channel I/O closures so they
+/// can observe cancellation without retaining the transport (which would be a
+/// retain cycle: the closures are stored on the transport). A small Sendable
+/// class wrapping a lock-protected bool.
+final class PumpCancelToken: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: false)
+
+    func cancel() {
+        lock.withLock { $0 = true }
+    }
+
+    var isCancelled: Bool {
+        lock.withLock { $0 }
+    }
+}
+
 /// A socketpair bridge that lets a second libssh2 session read/write through
 /// an SSH channel opened on the outer (proxy) session.
 ///
@@ -98,9 +114,27 @@ actor SSHProxySubsystemTransport {
 
     private let channelRead: ChannelRead
     private let channelWrite: ChannelWrite
+    /// Cancellation token captured by the channel I/O closures (via
+    /// `makeForChannel`). A standalone `Sendable` class so the closures can
+    /// observe cancellation without retaining the transport (which would be a
+    /// retain cycle: the closures are stored on the transport). `nil` for the
+    /// test-only init (test closures don't need cancellation).
+    private let cancelToken: PumpCancelToken?
 
     private var socketPair: SocketPair?
     private var pumpTask: Task<Void, Never>?
+    /// Lock-protected pump state so a nonisolated caller (`cancelPumpSync`)
+    /// can stop the pump without awaiting the actor. This is needed by
+    /// `SSHSession.cleanupLibssh2()`, which is synchronous and must stop the
+    /// pump BEFORE freeing the outer libssh2 session (the pump reads/writes a
+    /// channel on the outer session — freeing the session underneath a live
+    /// pump would be a use-after-free).
+    private let pumpState = OSAllocatedUnfairLock(initialState: PumpState())
+
+    private struct PumpState {
+        var task: Task<Void, Never>?
+        var pumpFD: Int32 = -1
+    }
 
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
@@ -110,6 +144,20 @@ actor SSHProxySubsystemTransport {
     init(channelRead: @escaping ChannelRead, channelWrite: @escaping ChannelWrite) {
         self.channelRead = channelRead
         self.channelWrite = channelWrite
+        self.cancelToken = nil
+    }
+
+    /// Test/production split: the production `makeForChannel` factory passes a
+    /// `cancelToken` so the closures can observe cancellation. The test-only
+    /// init (above) doesn't need one.
+    init(
+        channelRead: @escaping ChannelRead,
+        channelWrite: @escaping ChannelWrite,
+        cancelToken: PumpCancelToken
+    ) {
+        self.channelRead = channelRead
+        self.channelWrite = channelWrite
+        self.cancelToken = cancelToken
     }
 
     /// Create a connected socketpair for the channel <-> libssh2 bridge.
@@ -153,10 +201,14 @@ actor SSHProxySubsystemTransport {
 
         // Start the pump before returning the FD. Both loops run concurrently
         // in a detached task; either loop exiting cancels the other + closes
-        // the pump end (so the libssh2 session sees EOF on its reads).
-        pumpTask = Task.detached(priority: .userInitiated) { [weak self] in
+        // the pump end (so the libssh2 session sees EOF on its reads).\        let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.runPump(pair: pair)
+        }
+        pumpTask = task
+        pumpState.withLock { state in
+            state.task = task
+            state.pumpFD = pair.pumpFD
         }
 
         return pair.libssh2FD
@@ -172,16 +224,36 @@ actor SSHProxySubsystemTransport {
     ///
     /// Safe to call multiple times.
     func close() {
-        pumpTask?.cancel()
+        cancelPumpSync()
         pumpTask = nil
-        if let pair = socketPair {
-            // Close only the pump end. The pump's read/write on pumpFD will
-            // error out (EBADF) and the loops will exit. The libssh2FD is
-            // left open for the inner session's AtomicSocket to close.
-            Darwin.close(pair.pumpFD)
-            socketPair = nil
-        }
+        socketPair = nil
         logger.info("proxy_subsystem_transport_close")
+    }
+
+    /// Synchronously cancel the pump task + close the pump end of the
+    /// socketpair, without awaiting the actor. Used by `SSHSession.cleanupLibssh2()`
+    /// which is synchronous and must stop the pump BEFORE freeing the outer
+    /// libssh2 session (the pump reads/writes a channel on the outer session;
+    /// freeing the session underneath a live pump would be a use-after-free).
+    ///
+    /// Idempotent. Does NOT close the libssh2-facing FD (owned by the inner
+    /// session's `AtomicSocket`).
+    nonisolated func cancelPumpSync() {
+        let (task, fd) = pumpState.withLock { state -> (Task<Void, Never>?, Int32) in
+            let t = state.task
+            let f = state.pumpFD
+            state.task = nil
+            state.pumpFD = -1
+            return (t, f)
+        }
+        // Flip the cancellation token so the channel I/O closures bail out
+        // of their EAGAIN retry loops before the outer libssh2 session is
+        // freed (avoids a use-after-free on the outer session/channel).
+        cancelToken?.cancel()
+        task?.cancel()
+        if fd >= 0 {
+            Darwin.close(fd)
+        }
     }
 
     // MARK: - Pump internals
@@ -335,37 +407,44 @@ extension SSHProxySubsystemTransport {
         channel: OpaquePointer,
         outerSession: OpaquePointer?
     ) -> SSHProxySubsystemTransport {
-        let channelRead: ChannelRead = { buf, maxLen in
-            // Retry on EAGAIN until data arrives, EOF, or a hard error.
-            // The pump loop calls this in a tight loop, so yielding on
-            // EAGAIN prevents a busy-spin. A small usleep keeps the pump
-            // from pegging a core while the channel has no data.
-            while true {
-                let n = libssh2_channel_read_ex(channel, 0, buf, maxLen)
-                if n == LIBSSH2_ERROR_EAGAIN {
-                    usleep(1_000)  // 1ms — non-blocking retry
-                    continue
+        // A standalone cancellation token (NOT the transport) captured by the
+        // channel I/O closures. This avoids a retain cycle: the closures are
+        // stored on the transport, so capturing the transport itself would
+        // pin it forever. The token is a small Sendable class that the
+        // transport flips via cancelPumpSync().
+        let cancelToken = PumpCancelToken()
+        let transport = SSHProxySubsystemTransport(
+            channelRead: { buf, maxLen in
+                // Retry on EAGAIN until data arrives, EOF, a hard error, or
+                // cancellation. A small usleep prevents a busy-spin while the
+                // channel has no data.
+                while true {
+                    if cancelToken.isCancelled { return 0 }  // EOF
+                    let n = libssh2_channel_read_ex(channel, 0, buf, maxLen)
+                    if n == LIBSSH2_ERROR_EAGAIN {
+                        usleep(1_000)  // 1ms — non-blocking retry
+                        continue
+                    }
+                    // n > 0: bytes read. n == 0: EOF. n < 0 (other): hard error
+                    // (map to EOF so the pump closes the pumpFD and the inner
+                    // session sees EOF rather than hanging).
+                    return n < 0 ? 0 : n
                 }
-                // n > 0: bytes read. n == 0: EOF. n < 0 (other): hard error
-                // (map to EOF so the pump closes the pumpFD and the inner
-                // session sees EOF rather than hanging).
-                return n < 0 ? 0 : n
-            }
-        }
-        let channelWrite: ChannelWrite = { buf, len in
-            while true {
-                let n = libssh2_channel_write_ex(channel, 0, buf, len)
-                if n == LIBSSH2_ERROR_EAGAIN {
-                    usleep(1_000)  // 1ms — non-blocking retry
-                    continue
+            },
+            channelWrite: { buf, len in
+                while true {
+                    if cancelToken.isCancelled { return 0 }
+                    let n = libssh2_channel_write_ex(channel, 0, buf, len)
+                    if n == LIBSSH2_ERROR_EAGAIN {
+                        usleep(1_000)  // 1ms — non-blocking retry
+                        continue
+                    }
+                    return n < 0 ? 0 : n
                 }
-                return n < 0 ? 0 : n
-            }
-        }
-        return SSHProxySubsystemTransport(
-            channelRead: channelRead,
-            channelWrite: channelWrite
+            },
+            cancelToken: cancelToken
         )
+        return transport
     }
 }
 
