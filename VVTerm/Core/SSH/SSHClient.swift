@@ -2474,7 +2474,15 @@ actor SSHSession {
                 throw error
             }
             guard ptyResult == 0 else {
-                if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed") }
+                var errmsg: UnsafeMutablePointer<CChar>?
+                var errmsgLen: Int32 = 0
+                libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+                let lastErrno = libssh2_session_last_errno(session)
+                let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+                logger.error(
+                    "pty_request_failed code=\(ptyResult) errno=\(lastErrno) libssh2=\(errorMsg, privacy: .public) term=\(terminalType.rawValue, privacy: .public) cols=\(wireCols) rows=\(wireRows)"
+                )
+                if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed", detail: "code_\(ptyResult)") }
                 throw SSHError.shellRequestFailed
             }
             if let ptyToken { startupTrace?.end(ptyToken) }
@@ -2516,7 +2524,15 @@ actor SSHSession {
                 throw error
             }
             guard shellResult == 0 else {
-                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
+                var errmsg: UnsafeMutablePointer<CChar>?
+                var errmsgLen: Int32 = 0
+                libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+                let lastErrno = libssh2_session_last_errno(session)
+                let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+                logger.error(
+                    "shell_request_failed code=\(shellResult) errno=\(lastErrno) libssh2=\(errorMsg, privacy: .public)"
+                )
+                if let shellToken { startupTrace?.end(shellToken, outcome: "failed", detail: "code_\(shellResult)") }
                 throw SSHError.shellRequestFailed
             }
             if let shellToken { startupTrace?.end(shellToken) }
