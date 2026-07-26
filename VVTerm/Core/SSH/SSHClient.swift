@@ -28,6 +28,37 @@ enum LibSSH2Runtime {
     }
 }
 
+// MARK: - libssh2 method preferences
+
+/// libssh2 KEX + hostkey algorithm preference strings.
+///
+/// Teleport's TLS-routing proxy (like OpenSSH 8.8+) disables `ssh-rsa`
+/// (SHA-1) hostkey signatures by default. libssh2 1.11.1 with the OpenSSL
+/// backend supports `curve25519-sha256`, ECDH, and `rsa-sha2-256/512`, so we
+/// offer modern algorithms first and keep `ssh-rsa` last as a fallback. This
+/// avoids `LIBSSH2_ERROR_KEX_FAILURE` (-5) when the peer rejects the legacy
+/// hostkey type.
+///
+/// These constants are pure data so they can be unit-tested without a live
+/// libssh2 session; `SSHClient.connect` passes them to
+/// `libssh2_session_method_pref` before `libssh2_session_handshake`.
+enum SSHMethodPreferences {
+    /// KEX algorithms preferred for every SSH connection. Ordered so the
+    /// fastest, most modern algorithms negotiate first.
+    static let kex =
+        "curve25519-sha256,curve25519-sha256@libssh.org," +
+        "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521," +
+        "diffie-hellman-group-exchange-sha256"
+
+    /// Hostkey algorithms preferred for every SSH connection. `ssh-rsa`
+    /// (SHA-1) is intentionally last so Teleport/OpenSSH 8.8+ peers that
+    /// disable it still negotiate a SHA-2 or Ed25519 hostkey.
+    static let hostkey =
+        "ssh-ed25519,rsa-sha2-512,rsa-sha2-256," +
+        "ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256," +
+        "ssh-rsa"
+}
+
 // MARK: - SSH Client using libssh2
 
 nonisolated struct ShellHandle: Sendable {
@@ -1431,6 +1462,16 @@ actor SSHSession {
         libssh2_session_method_pref(session, LIBSSH2_METHOD_MAC_CS, fastMACs)
         libssh2_session_method_pref(session, LIBSSH2_METHOD_MAC_SC, fastMACs)
 
+        // Force modern KEX + hostkey algorithms (Teleport proxy may reject ssh-rsa).
+        // libssh2 1.11.1 with the OpenSSL backend (linked via libcrypto.a)
+        // supports curve25519-sha256, ECDH, and rsa-sha2-256/512 hostkey
+        // signatures. Teleport's proxy — like OpenSSH 8.8+ — disables
+        // `ssh-rsa` (SHA-1) by default, so offering it first causes a KEX
+        // failure (LIBSSH2_ERROR_KEX_FAILURE / -5). Order the preferences so
+        // modern, SHA-2 based algorithms are tried before legacy `ssh-rsa`.
+        libssh2_session_method_pref(session, LIBSSH2_METHOD_KEX, SSHMethodPreferences.kex)
+        libssh2_session_method_pref(session, LIBSSH2_METHOD_HOSTKEY, SSHMethodPreferences.hostkey)
+
         // Set blocking mode for handshake
         libssh2_session_set_blocking(session, 1)
 
@@ -1467,7 +1508,15 @@ actor SSHSession {
             cleanup()
             throw SSHError.connectionFailed("SSH handshake failed (code \(handshakeResult)): \(errorMsg)")
         }
-        if let handshakeToken { startupTrace?.end(handshakeToken) }
+
+        // Log the negotiated KEX + hostkey algorithms so future live KEX
+        // mismatches surface what libssh2 actually agreed on with the peer.
+        let negotiatedKex = SSHClient.negotiatedMethod(session, method: LIBSSH2_METHOD_KEX)
+        let negotiatedHostkey = SSHClient.negotiatedMethod(session, method: LIBSSH2_METHOD_HOSTKEY)
+        logger.info(
+            "ssh_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) fd=\(fd) peer=\(peer, privacy: .public)"
+        )
+        if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "ok", detail: "kex_\(negotiatedKex)") }
 
         let hostKeyToken = startupTrace?.begin(.hostKeyVerification)
         do {
@@ -3564,6 +3613,17 @@ actor SSHSession {
     private static func string(from buffer: [CChar], length: Int) -> String {
         let bytes = buffer.prefix(length).map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// Returns the algorithm libssh2 negotiated for the given method type after
+    /// a successful handshake, or `"unknown"` if libssh2 could not report it.
+    /// Used for diagnostics so future KEX mismatches surface the agreed value.
+    nonisolated static func negotiatedMethod(_ session: OpaquePointer?, method: Int32) -> String {
+        guard let session else { return "unknown" }
+        guard let raw = libssh2_session_methods(session, method) else {
+            return "unknown"
+        }
+        return String(cString: raw)
     }
 
     private static func remoteFileError(
