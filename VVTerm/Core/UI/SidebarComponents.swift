@@ -113,6 +113,20 @@ struct ServerRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: Telepo
             .background(selectionBackground)
             .opacity(isLocked ? 0.7 : 1.0)
             .contentShape(Rectangle())
+            // Make the row a single accessibility container so the row
+            // identifier lives on the container and is NOT propagated to
+            // descendant elements (the server name Text, host Text,
+            // environment Text, server icon Image, and the readiness pill).
+            // Without `.contain`, SwiftUI propagates the identifier to every
+            // descendant, which (a) makes `app.staticTexts["vvterm.serverRow.
+            // <uuid>"]` match multiple elements (the name/host/env Texts and
+            // icon Image all inherit it) so the test can't tap a single
+            // element, and (b) overwrites the readiness pill's own identifier
+            // (vvterm.serverRow.readinessPill.setup / .signIn) so
+            // `app.staticTexts["vvterm.serverRow.readinessPill.*"]` never
+            // resolves. `.contain` exposes children as separate elements
+            // under the container without inheriting its identifier.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("vvterm.serverRow.\(server.id.uuidString)")
             .onTapGesture {
                 if isLocked {
