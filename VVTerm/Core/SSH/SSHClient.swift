@@ -1434,14 +1434,34 @@ actor SSHSession {
         // Set blocking mode for handshake
         libssh2_session_set_blocking(session, 1)
 
-        // Perform SSH handshake
+        // Perform SSH handshake.
+        //
+        // Teleport proxies running TLS Routing (the default since Teleport 13)
+        // multiplex all client protocols on port 443 behind a single TLS
+        // listener. SSH is reached via ALPN `teleport-proxy-ssh` *inside* a TLS
+        // tunnel — a raw TCP socket here will get an immediate handshake
+        // failure because the proxy speaks TLS, not SSH, on the bare socket.
+        // When that happens `libssh2_session_last_error` typically reports a
+        // banner/version error (e.g. "Error starting up SSH session: -1")
+        // rather than a TLS error, because libssh2 never sees a TLS byte.
+        // Capture the libssh2 error string so the live failure surfaces it.
         try Task.checkCancellation()
         let handshakeToken = startupTrace?.begin(.sshHandshake)
+        logger.info(
+            "ssh_handshake_begin fd=\(socket) peer=\(connectedPeerAddress ?? "unknown", privacy: .public) dial=\(config.dialHost, privacy: .private(mask: .hash)):\(config.dialPort)"
+        )
         let handshakeResult = libssh2_session_handshake(session, socket)
         guard handshakeResult == 0 else {
-            if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "failed") }
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "ssh_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) fd=\(socket) peer=\(connectedPeerAddress ?? "unknown", privacy: .public) dial=\(config.dialHost, privacy: .private(mask: .hash)):\(config.dialPort)"
+            )
+            if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "failed", detail: "code_\(handshakeResult)") }
             cleanup()
-            throw SSHError.connectionFailed("SSH handshake failed: \(handshakeResult)")
+            throw SSHError.connectionFailed("SSH handshake failed (code \(handshakeResult)): \(errorMsg)")
         }
         if let handshakeToken { startupTrace?.end(handshakeToken) }
 
