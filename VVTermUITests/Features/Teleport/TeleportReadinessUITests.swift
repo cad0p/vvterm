@@ -105,6 +105,19 @@ final class TeleportReadinessUITests: XCTestCase {
 
         // The amber "Setup" pill should be visible.
         let setupPill = app.staticTexts["vvterm.serverRow.readinessPill.setup"]
+        if !setupPill.waitForExistence(timeout: 5) {
+            // DEBUG: dump the full accessibility tree so CI logs reveal
+            // whether ServerRow rendered, whether the pill Text exists, and
+            // what identifier/type it has. The previous accessibility fixes
+            // (1c848fd, 7bc8434, dcbe78b, 20c5164) all guessed without
+            // seeing the tree; this stops the guessing.
+            let tree = app.debugDescription
+            let attachment = XCTAttachment(string: tree)
+            attachment.name = "element-tree-needsBootstrap"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            print("DEBUG_ELEMENT_TREE_needsBootstrap:\n\(tree)")
+        }
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for needsBootstrap")
 
         // Tap the row → the bootstrap sheet should appear.

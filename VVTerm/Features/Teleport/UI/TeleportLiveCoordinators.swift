@@ -210,6 +210,8 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
             throw GRPCError.transport("not connected")
         }
         var req = Proto_CreateRegisterChallengeRequest()
+        req.deviceType = .webauthn
+        req.deviceUsage = .passwordless
         if let existing = existingMFAResponse {
             req.existingMfaResponse = existing
         }
@@ -231,6 +233,7 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
         req.contextUser = Proto_ContextUser()
         req.newDeviceName = deviceName
         req.newMfaResponse = newMFAResponse
+        req.deviceUsage = .passwordless
         _ = try await conn.unary(
             path: "/proto.AuthService/AddMFADeviceSync",
             request: req,
