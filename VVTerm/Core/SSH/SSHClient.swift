@@ -1676,9 +1676,10 @@ actor SSHSession {
         }
         tlsTransport = transport
         let dialPort = config.dialPort
+        let dialHost = config.dialHost
         let caCertCount = tlsState.clusterCAPEMs.count
         logger.info(
-            "teleport TLS transport connected dial=\(config.dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
+            "teleport TLS transport connected dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
         )
         return fd
     }
@@ -2813,7 +2814,9 @@ actor SSHSession {
             // rejecting. Teleport sometimes writes a human-readable error to
             // channel stderr before the CHANNEL_FAILURE.
             var stderrBuf = [UInt8](repeating: 0, count: 4096)
-            let stderrLen = libssh2_channel_read_stderr(outerChannel, &stderrBuf, UInt32(stderrBuf.count))
+            // libssh2_channel_read_stderr doesn't exist as a symbol; use
+            // libssh2_channel_read_ex with stream_id=1 (SSH_EXTENDED_DATA_STDERR).
+            let stderrLen = libssh2_channel_read_ex(outerChannel, 1, &stderrBuf, UInt32(stderrBuf.count))
             let stderrMsg = stderrLen > 0
                 ? String(bytes: stderrBuf.prefix(Int(stderrLen)), encoding: .utf8) ?? "<non-utf8>"
                 : "<no stderr>"
