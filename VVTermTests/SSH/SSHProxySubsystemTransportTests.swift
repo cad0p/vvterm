@@ -88,6 +88,38 @@ final class LockedByteQueue: @unchecked Sendable {
     }
 }
 
+/// Detects concurrent access to a shared resource (e.g. the outer libssh2
+/// session). `enter()`/`exit()` bracket a critical section; `maxDepth` records
+/// the maximum number of concurrent entrants. Used to regression-test the
+/// pump's outer-session mutex: if `maxDepth > 1`, two closures ran
+/// concurrently — the race that trips `assert(remainbuf >= 0)` in libssh2's
+/// transport.c.
+final class ConcurrentAccessDetector: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: State())
+
+    private struct State {
+        var current: Int = 0
+        var max: Int = 0
+    }
+
+    func enter() {
+        lock.withLock { state in
+            state.current += 1
+            if state.current > state.max { state.max = state.current }
+        }
+    }
+
+    func exit() {
+        lock.withLock { state in
+            state.current -= 1
+        }
+    }
+
+    var maxDepth: Int {
+        lock.withLock { $0.max }
+    }
+}
+
 struct SSHProxySubsystemTransportTests {
 
     // MARK: - Socketpair creation
@@ -223,6 +255,137 @@ struct SSHProxySubsystemTransportTests {
         // blocking indefinitely. Give the pump a moment to close the pump end.
         let result = try await readWithTimeout(fd: fd, count: 1, timeoutSeconds: 3)
         #expect(result == 0, "expected EOF (0) on libssh2FD after channel EOF")
+    }
+
+    // MARK: - Outer-session mutex (remainbuf crash regression)
+
+    /// The pump's two loops (channel->FD and FD->channel) run concurrently in
+    /// a task group. Both call into the *outer* libssh2 session — `channelRead`
+    /// via `libssh2_channel_read_ex` -> `ssh2_transport_read`, `channelWrite` via
+    /// `libssh2_channel_write_ex` -> `ssh2_transport_send`. libssh2 is NOT
+    /// thread-safe per-session (the session's transport read buffer
+    /// `session->packet.writeidx/readidx` is shared across all channels). Two
+    /// concurrent `ssh2_transport_read`/`ssh2_transport_send` calls corrupt that
+    /// buffer's accounting and trip `assert(remainbuf >= 0)` in transport.c.
+    ///
+    /// `makeForChannel` accepts a `SessionMutex` (the outer session's lock) so
+    /// the closures serialize their libssh2 calls. This test verifies the
+    /// pump's concurrent loops never execute their libssh2-calling critical
+    /// sections simultaneously when the closures share a mutex.
+    @Test
+    func pumpSerializesChannelReadAndWriteThroughSharedMutex() async throws {
+        // A detector that tracks whether the read and write critical sections
+        // overlap. `enter()` returns the depth; if it ever exceeds 1, two
+        // closures ran concurrently — the race that crashes libssh2.
+        let detector = ConcurrentAccessDetector()
+        let outerSessionMutex = SessionMutex()
+
+        // Bidirectional data: inbound bytes for channelRead to drain, outbound
+        // bytes written to libssh2FD for the pump to forward to channelWrite.
+        // The inbound queue stays open (empty after the banner) so channelRead
+        // blocks rather than returning EOF — this keeps the channel->FD loop
+        // alive while the FD->channel loop drains the outbound banner. Closing
+        // inbound at the end lets the pump exit.
+        let inbound = LockedByteQueue()
+        let inboundBanner: [UInt8] = Array("SSH-2.0-OpenSSH_8.9\r\n".utf8)
+        inbound.enqueue(inboundBanner)  // not closed — channelRead blocks after
+
+        let outboundBanner: [UInt8] = Array("SSH-2.0-libssh2_1.11.1\r\n".utf8)
+        let writtenToChannel = LockedByteQueue()
+
+        // Closures mirror `makeForChannel`: the (simulated) libssh2 call is
+        // bracketed by the outer-session mutex + the detector. The blocking
+        // dequeue happens OUTSIDE the lock (production holds the lock only
+        // around `libssh2_channel_read_ex`, not the EAGAIN retry sleep) so a
+        // backpressured read doesn't stall the write loop.
+        let transport = SSHProxySubsystemTransport(
+            channelRead: { buf, maxLen in
+                let chunk = inbound.blockingDequeue(maxLen: maxLen)
+                if chunk.isEmpty { return 0 }
+                // Simulated `libssh2_channel_read_ex` — guarded by the mutex.
+                outerSessionMutex.withLock {
+                    detector.enter()
+                    defer { detector.exit() }
+                    for (i, b) in chunk.enumerated() { buf[i] = b }
+                    return chunk.count
+                }
+            },
+            channelWrite: { buf, len in
+                // Simulated `libssh2_channel_write_ex` — guarded by the mutex.
+                outerSessionMutex.withLock {
+                    detector.enter()
+                    defer { detector.exit() }
+                    var bytes = [UInt8]()
+                    for i in 0..<len { bytes.append(buf[i]) }
+                    writtenToChannel.enqueue(bytes)
+                    return len
+                }
+            }
+        )
+        let fd = try await transport.start()
+        defer { Task { await transport.close() } }
+
+        // Write the client banner to the libssh2FD (as the inner libssh2
+        // session would). The FD->channel loop forwards it to channelWrite.
+        _ = try writeAll(fd: fd, bytes: outboundBanner)
+
+        // Wait for the banner to flow both ways. The inbound banner should
+        // arrive on the libssh2FD (channel->FD), and the outbound banner
+        // should arrive on the channel (FD->channel).
+        let receivedInbound = try await readBytesAsync(
+            fd: fd, count: inboundBanner.count, timeoutSeconds: 3
+        )
+        #expect(receivedInbound == inboundBanner)
+        try await waitForCondition(timeoutSeconds: 3) {
+            writtenToChannel.hasBytes(outboundBanner.count)
+        }
+        #expect(
+            Array(writtenToChannel.snapshot().prefix(outboundBanner.count)) == outboundBanner
+        )
+
+        // The detector must never have seen concurrent access (depth > 1).
+        // If it did, the pump's read+write loops raced on the outer session —
+        // the exact condition that trips `assert(remainbuf >= 0)` in libssh2's
+        // transport.c.
+        #expect(detector.maxDepth <= 1, "channelRead and channelWrite overlapped — outer-session race")
+
+        // Close the inbound queue so the pump's channel->FD loop exits (it
+        // blocks on the empty-but-open queue) and the detached pump task can
+        // terminate (avoids leaking the task).
+        inbound.close()
+    }
+
+    /// Verify `SessionMutex` provides mutual exclusion: two threads calling
+    /// `withLock` concurrently never run their bodies at the same time.
+    @Test
+    func sessionMutexProvidesMutualExclusion() async throws {
+        let mutex = SessionMutex()
+        let detector = ConcurrentAccessDetector()
+        let iterations = 500
+        let half = iterations / 2
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for _ in 0..<half {
+                    mutex.withLock {
+                        detector.enter()
+                        _ = usleep(10)  // hold briefly to force overlap if non-exclusive
+                        detector.exit()
+                    }
+                }
+            }
+            group.addTask {
+                for _ in 0..<half {
+                    mutex.withLock {
+                        detector.enter()
+                        _ = usleep(10)
+                        detector.exit()
+                    }
+                }
+            }
+        }
+
+        #expect(detector.maxDepth <= 1, "SessionMutex allowed concurrent critical sections")
     }
 
     // MARK: - Helpers

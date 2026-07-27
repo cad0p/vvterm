@@ -76,6 +76,43 @@ final class PumpCancelToken: @unchecked Sendable {
     }
 }
 
+/// A `Sendable` mutex guarding all libssh2 calls on the outer (proxy) session.
+///
+/// libssh2 is NOT thread-safe per-session — the session's transport read
+/// buffer (`session->packet.writeidx/readidx`, shared across all channels)
+/// and crypto sequence-number state are corrupted when two threads call into
+/// the same `LIBSSH2_SESSION*` concurrently. The symptom is
+/// `assert(remainbuf >= 0)` in `ssh2_transport_read` (transport.c) —
+/// `remainbuf = writeidx - readidx` goes negative when a concurrent reader
+/// advances `readidx` past another reader's `writeidx`.
+///
+/// The Teleport proxy-subsystem path is uniquely exposed: its pump runs two
+/// concurrent loops in a task group (`pumpChannelToFD` -> `channelRead` ->
+/// `libssh2_channel_read_ex`, and `pumpFDToChannel` -> `channelWrite` ->
+/// `libssh2_channel_write_ex`). Both touch the outer session. Without
+/// serialization, they race on every bidirectional byte and crash after
+/// enough data flows. `sendKeepAlive` (every 30s) races the pump too.
+///
+/// This mutex is shared between the pump closures (which run off-actor in
+/// detached tasks) and the `SSHSession` actor methods that touch the outer
+/// session (`sendKeepAlive`, and any exec/SFTP/ioLoop call). Acquiring it
+/// around every outer-session libssh2 call serializes them. `NSLock` is
+/// non-reentrant by design — the lock is held only around the synchronous
+/// libssh2 C call (never across an `await` or an EAGAIN `usleep` retry), so
+/// reentrancy would indicate a bug.
+final class SessionMutex: @unchecked Sendable {
+    private let lock = NSLock()
+
+    nonisolated init() {}
+
+    /// Acquire the mutex, run `body`, release. Returns `body`'s result.
+    nonisolated func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+}
+
 /// A socketpair bridge that lets a second libssh2 session read/write through
 /// an SSH channel opened on the outer (proxy) session.
 ///
@@ -398,15 +435,32 @@ extension SSHProxySubsystemTransport {
     /// MUST be in non-blocking mode (the default after `SSHSession.connect`
     /// sets it) so EAGAIN is returned rather than blocking the pump's thread.
     ///
+    /// All libssh2 calls are serialized through `outerSessionMutex`. The
+    /// pump's two loops (`pumpChannelToFD` -> `channelRead`, and
+    /// `pumpFDToChannel` -> `channelWrite`) run concurrently in a task group
+    /// but both touch the same outer `LIBSSH2_SESSION*`. libssh2 is not
+    /// thread-safe per-session — concurrent `ssh2_transport_read` /
+    /// `ssh2_transport_send` corrupt the session's transport buffer
+    /// accounting and trip `assert(remainbuf >= 0)` in transport.c. The
+    /// mutex is the same one `SSHSession.sendKeepAlive` (and other
+    /// outer-session callers) acquire, so the pump also serializes against
+    /// keepalives. The lock is held only around the synchronous libssh2 C
+    /// call; the EAGAIN `usleep` retry happens outside the lock so a
+    /// backpressured channel doesn't stall keepalives.
+    ///
     /// - Parameters:
     ///   - channel: The outer session channel (already has the `proxy:...`
     ///     subsystem requested). The transport does NOT take ownership — the
     ///     caller frees the channel after the inner session is done.
     ///   - outerSession: The outer libssh2 session (used only for
     ///     `libssh2_session_last_errno` diagnostics; may be nil in tests).
+    ///   - outerSessionMutex: The mutex shared with `SSHSession` to serialize
+    ///     all outer-session libssh2 access. Required for the production path;
+    ///     pass `SessionMutex()` in tests that don't touch a real session.
     static func makeForChannel(
         channel: OpaquePointer,
-        outerSession: OpaquePointer?
+        outerSession: OpaquePointer?,
+        outerSessionMutex: SessionMutex
     ) -> SSHProxySubsystemTransport {
         // A standalone cancellation token (NOT the transport) captured by the
         // channel I/O closures. This avoids a retain cycle: the closures are
@@ -418,10 +472,15 @@ extension SSHProxySubsystemTransport {
             channelRead: { buf, maxLen in
                 // Retry on EAGAIN until data arrives, EOF, a hard error, or
                 // cancellation. A small usleep prevents a busy-spin while the
-                // channel has no data.
+                // channel has no data. The libssh2 call is guarded by the
+                // outer-session mutex (see class doc) — the EAGAIN sleep is
+                // outside the lock so a backpressured channel doesn't stall
+                // keepalives or the FD->channel loop.
                 while true {
                     if cancelToken.isCancelled { return 0 }  // EOF
-                    let n = libssh2_channel_read_ex(channel, 0, buf, maxLen)
+                    let n = outerSessionMutex.withLock {
+                        libssh2_channel_read_ex(channel, 0, buf, maxLen)
+                    }
                     if n == LIBSSH2_ERROR_EAGAIN {
                         usleep(1_000)  // 1ms — non-blocking retry
                         continue
@@ -435,7 +494,9 @@ extension SSHProxySubsystemTransport {
             channelWrite: { buf, len in
                 while true {
                     if cancelToken.isCancelled { return 0 }
-                    let n = libssh2_channel_write_ex(channel, 0, buf, len)
+                    let n = outerSessionMutex.withLock {
+                        libssh2_channel_write_ex(channel, 0, buf, len)
+                    }
                     if n == LIBSSH2_ERROR_EAGAIN {
                         usleep(1_000)  // 1ms — non-blocking retry
                         continue

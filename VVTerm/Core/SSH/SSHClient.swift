@@ -1427,6 +1427,21 @@ actor SSHSession {
     /// Atomic socket storage for emergency abort from any thread
     private let atomicSocket = AtomicSocket()
 
+    /// Guards all libssh2 calls on the outer (proxy) session. The Teleport
+    /// proxy-subsystem pump (`SSHProxySubsystemTransport`) runs two concurrent
+    /// loops that read/write the outer session's proxy-subsystem channel via
+    /// `libssh2_channel_read_ex` / `libssh2_channel_write_ex` — both touch
+    /// the same `LIBSSH2_SESSION*`. libssh2 is not thread-safe per-session,
+    /// so without serialization the concurrent `ssh2_transport_read` /
+    /// `ssh2_transport_send` corrupt the session's transport buffer
+    /// accounting (`session->packet.writeidx/readidx`) and trip
+    /// `assert(remainbuf >= 0)` in transport.c. This mutex is shared with the
+    /// pump closures (`makeForChannel`) and acquired here in `sendKeepAlive`
+    /// (and any other outer-session caller) so off-actor pump access and
+    /// actor-isolated access never overlap. See `SessionMutex` for the race
+    /// rationale.
+    private let outerSessionMutex = SessionMutex()
+
     /// Session-specific auth callback context passed to libssh2 session abstract pointer.
     private let keyboardInteractiveContext = KeyboardInteractiveContext()
 
@@ -2813,12 +2828,12 @@ actor SSHSession {
             // Read any extended data (stderr) the proxy may have sent before
             // rejecting. Teleport sometimes writes a human-readable error to
             // channel stderr before the CHANNEL_FAILURE.
-            var stderrBuf = [UInt8](repeating: 0, count: 4096)
+            var stderrBuf = [CChar](repeating: 0, count: 4096)
             // libssh2_channel_read_stderr doesn't exist as a symbol; use
             // libssh2_channel_read_ex with stream_id=1 (SSH_EXTENDED_DATA_STDERR).
-            let stderrLen = libssh2_channel_read_ex(outerChannel, 1, &stderrBuf, UInt32(stderrBuf.count))
+            let stderrLen = libssh2_channel_read_ex(outerChannel, 1, &stderrBuf, stderrBuf.count)
             let stderrMsg = stderrLen > 0
-                ? String(bytes: stderrBuf.prefix(Int(stderrLen)), encoding: .utf8) ?? "<non-utf8>"
+                ? String(cString: stderrBuf, encoding: .utf8) ?? "<non-utf8>"
                 : "<no stderr>"
             logger.error(
                 "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(stderrMsg, privacy: .public)"
@@ -2835,7 +2850,8 @@ actor SSHSession {
         //    node's banner is forwarded as soon as it arrives.
         let transport = SSHProxySubsystemTransport.makeForChannel(
             channel: outerChannel,
-            outerSession: outerSession
+            outerSession: outerSession,
+            outerSessionMutex: outerSessionMutex
         )
         let innerFD: Int32
         do {
@@ -4143,7 +4159,16 @@ actor SSHSession {
     func sendKeepAlive() {
         guard let session = libssh2Session else { return }
         var secondsToNext: Int32 = 0
-        libssh2_keepalive_send(session, &secondsToNext)
+        // Acquire the outer-session mutex: the Teleport proxy-subsystem pump
+        // may be reading/writing the outer session's proxy channel off-actor
+        // at this moment. Without the lock, `libssh2_keepalive_send` (->
+        // `ssh2_transport_send`) races the pump's `ssh2_transport_read` /
+        // `ssh2_transport_send` and corrupts the session transport buffer
+        // (the `remainbuf >= 0` assertion). No-op when the pump isn't active
+        // (non-Teleport path) — the lock is uncontended.
+        outerSessionMutex.withLock {
+            libssh2_keepalive_send(session, &secondsToNext)
+        }
     }
 
     private func ensureSFTPSession() async throws -> OpaquePointer {
