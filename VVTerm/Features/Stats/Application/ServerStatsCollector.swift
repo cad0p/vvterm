@@ -33,6 +33,19 @@ final class ServerStatsCollector: ObservableObject {
     private var hardwareProfile: HardwareProfile = .empty
     private var isDockerCollectionEnabled = false
 
+    // Teleport servers connect through a two-session path: the OUTER session
+    // is the Teleport PROXY (TLS+ALPN on port 443), which is in `proxyMode`
+    // and rejects `exec`/`pty`/`shell` channel requests with
+    // LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). Stats collection runs
+    // `client.execute(...)` which opens an exec channel on the session it's
+    // given — for Teleport that's the proxy session, so every probe fails.
+    // The real exec target is the INNER (target node) session, established
+    // after the second handshake. Routing stats through the inner session
+    // is tracked as a follow-up; for now we skip collection entirely, the
+    // same way `remoteEnvironment()` and `remoteTerminalType()` are skipped
+    // in `SSHClient.startShell`.
+    private var isTeleportProxySession = false
+
     // MARK: - Collection Control
 
     func startCollecting(
@@ -47,6 +60,7 @@ final class ServerStatsCollector: ObservableObject {
         isCollecting = true
         isDockerCollectionEnabled = collectDocker
         connectionError = nil
+        isTeleportProxySession = Self.shouldSkipStatsCollection(for: server.authMethod)
         resetCollectionState()
 
         // Use shared client if available, otherwise create one
@@ -123,6 +137,8 @@ final class ServerStatsCollector: ObservableObject {
             throw ProcessControlError.protectedProcess
         }
 
+        try ensureStatsCapableClient()
+
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
@@ -140,6 +156,8 @@ final class ServerStatsCollector: ObservableObject {
     }
 
     func loadProcesses() async throws -> [ProcessInfo] {
+        try ensureStatsCapableClient()
+
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
@@ -152,6 +170,8 @@ final class ServerStatsCollector: ObservableObject {
     }
 
     func loadDockerStats() async throws -> DockerStats {
+        try ensureStatsCapableClient()
+
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
@@ -170,6 +190,12 @@ final class ServerStatsCollector: ObservableObject {
     /// The selected volume must still belong to the latest Stats snapshot so a
     /// stale sheet cannot probe an unrelated raw locator after a mount changes.
     func loadStorageHealth(for volume: VolumeInfo) async throws -> StorageHealthResult {
+        do {
+            try ensureStatsCapableClient()
+        } catch {
+            return .unavailable(.unsupported)
+        }
+
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
@@ -257,6 +283,8 @@ final class ServerStatsCollector: ObservableObject {
     }
 
     func performDockerAction(_ action: DockerContainerAction, on container: DockerContainer) async throws -> DockerStats {
+        try ensureStatsCapableClient()
+
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
@@ -276,7 +304,40 @@ final class ServerStatsCollector: ObservableObject {
 
     // MARK: - Stats Collection
 
+    /// Throws when stats collection cannot run on the current session.
+    ///
+    /// Teleport proxy sessions reject `exec`/`pty`/`shell` channel requests
+    /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22), so any stats probe
+    /// that opens an exec channel fails. Stats must be routed through the
+    /// inner (target node) session before they're available; until then we
+    /// surface a clear error instead of repeatedly failing exec.
+    private func ensureStatsCapableClient() throws {
+        guard !isTeleportProxySession else {
+            throw ProcessControlError.teleportProxySession
+        }
+    }
+
+    /// Returns `true` when stats collection must be skipped because the SSH
+    /// session is the Teleport PROXY session, which rejects `exec`/`pty`/
+    /// `shell` channel requests with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE
+    /// (-22).
+    ///
+    /// This mirrors the `startShell` skip for `remoteEnvironment()` and
+    /// `remoteTerminalType()` in `SSHClient`. Routing stats through the
+    /// inner (target node) session is a follow-up; until then stats are
+    /// unavailable for Teleport proxy sessions.
+    nonisolated static func shouldSkipStatsCollection(for authMethod: AuthMethod) -> Bool {
+        authMethod == .faceIDTeleport
+    }
+
     private func collectStats(client: SSHClient) async {
+        // Teleport proxy session rejects exec/pty/shell with -22. Skip
+        // collection entirely until stats are routed through the inner
+        // (target node) session. See `isTeleportProxySession` for context.
+        guard !isTeleportProxySession else {
+            logger.info("Skipping stats collection: Teleport proxy session does not support exec channels")
+            return
+        }
         do {
             // Detect platform and create collector on first run
             if remotePlatform == .unknown {
@@ -333,6 +394,9 @@ final class ServerStatsCollector: ObservableObject {
         remotePlatform = .unknown
         platformCollector = nil
         hardwareProfile = .empty
+        // Note: `isTeleportProxySession` is intentionally NOT reset here —
+        // it is set in `startCollecting` before `resetCollectionState()` and
+        // must survive a collection reset within the same session.
         cpuHistory = []
         memoryHistory = []
         networkRxHistory = []
@@ -458,6 +522,7 @@ final class ServerStatsCollector: ObservableObject {
 private enum ProcessControlError: LocalizedError {
     case notConnected
     case protectedProcess
+    case teleportProxySession
 
     var errorDescription: String? {
         switch self {
@@ -465,6 +530,11 @@ private enum ProcessControlError: LocalizedError {
             return String(localized: "Stats is not connected to the server.")
         case .protectedProcess:
             return String(localized: "This process cannot be killed from Stats.")
+        case .teleportProxySession:
+            // The Teleport proxy rejects exec/pty/shell with -22. Stats are
+            // not available on the proxy session until they're routed through
+            // the inner (target node) session.
+            return String(localized: "Stats are not available for Teleport proxy sessions.")
         }
     }
 }
