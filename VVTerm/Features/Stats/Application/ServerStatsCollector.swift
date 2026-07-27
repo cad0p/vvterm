@@ -81,6 +81,16 @@ final class ServerStatsCollector: ObservableObject {
                     credentials: credentials,
                     disconnectWhenDone: ownsClient
                 ) { connectedClient in
+                    // Teleport's outer session is the PROXY and rejects exec
+                    // with -22. The inner (target-node) session used to be
+                    // established only inside `startShell`, but stats never
+                    // starts a shell — so without this prepare call the inner
+                    // session would never exist, `supportsExec` would stay
+                    // `false`, and every poll (every 2s) would log the skip
+                    // forever. This is a no-op for non-Teleport auth methods
+                    // and idempotent for Teleport.
+                    try await connectedClient.prepareTeleportInnerSession()
+
                     await MainActor.run {
                         self.connectionError = nil
                     }
@@ -292,11 +302,12 @@ final class ServerStatsCollector: ObservableObject {
     ///
     /// Teleport proxy sessions reject `exec`/`pty`/`shell` channel requests
     /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). `SSHSession.execute`
-    /// now routes exec to the INNER (target-node) session for Teleport, so
-    /// stats succeed once that session is established. Before the shell
-    /// starts (inner session nil), `SSHClient.supportsExec` returns `false`
-    /// and this throws so the caller surfaces a clear error instead of
-    /// repeatedly failing exec.
+    /// routes exec to the INNER (target-node) session for Teleport, which is
+    /// established by `SSHClient.prepareTeleportInnerSession()` (called in
+    /// `startCollecting` after connect). If the prepare call failed or has
+    /// not completed yet, `SSHClient.supportsExec` returns `false` and this
+    /// throws so the caller surfaces a clear error instead of repeatedly
+    /// failing exec.
     private func ensureStatsCapableClient(client: SSHClient) async throws {
         guard await client.supportsExec else {
             throw ProcessControlError.teleportProxySession
@@ -319,10 +330,11 @@ final class ServerStatsCollector: ObservableObject {
     private func collectStats(client: SSHClient) async {
         // Teleport's outer session is the PROXY, which rejects exec with -22.
         // `SSHSession.execute` routes to the inner (target-node) session for
-        // Teleport, but that session is only established after the second
-        // handshake in `startShellViaTeleportProxy`. Before that (or if the
-        // shell never started), `supportsExec` returns `false` and we skip
-        // gracefully instead of spinning failing exec calls.
+        // Teleport. That inner session is established by
+        // `SSHClient.prepareTeleportInnerSession()`, called in `startCollecting`
+        // after connect (stats never starts a shell). If the prepare call has
+        // not completed yet (or failed), `supportsExec` returns `false` and
+        // we skip gracefully instead of spinning failing exec calls.
         let canExec = await client.supportsExec
         guard canExec else {
             logger.info("Skipping stats collection: inner session not ready for exec (Teleport proxy session)")
@@ -519,9 +531,9 @@ private enum ProcessControlError: LocalizedError {
             return String(localized: "This process cannot be killed from Stats.")
         case .teleportProxySession:
             // The Teleport proxy rejects exec/pty/shell with -22. Stats route
-            // through the inner (target-node) session once it is established
-            // (after the second handshake in `startShellViaTeleportProxy`).
-            // If the inner session is not ready yet, exec cannot run.
+            // through the inner (target-node) session, established by
+            // `SSHClient.prepareTeleportInnerSession()` after connect. If the
+            // prepare call failed or has not completed yet, exec cannot run.
             return String(localized: "Stats are not available until the Teleport target node session is ready.")
         }
     }

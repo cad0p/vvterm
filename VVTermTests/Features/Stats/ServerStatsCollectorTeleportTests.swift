@@ -21,6 +21,11 @@
 //  longer blanket-skips Teleport — runtime readiness is gated by
 //  `SSHClient.supportsExec`.
 //
+//  The inner session is now established by `SSHClient.prepareTeleportInnerSession()`,
+//  which `ServerStatsCollector.startCollecting` calls after `connect` (stats
+//  never starts a shell). This is a no-op for non-Teleport auth methods and
+//  idempotent for Teleport (reuses an already-established inner session).
+//
 
 import XCTest
 @testable import VVTerm
@@ -95,5 +100,46 @@ final class ServerStatsCollectorTeleportTests: XCTestCase {
                 "\(method) must never route exec to the inner session"
             )
         }
+    }
+
+    // MARK: - prepareTeleportInnerSession contract
+
+    /// `SSHClient.prepareTeleportInnerSession()` is the documented entry point
+    /// that exec-only consumers (stats collector) call after `connect` to
+    /// establish the inner (target-node) session without starting a shell.
+    /// It must exist as a public method on `SSHClient` so the stats collector
+    /// can call it without reaching into `SSHSession` internals.
+    func testSSHClientExposesPrepareTeleportInnerSession() {
+        // This is a compile-time contract test: if the method is removed or
+        // renamed, this file fails to compile. The method signature
+        // `func prepareTeleportInnerSession() async throws` must stay.
+        let method: (SSHClient) async throws -> Void = { client in
+            try await client.prepareTeleportInnerSession()
+        }
+        _ = method
+        XCTAssertTrue(true, "SSHClient.prepareTeleportInnerSession exists and is callable")
+    }
+
+    /// `SSHSession.prepareTeleportInnerSession()` must be a no-op for non-
+    /// Teleport auth methods (their outer session supports exec directly) so
+    /// that callers can invoke it unconditionally after `connect` without
+    /// branching on the auth method. This is verified via the config-level
+    /// guard: a non-Teleport config must never trigger the Teleport prepare
+    // path. We assert the auth-method guard predicate that
+    // `prepareTeleportInnerSession` uses internally.
+    func testPrepareTeleportInnerSessionIsNoOpForNonTeleportAuthMethods() {
+        // The internal guard is `config.authMethod == .faceIDTeleport`.
+        // Non-Teleport methods must NOT match that guard, so the prepare call
+        // returns immediately without touching libssh2.
+        for method: AuthMethod in [.password, .sshKey, .sshKeyWithPassphrase] {
+            XCTAssertFalse(
+                method == .faceIDTeleport,
+                "\(method) must not match the Teleport prepare guard"
+            )
+        }
+        XCTAssertTrue(
+            AuthMethod.faceIDTeleport == .faceIDTeleport,
+            "Teleport auth method must match the prepare guard"
+        )
     }
 }

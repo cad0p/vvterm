@@ -910,6 +910,34 @@ actor SSHClient {
         }
     }
 
+    /// Establish the inner (target-node) session for a Teleport proxy
+    /// connection without starting a shell.
+    ///
+    /// Teleport's outer session is the PROXY, which rejects `exec` with -22.
+    /// Exec must run on the INNER (target-node) session, established by a
+    /// second SSH handshake over a `proxy:<node>:0` subsystem tunnel. That
+    /// second handshake used to only happen inside `startShell`, so exec-only
+    /// consumers (the stats collector creates its own `SSHClient` and never
+    /// starts a shell) never got an inner session — `supportsExec` stayed
+    /// `false` forever and every stats poll logged a skip.
+    ///
+    /// Call this after `connect(to:credentials:)` for Teleport servers when
+    /// the connection will be used for `execute` rather than `startShell`
+    /// (stats collection, process control). It is a no-op for non-Teleport
+    /// auth methods and idempotent for Teleport (a ready inner session is
+    /// reused, so calling it when the terminal already opened a shell is
+    /// safe and cheap).
+    ///
+    /// The terminal shell path also calls this (via `startShell` →
+    /// `startShellViaTeleportProxy` → `prepareTeleportInnerSession`), so the
+    /// live shell behavior is unchanged.
+    func prepareTeleportInnerSession() async throws {
+        guard let session = session else {
+            throw SSHError.notConnected
+        }
+        try await session.prepareTeleportInnerSession()
+    }
+
     // MARK: - Mosh
 
     func restoreMoshShell(
@@ -2768,58 +2796,48 @@ actor SSHSession {
 
     // MARK: - Teleport proxy-subsystem second handshake
 
-    /// Start a shell via the Teleport proxy subsystem + a second SSH handshake
-    /// to the target node.
+    /// Establish the inner (target-node) libssh2 session for a Teleport proxy
+    /// connection WITHOUT opening a shell channel.
     ///
-    /// Teleport's proxy listener is in `proxyMode`: it rejects `pty`/`shell`/
-    /// `exec` channel requests on the outer session. Instead:
+    /// Teleport's outer session is the PROXY, which rejects `exec`/`pty`/
+    /// `shell` with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). Exec (used by
+    /// stats collection, process control, and SFTP) must run on the INNER
+    /// (target-node) session, established by a second SSH handshake over a
+    /// `proxy:<node>:0` subsystem tunnel. Previously this second handshake
+    /// only happened inside `startShellViaTeleportProxy`, so exec-only
+    /// consumers (the stats collector creates its own `SSHClient` and never
+    /// starts a shell) never got an inner session — `supportsExec` stayed
+    /// `false` forever and every stats poll (every 2s) logged a skip.
     ///
-    ///   1. Open a `session` channel on the outer (proxy) session.
-    ///   2. Request a `proxy:<node>:0` subsystem — the proxy forwards the
-    ///      channel as a raw TCP tunnel to the target node's SSH service.
-    ///   3. Bridge the channel to a socketpair (`SSHProxySubsystemTransport`)
-    ///      so a second libssh2 session can read/write through it.
-    ///   4. Create the inner libssh2 session + set the same KEX/hostkey
-    ///      preferences (cert hostkey variants — the target node presents a
-    ///      host cert signed by the same HostCA as the proxy).
-    ///   5. `libssh2_session_handshake(innerSession, innerFD)` — the second
-    ///      handshake to the target node.
-    ///   6. Verify the inner hostkey against the target node hostname
-    ///      (`config.host`).
-    ///   7. Auth with the same cert + ed25519 key (publickey auth).
-    ///   8. Open a `session` channel on the inner session.
-    ///   9. PTY + shell on the inner channel.
-    ///  10. Return a `ShellHandle` wrapping the inner channel; `innerIOLoop`
-    ///      drains it.
+    /// This method performs steps 1-7 of `startShellViaTeleportProxy`
+    /// (open outer channel, request subsystem, bridge transport, create inner
+    /// session, handshake, verify hostkey, cert auth) and switches the inner
+    /// session to non-blocking. It is a no-op for non-Teleport auth methods
+    /// (their outer session supports exec directly) and idempotent for
+    /// Teleport (a ready inner session is reused, so calling it when the
+    /// terminal already opened a shell is safe and cheap). `startShellViaTeleportProxy`
+    /// calls this first, then opens a shell channel on the now-ready inner
+    /// session.
     ///
-    /// The outer session + its proxy-subsystem channel + the bridge transport
-    /// are retained for the inner session's lifetime and torn down in `cleanup`.
-    private func startShellViaTeleportProxy(
-        cols: Int,
-        rows: Int,
-        pixelSize: TerminalPixelSize?,
-        startupCommand: String?,
-        environment: RemoteEnvironment,
-        terminalType: RemoteTerminalType
-    ) async throws -> ShellHandle {
+    /// Ownership: the outer proxy-subsystem channel, the bridge transport, and
+    /// the inner session are retained on this `SSHSession` and torn down in
+    /// `cleanup`. On any failure the transport is invalidated so exec-only
+    /// callers also tear down correctly.
+    func prepareTeleportInnerSession() async throws {
+        // Non-Teleport auth methods support exec directly on the outer session.
+        guard config.authMethod == .faceIDTeleport else { return }
+        // Idempotent: a ready inner session means a prior prepare (or shell)
+        // already established the tunnel + second handshake.
+        if innerLibssh2Session != nil { return }
+
         guard isActive, let outerSession = libssh2Session else {
             throw SSHError.notConnected
         }
-        guard let wireCols = Int32(exactly: cols),
-              let wireRows = Int32(exactly: rows) else {
-            throw SSHError.unknown("Invalid terminal size \(cols)x\(rows)")
-        }
 
-        let startupId = UUID()
-        shellStartupsInFlight.insert(startupId)
         var shouldInvalidateTransport = false
         defer {
             if shouldInvalidateTransport {
                 invalidateTransport()
-            }
-            shellStartupsInFlight.remove(startupId)
-            if !isActive {
-                cleanupLibssh2()
             }
         }
 
@@ -2867,9 +2885,9 @@ actor SSHSession {
             // Read any extended data (stderr) the proxy may have sent before
             // rejecting. Teleport sometimes writes a human-readable error to
             // channel stderr before the CHANNEL_FAILURE.
-            var stderrBuf = [CChar](repeating: 0, count: 4096)
             // libssh2_channel_read_stderr doesn't exist as a symbol; use
             // libssh2_channel_read_ex with stream_id=1 (SSH_EXTENDED_DATA_STDERR).
+            var stderrBuf = [CChar](repeating: 0, count: 4096)
             let stderrLen = libssh2_channel_read_ex(outerChannel, 1, &stderrBuf, stderrBuf.count)
             let stderrMsg = stderrLen > 0
                 ? String(cString: stderrBuf, encoding: .utf8) ?? "<non-utf8>"
@@ -2967,6 +2985,75 @@ actor SSHSession {
 
         // Switch the inner session to non-blocking for I/O.
         libssh2_session_set_blocking(innerSession, 0)
+    }
+
+    /// Start a shell via the Teleport proxy subsystem + a second SSH handshake
+    /// to the target node.
+    ///
+    /// Teleport's proxy listener is in `proxyMode`: it rejects `pty`/`shell`/
+    /// `exec` channel requests on the outer session. Instead:
+    ///
+    ///   1. Open a `session` channel on the outer (proxy) session.
+    ///   2. Request a `proxy:<node>:0` subsystem — the proxy forwards the
+    ///      channel as a raw TCP tunnel to the target node's SSH service.
+    ///   3. Bridge the channel to a socketpair (`SSHProxySubsystemTransport`)
+    ///      so a second libssh2 session can read/write through it.
+    ///   4. Create the inner libssh2 session + set the same KEX/hostkey
+    ///      preferences (cert hostkey variants — the target node presents a
+    ///      host cert signed by the same HostCA as the proxy).
+    ///   5. `libssh2_session_handshake(innerSession, innerFD)` — the second
+    ///      handshake to the target node.
+    ///   6. Verify the inner hostkey against the target node hostname
+    ///      (`config.host`).
+    ///   7. Auth with the same cert + ed25519 key (publickey auth).
+    ///   8. Open a `session` channel on the inner session.
+    ///   9. PTY + shell on the inner channel.
+    ///  10. Return a `ShellHandle` wrapping the inner channel; `innerIOLoop`
+    ///      drains it.
+    ///
+    /// The outer session + its proxy-subsystem channel + the bridge transport
+    /// are retained for the inner session's lifetime and torn down in `cleanup`.
+    private func startShellViaTeleportProxy(
+        cols: Int,
+        rows: Int,
+        pixelSize: TerminalPixelSize?,
+        startupCommand: String?,
+        environment: RemoteEnvironment,
+        terminalType: RemoteTerminalType
+    ) async throws -> ShellHandle {
+        guard isActive, libssh2Session != nil else {
+            throw SSHError.notConnected
+        }
+        guard let wireCols = Int32(exactly: cols),
+              let wireRows = Int32(exactly: rows) else {
+            throw SSHError.unknown("Invalid terminal size \(cols)x\(rows)")
+        }
+
+        let startupId = UUID()
+        shellStartupsInFlight.insert(startupId)
+        var shouldInvalidateTransport = false
+        defer {
+            if shouldInvalidateTransport {
+                invalidateTransport()
+            }
+            shellStartupsInFlight.remove(startupId)
+            if !isActive {
+                cleanupLibssh2()
+            }
+        }
+
+        // Steps 1-7: establish the inner (target-node) session. This is a
+        // connection-level concern (proxy subsystem + second handshake +
+        // hostkey verify + cert auth), not a shell-level concern, so it is
+        // extracted into `prepareTeleportInnerSession()` which is also called
+        // by exec-only consumers (stats collector) that never start a shell.
+        // Idempotent: a no-op if the inner session is already established by
+        // a prior prepare call (e.g. stats ran before the terminal opened).
+        try await prepareTeleportInnerSession()
+        guard let innerSession = innerLibssh2Session else {
+            shouldInvalidateTransport = true
+            throw SSHError.notConnected
+        }
 
         // 8. Open a session channel on the inner session.
         let innerChannel: OpaquePointer
