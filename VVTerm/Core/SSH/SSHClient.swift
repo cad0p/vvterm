@@ -910,6 +910,19 @@ actor SSHClient {
         }
     }
 
+    /// Returns `true` when SFTP (remote file browser) can currently succeed
+    /// on the active session. For Teleport this requires the INNER
+    /// (target-node) session to be established; for every other auth method
+    /// it mirrors `isConnected`. File-browser callers consult this to
+    /// surface a clear "not ready" error before attempting SFTP init (which
+    /// would otherwise fail with "Failed to start SFTP session" on the
+    /// Teleport proxy).
+    var supportsSFTP: Bool {
+        get async {
+            await session?.supportsSFTP ?? false
+        }
+    }
+
     /// Establish the inner (target-node) session for a Teleport proxy
     /// connection without starting a shell.
     ///
@@ -1429,6 +1442,13 @@ actor SSHSession {
     let config: SSHSessionConfig
     private var libssh2Session: OpaquePointer?
     private var sftpSession: OpaquePointer?
+    /// `true` when `sftpSession` was created via `libssh2_sftp_init` on the
+    /// inner (target-node) libssh2 session (Teleport proxy-subsystem path).
+    /// `false` when it was created on the outer (direct) session. SFTP I/O
+    /// retries (EAGAIN) must wait on the matching socket: the inner
+    /// socketpair FD for `true`, the outer socket for `false`. Mixing them
+    /// would wait on the wrong FD and hang or spin.
+    private var sftpSessionIsInner: Bool = false
     private var shellChannels: [UUID: ShellChannelState] = [:]
     private var shellStartupsInFlight: Set<UUID> = []
     private var socket: Int32 = -1
@@ -1520,6 +1540,29 @@ actor SSHSession {
     /// gracefully before the shell starts rather than spinning failing exec
     /// calls.
     var supportsExec: Bool {
+        guard isActive, !hasBeenCleaned, libssh2Session != nil else { return false }
+        if config.authMethod == .faceIDTeleport {
+            return innerLibssh2Session != nil
+                && innerSocket >= 0
+                && innerAtomicSocket.isUsable
+        }
+        return true
+    }
+
+    /// Returns `true` when SFTP (remote file browser) can currently succeed
+    /// on this session.
+    ///
+    /// Teleport's outer session is the PROXY, which is in `proxyMode` and
+    /// rejects the SFTP subsystem request with -22 (only the
+    /// `proxy:<node>:0` subsystem is accepted). SFTP must run on the INNER
+    /// (target-node) session, established by `prepareTeleportInnerSession()`.
+    /// For non-Teleport auth methods this mirrors `isConnected` (the outer
+    /// session supports SFTP directly).
+    ///
+    /// File-browser callers consult this to surface a clear "not ready"
+    /// error before attempting SFTP init (which would otherwise fail with
+    /// the opaque "Failed to start SFTP session" message on the proxy).
+    var supportsSFTP: Bool {
         guard isActive, !hasBeenCleaned, libssh2Session != nil else { return false }
         if config.authMethod == .faceIDTeleport {
             return innerLibssh2Session != nil
@@ -2040,6 +2083,7 @@ actor SSHSession {
         // Prevent double cleanup
         guard !hasBeenCleaned else { return }
         sftpSession = nil
+        sftpSessionIsInner = false
 
         // Free the Teleport inner (target-node) session first, before the
         // outer session. The inner session's I/O was already interrupted by
@@ -2213,7 +2257,7 @@ actor SSHSession {
             }
 
             if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -2282,7 +2326,7 @@ actor SSHSession {
             }
 
             if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -2342,7 +2386,7 @@ actor SSHSession {
                 }
 
                 if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
-                    await waitForSocket()
+                    await waitForSFTPSocket()
                     continue
                 }
 
@@ -2388,7 +2432,7 @@ actor SSHSession {
             }
 
             if bytesWritten == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -2431,7 +2475,7 @@ actor SSHSession {
             }
 
             if result == Int32(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -2483,7 +2527,7 @@ actor SSHSession {
             }
 
             if result == Int32(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -3987,6 +4031,22 @@ actor SSHSession {
         _ = poll(&pfd, 1, 5)
     }
 
+    /// Wait for the SFTP session's backing socket to become readable/writable.
+    /// SFTP operations retry on EAGAIN; the socket they must wait on depends
+    /// on which libssh2 session the SFTP handle is bound to: the inner
+    /// socketpair FD for the Teleport proxy-subsystem path
+    /// (`sftpSessionIsInner == true`), the outer socket for the direct path.
+    /// Waiting on the wrong FD would either hang (inner FD never sees the
+    /// outer socket's traffic) or spin busily (outer socket is always
+    /// ready, but the inner session is still EAGAIN).
+    private func waitForSFTPSocket() async {
+        if sftpSessionIsInner {
+            await waitForInnerSocket()
+        } else {
+            await waitForSocket()
+        }
+    }
+
     private func resolveNumericPeerAddress(for socket: Int32) -> String? {
         var storage = sockaddr_storage()
         var storageLen = socklen_t(MemoryLayout<sockaddr_storage>.size)
@@ -4057,6 +4117,23 @@ actor SSHSession {
         permissions: Int32 = 0o600,
         strategy: SSHUploadStrategy = .automatic
     ) async throws {
+        // Teleport's outer session is the PROXY, which rejects SCP channel
+        // opens and exec channel requests with -22. SCP and exec uploads
+        // would both fail on the outer session. Route uploads through the
+        // SFTP `writeFile` path instead — SFTP runs on the INNER (target-
+        // node) session for Teleport (see `ensureSFTPSession`), so the
+        // upload succeeds there. Non-Teleport auth methods keep the existing
+        // SCP-then-exec strategy (faster than SFTP for large uploads).
+        let routeToInner = Self.shouldRouteSFTPToInnerSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        )
+        if routeToInner {
+            logger.info("Using SFTP upload for Teleport inner session [path: \(remotePath, privacy: .public)]")
+            try await writeFile(data, to: remotePath, permissions: permissions)
+            return
+        }
+
         if strategy == .execPreferred {
             logger.info("Using exec-preferred upload strategy [path: \(remotePath, privacy: .public)]")
             try await uploadViaExec(data, to: remotePath)
@@ -4417,6 +4494,26 @@ actor SSHSession {
         authMethod == .faceIDTeleport && innerSessionReady
     }
 
+    /// Pure routing decision extracted from `ensureSFTPSession()` so it can
+    /// be unit-tested without a live libssh2 session. Returns `true` only
+    /// for the Teleport auth method AND when the inner (target-node)
+    /// session is ready (non-nil). For every other combination the outer
+    /// path is used.
+    ///
+    /// Teleport's outer session is the PROXY, which rejects the SFTP
+    /// subsystem request (`libssh2_sftp_init` on the outer session fails
+    /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE, -22) because the proxy
+    /// is in `proxyMode` and only accepts the `proxy:<node>:0` subsystem.
+    /// SFTP must run on the INNER (target-node) session, established by
+    /// `prepareTeleportInnerSession()` (second handshake over the
+    /// `proxy:<node>:0` subsystem tunnel).
+    nonisolated static func shouldRouteSFTPToInnerSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && innerSessionReady
+    }
+
     private func enqueueExecRequest(_ command: String, isInner: Bool) async throws -> String {
         let requestId = UUID()
         return try await withTaskCancellationHandler(operation: {
@@ -4461,6 +4558,47 @@ actor SSHSession {
             return sftpSession
         }
 
+        // Teleport's outer session is the PROXY, which is in `proxyMode` and
+        // rejects the SFTP subsystem request with -22 (only the
+        // `proxy:<node>:0` subsystem is accepted). SFTP must run on the INNER
+        // (target-node) session, established by `prepareTeleportInnerSession()`.
+        // When the inner session is not ready yet, surface a clear error instead
+        // of attempting SFTP init on the outer session (which fails with the
+        // opaque "Failed to start SFTP session" message).
+        let routeToInner = Self.shouldRouteSFTPToInnerSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        )
+
+        if routeToInner {
+            guard let inner = innerLibssh2Session,
+                  innerSocket >= 0,
+                  innerAtomicSocket.isUsable,
+                  !hasBeenCleaned else {
+                throw RemoteFileBrowserError.failed(
+                    String(localized: "The Teleport target node session is not ready for file browsing.")
+                )
+            }
+
+            while true {
+                try Task.checkCancellation()
+
+                if let sftpSession = libssh2_sftp_init(inner) {
+                    self.sftpSession = sftpSession
+                    self.sftpSessionIsInner = true
+                    return sftpSession
+                }
+
+                let lastError = libssh2_session_last_errno(inner)
+                if lastError == LIBSSH2_ERROR_EAGAIN {
+                    await waitForInnerSocket()
+                    continue
+                }
+
+                throw Self.remoteFileError(from: nil, operation: "start SFTP session", path: nil)
+            }
+        }
+
         guard let session = libssh2Session else {
             throw RemoteFileBrowserError.disconnected
         }
@@ -4470,6 +4608,7 @@ actor SSHSession {
 
             if let sftpSession = libssh2_sftp_init(session) {
                 self.sftpSession = sftpSession
+                self.sftpSessionIsInner = false
                 return sftpSession
             }
 
@@ -4519,7 +4658,13 @@ actor SSHSession {
         openType: Int32,
         operation: String
     ) async throws -> OpaquePointer {
-        guard let session = libssh2Session else {
+        // The libssh2 session that backs `sftp` — used for EAGAIN detection
+        // via `libssh2_session_last_errno`. For Teleport this is the INNER
+        // (target-node) session; for direct connections it is the outer
+        // session. Picking the wrong one would misread the error code and
+        // either hang (treating a real error as EAGAIN) or throw a misleading
+        // error (treating EAGAIN as a hard failure).
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
             throw RemoteFileBrowserError.disconnected
         }
 
@@ -4542,7 +4687,7 @@ actor SSHSession {
 
             let lastError = libssh2_session_last_errno(session)
             if lastError == LIBSSH2_ERROR_EAGAIN {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -4556,7 +4701,12 @@ actor SSHSession {
         operation: String,
         mutation: (OpaquePointer, UnsafePointer<CChar>, UInt32) -> Int
     ) async throws {
-        guard libssh2Session != nil else {
+        // The libssh2 session backing `sftp` (inner for Teleport, outer for
+        // direct). `performSFTPMutation` does not itself read the errno, but
+        // the nil-check gates the EAGAIN wait path: if the backing session
+        // is gone there is nothing to wait on.
+        let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session
+        guard session != nil else {
             throw RemoteFileBrowserError.disconnected
         }
 
@@ -4573,7 +4723,7 @@ actor SSHSession {
             }
 
             if result == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -4615,7 +4765,7 @@ actor SSHSession {
             }
 
             if result == Int32(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -4632,7 +4782,11 @@ actor SSHSession {
         linkType: Int32,
         sftp: OpaquePointer
     ) async throws -> String {
-        guard let session = libssh2Session else {
+        // The libssh2 session backing `sftp` (inner for Teleport, outer for
+        // direct). `readSymlinkTarget` reads `libssh2_session_last_errno` to
+        // distinguish EAGAIN from a hard failure, so it must consult the
+        // session that actually owns the SFTP channel.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
             throw RemoteFileBrowserError.disconnected
         }
 
@@ -4668,7 +4822,7 @@ actor SSHSession {
 
             let lastError = libssh2_session_last_errno(session)
             if lastError == LIBSSH2_ERROR_EAGAIN {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 

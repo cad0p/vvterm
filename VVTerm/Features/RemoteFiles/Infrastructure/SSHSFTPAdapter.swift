@@ -39,6 +39,28 @@ final class SSHSFTPAdapter {
                 credentials: credentials,
                 disconnectWhenDone: false
             ) { client in
+                // Teleport's outer session is the PROXY, which is in
+                // `proxyMode` and rejects the SFTP subsystem request with -22
+                // (only the `proxy:<node>:0` subsystem is accepted). SFTP must
+                // run on the INNER (target-node) session, established by
+                // `prepareTeleportInnerSession()`. This is a no-op for
+                // non-Teleport auth methods and idempotent for Teleport (a
+                // ready inner session is reused), so it is safe to call for
+                // both the borrowed client (terminal's, which may already
+                // have an inner session after `startShell`) and the owned
+                // client (file-browser-only, which never starts a shell).
+                try await client.prepareTeleportInnerSession()
+
+                // Surface a clear "not ready" error before attempting SFTP
+                // init when the inner session is not ready yet. Without this
+                // gate, `ensureSFTPSession` would throw the opaque "Failed to
+                // start SFTP session" on the outer proxy session.
+                guard await client.supportsSFTP else {
+                    throw RemoteFileBrowserError.failed(
+                        String(localized: "The Teleport target node session is not ready for file browsing.")
+                    )
+                }
+
                 try await operation(SFTPRemoteFileService(client: client))
             }
         } catch {
