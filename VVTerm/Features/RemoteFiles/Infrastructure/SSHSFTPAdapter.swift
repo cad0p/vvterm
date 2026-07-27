@@ -49,7 +49,7 @@ final class SSHSFTPAdapter {
                 // both the borrowed client (terminal's, which may already
                 // have an inner session after `startShell`) and the owned
                 // client (file-browser-only, which never starts a shell).
-                try await client.prepareTeleportInnerSession()
+                _ = try await client.prepareTeleportInnerSession()
 
                 // Surface a clear "not ready" error before attempting SFTP
                 // init when the inner session is not ready yet. Without this
