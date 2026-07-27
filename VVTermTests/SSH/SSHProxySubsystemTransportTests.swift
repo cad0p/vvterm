@@ -303,7 +303,7 @@ struct SSHProxySubsystemTransportTests {
                 let chunk = inbound.blockingDequeue(maxLen: maxLen)
                 if chunk.isEmpty { return 0 }
                 // Simulated `libssh2_channel_read_ex` — guarded by the mutex.
-                outerSessionMutex.withLock {
+                return outerSessionMutex.withLock {
                     detector.enter()
                     defer { detector.exit() }
                     for (i, b) in chunk.enumerated() { buf[i] = b }
@@ -312,7 +312,7 @@ struct SSHProxySubsystemTransportTests {
             },
             channelWrite: { buf, len in
                 // Simulated `libssh2_channel_write_ex` — guarded by the mutex.
-                outerSessionMutex.withLock {
+                return outerSessionMutex.withLock {
                     detector.enter()
                     defer { detector.exit() }
                     var bytes = [UInt8]()
