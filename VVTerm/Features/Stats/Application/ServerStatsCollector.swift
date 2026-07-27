@@ -33,19 +33,6 @@ final class ServerStatsCollector: ObservableObject {
     private var hardwareProfile: HardwareProfile = .empty
     private var isDockerCollectionEnabled = false
 
-    // Teleport servers connect through a two-session path: the OUTER session
-    // is the Teleport PROXY (TLS+ALPN on port 443), which is in `proxyMode`
-    // and rejects `exec`/`pty`/`shell` channel requests with
-    // LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). Stats collection runs
-    // `client.execute(...)` which opens an exec channel on the session it's
-    // given — for Teleport that's the proxy session, so every probe fails.
-    // The real exec target is the INNER (target node) session, established
-    // after the second handshake. Routing stats through the inner session
-    // is tracked as a follow-up; for now we skip collection entirely, the
-    // same way `remoteEnvironment()` and `remoteTerminalType()` are skipped
-    // in `SSHClient.startShell`.
-    private var isTeleportProxySession = false
-
     // MARK: - Collection Control
 
     func startCollecting(
@@ -60,7 +47,6 @@ final class ServerStatsCollector: ObservableObject {
         isCollecting = true
         isDockerCollectionEnabled = collectDocker
         connectionError = nil
-        isTeleportProxySession = Self.shouldSkipStatsCollection(for: server.authMethod)
         resetCollectionState()
 
         // Use shared client if available, otherwise create one
@@ -137,11 +123,10 @@ final class ServerStatsCollector: ObservableObject {
             throw ProcessControlError.protectedProcess
         }
 
-        try ensureStatsCapableClient()
-
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
 
         let command: String
         switch remotePlatform {
@@ -156,11 +141,11 @@ final class ServerStatsCollector: ObservableObject {
     }
 
     func loadProcesses() async throws -> [ProcessInfo] {
-        try ensureStatsCapableClient()
-
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
+
         guard let platformCollector else {
             return stats.topProcesses
         }
@@ -170,11 +155,11 @@ final class ServerStatsCollector: ObservableObject {
     }
 
     func loadDockerStats() async throws -> DockerStats {
-        try ensureStatsCapableClient()
-
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
+
         let dockerStats = await dockerCollector.collect(
             client: client,
             platform: remotePlatform,
@@ -190,15 +175,15 @@ final class ServerStatsCollector: ObservableObject {
     /// The selected volume must still belong to the latest Stats snapshot so a
     /// stale sheet cannot probe an unrelated raw locator after a mount changes.
     func loadStorageHealth(for volume: VolumeInfo) async throws -> StorageHealthResult {
+        guard let client = sshClient else {
+            return .unavailable(.unsupported)
+        }
         do {
-            try ensureStatsCapableClient()
+            try await ensureStatsCapableClient(client: client)
         } catch {
             return .unavailable(.unsupported)
         }
 
-        guard let client = sshClient else {
-            throw ProcessControlError.notConnected
-        }
         guard let currentVolume = VolumeVisibilityPolicy.normalized(stats.volumes)
             .first(where: { $0.identity == volume.identity }) else {
             return .unavailable(.unmapped)
@@ -283,11 +268,10 @@ final class ServerStatsCollector: ObservableObject {
     }
 
     func performDockerAction(_ action: DockerContainerAction, on container: DockerContainer) async throws -> DockerStats {
-        try ensureStatsCapableClient()
-
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
 
         try await dockerCollector.perform(action, container: container, client: client, platform: remotePlatform)
         try? await Task.sleep(for: .milliseconds(500))
@@ -307,35 +291,41 @@ final class ServerStatsCollector: ObservableObject {
     /// Throws when stats collection cannot run on the current session.
     ///
     /// Teleport proxy sessions reject `exec`/`pty`/`shell` channel requests
-    /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22), so any stats probe
-    /// that opens an exec channel fails. Stats must be routed through the
-    /// inner (target node) session before they're available; until then we
-    /// surface a clear error instead of repeatedly failing exec.
-    private func ensureStatsCapableClient() throws {
-        guard !isTeleportProxySession else {
+    /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). `SSHSession.execute`
+    /// now routes exec to the INNER (target-node) session for Teleport, so
+    /// stats succeed once that session is established. Before the shell
+    /// starts (inner session nil), `SSHClient.supportsExec` returns `false`
+    /// and this throws so the caller surfaces a clear error instead of
+    /// repeatedly failing exec.
+    private func ensureStatsCapableClient(client: SSHClient) async throws {
+        guard await client.supportsExec else {
             throw ProcessControlError.teleportProxySession
         }
     }
 
-    /// Returns `true` when stats collection must be skipped because the SSH
-    /// session is the Teleport PROXY session, which rejects `exec`/`pty`/
-    /// `shell` channel requests with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE
-    /// (-22).
-    ///
-    /// This mirrors the `startShell` skip for `remoteEnvironment()` and
-    /// `remoteTerminalType()` in `SSHClient`. Routing stats through the
-    /// inner (target node) session is a follow-up; until then stats are
-    /// unavailable for Teleport proxy sessions.
+    /// Static safety-net hook for future auth methods that can never support
+    /// exec. Currently returns `false` for every auth method: Teleport stats
+    /// route through the inner (target-node) session at runtime via
+    /// `SSHSession.execute`, gated by `SSHClient.supportsExec`. Kept as a
+    /// documented hook so a future auth method that structurally cannot run
+    /// exec can be skipped without a runtime probe.
     nonisolated static func shouldSkipStatsCollection(for authMethod: AuthMethod) -> Bool {
-        authMethod == .faceIDTeleport
+        // No auth method is statically skipped: Teleport routes through the
+        // inner session, and every other method uses the direct outer session.
+        _ = authMethod
+        return false
     }
 
     private func collectStats(client: SSHClient) async {
-        // Teleport proxy session rejects exec/pty/shell with -22. Skip
-        // collection entirely until stats are routed through the inner
-        // (target node) session. See `isTeleportProxySession` for context.
-        guard !isTeleportProxySession else {
-            logger.info("Skipping stats collection: Teleport proxy session does not support exec channels")
+        // Teleport's outer session is the PROXY, which rejects exec with -22.
+        // `SSHSession.execute` routes to the inner (target-node) session for
+        // Teleport, but that session is only established after the second
+        // handshake in `startShellViaTeleportProxy`. Before that (or if the
+        // shell never started), `supportsExec` returns `false` and we skip
+        // gracefully instead of spinning failing exec calls.
+        let canExec = await client.supportsExec
+        guard canExec else {
+            logger.info("Skipping stats collection: inner session not ready for exec (Teleport proxy session)")
             return
         }
         do {
@@ -394,9 +384,6 @@ final class ServerStatsCollector: ObservableObject {
         remotePlatform = .unknown
         platformCollector = nil
         hardwareProfile = .empty
-        // Note: `isTeleportProxySession` is intentionally NOT reset here —
-        // it is set in `startCollecting` before `resetCollectionState()` and
-        // must survive a collection reset within the same session.
         cpuHistory = []
         memoryHistory = []
         networkRxHistory = []
@@ -531,10 +518,11 @@ private enum ProcessControlError: LocalizedError {
         case .protectedProcess:
             return String(localized: "This process cannot be killed from Stats.")
         case .teleportProxySession:
-            // The Teleport proxy rejects exec/pty/shell with -22. Stats are
-            // not available on the proxy session until they're routed through
-            // the inner (target node) session.
-            return String(localized: "Stats are not available for Teleport proxy sessions.")
+            // The Teleport proxy rejects exec/pty/shell with -22. Stats route
+            // through the inner (target-node) session once it is established
+            // (after the second handshake in `startShellViaTeleportProxy`).
+            // If the inner session is not ready yet, exec cannot run.
+            return String(localized: "Stats are not available until the Teleport target node session is ready.")
         }
     }
 }

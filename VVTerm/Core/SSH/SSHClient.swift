@@ -898,6 +898,18 @@ actor SSHClient {
         }
     }
 
+    /// Returns `true` when `execute(_:)` can currently succeed on the active
+    /// session. For Teleport this requires the INNER (target-node) session to
+    /// be established; for every other auth method it mirrors `isConnected`.
+    /// Stats collection consults this to skip gracefully before the inner
+    /// session is ready (e.g. before the shell starts) instead of spinning
+    /// failing exec calls.
+    var supportsExec: Bool {
+        get async {
+            await session?.supportsExec ?? false
+        }
+    }
+
     // MARK: - Mosh
 
     func restoreMoshShell(
@@ -1349,6 +1361,13 @@ actor SSHSession {
         var output = Data()
         var stderr = Data()
         var isStarted = false
+        /// `true` for an exec channel backed by the inner (target-node) libssh2
+        /// session of the Teleport proxy-subsystem path. The outer `ioLoop`
+        /// skips these — they're drained by `innerIOLoop`, which polls the
+        /// inner socketpair FD (data for the inner channel arrives via the
+        /// proxy-subsystem pump, not the outer session's socket). Mirrors the
+        /// `ShellChannelState.isInner` flag.
+        var isInner: Bool = false
 
         init(id: UUID, command: String, continuation: CheckedContinuation<String, Error>) {
             self.id = id
@@ -1460,6 +1479,26 @@ actor SSHSession {
 
     var isConnected: Bool {
         isActive && libssh2Session != nil
+    }
+
+    /// Returns `true` when `execute(_:)` can currently succeed on this session.
+    ///
+    /// For non-Teleport auth methods this mirrors `isConnected` (the outer
+    /// session supports exec directly). For Teleport (`.faceIDTeleport`) the
+    /// outer session is the PROXY, which rejects exec with -22; exec must be
+    /// routed to the INNER (target-node) session, so this returns `true` only
+    /// when the inner session is established (after the second handshake in
+    /// `startShellViaTeleportProxy`). Stats collection consults this to skip
+    /// gracefully before the shell starts rather than spinning failing exec
+    /// calls.
+    var supportsExec: Bool {
+        guard isActive, !hasBeenCleaned, libssh2Session != nil else { return false }
+        if config.authMethod == .faceIDTeleport {
+            return innerLibssh2Session != nil
+                && innerSocket >= 0
+                && innerAtomicSocket.isUsable
+        }
+        return true
     }
 
     /// Interrupt socket I/O from any thread; actor-owned cleanup performs the final close.
@@ -3295,7 +3334,49 @@ actor SSHSession {
             }
 
             let hasInnerChannels = shellChannels.values.contains { $0.isInner }
-            if !hasInnerChannels {
+            // Drain inner exec requests. Mirrors the exec draining in the
+            // outer `ioLoop`, but opens/reads the channel on the inner
+            // (target-node) libssh2 session. The outer loop skips requests
+            // with `isInner == true`, so they are only drained here.
+            let hasInnerExec = execRequests.values.contains { $0.isInner }
+            if hasInnerExec {
+                let requestIds = Array(execRequests.keys)
+                for requestId in requestIds {
+                    guard let request = execRequests[requestId] else { continue }
+                    guard request.isInner else { continue }
+                    guard ensureInnerExecChannelReady(request) else { continue }
+
+                    guard let execChannel = request.channel else { continue }
+
+                    let bytesRead = libssh2_channel_read_ex(execChannel, 0, &buffer, buffer.count)
+                    if bytesRead > 0 {
+                        request.output.append(Data(bytes: buffer, count: Int(bytesRead)))
+                        didWork = true
+                    } else if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
+                        // No data yet
+                    } else if bytesRead < 0 {
+                        finishExecRequest(requestId, error: SSHError.socketError("Inner exec read failed: \(bytesRead)"))
+                        continue
+                    }
+
+                    let stderrRead = libssh2_channel_read_ex(execChannel, 1, &buffer, buffer.count)
+                    if stderrRead > 0 {
+                        request.stderr.append(Data(bytes: buffer, count: Int(stderrRead)))
+                        didWork = true
+                    } else if stderrRead == Int(LIBSSH2_ERROR_EAGAIN) {
+                        // No stderr data yet
+                    } else if stderrRead < 0 {
+                        finishExecRequest(requestId, error: SSHError.socketError("Inner exec stderr read failed: \(stderrRead)"))
+                        continue
+                    }
+
+                    if let currentChannel = request.channel, libssh2_channel_eof(currentChannel) != 0 {
+                        finishExecRequest(requestId, error: nil)
+                        didWork = true
+                    }
+                }
+            }
+            if !hasInnerChannels, !execRequests.values.contains(where: { $0.isInner }) {
                 break
             }
 
@@ -3550,6 +3631,12 @@ actor SSHSession {
                 let requestIds = Array(execRequests.keys)
                 for requestId in requestIds {
                     guard let request = execRequests[requestId] else { continue }
+                    // Inner (Teleport proxy-subsystem) exec requests are
+                    // drained by `innerIOLoop`, which polls the inner
+                    // socketpair FD. The outer loop must not touch them —
+                    // doing so would open/read the channel on the outer
+                    // (proxy) session and fail with -22.
+                    if request.isInner { continue }
                     guard ensureExecChannelReady(request) else { continue }
 
                     guard let execChannel = request.channel else { continue }
@@ -3583,7 +3670,14 @@ actor SSHSession {
                 }
             }
 
-            if shellChannels.isEmpty, execRequests.isEmpty {
+            // Exit the outer loop when there are no outer shell channels
+            // AND no outer exec requests. Inner (Teleport) shell/exec
+            // requests are tracked in the same dictionaries but drained by
+            // `innerIOLoop`; they must not keep the outer loop alive (it
+            // would spin on `waitForSocket` with no work to do).
+            let hasOuterShell = shellChannels.values.contains { !$0.isInner }
+            let hasOuterExec = execRequests.values.contains { !$0.isInner }
+            if !hasOuterShell, !hasOuterExec {
                 break
             }
 
@@ -3696,7 +3790,64 @@ actor SSHSession {
         return true
     }
 
-    private func cancelExecRequest(_ requestId: UUID, error: Error) {
+    /// Mirror of `ensureExecChannelReady` for the inner (target-node) libssh2
+    /// session. Opens a `session` channel on `innerLibssh2Session` and
+    /// requests `exec` on it. The inner session is non-blocking, so
+    /// EAGAIN retries are handled by the next `innerIOLoop` pass (which
+    /// re-enties this via the per-request guard). Returns `false` (without
+    /// failing the request) on EAGAIN so the loop retries; returns `false`
+    /// (failing the request) on a hard error.
+    private func ensureInnerExecChannelReady(_ request: ExecRequest) -> Bool {
+        guard let session = innerLibssh2Session,
+              innerSocket >= 0,
+              innerAtomicSocket.isUsable,
+              !hasBeenCleaned else {
+            finishExecRequest(request.id, error: SSHError.notConnected)
+            return false
+        }
+
+        if request.channel == nil {
+            let newChannel = libssh2_channel_open_ex(
+                session,
+                "session",
+                UInt32("session".utf8.count),
+                2 * 1024 * 1024,
+                32768,
+                nil,
+                0
+            )
+            if let newChannel = newChannel {
+                request.channel = newChannel
+            } else {
+                let lastError = libssh2_session_last_errno(session)
+                if lastError == LIBSSH2_ERROR_EAGAIN {
+                    return false
+                }
+                finishExecRequest(request.id, error: SSHError.channelOpenFailed)
+                return false
+            }
+        }
+
+        if !request.isStarted, let execChannel = request.channel {
+            let execResult = libssh2_channel_process_startup(
+                execChannel,
+                "exec",
+                4,
+                request.command,
+                UInt32(request.command.utf8.count)
+            )
+            if execResult == Int32(LIBSSH2_ERROR_EAGAIN) {
+                return false
+            }
+            if execResult != 0 {
+                finishExecRequest(request.id, error: SSHError.unknown("Inner exec failed: \(execResult)"))
+                return false
+            }
+            request.isStarted = true
+        }
+
+        return true
+    }
         guard execRequests[requestId] != nil else { return }
         finishExecRequest(requestId, error: error)
     }
@@ -4136,15 +4287,53 @@ actor SSHSession {
     // MARK: - Execute Command
 
     func execute(_ command: String) async throws -> String {
+        // Teleport's outer session is the PROXY — it rejects exec/pty/shell
+        // with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). Route exec to
+        // the inner (target-node) session when one exists. The inner session
+        // is created inside `startShellViaTeleportProxy` (second handshake
+        // over the `proxy:<node>:0` subsystem tunnel); before the shell
+        // starts it is nil, so we surface `notConnected` and the caller
+        // (stats collector) skips gracefully.
+        let routeToInner = Self.shouldRouteExecToInnerSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        )
+        if routeToInner {
+            guard let inner = innerLibssh2Session,
+                  innerSocket >= 0,
+                  innerAtomicSocket.isUsable,
+                  !hasBeenCleaned else {
+                throw SSHError.notConnected
+            }
+            startInnerIOLoopIfNeeded()
+            return try await enqueueExecRequest(command, isInner: true)
+        }
+
         guard libssh2Session != nil else {
             throw SSHError.notConnected
         }
         startIOLoop()
+        return try await enqueueExecRequest(command, isInner: false)
+    }
 
+    /// Pure routing decision extracted from `execute()` so it can be unit-
+    /// tested without a live libssh2 session. Returns `true` only for the
+    /// Teleport auth method AND when the inner (target-node) session is
+    /// ready (non-nil). For every other combination the outer path is
+    /// used.
+    nonisolated static func shouldRouteExecToInnerSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && innerSessionReady
+    }
+
+    private func enqueueExecRequest(_ command: String, isInner: Bool) async throws -> String {
         let requestId = UUID()
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let request = ExecRequest(id: requestId, command: command, continuation: continuation)
+                request.isInner = isInner
                 execRequests[request.id] = request
             }
         }, onCancel: { [weak self] in
@@ -4152,6 +4341,13 @@ actor SSHSession {
                 await self?.cancelExecRequest(requestId, error: CancellationError())
             }
         })
+    }
+
+    /// Start the inner I/O loop if it is not already running. Called when an
+    /// exec request is routed to the inner session without a shell channel
+    /// already keeping the loop alive.
+    private func startInnerIOLoopIfNeeded() {
+        startInnerIOLoop()
     }
 
     // MARK: - Keep Alive
