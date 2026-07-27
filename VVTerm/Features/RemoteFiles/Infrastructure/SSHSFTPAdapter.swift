@@ -61,7 +61,7 @@ final class SSHSFTPAdapter {
                     )
                 }
 
-                try await operation(SFTPRemoteFileService(client: client))
+                return try await operation(SFTPRemoteFileService(client: client))
             }
         } catch {
             if registration.ownership == .borrowed {
