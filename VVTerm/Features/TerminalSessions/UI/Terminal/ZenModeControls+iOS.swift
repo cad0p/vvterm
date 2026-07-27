@@ -1,5 +1,8 @@
 #if os(iOS)
 import SwiftUI
+import os.log
+
+private let zenPanelLogger = Logger.forCategory("ZenMode")
 
 struct IOSZenModePanel: View {
     let width: CGFloat
@@ -86,7 +89,10 @@ struct IOSZenModePanel: View {
                 ZenModeActionButton(
                     title: "Exit Zen Mode",
                     systemImage: "arrow.down.right.and.arrow.up.left",
-                    action: onExitZen
+                    action: {
+                        zenPanelLogger.notice("iOS zen panel: Exit Zen Mode tapped")
+                        onExitZen()
+                    }
                 )
                 .accessibilityIdentifier("vvterm.terminal.exitZenMode")
             }

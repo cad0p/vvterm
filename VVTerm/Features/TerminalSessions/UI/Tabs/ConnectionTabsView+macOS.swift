@@ -1,6 +1,9 @@
 #if os(macOS)
 import SwiftUI
 import AppKit
+import os.log
+
+private let zenExitLogger = Logger.forCategory("ZenMode")
 
 struct ZenWindowChromeBridge: NSViewRepresentable {
     @Binding var contentInsets: EdgeInsets
@@ -480,6 +483,7 @@ extension ConnectionTerminalContainer {
                 Task { await fileBrowser.refresh(server: server, tab: selectedFileTab) }
             },
             onExitZen: {
+                zenExitLogger.notice("macOS zen panel: Exit Zen Mode tapped")
                 showingZenPanel = false
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
                     isZenModeEnabled = false

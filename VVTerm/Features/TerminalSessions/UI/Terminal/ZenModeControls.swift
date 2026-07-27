@@ -1,4 +1,7 @@
 import SwiftUI
+import os.log
+
+private let zenControlsLogger = Logger.forCategory("ZenMode")
 
 struct ZenModeFloatingOverlay<Panel: View>: View {
     @Binding var isPanelPresented: Bool
@@ -74,6 +77,7 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
 
     private var launcherButton: some View {
         Button {
+            zenControlsLogger.notice("zen launcher tapped: isPanelPresented=\(isPanelPresented)")
             withAnimation(.spring(response: 0.26, dampingFraction: 0.84)) {
                 isPanelPresented.toggle()
             }
@@ -87,6 +91,7 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
                     Circle()
                         .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                 )
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(String(localized: "Zen controls"))
