@@ -3848,6 +3848,8 @@ actor SSHSession {
 
         return true
     }
+
+    private func cancelExecRequest(_ requestId: UUID, error: Error) {
         guard execRequests[requestId] != nil else { return }
         finishExecRequest(requestId, error: error)
     }
