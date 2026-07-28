@@ -113,6 +113,41 @@ final class SessionMutex: @unchecked Sendable {
     }
 }
 
+/// Closes the pump end of the socketpair exactly once, waking blocked readers.
+///
+/// Two close paths race on the pump FD: a pump loop that sees EOF/error closes
+/// it, and `runPump`'s task-group cleanup closes it after the first loop exits
+/// (plus `cancelPumpSync` from `SSHSession.cleanupLibssh2`). A plain double
+/// `close(2)` is an FD-reuse hazard (another thread can open a file between
+/// the two closes and get the same fd number, which the second close then
+/// kills). Worse, `close` alone does NOT wake a thread blocked in `read()` on
+/// the same fd — the in-flight syscall holds a file reference, so the socket
+/// stays half-alive and the peer never sees EOF (this deadlocked the
+/// `pumpHandlesChannelEOFByClosingPumpFD` test: `pumpFDToChannel` stayed
+/// blocked in `read(pumpFD)` and `read(libssh2FD)` never returned 0).
+/// `shutdown(SHUT_RDWR)` wakes blocked readers immediately and delivers EOF to
+/// the peer regardless of outstanding references; the once-flag serializes the
+/// close itself.
+final class PumpFDCloser: @unchecked Sendable {
+    private let didClose = OSAllocatedUnfairLock(initialState: false)
+
+    nonisolated init() {}
+
+    /// `shutdown` + `close` the fd exactly once; subsequent calls are no-ops.
+    nonisolated func closeOnce(_ fd: Int32) {
+        guard fd >= 0 else { return }
+        let shouldClose = didClose.withLock { done -> Bool in
+            if done { return false }
+            done = true
+            return true
+        }
+        if shouldClose {
+            Darwin.shutdown(fd, SHUT_RDWR)
+            Darwin.close(fd)
+        }
+    }
+}
+
 /// A socketpair bridge that lets a second libssh2 session read/write through
 /// an SSH channel opened on the outer (proxy) session.
 ///
@@ -171,6 +206,7 @@ actor SSHProxySubsystemTransport {
     private struct PumpState {
         var task: Task<Void, Never>?
         var pumpFD: Int32 = -1
+        var closer: PumpFDCloser?
     }
 
     private let logger = Logger(
@@ -239,14 +275,19 @@ actor SSHProxySubsystemTransport {
         // Start the pump before returning the FD. Both loops run concurrently
         // in a detached task; either loop exiting cancels the other + closes
         // the pump end (so the libssh2 session sees EOF on its reads).
+        // The closer is shared between the pump loops, `runPump`'s cleanup,
+        // and `cancelPumpSync` so the pump FD is shutdown+closed exactly once
+        // (see `PumpFDCloser`).
+        let closer = PumpFDCloser()
         let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            await self.runPump(pair: pair)
+            await self.runPump(pair: pair, closer: closer)
         }
         pumpTask = task
         pumpState.withLock { state in
             state.task = task
             state.pumpFD = pair.pumpFD
+            state.closer = closer
         }
 
         return pair.libssh2FD
@@ -277,21 +318,24 @@ actor SSHProxySubsystemTransport {
     /// Idempotent. Does NOT close the libssh2-facing FD (owned by the inner
     /// session's `AtomicSocket`).
     nonisolated func cancelPumpSync() {
-        let (task, fd) = pumpState.withLock { state -> (Task<Void, Never>?, Int32) in
+        let (task, fd, closer) = pumpState.withLock {
+            state -> (Task<Void, Never>?, Int32, PumpFDCloser?) in
             let t = state.task
             let f = state.pumpFD
+            let c = state.closer
             state.task = nil
             state.pumpFD = -1
-            return (t, f)
+            state.closer = nil
+            return (t, f, c)
         }
         // Flip the cancellation token so the channel I/O closures bail out
         // of their EAGAIN retry loops before the outer libssh2 session is
         // freed (avoids a use-after-free on the outer session/channel).
         cancelToken?.cancel()
         task?.cancel()
-        if fd >= 0 {
-            Darwin.close(fd)
-        }
+        // shutdown+close via the shared closer (wakes blocked readers; no-op
+        // if a pump loop already closed it — avoids the fd-reuse race).
+        closer?.closeOnce(fd)
     }
 
     // MARK: - Pump internals
@@ -308,7 +352,7 @@ actor SSHProxySubsystemTransport {
     /// `nonisolated` so the blocking `read()`/`write()` on the pump FD run on
     /// the detached task's thread without hopping onto the actor (which would
     /// serialize + stall the pump).
-    nonisolated private func runPump(pair: SocketPair) async {
+    nonisolated private func runPump(pair: SocketPair, closer: PumpFDCloser) async {
         let pumpLog = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
             category: "SSH-Proxy-Subsystem-Pump"
@@ -317,19 +361,19 @@ actor SSHProxySubsystemTransport {
         await withTaskGroup(of: Void.self) { group in
             // channel -> pumpFD
             group.addTask {
-                await self.pumpChannelToFD(pair: pair, log: pumpLog)
+                await self.pumpChannelToFD(pair: pair, closer: closer, log: pumpLog)
             }
             // pumpFD -> channel
             group.addTask {
                 await self.pumpFDToChannel(pair: pair, log: pumpLog)
             }
             // When either loop exits, cancel the other + close the pump end.
-            // (The loops close pumpFD on their own EOF; closing again here is
-            // a harmless EBADF, but ensures the pumpFD is closed even if a
-            // loop exited without reaching its close path.)
+            // (The channel->FD loop closes pumpFD on its own EOF; the closer
+            // makes this idempotent, and ensures the pumpFD is closed even if
+            // a loop exited without reaching its close path.)
             await group.next()
             group.cancelAll()
-            Darwin.close(pair.pumpFD)
+            closer.closeOnce(pair.pumpFD)
         }
     }
 
@@ -337,7 +381,7 @@ actor SSHProxySubsystemTransport {
     /// injected `channelRead` closure), write them to the pump FD for the
     /// inner libssh2 session to read. Loops until the channel returns 0 (EOF)
     /// or the task is cancelled.
-    nonisolated private func pumpChannelToFD(pair: SocketPair, log: Logger) async {
+    nonisolated private func pumpChannelToFD(pair: SocketPair, closer: PumpFDCloser, log: Logger) async {
         var channelToFDBytes: Int = 0
         var loggedFirst = false
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
@@ -345,12 +389,16 @@ actor SSHProxySubsystemTransport {
         while !Task.isCancelled {
             let n = channelRead(buffer, 64 * 1024)
             if n <= 0 {
-                // Channel EOF or error — close the pump FD so the inner
-                // libssh2 session's reads return EOF (otherwise
+                // Channel EOF or error — shutdown+close the pump FD so the
+                // inner libssh2 session's reads return EOF (otherwise
                 // `libssh2_session_handshake` would hang forever waiting for
-                // a banner that will never arrive).
+                // a banner that will never arrive). `shutdown` first: a plain
+                // `close` does NOT wake the FD->channel loop blocked in
+                // `read(pumpFD)` — the in-flight syscall holds a file
+                // reference, so the socket stays half-alive and the libssh2FD
+                // peer never sees EOF.
                 log.info("pump_channel_to_fd_eof_or_err ret=\(n) bytes=\(channelToFDBytes)")
-                Darwin.close(pair.pumpFD)
+                closer.closeOnce(pair.pumpFD)
                 return
             }
             if !loggedFirst {
