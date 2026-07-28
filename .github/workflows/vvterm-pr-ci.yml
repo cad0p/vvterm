@@ -456,10 +456,17 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             $ONLY_TESTING_ARGS \
             -parallel-testing-enabled \
+            -collect-test-diagnostics never \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
           # Preserve xcodebuild's exit code for the step status, but don't
           # abort before the upload steps (which run on always()).
+          #
+          # -collect-test-diagnostics never: skip the 600s simulator diagnostic
+          # collection that fires after a test failure. The diagnostic collection
+          # (sysdiagnose, log archive) takes 600s (10m) per failed test and is
+          # the main source of CI wall-clock waste from flakes. The xcresult
+          # bundle already contains the test failure details.
           exit ${PIPESTATUS[0]}
 
       - name: Upload test results
