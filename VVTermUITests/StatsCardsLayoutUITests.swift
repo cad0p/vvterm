@@ -94,7 +94,25 @@ final class StatsCardsLayoutUITests: XCTestCase {
     }
 
     @MainActor
+    private func waitForLayoutToSettle() throws {
+        // After rotation, the container width changes immediately but the cards'
+        // frames may still be animating to their final column positions. Poll
+        // until the layout is stable: two consecutive reads of the cpu card's
+        // minY produce the same value, indicating the animation has completed.
+        let stable = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let y1 = self.card("cpu").frame.minY
+            // Wait a brief moment, then check again.
+            Thread.sleep(forTimeInterval: 0.15)
+            let y2 = self.card("cpu").frame.minY
+            return abs(y1 - y2) < 0.5
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [stable], timeout: 5), .completed,
+                       "Layout did not settle after rotation")
+    }
+
+    @MainActor
     private func assertExpectedColumnsAndContainment() throws {
+        try waitForLayoutToSettle()
         try assertCardsAreHorizontallyContained()
         let firstRowY = card("system").frame.minY
         let expectedColumnCount = layoutConfiguration.columnCount(for: container.frame.width)
