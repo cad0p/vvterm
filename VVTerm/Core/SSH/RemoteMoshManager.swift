@@ -459,11 +459,12 @@ actor RemoteMoshServerLease {
         waiters.forEach { $0.resume() }
     }
 
-    #if DEBUG
+    /// Resumes waiters blocked on `cleanupPending` state. Available in both
+    /// Debug and Release — must NOT be inside `#if DEBUG` because it's called
+    /// from `cleanup()` which is outside the debug block.
     private func resumeCleanupPendingWaiters() {
         let waiters = cleanupPendingWaiters
         cleanupPendingWaiters.removeAll(keepingCapacity: false)
         waiters.forEach { $0.resume() }
     }
-    #endif
 }

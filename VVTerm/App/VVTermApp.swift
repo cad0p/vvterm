@@ -127,14 +127,19 @@ struct VVTermApp: App {
     private var usesTeleportPhaseChainUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-phase-chain")
     }
+    #endif
 
     /// True when ANY UI test harness launch arg is present. Used to skip
     /// app-side singletons (ServerManager → CloudKitManager) that trap in
     /// the simulator without iCloud entitlements.
+    ///
+    /// Available in both Debug and Release — in Release it always returns
+    /// false (no launch args), so the guard is a no-op. Must NOT be inside
+    /// the `#if DEBUG` block because it's referenced from `.onAppear`/
+    /// `.onChange` modifiers in the `#if os(iOS)` section below.
     static var isUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("--vvterm-ui-test-") }
     }
-    #endif
 
     #if os(iOS)
     @ViewBuilder
