@@ -244,6 +244,15 @@ jobs:
         # `IgnoreFileSystemDeviceInodeChanges=YES` below, this lets Xcode
         # recognize that only VVTermTests changed → recompiles only the test
         # target (~3m) instead of all SPM deps (~6m).
+        #
+        # NOTE: This job does NOT download the build artifact (unlike ui-tests).
+        # The cache alone provides Products + Intermediates.noindex + SourcePackages
+        # with correct mtimes. Downloading the artifact and extracting it over
+        # the cache-restored files gave them fresh tar mtimes, which caused
+        # xcodebuild to re-validate and recompile all SPM deps (~6m waste) even
+        # though the .o files were present. The cache's mtime sidecar is the
+        # source of truth; the artifact is only needed by ui-tests (which uses
+        # test-without-building and does zero compilation).
         uses: irgaly/xcode-cache@v1
         with:
           key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
@@ -253,21 +262,6 @@ jobs:
           swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           swiftpm-cache-restore-keys: |
             xcode27-spm-
-
-      - name: Download build products
-        # Download the tarball from the build job and extract it into the
-        # same -derivedDataPath the build used. Tar preserves the symlinks
-        # inside .app bundles that actions/download-artifact would flatten.
-        uses: actions/download-artifact@v8
-        with:
-          name: vvterm-build
-          path: ${{ runner.temp }}
-
-      - name: Extract build products
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
-          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
 
       - name: Clear stale PCM module cache
         # Remove the Clang module cache so restored .pcm files from an older
