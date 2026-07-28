@@ -94,25 +94,7 @@ final class StatsCardsLayoutUITests: XCTestCase {
     }
 
     @MainActor
-    private func waitForLayoutToSettle() throws {
-        // After rotation, the container width changes immediately but the cards'
-        // frames may still be animating to their final column positions. Poll
-        // until the layout is stable: two consecutive reads of the cpu card's
-        // minY produce the same value, indicating the animation has completed.
-        let stable = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            let y1 = self.card("cpu").frame.minY
-            // Wait a brief moment, then check again.
-            Thread.sleep(forTimeInterval: 0.15)
-            let y2 = self.card("cpu").frame.minY
-            return abs(y1 - y2) < 0.5
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [stable], timeout: 5), .completed,
-                       "Layout did not settle after rotation")
-    }
-
-    @MainActor
     private func assertExpectedColumnsAndContainment() throws {
-        try waitForLayoutToSettle()
         try assertCardsAreHorizontallyContained()
         let firstRowY = card("system").frame.minY
         let expectedColumnCount = layoutConfiguration.columnCount(for: container.frame.width)
@@ -210,7 +192,14 @@ final class StatsCardsLayoutUITests: XCTestCase {
         )
 
         func columnCount(for viewportWidth: CGFloat) -> Int {
-            let availableWidth = max(0, min(viewportWidth, maximumWidth) - horizontalPadding * 2)
+            // Mirror StatsGridLayoutPolicy.columnCount(for:minimumColumnWidth:spacing:)
+            // exactly: the layout uses the view's proposed width directly and does
+            // NOT subtract horizontalPadding (padding is applied by the parent
+            // ScrollView + page padding, not by StatsCardsGridLayout). The old
+            // code subtracted horizontalPadding * 2, which made the expected
+            // column count differ from the actual layout's column count after
+            // rotation, causing the flaky "multi-column layout" assertion.
+            let availableWidth = max(0, min(viewportWidth, maximumWidth))
             if availableWidth >= minimumGridWidth(for: 3) {
                 return 3
             }
