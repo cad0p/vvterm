@@ -1698,6 +1698,12 @@ final class TerminalKeyboardUITests: XCTestCase {
         if usesNativeFindNavigator {
             app.launchArguments.append("--vvterm-ui-test-native-find-navigator")
         }
+        // Under CI load (4 UI shards + unit-tests in parallel), the simulator
+        // can take >60s to launch the app. The default XCUITest launch timeout
+        // (60s) is insufficient — increase to 180s to absorb the load.
+        // See issue #43 for the "Timed out while launching application via Xcode"
+        // flake that affects multiple keyboard tests.
+        app.launchTimeout = 180
         app.launch()
 
         let ready = app.staticTexts["vvterm.keyboardTest.ready"]
