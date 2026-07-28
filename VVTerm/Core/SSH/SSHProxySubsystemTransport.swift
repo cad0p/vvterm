@@ -383,7 +383,6 @@ actor SSHProxySubsystemTransport {
     /// or the task is cancelled.
     nonisolated private func pumpChannelToFD(pair: SocketPair, closer: PumpFDCloser, log: Logger) async {
         var channelToFDBytes: Int = 0
-        var loggedFirst = false
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         while !Task.isCancelled {
@@ -400,18 +399,6 @@ actor SSHProxySubsystemTransport {
                 log.info("pump_channel_to_fd_eof_or_err ret=\(n) bytes=\(channelToFDBytes)")
                 closer.closeOnce(pair.pumpFD)
                 return
-            }
-            if !loggedFirst {
-                loggedFirst = true
-                // The first channel->FD chunk carries the target node's SSH
-                // banner (`SSH-2.0-...`). Dump the first 512 bytes as hex so
-                // the banner (and any KEX_INIT bytes that did arrive) are
-                // visible in the live device log.
-                let first = min(n, 512)
-                var hex = ""
-                hex.reserveCapacity(first * 2)
-                for i in 0..<first { hex += String(format: "%02x", buffer[i]) }
-                log.info("pump_channel_to_fd_first len=\(n) hex=\(hex, privacy: .public)")
             }
             channelToFDBytes += n
             // Write all bytes to the pump FD (may need multiple writes).
@@ -436,21 +423,12 @@ actor SSHProxySubsystemTransport {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         var fdToChannelBytes: Int = 0
-        var loggedFirst = false
         while !Task.isCancelled {
             let n = Darwin.read(pair.pumpFD, buffer, 64 * 1024)
             if n <= 0 {
                 // EOF or error — stop sending.
                 log.info("pump_fd_to_channel_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToChannelBytes)")
                 return
-            }
-            if !loggedFirst {
-                loggedFirst = true
-                let first = min(n, 32)
-                var hex = ""
-                hex.reserveCapacity(first * 2)
-                for i in 0..<first { hex += String(format: "%02x", buffer[i]) }
-                log.info("pump_fd_to_channel_first len=\(n) hex=\(hex, privacy: .public)")
             }
             fdToChannelBytes += n
             // Write all bytes to the channel (the closure handles

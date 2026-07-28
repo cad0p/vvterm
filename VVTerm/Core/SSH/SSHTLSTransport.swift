@@ -361,26 +361,8 @@ actor SSHTLSTransport {
 
     /// NWConnection -> pumpFD: receive bytes, write them to the pump FD for
     /// libssh2 to read. Loops until receive returns nil (EOF/error).
-    ///
-    /// KEX_INIT buffering: the server's first packet after the banner is its
-    /// `SSH_MSG_KEXINIT` (~704 bytes for Teleport). `NWConnection.receive`
-    /// may deliver the banner (18 bytes) and the KEX_INIT in separate
-    /// callbacks, so parsing only the first chunk sees just the banner and
-    /// fails with `truncated_packet_length`. To surface the server's offered
-    /// algorithms as soon as they arrive, every received chunk is appended
-    /// to `kexAccumulator` and `parseServerKexInit` is retried on the
-    /// accumulated buffer until it succeeds (or the buffer clearly cannot
-    /// contain a KEX_INIT). Parsing is diagnostic only — all bytes are
-    /// forwarded to `pumpFD` regardless.
     nonisolated private func pumpNWToFD(connection: NWConnection, pumpFD: Int32, log: Logger) async {
         var nwToFDBytes: Int = 0
-        var loggedFirst = false
-        var kexParsed = false
-        // Cap the accumulator so a server that never sends a parseable
-        // KEX_INIT doesn't grow it unbounded. 8 KiB is well above a typical
-        // KEX_INIT (~700 bytes) but small enough to bound memory.
-        var kexAccumulator = Data()
-        let kexAccumulatorLimit = 8 * 1024
         while !Task.isCancelled {
             // NWConnection.receive has only a completion-handler form; bridge
             // it to async via a continuation. The completion is @Sendable.
@@ -408,41 +390,6 @@ actor SSHTLSTransport {
                 Darwin.close(pumpFD)
                 return
             }
-            if !loggedFirst {
-                loggedFirst = true
-                // The first NW→FD chunk carries the server's SSH banner
-                // (`SSH-2.0-...\r\n`) and may or may not also carry the
-                // KEX_INIT packet (Teleport's KEX_INIT is ~704 bytes, but
-                // `NWConnection.receive` may split banner + KEX_INIT across
-                // callbacks). Dump the first 512 bytes as hex so the banner
-                // (and any KEX_INIT bytes that did arrive) are visible in the
-                // live device log. The KEX_INIT parse happens against the
-                // accumulator below, which spans chunks.
-                log.info("pump_nw_to_fd_first len=\(data.count) hex=\(Self.hexDump(data, maxBytes: 512), privacy: .public)")
-            }
-            // Diagnostic-only KEX_INIT parse. Append to the accumulator and
-            // retry as long as we haven't parsed it yet (the packet may span
-            // several `receive` callbacks). Once parsed, stop so we don't
-            // re-log the same packet every chunk. This never gates the byte
-            // forward to libssh2 — it only emits log lines.
-            if !kexParsed {
-                kexAccumulator.append(data)
-                if let parsed = Self.parseServerKexInit(kexAccumulator) {
-                    log.info("server_kex_init kex=\(parsed.kex, privacy: .public) hostkey=\(parsed.hostkey, privacy: .public) crypt_c2s=\(parsed.cryptC2S, privacy: .public) crypt_s2c=\(parsed.cryptS2C, privacy: .public) mac_c2s=\(parsed.macC2S, privacy: .public) mac_s2c=\(parsed.macS2C, privacy: .public) comp_c2s=\(parsed.compC2S, privacy: .public) comp_s2c=\(parsed.compS2C, privacy: .public)")
-                    kexParsed = true
-                    kexAccumulator.removeAll(keepingCapacity: false)
-                } else if kexAccumulator.count > kexAccumulatorLimit {
-                    // The accumulator has grown well past any plausible
-                    // KEX_INIT without a successful parse; give up and log
-                    // the skip reason against what we have so far so a live
-                    // mismatch isn't masked forever.
-                    log.info("server_kex_init parse=skipped reason=\(Self.kexInitParseSkipReason(kexAccumulator), privacy: .public) accumulated=\(kexAccumulator.count)")
-                    kexParsed = true
-                    kexAccumulator.removeAll(keepingCapacity: false)
-                } else {
-                    log.info("server_kex_init parse=pending reason=\(Self.kexInitParseSkipReason(kexAccumulator), privacy: .public) accumulated=\(kexAccumulator.count)")
-                }
-            }
             nwToFDBytes += data.count
             // Write all bytes to the pump FD (may need multiple writes).
             var written = 0
@@ -469,7 +416,6 @@ actor SSHTLSTransport {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         var fdToNWBytes: Int = 0
-        var loggedFirst = false
         while !Task.isCancelled {
             let n = Darwin.read(pumpFD, buffer, 64 * 1024)
             if n <= 0 {
@@ -478,10 +424,6 @@ actor SSHTLSTransport {
                 return
             }
             let data = Data(bytes: buffer, count: n)
-            if !loggedFirst {
-                loggedFirst = true
-                log.info("pump_fd_to_nw_first len=\(n) hex=\(Self.hexDump(data, maxBytes: 32), privacy: .public)")
-            }
             fdToNWBytes += n
             // NWConnection.send has only a completion-handler form. Bridge to
             // async + treat the completion error as a stop signal.
@@ -497,194 +439,6 @@ actor SSHTLSTransport {
             }
         }
         log.info("pump_fd_to_nw_cancelled bytes=\(fdToNWBytes)")
-    }
-
-    /// Hex-dump the first `maxBytes` of `data` for diagnostic logging.
-    /// Used to confirm the SSH banner (`SSH-2.0-...`) is flowing through
-    /// the pump in each direction.
-    nonisolated private static func hexDump(_ data: Data, maxBytes: Int) -> String {
-        let limit = min(data.count, maxBytes)
-        guard limit > 0 else { return "" }
-        var hex = ""
-        hex.reserveCapacity(limit * 2)
-        for i in 0..<limit {
-            hex += String(format: "%02x", data[i])
-        }
-        // Also include the printable ASCII prefix (helps spot `SSH-2.0-`).
-        var ascii = ""
-        for i in 0..<limit {
-            let c = data[i]
-            if c >= 0x20 && c < 0x7f {
-                ascii += String(UnicodeScalar(c))
-            } else {
-                ascii += "."
-            }
-        }
-        return "\(hex) | \(ascii)"
-    }
-
-    // MARK: - SSH KEX_INIT parser (diagnostics)
-
-    /// Parsed name-lists from an SSH `SSH_MSG_KEXINIT` (message type 20)
-    /// packet. Only the fields needed to diagnose a KEX mismatch are kept.
-    struct ServerKexInit: Equatable {
-        let kex: String
-        let hostkey: String
-        let cryptC2S: String
-        let cryptS2C: String
-        let macC2S: String
-        let macS2C: String
-        let compC2S: String
-        let compS2C: String
-    }
-
-    /// Best-effort parse of the server's first KEX_INIT from an accumulated
-    /// NW→FD byte buffer. The buffer starts with the SSH banner
-    /// (`SSH-2.0-...\r\n`), then the first binary packet, which must be
-    /// `SSH_MSG_KEXINIT` (20). Returns `nil` if the buffer does not yet
-    /// contain a complete KEX_INIT (e.g. only the banner, or the packet is
-    /// still being delivered across `NWConnection.receive` callbacks) or the
-    /// message type is unexpected; `kexInitParseSkipReason` explains why for
-    /// the log.
-    ///
-    /// Designed to be called repeatedly as the pump accumulates chunks: it is
-    /// pure and side-effect free, and returns `nil` until the full packet is
-    /// present, at which point the caller logs the result and stops parsing.
-    ///
-    /// SSH binary packet layout (RFC 4253 §6):
-    ///   uint32  packet_length   (excludes itself + MAC)
-    ///   byte    padding_length
-    ///   byte[n1] payload         (n1 = packet_length - padding_length - 1)
-    ///   byte[p] padding
-    ///   byte[m] MAC (not present before keys are agreed)
-    ///
-    /// KEXINIT payload (RFC 4253 §7.1):
-    ///   byte      SSH_MSG_KEXINIT (20)
-    ///   byte[16]  cookie
-    ///   name-list kex_algorithms
-    ///   name-list server_host_key_algorithms
-    ///   name-list encryption_algorithms_client_to_server
-    ///   name-list encryption_algorithms_server_to_client
-    ///   name-list mac_algorithms_client_to_server
-    ///   name-list mac_algorithms_server_to_client
-    ///   name-list compression_algorithms_client_to_server
-    ///   name-list compression_algorithms_server_to_client
-    ///   name-list languages_client_to_server
-    ///   name-list languages_server_to_client
-    ///   boolean   first_kex_packet_follows
-    ///   uint32    reserved
-    nonisolated static func parseServerKexInit(_ data: Data) -> ServerKexInit? {
-        // Skip the banner (everything up to and including \r\n).
-        guard let bannerEnd = firstCRLFAfterBanner(in: data) else { return nil }
-        var cursor = bannerEnd
-        guard cursor + 4 <= data.count else { return nil }
-        let packetLength = readUInt32BE(data, at: cursor)
-        cursor += 4
-        guard packetLength >= 2, cursor + Int(packetLength) <= data.count else { return nil }
-        let paddingLength = UInt32(data[cursor])
-        cursor += 1
-        // Absolute end of the payload (packet_length - padding_length - 1
-        // bytes after the padding-length byte). Bounds every name-list read.
-        let payloadEnd = bannerEnd + 4 + 1 + Int(packetLength) - Int(paddingLength) - 1
-        guard payloadEnd <= data.count else { return nil }
-        // payload[0] is the message type.
-        guard cursor < payloadEnd else { return nil }
-        let msgType = data[cursor]
-        guard msgType == 20 else { return nil }
-        cursor += 1
-        // cookie (16 bytes, opaque).
-        guard cursor + 16 <= payloadEnd else { return nil }
-        cursor += 16
-        // The next 8 name-lists are the algorithm offers we care about
-        // (skipping languages at the end). Each name-list is a uint32
-        // length + that many ASCII bytes.
-        let kex = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let hostkey = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let cryptC2S = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let cryptS2C = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let macC2S = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let macS2C = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let compC2S = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        let compS2C = readNameList(data, cursor: &cursor, payloadEnd: payloadEnd)
-        return ServerKexInit(
-            kex: kex,
-            hostkey: hostkey,
-            cryptC2S: cryptC2S,
-            cryptS2C: cryptS2C,
-            macC2S: macC2S,
-            macS2C: macS2C,
-            compC2S: compC2S,
-            compS2C: compS2C
-        )
-    }
-
-    /// Human-readable reason the KEX_INIT parse was skipped, for the log.
-    nonisolated private static func kexInitParseSkipReason(_ data: Data) -> String {
-        guard let bannerEnd = firstCRLFAfterBanner(in: data) else {
-            return "no_banner_crlf"
-        }
-        if bannerEnd + 4 > data.count { return "truncated_packet_length" }
-        let packetLength = readUInt32BE(data, at: bannerEnd)
-        if packetLength < 2 { return "packet_length_too_small len=\(packetLength)" }
-        if bannerEnd + 4 + Int(packetLength) > data.count {
-            return "packet_truncated need=\(bannerEnd + 4 + Int(packetLength)) have=\(data.count)"
-        }
-        let msgTypeOffset = bannerEnd + 4 + 1
-        if msgTypeOffset >= data.count { return "truncated_msg_type" }
-        let msgType = data[msgTypeOffset]
-        if msgType != 20 { return "unexpected_msg_type=\(msgType)" }
-        return "unknown"
-    }
-
-    /// Index just past the first `\r\n` in the SSH banner prefix, or `nil`
-    /// if the chunk does not yet contain a complete banner.
-    nonisolated private static func firstCRLFAfterBanner(in data: Data) -> Int? {
-        // The banner ends with \r\n. Scan for the first \r\n pair.
-        var i = 0
-        let limit = min(data.count, 256)
-        while i + 1 < limit {
-            if data[i] == 0x0D, data[i + 1] == 0x0A {
-                return i + 2
-            }
-            i += 1
-        }
-        return nil
-    }
-
-    /// Read a big-endian uint32 at `offset`.
-    nonisolated private static func readUInt32BE(_ data: Data, at offset: Int) -> UInt32 {
-        guard offset + 4 <= data.count else { return 0 }
-        return (UInt32(data[offset]) << 24)
-            | (UInt32(data[offset + 1]) << 16)
-            | (UInt32(data[offset + 2]) << 8)
-            | UInt32(data[offset + 3])
-    }
-
-    /// Read an SSH name-list (uint32 length + ASCII bytes) starting at
-    /// `*cursor`. Advances `*cursor` past the name-list and bounds reads
-    /// against `payloadEnd`. Returns `""` if the name-list is missing or
-    /// truncated so the caller still gets a value for every field.
-    nonisolated private static func readNameList(
-        _ data: Data,
-        cursor: inout Int,
-        payloadEnd: Int
-    ) -> String {
-        guard cursor + 4 <= payloadEnd, cursor + 4 <= data.count else {
-            return ""
-        }
-        let length = Int(readUInt32BE(data, at: cursor))
-        cursor += 4
-        guard length > 0, cursor + length <= payloadEnd, cursor + length <= data.count else {
-            // Truncated name-list: advance conservatively so the caller can
-            // still report downstream name-lists if any remain, but never
-            // advance past the payload end (guards against a huge/garbage
-            // length word reading past the buffer).
-            cursor = min(cursor + max(length, 0), payloadEnd)
-            return ""
-        }
-        let bytes = data.subdata(in: cursor..<(cursor + length))
-        cursor += length
-        return String(data: bytes, encoding: .ascii) ?? ""
     }
 
     // MARK: - PEM helpers
