@@ -99,6 +99,15 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      debug_test:
+        description: 'Run a single test with full diagnostics (sysdiagnose, log archive). Leave empty for normal PR CI.'
+        required: false
+        default: ''
+      debug_timeout:
+        description: 'Maximum test execution time (seconds) for the debug run.'
+        required: false
+        default: '600'
 
 permissions:
   contents: read
@@ -508,5 +517,125 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ui-test-screenshots-${{ matrix.shard.name }}
+          path: ${{ runner.temp }}/screenshots
+          if-no-files-found: ignore
+
+  # Debug job: run a single test with full diagnostics (sysdiagnose, log
+  # archive) for investigating flakes. Trigger via workflow_dispatch with
+  # the `debug_test` input set to the test identifier (e.g.
+  # `VVTermUITests/StatsCardsLayoutUITests/testDetailedCards...`).
+  #
+  # This job runs OUTSIDE the normal PR CI path (only on workflow_dispatch
+  # with debug_test set). It uses `-collect-test-diagnostics always` to
+  # capture the full simulator diagnostics that the normal CI path skips
+  # (which saves ~10m per failed shard). Use this when a flake needs
+  # deeper investigation than the xcresult + test.log provide.
+  debug-test:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.debug_test != ''
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Restore source mtimes
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
+        uses: irgaly/xcode-cache@v1
+        with:
+          key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
+          restore-keys: |
+            xcode27-deriveddata-${{ github.workflow }}-
+          deriveddata-directory: ${{ runner.temp }}/DerivedData
+          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          swiftpm-cache-restore-keys: |
+            xcode27-spm-
+
+      - name: Download build products
+        uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          path: ${{ runner.temp }}
+
+      - name: Extract build products
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
+          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
+
+      - name: Download Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Install xcparse
+        run: brew install chargepoint/xcparse/xcparse
+
+      - name: Run single test with full diagnostics
+        run: |
+          set -euo pipefail
+          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
+          echo "Using xctestrun manifest: $XCRUN"
+
+          export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
+          mkdir -p "$SCREENSHOT_DIR"
+          python3 - "$XCRUN" "$SCREENSHOT_DIR" <<'PY'
+          import plistlib, sys
+          path, screenshot_dir = sys.argv[1], sys.argv[2]
+          with open(path, "rb") as f:
+              data = plistlib.load(f)
+          for cfg in data.get("TestConfigurations", []):
+              for target in cfg.get("TestTargets", []):
+                  env = target.setdefault("EnvironmentVariables", {})
+                  env["SCREENSHOT_DIR"] = screenshot_dir
+                  target["UserAttachmentLifetime"] = "keepAlways"
+                  target["SystemAttachmentLifetime"] = "keepAlways"
+          with open(path, "wb") as f:
+              plistlib.dump(data, f)
+          PY
+
+          xcodebuild test-without-building \
+            -xctestrun "$XCRUN" \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -only-testing:"${{ github.event.inputs.debug_test }}" \
+            -parallel-testing-enabled \
+            -collect-test-diagnostics always \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-test-results
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
+            ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+
+      - name: Extract + upload screenshots
+        if: always()
+        run: |
+          set +e
+          export_dir="$RUNNER_TEMP/screenshots"
+          mkdir -p "$export_dir"
+          if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
+            xcparse screenshots \
+              "$RUNNER_TEMP/TestResults.xcresult" \
+              "$export_dir" 2>/dev/null
+          fi
+          find "$export_dir" -type f 2>/dev/null | head -30 || true
+      - name: Upload screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-test-screenshots
           path: ${{ runner.temp }}/screenshots
           if-no-files-found: ignore
