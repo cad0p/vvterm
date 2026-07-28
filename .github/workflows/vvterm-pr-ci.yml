@@ -459,13 +459,12 @@ jobs:
           done
           echo "Shard test args:$ONLY_TESTING_ARGS"
 
-          xcodebuild test-without-building \
+          xcodebuild test-without-building -collect-test-diagnostics never \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             $ONLY_TESTING_ARGS \
             -parallel-testing-enabled \
-            -collect-test-diagnostics never \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
           # Preserve xcodebuild's exit code for the step status, but don't
@@ -475,7 +474,8 @@ jobs:
           # collection that fires after a test failure. The diagnostic collection
           # (sysdiagnose, log archive) takes 600s (10m) per failed test and is
           # the main source of CI wall-clock waste from flakes. The xcresult
-          # bundle already contains the test failure details.
+          # bundle already contains the test failure details. Use the debug-test
+          # job (workflow_dispatch) to capture full diagnostics when needed.
           exit ${PIPESTATUS[0]}
 
       - name: Upload test results
