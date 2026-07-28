@@ -91,4 +91,57 @@ final class TeleportSFTPRoutingTests: XCTestCase {
         _ = access
         XCTAssertTrue(true, "SSHClient.supportsSFTP exists and is callable")
     }
+
+    // MARK: - SFTP-on-outer-session landmine closure
+
+    /// `SSHSession.shouldRejectSFTPOnOuterSession(authMethod:innerSessionReady:)`
+    /// is the pure safety-net decision extracted from `ensureSFTPSession()`.
+    /// When SFTP init would otherwise fall through to the OUTER (proxy)
+    /// session for a Teleport client whose inner session is NOT ready,
+    /// `ensureSFTPSession()` must surface a clear error instead of attempting
+    /// `libssh2_sftp_init` on the outer session — which fails with -22 and
+    /// poisons the outer session state so the subsequent subsystem request
+    /// also fails.
+    ///
+    /// The decision returns `true` (reject) ONLY for the Teleport auth method
+    /// AND when the inner session is not ready. For non-Teleport (outer
+    /// session supports SFTP directly) and for Teleport-with-ready-inner
+    /// (SFTP routes to the inner session), it returns `false`.
+    func testShouldRejectSFTPOnOuterSessionForTeleportWhenInnerNotReady() {
+        XCTAssertTrue(
+            SSHSession.shouldRejectSFTPOnOuterSession(
+                authMethod: .faceIDTeleport,
+                innerSessionReady: false
+            ),
+            "Teleport without a ready inner session must not run SFTP on the outer session"
+        )
+    }
+
+    func testShouldNotRejectSFTPOnOuterSessionForTeleportWhenInnerReady() {
+        // Inner session ready: SFTP routes to the inner session via
+        // `shouldRouteSFTPToInnerSession`; the outer-session fallthrough is
+        // never reached, so the rejection guard must not fire.
+        XCTAssertFalse(
+            SSHSession.shouldRejectSFTPOnOuterSession(
+                authMethod: .faceIDTeleport,
+                innerSessionReady: true
+            ),
+            "Teleport with a ready inner session must not reject outer-session SFTP"
+        )
+    }
+
+    func testShouldNotRejectSFTPOnOuterSessionForNonTeleport() {
+        // Non-Teleport auth methods use the direct outer session, which
+        // supports SFTP. They must never be rejected at the outer-session
+        // fallthrough.
+        for method: AuthMethod in [.password, .sshKey, .sshKeyWithPassphrase] {
+            XCTAssertFalse(
+                SSHSession.shouldRejectSFTPOnOuterSession(
+                    authMethod: method,
+                    innerSessionReady: false
+                ),
+                "\(method) must never be rejected at the outer-session SFTP fallthrough"
+            )
+        }
+    }
 }

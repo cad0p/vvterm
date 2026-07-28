@@ -142,4 +142,113 @@ final class ServerStatsCollectorTeleportTests: XCTestCase {
             "Teleport auth method must match the prepare guard"
         )
     }
+
+    // MARK: - Environment resolution must establish the inner session first
+
+    /// `SSHClient.shouldPrepareInnerSessionBeforeResolvingEnvironment(...)`
+    /// is the pure decision extracted from `remoteEnvironment()` so it can
+    /// be unit-tested without a live libssh2 session.
+    ///
+    /// `remoteEnvironment()` and `remoteTerminalType()` resolve the remote
+    /// platform/shell/terminal-type by running `execute(...)` probes. For
+    /// Teleport the outer session is the PROXY, which rejects exec with -22;
+    /// those probes must run on the INNER (target-node) session. If the inner
+    /// session is not ready when `remoteEnvironment()` is called, the client
+    /// must establish it (via `prepareTeleportInnerSession()`) BEFORE running
+    /// the probes — otherwise the probes exec on the outer session, fail
+    /// with -22, and poison the outer session so the subsequent subsystem
+    /// request also fails.
+    ///
+    /// The decision returns `true` ONLY for the Teleport auth method AND when
+    /// the inner session is not yet ready. For non-Teleport (outer session
+    /// supports exec directly) and for Teleport-with-ready-inner (prepare is
+    /// a no-op idempotent guard), it returns `false`.
+    func testShouldPrepareInnerSessionBeforeResolvingEnvironmentForTeleportWhenNotReady() {
+        XCTAssertTrue(
+            SSHClient.shouldPrepareInnerSessionBeforeResolvingEnvironment(
+                authMethod: .faceIDTeleport,
+                innerSessionReady: false
+            ),
+            "Teleport with no inner session yet must prepare it before resolving env"
+        )
+    }
+
+    func testShouldNotPrepareInnerSessionBeforeResolvingEnvironmentForTeleportWhenReady() {
+        // Inner session already established (e.g. shell already started):
+        // prepare is an idempotent no-op, but the decision must still return
+        // `false` so callers don't redundantly invoke prepare on every resolve.
+        XCTAssertFalse(
+            SSHClient.shouldPrepareInnerSessionBeforeResolvingEnvironment(
+                authMethod: .faceIDTeleport,
+                innerSessionReady: true
+            ),
+            "Teleport with a ready inner session must not re-prepare before resolving env"
+        )
+    }
+
+    func testShouldNotPrepareInnerSessionBeforeResolvingEnvironmentForNonTeleport() {
+        // Non-Teleport auth methods use the direct outer session, which
+        // supports exec directly. They must never prepare an inner session.
+        for method: AuthMethod in [.password, .sshKey, .sshKeyWithPassphrase] {
+            XCTAssertFalse(
+                SSHClient.shouldPrepareInnerSessionBeforeResolvingEnvironment(
+                    authMethod: method,
+                    innerSessionReady: false
+                ),
+                "\(method) must never prepare an inner session before resolving env"
+            )
+        }
+    }
+
+    // MARK: - Exec-on-outer-session landmine closure
+
+    /// `SSHSession.shouldRejectExecOnOuterSession(authMethod:innerSessionReady:)`
+    /// is the pure safety-net decision extracted from `execute()`. When exec
+    /// would otherwise fall through to the OUTER (proxy) session for a
+    /// Teleport client whose inner session is NOT ready, `execute()` must
+    /// throw `notConnected` instead — running exec on the outer session
+    /// fails with -22 and poisons the outer session state so the subsequent
+    /// subsystem request also fails.
+    ///
+    /// The decision returns `true` (reject) ONLY for the Teleport auth method
+    /// AND when the inner session is not ready. For non-Teleport (outer
+    /// session supports exec directly) and for Teleport-with-ready-inner (exec
+    /// routes to the inner session), it returns `false`.
+    func testShouldRejectExecOnOuterSessionForTeleportWhenInnerNotReady() {
+        XCTAssertTrue(
+            SSHSession.shouldRejectExecOnOuterSession(
+                authMethod: .faceIDTeleport,
+                innerSessionReady: false
+            ),
+            "Teleport without a ready inner session must not exec on the outer session"
+        )
+    }
+
+    func testShouldNotRejectExecOnOuterSessionForTeleportWhenInnerReady() {
+        // Inner session ready: exec routes to the inner session via
+        // `shouldRouteExecToInnerSession`; the outer-session fallthrough is
+        // never reached, so the rejection guard must not fire.
+        XCTAssertFalse(
+            SSHSession.shouldRejectExecOnOuterSession(
+                authMethod: .faceIDTeleport,
+                innerSessionReady: true
+            ),
+            "Teleport with a ready inner session must not reject outer-session exec"
+        )
+    }
+
+    func testShouldNotRejectExecOnOuterSessionForNonTeleport() {
+        // Non-Teleport auth methods use the direct outer session, which
+        // supports exec. They must never be rejected at the outer-session
+        // fallthrough.
+        for method: AuthMethod in [.password, .sshKey, .sshKeyWithPassphrase] {
+            XCTAssertFalse(
+                SSHSession.shouldRejectExecOnOuterSession(
+                    authMethod: method,
+                    innerSessionReady: false
+                ),
+                "\(method) must never be rejected at the outer-session exec fallthrough"
+            )
+        }
+    }
 }
