@@ -206,6 +206,15 @@ Safe refactor expectation:
 - Do not rely on "checked on my phone" or manual Xcode testing as the only validation for keyboard/input regressions. Keep simulator UI tests or unit tests that can be rerun by future agents.
 - Before finishing non-documentation code changes, run the narrowest reliable build/test commands that exercise the touched behavior and report exactly what was run. If a test cannot run because of tooling or environment issues, report that as a residual risk.
 
+### CI Performance Budget (target wall-clock ≤ 20m)
+
+- GitHub Actions caps this repo at **5 concurrent macOS jobs**. The workflow is sized to fit that cap with zero queueing: `build` (1) runs first, then `unit-tests` (1) + 4 `ui-tests` shards (4) = 5 in parallel. Do NOT add a 5th UI shard — it would queue behind a finished job and add its full runtime to the wall-clock.
+- **Monitor per-shard runtime on every CI run.** Pull `gh run view <id> --json jobs` and compute each job's `completedAt - startedAt`. The wall-clock is `build` + `max(shard runtimes)` because the test phase is fully parallel. The slowest shard is the bottleneck.
+- **Rebalance shards when the max/min ratio exceeds ~1.3.** Move tests from the slowest shard to the fastest shard via LPT bin-packing of measured per-method runtimes (extract from the `test.log` `Test Case '-[...]' passed (N seconds)` lines). Keep the shard count at 4.
+- **Flaky tests are a performance bug, not just a correctness bug.** A test that times out burns the full simulator diagnostic-collection budget (600s = 10m) before failing. When a shard's runtime is ~10m longer than its peers, suspect a timeout/hang, not a slow test. File a GitHub Issue, and either fix the flake, mark `XCTSkip` with a reference to the issue, or quarantine the test into a separate non-blocking job until fixed. Do not let flakes persist in the hot path.
+- **Shorten tests that take too long.** A single UI test over ~60s is a candidate for optimization: reduce sleep/animation waits, avoid full app relaunches where a view-harness suffices, split into smaller focused tests, or move the logic to a unit test. The `notice-outlier` shard pattern (pair the one slow outlier with the smallest other tests) is a last resort, not a permanent home.
+- The `unit-tests` job should stay under ~5m. If it creeps past that, the test target is recompiling SPM deps it should reuse from the build artifact — check the DerivedData cache hit rate and the `IgnoreFileSystemDeviceInodeChanges` / mtime-restore steps.
+
 ## Commits
 
 - Use **atomic commits**.
