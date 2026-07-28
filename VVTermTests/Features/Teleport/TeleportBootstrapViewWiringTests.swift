@@ -247,8 +247,12 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         let expectation = expectation(description: "onSuccess fired with bootstrap result")
 
         // Poll for up to 5s — the mock POST returns in ~150ms, so 5s is ample
-        // even with parent re-evals racing.
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+        // even with parent re-evals racing. Capture the timer so it is
+        // invalidated when `wait` returns (on timeout the repeating timer
+        // would otherwise keep firing forever, pinning the host process and
+        // tripping the simulator's 600s diagnostic-collection timeout →
+        // spurious `TEST FAILED`).
+        let pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
             Task { @MainActor in
                 if onSuccessResult.value != nil {
                     expectation.fulfill()
@@ -256,6 +260,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 }
             }
         }
+        defer { pollTimer.invalidate() }
 
         wait(for: [expectation], timeout: 5.0)
 
@@ -293,7 +298,9 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
         let expectation = expectation(description: "onSuccess fired with bootstrap result")
 
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+        // See testBootstrapSuccess_firesOnSuccess_whenParentReEvaluatesDuringPost
+        // for why the timer is captured + invalidated in a defer.
+        let pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
             Task { @MainActor in
                 if onSuccessResult.value != nil {
                     expectation.fulfill()
@@ -301,6 +308,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 }
             }
         }
+        defer { pollTimer.invalidate() }
 
         wait(for: [expectation], timeout: 5.0)
 
