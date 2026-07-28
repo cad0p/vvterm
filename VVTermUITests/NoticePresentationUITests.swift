@@ -220,12 +220,6 @@ final class NoticePresentationUITests: XCTestCase {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US"
         ] + additionalArguments
-        // Under CI load (4 UI shards + unit-tests in parallel), the simulator
-        // can take >60s to launch the app. The default XCUITest launch timeout
-        // (60s) is insufficient — increase to 180s to absorb the load.
-        // See issue #43 for the "Timed out while launching application via Xcode"
-        // flake that affects multiple notice tests.
-        app.launchTimeout = 180
         app.launch()
         return app
     }

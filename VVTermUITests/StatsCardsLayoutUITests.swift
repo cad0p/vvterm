@@ -73,12 +73,6 @@ final class StatsCardsLayoutUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO"
         ] + extraArguments
-        // Under CI load (4 UI shards + unit-tests in parallel), the simulator
-        // can take >60s to launch the app. The default XCUITest launch timeout
-        // (60s) is insufficient — increase to 180s to absorb the load.
-        // See issue #43 for the "Timed out while launching application via Xcode"
-        // flake that affects multiple stats layout tests.
-        app.launchTimeout = 180
         app.launch()
 
         XCTAssertTrue(container.waitForExistence(timeout: 8))
