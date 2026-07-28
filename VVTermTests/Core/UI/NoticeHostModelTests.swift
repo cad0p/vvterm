@@ -43,7 +43,17 @@ struct NoticeHostModelTests {
             )
         )
 
-        try await Task.sleep(for: .milliseconds(100))
+        // Poll instead of a fixed sleep: the dismissal is Task.sleep(20ms) +
+        // a MainActor hop, which can exceed a fixed 100ms wait on a loaded CI
+        // runner (observed flake in GitHub Actions).
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !host.bottomOperations.isEmpty {
+            if ContinuousClock.now > deadline {
+                Issue.record("auto-dismiss did not fire within 3s")
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         #expect(host.bottomOperations.isEmpty)
     }
