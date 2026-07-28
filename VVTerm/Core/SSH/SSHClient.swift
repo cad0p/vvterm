@@ -392,8 +392,39 @@ actor SSHClient {
     }
 
     func remoteEnvironment(forceRefresh: Bool = false) async -> RemoteEnvironment {
-        if !forceRefresh, let resolvedRemoteEnvironment {
+        // Teleport's outer session is the PROXY, which rejects exec with -22.
+        // The resolver's exec probes must run on the INNER (target-node)
+        // session, established by `prepareTeleportInnerSession()`. If the
+        // inner session is not ready yet, establish it BEFORE resolving so
+        // the probes route to the inner session (never the outer). If the
+        // inner session can't be established, swallow the error — the
+        // resolver's exec probes will themselves fail gracefully and return
+        // `.unknown`, matching the prior behavior. This makes every caller of
+        // remoteEnvironment()/remoteTerminalType() safe without each one
+        // needing to know about Teleport.
+        let authMethod = connectedServer?.authMethod ?? .password
+        let innerReady = await (session?.isInnerSessionReady ?? false)
+        if !forceRefresh,
+           let resolvedRemoteEnvironment,
+           // For Teleport, a cached `.unknown` platform means env was resolved
+           // before the inner session existed (the prepare failed or hadn't
+           // run yet). Treat it as a miss when the inner session is now ready
+           // so we re-resolve against the real target node.
+           !(authMethod == .faceIDTeleport && innerReady && resolvedRemoteEnvironment.platform == .unknown) {
             return resolvedRemoteEnvironment
+        }
+
+        if Self.shouldPrepareInnerSessionBeforeResolvingEnvironment(
+            authMethod: authMethod,
+            innerSessionReady: innerReady
+        ) {
+            do {
+                try await prepareTeleportInnerSession()
+            } catch {
+                logger.warning(
+                    "Failed to prepare Teleport inner session before resolving environment: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
 
         let token = startupTrace?.begin(.remoteEnvironment)
@@ -558,29 +589,15 @@ actor SSHClient {
         }
 
         let connectionMode = connectedServer?.connectionMode ?? .standard
-        let isTeleport = connectedServer?.authMethod == .faceIDTeleport
-        // For Teleport, the outer session is the PROXY — it rejects exec/pty/shell.
-        // remoteEnvironment() and remoteTerminalType() exec on the outer session,
-        // which fails with -22 and leaves the session in a bad state. Skip them
-        // here; they'll run on the inner (target node) session after the second
-        // handshake inside startValidatedSSHShell.
-        let environment: RemoteEnvironment
-        let terminalType: RemoteTerminalType
-        if isTeleport {
-            environment = RemoteEnvironment(
-                platform: .unknown,
-                shellProfile: .init(family: .unknown, executableName: nil, shellName: nil),
-                activeShellName: nil,
-                powerShellExecutable: nil
-            )
-            terminalType = .xterm256Color
-            try validateShellStartupSession(sshSession)
-        } else {
-            environment = await remoteEnvironment()
-            try validateShellStartupSession(sshSession)
-            terminalType = await remoteTerminalType()
-            try validateShellStartupSession(sshSession)
-        }
+        // Resolve unconditionally: for Teleport, remoteEnvironment() now
+        // establishes the inner (target-node) session first, so the resolver's
+        // exec probes route to the inner session (never the outer proxy).
+        // startShellViaTeleportProxy later calls prepareTeleportInnerSession()
+        // again — that's an idempotent no-op when the inner session is ready.
+        let environment = await remoteEnvironment()
+        try validateShellStartupSession(sshSession)
+        let terminalType = await remoteTerminalType()
+        try validateShellStartupSession(sshSession)
         if connectionMode != .mosh {
             let sshShell = try await startValidatedSSHShell(
                 using: sshSession,
@@ -949,6 +966,33 @@ actor SSHClient {
             throw SSHError.notConnected
         }
         try await session.prepareTeleportInnerSession()
+        // The inner (target-node) session is now established. If env/terminal
+        // type was resolved before the inner session existed (e.g. a caller
+        // invoked remoteEnvironment() before the shell started and got
+        // `.unknown` defaults because the prepare failed), the cached values
+        // are stale. Clear them so the next remoteEnvironment(forceRefresh:
+        // false) call re-resolves against the now-ready inner session.
+        if connectedServer?.authMethod == .faceIDTeleport {
+            resolvedRemoteEnvironment = nil
+            resolvedRemoteTerminalType = nil
+        }
+    }
+
+    /// Pure decision extracted from `remoteEnvironment()` so it can be unit-
+    /// tested without a live libssh2 session. Returns `true` ONLY for the
+    /// Teleport auth method AND when the inner (target-node) session is not
+    /// yet ready — the client must establish the inner session BEFORE running
+    /// the resolver's exec probes, otherwise the probes exec on the outer
+    /// PROXY session (fails with -22 and poisons the session).
+    ///
+    /// For non-Teleport (outer session supports exec directly) and for
+    /// Teleport-with-ready-inner (prepare is an idempotent no-op), returns
+    /// `false`.
+    nonisolated static func shouldPrepareInnerSessionBeforeResolvingEnvironment(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && !innerSessionReady
     }
 
     // MARK: - Mosh
@@ -1547,6 +1591,18 @@ actor SSHSession {
                 && innerAtomicSocket.isUsable
         }
         return true
+    }
+
+    /// Returns `true` when the Teleport INNER (target-node) session has been
+    /// established by `prepareTeleportInnerSession()` (non-nil libssh2
+    /// session). This is a lightweight liveness check used by
+    /// `SSHClient.remoteEnvironment()` to decide whether to prepare the inner
+    /// session before running exec probes — distinct from `supportsExec`,
+    /// which additionally gates on socket usability and active state. For
+    /// non-Teleport auth methods this returns `false` (there is no inner
+    /// session, and none is needed).
+    var isInnerSessionReady: Bool {
+        config.authMethod == .faceIDTeleport && innerLibssh2Session != nil
     }
 
     /// Returns `true` when SFTP (remote file browser) can currently succeed
@@ -4455,6 +4511,19 @@ actor SSHSession {
             return try await enqueueExecRequest(command, isInner: true)
         }
 
+        // Safety net: Teleport-without-inner must NEVER exec on the outer
+        // proxy session — it would fail with -22 and poison the outer
+        // session state so the subsequent subsystem request also fails.
+        // Callers that want exec for a Teleport connection must first
+        // establish the inner session via `prepareTeleportInnerSession()`
+        // (or `SSHClient.remoteEnvironment()`, which does it automatically).
+        if Self.shouldRejectExecOnOuterSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        ) {
+            throw SSHError.notConnected
+        }
+
         guard libssh2Session != nil else {
             throw SSHError.notConnected
         }
@@ -4472,6 +4541,24 @@ actor SSHSession {
         innerSessionReady: Bool
     ) -> Bool {
         authMethod == .faceIDTeleport && innerSessionReady
+    }
+
+    /// Pure safety-net decision extracted from `execute()` so it can be unit-
+    /// tested without a live libssh2 session. Returns `true` ONLY for the
+    /// Teleport auth method AND when the inner (target-node) session is NOT
+    /// ready — exec must be rejected in this case rather than falling through
+    /// to the outer PROXY session, which rejects exec with -22 and poisons
+    /// the outer session state so the subsequent subsystem request also
+    /// fails.
+    ///
+    /// For non-Teleport (outer session supports exec directly) and for
+    /// Teleport-with-ready-inner (exec routes to the inner session via
+    /// `shouldRouteExecToInnerSession`), returns `false`.
+    nonisolated static func shouldRejectExecOnOuterSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && !innerSessionReady
     }
 
     /// Pure routing decision extracted from `ensureSFTPSession()` so it can
@@ -4492,6 +4579,24 @@ actor SSHSession {
         innerSessionReady: Bool
     ) -> Bool {
         authMethod == .faceIDTeleport && innerSessionReady
+    }
+
+    /// Pure safety-net decision extracted from `ensureSFTPSession()` so it
+    /// can be unit-tested without a live libssh2 session. Returns `true` ONLY
+    /// for the Teleport auth method AND when the inner (target-node) session
+    /// is NOT ready — SFTP init must be rejected in this case rather than
+    /// falling through to the outer PROXY session, which rejects the SFTP
+    /// subsystem request with -22 and poisons the outer session state so
+    /// the subsequent subsystem request also fails.
+    ///
+    /// For non-Teleport (outer session supports SFTP directly) and for
+    /// Teleport-with-ready-inner (SFTP routes to the inner session via
+    /// `shouldRouteSFTPToInnerSession`), returns `false`.
+    nonisolated static func shouldRejectSFTPOnOuterSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && !innerSessionReady
     }
 
     private func enqueueExecRequest(_ command: String, isInner: Bool) async throws -> String {
@@ -4577,6 +4682,21 @@ actor SSHSession {
 
                 throw Self.remoteFileError(from: nil, operation: "start SFTP session", path: nil)
             }
+        }
+
+        // Safety net: Teleport-without-inner must NEVER run SFTP on the
+        // outer proxy session — `libssh2_sftp_init` on the PROXY fails with
+        // -22 and poisons the outer session state so the subsequent
+        // subsystem request also fails. Callers (the SFTP adapter already
+        // calls `prepareTeleportInnerSession()` before SFTP init) should not
+        // reach this branch, but guard defensively.
+        if Self.shouldRejectSFTPOnOuterSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        ) {
+            throw RemoteFileBrowserError.failed(
+                String(localized: "The Teleport target node session is not ready for file browsing.")
+            )
         }
 
         guard let session = libssh2Session else {
