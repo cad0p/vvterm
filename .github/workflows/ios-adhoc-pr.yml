@@ -1,0 +1,476 @@
+# ios-adhoc-pr — per-PR ad-hoc OTA distribution (pcad.it-infra #154 Phase 1).
+#
+# Signs the unsigned Release .xcarchive produced by the `ota-archive` job of
+# "VVTerm PR CI" with the ad-hoc provisioning profiles, mints a ~900s
+# scoped R2 credential via Teleport Machine ID → Vault JWT → cloudflare
+# secrets engine, uploads the IPA + install manifest to the ota-builds
+# bucket (served at https://ota.pcad.it), and posts a sticky PR comment with
+# the tap-to-install page.
+#
+# SECURITY SHAPE — why this is a separate workflow_run workflow:
+#   - The `name:` (`ios-adhoc-pr`) and the effective ref (`refs/heads/main`,
+#     because workflow_run always executes the default-branch workflow file)
+#     are HARD-PINNED in two Tier-0, human-applied allow rules:
+#       * Teleport join token  ci-vvterm-ota-bot  (pcad.it-infra
+#         teleport/bot-vvterm-ota-token.yaml, scripts/073)
+#       * Vault JWT role       ci-vvterm-ota      (pcad.it-infra
+#         vault/jwt/role-ci-vvterm-ota.json, scripts/072)
+#     Renaming this workflow or moving these steps into a pull_request
+#     workflow breaks the binding until 072/073 are re-run — deliberately.
+#   - This job NEVER checks out or executes PR code. It only signs bytes
+#     produced as an artifact by the untrusted PR CI run. The Apple
+#     distribution certificate (long-lived) and the Vault-derived R2
+#     credential (short-lived, pr-<N>/ prefix only) never share a job with
+#     untrusted code — invariant #3 (runner-held = short-lived only).
+#   - The R2 parent token never leaves Vault; the derived triple minted here
+#     expires in ~900s and is scoped to bucket ota-builds, prefix pr-<N>/*.
+#     pr-* objects auto-expire after 7 days via the bucket lifecycle rule
+#     (pcad.it-infra terraform/cloudflare_r2.tf) — no cleanup workflow, by
+#     design.
+#
+# Triggering:
+#   - workflow_run: fires when "VVTerm PR CI" completes for a pull_request,
+#     regardless of test conclusions (device smoke builds are wanted even
+#     when a UI shard flakes). Gated in-job on the run's `ota-archive` job
+#     having succeeded.
+#   - workflow_dispatch: manual verification — needs the VVTerm PR CI run id
+#     to pull the artifact from, and the PR number for the prefix/comment.
+#     NOTE: this workflow only becomes triggerable once it exists on main
+#     (workflow_run/workflow_dispatch both read the workflow file from the
+#     default branch).
+#
+# Cost: ~3-5 min on xcode-27 (same toolchain that produced the archive;
+# export-only, no compilation).
+
+name: ios-adhoc-pr
+
+on:
+  workflow_run:
+    workflows: ["VVTerm PR CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: "VVTerm PR CI run ID whose ota-unsigned-archive artifact to sign"
+        required: true
+        type: string
+      pr_number:
+        description: "PR number (R2 prefix pr-<N> and comment target)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read          # cross-run artifact download (run-id)
+  id-token: write        # Teleport github join + Vault OIDC audience JWT
+  pull-requests: write   # sticky PR comment
+
+concurrency:
+  group: ios-adhoc-pr-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sign-and-publish:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.pull_requests[0].number != null)
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      TELEPORT_PROXY: teleport.pcad.it:443
+      # The bot token VALUE is the Teleport token resource NAME (not a
+      # secret) — authentication is the run's GitHub OIDC JWT, verified
+      # against the Tier-0 allow rules (repository + ref=refs/heads/main +
+      # workflow=ios-adhoc-pr).
+      TELEPORT_BOT_TOKEN: ci-vvterm-ota-bot
+      VAULT_JWT_ROLE: ci-vvterm-ota
+      VAULT_OIDC_AUDIENCE: vault.pcad.it
+      VAULT_LOCAL_ADDR: http://127.0.0.1:18200
+      R2_BUCKET: ota-builds
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      OTA_BASE_URL: https://ota.pcad.it
+      APP_BUNDLE_ID: it.pcad.vvterm
+      LIVE_ACTIVITY_BUNDLE_ID: it.pcad.vvterm.liveactivity
+
+    steps:
+      - name: Resolve run context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "PR_NUMBER=${{ inputs.pr_number }}" >> "$GITHUB_ENV"
+            echo "SOURCE_RUN_ID=${{ inputs.ci_run_id }}" >> "$GITHUB_ENV"
+            SHA="$(gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.ci_run_id }}" --jq '.head_sha')"
+            echo "HEAD_SHA=$SHA" >> "$GITHUB_ENV"
+          else
+            echo "PR_NUMBER=${{ github.event.workflow_run.pull_requests[0].number }}" >> "$GITHUB_ENV"
+            echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+            echo "HEAD_SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Validate inputs + secrets
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_DIST_CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_ADHOC_PROFILE_B64: ${{ secrets.IOS_ADHOC_PROFILE_B64 }}
+          IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64: ${{ secrets.IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::error::PR_NUMBER '${PR_NUMBER}' is not numeric — refusing to build an R2 prefix from it."
+            exit 1
+          fi
+          for name in \
+            IOS_TEAM_ID IOS_DIST_CERT_P12_B64 IOS_DIST_CERT_PASSWORD \
+            IOS_ADHOC_PROFILE_B64 IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64 R2_ACCOUNT_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required secret/variable: $name"
+              exit 1
+            fi
+          done
+
+      - name: Check source run produced the unsigned archive
+        # Only the ota-archive job matters — test shard conclusions must not
+        # block a device smoke build. Missing/expired artifact → skip quietly
+        # (e.g. runs that predate the ota-archive job).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api "repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name == "ota-archive") | .conclusion')"
+          if [[ "$conclusion" != "success" ]]; then
+            echo "::notice::ota-archive conclusion in run ${SOURCE_RUN_ID} is '${conclusion:-missing}' — no OTA build to publish."
+            exit 0
+          fi
+          artifact_id="$(gh api "repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name == "ota-unsigned-archive" and (.expired | not)) | .id' | head -1)"
+          if [[ -z "$artifact_id" ]]; then
+            echo "::notice::No live ota-unsigned-archive artifact in run ${SOURCE_RUN_ID} — nothing to do."
+            exit 0
+          fi
+
+      - name: Download unsigned archive artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ota-unsigned-archive
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/ota
+
+      - name: Extract unsigned archive
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sign"
+          tar -xzf "$RUNNER_TEMP/ota/ota-unsigned-archive.tar.gz" -C "$RUNNER_TEMP/sign"
+          ARCHIVE_PATH="$(find "$RUNNER_TEMP/sign" -name '*.xcarchive' -maxdepth 2 | head -1)"
+          if [[ -z "$ARCHIVE_PATH" ]]; then
+            echo "::error::No .xcarchive found in artifact"
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+
+      - name: Install signing certificate and ad-hoc profiles
+        # Same keychain dance as the TestFlight workflow, with the ad-hoc
+        # profiles. The Apple Distribution cert is shared with TestFlight;
+        # only the profiles are ad-hoc specific.
+        env:
+          IOS_DIST_CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_ADHOC_PROFILE_B64: ${{ secrets.IOS_ADHOC_PROFILE_B64 }}
+          IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64: ${{ secrets.IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/dist-cert.p12"
+          APP_PROFILE_PATH="$RUNNER_TEMP/adhoc.mobileprovision"
+          LIVE_ACTIVITY_PROFILE_PATH="$RUNNER_TEMP/live-activity-adhoc.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+          echo "$IOS_DIST_CERT_P12_B64" | base64 --decode > "$CERT_PATH"
+          echo "$IOS_ADHOC_PROFILE_B64" | base64 --decode > "$APP_PROFILE_PATH"
+          echo "$IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64" | base64 --decode > "$LIVE_ACTIVITY_PROFILE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          install_profile() {
+            local profile_path="$1"
+            local env_name="$2"
+            local profile_uuid profile_name
+
+            profile_uuid="$(security cms -D -i "$profile_path" | plutil -extract UUID raw -)"
+            profile_name="$(security cms -D -i "$profile_path" | plutil -extract Name raw -)"
+            cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+            echo "$env_name=$profile_name" >> "$GITHUB_ENV"
+          }
+
+          install_profile "$APP_PROFILE_PATH" "APP_PROVISIONING_PROFILE_SPECIFIER"
+          install_profile "$LIVE_ACTIVITY_PROFILE_PATH" "LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER"
+
+      - name: Export ad-hoc signed IPA
+        env:
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          EXPORT_PATH="$RUNNER_TEMP/export"
+          EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
+
+          # method=release-testing is ad-hoc distribution in Xcode 15.3+
+          # (the legacy `ad-hoc` value was renamed). signingStyle=manual +
+          # provisioningProfiles dict re-signs the unsigned archive per
+          # target — this is the step that holds the long-lived Apple
+          # signing material, kept strictly away from PR code.
+          cat > "$EXPORT_OPTIONS" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>destination</key>
+              <string>export</string>
+              <key>method</key>
+              <string>release-testing</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>manageAppVersionAndBuildNumber</key>
+              <false/>
+          </dict>
+          </plist>
+          EOF
+
+          /usr/libexec/PlistBuddy -c "Add :teamID string $TEAM_ID" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$APP_BUNDLE_ID string $APP_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$LIVE_ACTIVITY_BUNDLE_ID string $LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" "$EXPORT_OPTIONS"
+
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS" \
+            | tee "$RUNNER_TEMP/xcodebuild-export.log"
+
+          IPA_PATH="$EXPORT_PATH/VVTerm.ipa"
+          if [[ ! -f "$IPA_PATH" ]]; then
+            echo "::error::IPA not found at $IPA_PATH"
+            ls -la "$EXPORT_PATH" >&2
+            exit 1
+          fi
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+
+      - name: Generate install manifest + landing page
+        # itms-services:// links are not clickable inside GitHub comments
+        # (protocol-sanitized), so we publish a tiny per-PR landing page
+        # whose button carries the itms-services URL — tap-to-install from
+        # Safari on a registered device.
+        run: |
+          set -euo pipefail
+
+          OUT_DIR="$RUNNER_TEMP/ota-out/pr-${PR_NUMBER}"
+          mkdir -p "$OUT_DIR"
+          cp "$IPA_PATH" "$OUT_DIR/VVTerm.ipa"
+
+          unzip -q "$IPA_PATH" -d "$RUNNER_TEMP/ipa"
+          INFO_PLIST="$RUNNER_TEMP/ipa/Payload/VVTerm.app/Info.plist"
+          VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")"
+          BUILD="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST")"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")"
+          MANIFEST_URL="${OTA_BASE_URL}/pr-${PR_NUMBER}/manifest.plist"
+          IPA_URL="${OTA_BASE_URL}/pr-${PR_NUMBER}/VVTerm.ipa"
+
+          cat > "$OUT_DIR/manifest.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>items</key>
+              <array>
+                  <dict>
+                      <key>assets</key>
+                      <array>
+                          <dict>
+                              <key>kind</key>
+                              <string>software-package</string>
+                              <key>url</key>
+                              <string>${IPA_URL}</string>
+                          </dict>
+                      </array>
+                      <key>metadata</key>
+                      <dict>
+                          <key>bundle-identifier</key>
+                          <string>${BUNDLE_ID}</string>
+                          <key>bundle-version</key>
+                          <string>${VERSION}</string>
+                          <key>kind</key>
+                          <string>software</string>
+                          <key>title</key>
+                          <string>VVTerm PR ${PR_NUMBER}</string>
+                      </dict>
+                  </dict>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+          cat > "$OUT_DIR/index.html" <<EOF
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>VVTerm PR ${PR_NUMBER} — ad-hoc build</title>
+            <style>
+              body { font-family: -apple-system, sans-serif; margin: 3rem auto; max-width: 34rem; padding: 0 1rem; }
+              a.button { display: block; padding: 1rem; text-align: center; background: #0a7cff; color: white;
+                         border-radius: 12px; text-decoration: none; font-size: 1.2rem; }
+              code { word-break: break-all; }
+              .meta { color: #666; font-size: 0.9rem; }
+            </style>
+          </head>
+          <body>
+            <h1>VVTerm — PR ${PR_NUMBER}</h1>
+            <p class="meta">Commit <code>${HEAD_SHA}</code><br>
+            Version ${VERSION} (${BUILD}) · ad-hoc · expires 7 days after upload</p>
+            <p><a class="button" href="itms-services://?action=download-manifest&amp;url=${MANIFEST_URL}">Install on this device</a></p>
+            <p class="meta">Requires a device UDID registered in the ad-hoc profile.
+            Raw manifest: <code>${MANIFEST_URL}</code></p>
+          </body>
+          </html>
+          EOF
+
+          echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=${VERSION} (${BUILD})" >> "$GITHUB_ENV"
+
+      - name: Install Teleport client (tbot + tsh)
+        uses: teleport-actions/setup@v1
+        with:
+          version: auto
+          proxy: ${{ env.TELEPORT_PROXY }}
+
+      - name: Install CLI tools
+        run: |
+          set -euo pipefail
+          command -v jq  >/dev/null || brew install jq
+          command -v aws >/dev/null || brew install awscli
+          command -v vault >/dev/null || brew install vault
+          aws --version
+          vault version
+
+      - name: Mint short-lived R2 credential and publish to ota.pcad.it
+        # Everything that depends on the app tunnel MUST live in this single
+        # step — background processes do not survive across run: steps
+        # (pcad.it-infra docs/teleport-machine-id-bootstrap.md, gotcha #4).
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tbot-vault
+
+          cleanup() {
+            [[ -f /tmp/tbot-vault.pid ]] && kill "$(cat /tmp/tbot-vault.pid)" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          tbot start application-tunnel \
+            --join-method=github \
+            --token="${TELEPORT_BOT_TOKEN}" \
+            --proxy-server="${TELEPORT_PROXY}" \
+            --app=vault \
+            --listen=tcp://127.0.0.1:18200 \
+            --storage=file:///tmp/tbot-vault \
+            > /tmp/tbot-vault.log 2>&1 &
+          echo $! > /tmp/tbot-vault.pid
+
+          echo "Waiting for vault tunnel..."
+          for i in $(seq 1 60); do
+            nc -z 127.0.0.1 18200 && break
+            sleep 1
+          done
+          nc -z 127.0.0.1 18200 || { echo "vault tunnel not up"; tail -30 /tmp/tbot-vault.log | grep -iv 'token\|jwt\|cert' || true; exit 1; }
+
+          # GitHub OIDC JWT for Vault (audience vault.pcad.it). The Vault JWT
+          # role ci-vvterm-ota binds repository + ref=refs/heads/main +
+          # workflow=ios-adhoc-pr — this only succeeds because workflow_run
+          # executes the default-branch workflow file.
+          token_json="$(curl -fsSL \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${VAULT_OIDC_AUDIENCE}")"
+          jwt="$(printf '%s' "$token_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+
+          export VAULT_ADDR="${VAULT_LOCAL_ADDR}"
+          login_json="$(vault write -format=json "auth/jwt/login" "role=${VAULT_JWT_ROLE}" "jwt=${jwt}")"
+          export VAULT_TOKEN="$(printf '%s' "$login_json" | jq -r '.auth.client_token')"
+          echo "Vault login OK; token policies:"
+          printf '%s' "$login_json" | jq -r '.auth.policies[]' | sed 's/^/  - /'
+
+          # Mint the ~900s derived R2 triple, scoped to pr-<N>/* by the
+          # operator-pinned role template. The Cloudflare parent token never
+          # leaves Vault.
+          creds_json="$(vault read -format=json cloudflare/r2-creds/ota-builds pr="${PR_NUMBER}")"
+          export AWS_ACCESS_KEY_ID="$(printf '%s' "$creds_json" | jq -r '.data.access_key_id')"
+          export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$creds_json" | jq -r '.data.secret_access_key')"
+          export AWS_SESSION_TOKEN="$(printf '%s' "$creds_json" | jq -r '.data.session_token')"
+          echo "::add-mask::$AWS_ACCESS_KEY_ID"
+          echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
+          echo "::add-mask::$AWS_SESSION_TOKEN"
+          export AWS_DEFAULT_REGION=auto
+
+          endpoint="https://${R2_ACCOUNT_ID}.eu.r2.cloudflarestorage.com"
+          cd "$OUT_DIR/.."
+          aws s3 cp "pr-${PR_NUMBER}/VVTerm.ipa"      "s3://${R2_BUCKET}/pr-${PR_NUMBER}/VVTerm.ipa"      --endpoint-url "$endpoint"
+          aws s3 cp "pr-${PR_NUMBER}/manifest.plist"  "s3://${R2_BUCKET}/pr-${PR_NUMBER}/manifest.plist"  --endpoint-url "$endpoint" --content-type "application/x-plist"
+          aws s3 cp "pr-${PR_NUMBER}/index.html"      "s3://${R2_BUCKET}/pr-${PR_NUMBER}/index.html"      --endpoint-url "$endpoint" --content-type "text/html"
+
+          echo "Published: ${OTA_BASE_URL}/pr-${PR_NUMBER}/index.html"
+
+      - name: Comment install link on PR
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MARKER="<!-- ios-adhoc-pr -->"
+          INSTALL_URL="${OTA_BASE_URL}/pr-${PR_NUMBER}/index.html"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          body="${MARKER}
+          ## 📱 Ad-hoc OTA build — PR #${PR_NUMBER}
+
+          **[Install on a registered device](${INSTALL_URL})** (open in Safari on the device)
+
+          - Commit: \`${HEAD_SHA}\`
+          - Version: ${BUILD_VERSION}
+          - Manifest: \`${OTA_BASE_URL}/pr-${PR_NUMBER}/manifest.plist\`
+          - Expires: 7 days after upload (R2 lifecycle \`pr-*\`)
+
+          _Published by [\`ios-adhoc-pr\`](${RUN_URL}) — Vault-brokered short-lived R2 credentials (pcad.it-infra #154)._"
+
+          existing="$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '.[] | select(.body | contains("'"$MARKER"'")) | .id' | head -1)"
+          if [[ -n "$existing" ]]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing}" -f body="$body" >/dev/null
+            echo "Updated existing comment ${existing}"
+          else
+            gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="$body" >/dev/null
+            echo "Posted new comment"
+          fi
+
+      - name: Upload export log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ota-export-log
+          path: ${{ runner.temp }}/xcodebuild-export.log
+          if-no-files-found: ignore
