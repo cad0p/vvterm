@@ -462,7 +462,14 @@ jobs:
           echo "::add-mask::$AWS_SESSION_TOKEN"
           export AWS_DEFAULT_REGION=auto
 
-          endpoint="https://${R2_ACCOUNT_ID}.eu.r2.cloudflarestorage.com"
+          # IMPORTANT: use the DEFAULT endpoint host, not .eu. — locally-signed
+          # R2 temp credentials are audience-bound to the host claim baked into
+          # the session JWT by the Vault plugin (aud=<account>.r2.cloudflare
+          # storage.com, no jurisdiction), so calling the .eu. endpoint gets
+          # every request rejected with Unauthorized (observed in run
+          # 30428150398). Jurisdiction governs bucket data residency, not which
+          # endpoint may serve the bucket.
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           cd "$OUT_DIR/.."
           aws s3 cp "pr-${PR_NUMBER}/VVTerm.ipa"      "s3://${R2_BUCKET}/pr-${PR_NUMBER}/VVTerm.ipa"      --endpoint-url "$endpoint"
           aws s3 cp "pr-${PR_NUMBER}/manifest.plist"  "s3://${R2_BUCKET}/pr-${PR_NUMBER}/manifest.plist"  --endpoint-url "$endpoint" --content-type "application/x-plist"
