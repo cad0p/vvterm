@@ -16,7 +16,7 @@ on:
       force_pro:
         description: "Force Pro on for all users (fork-owner builds; bypasses StoreKit)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
