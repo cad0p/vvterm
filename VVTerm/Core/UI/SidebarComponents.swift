@@ -2,7 +2,14 @@ import SwiftUI
 
 // MARK: - Server Row
 
-struct ServerRow: View {
+/// Generic over `KeyRing` so the row can observe a concrete
+/// `ObservableObject` (either the real `TeleportKeyRing` or a test
+/// `MockTeleportKeyRing`) while still being injectable. An existential
+/// `any TeleportKeyRingStoring` cannot conform to `ObservableObject`, so
+/// `@ObservedObject` requires a concrete type parameter. The
+/// `ObservableObject` constraint is on the struct (not just the init) so the
+/// `@ObservedObject` property wrapper can synthesize its conformance.
+struct ServerRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: TeleportKeyRingStoring {
     let server: Server
     let isSelected: Bool
     let onSelect: () -> Void
@@ -10,16 +17,69 @@ struct ServerRow: View {
     var onMove: ((Server) -> Void)? = nil
     var onConnect: ((Server) -> Void)? = nil
     var onLockedTap: (() -> Void)? = nil
+    /// Called when a non-ready Teleport server is tapped. The caller opens
+    /// the appropriate setup sheet (bootstrap/registration/login) based on
+    /// the readiness state. If nil, the tap falls through to `onSelect`.
+    var onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil
 
     @ObservedObject private var tabManager = TerminalTabManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var keyRing: KeyRing
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
+
+    /// Testability hook: when non-nil, overrides the `ServerManager` lock
+    /// check. UI test harnesses pass `false` so the row's tap → connect /
+    /// tap → setup routing is exercisable without seeding `ServerManager`
+    /// (which would trigger CloudKit). Production callers leave this nil.
+    private let isLockedOverride: Bool?
+
+    /// The key ring is injected so UI tests can drive the readiness matrix
+    /// via `MockTeleportKeyRing`. Production callers pass `.shared`.
+    init(
+        server: Server,
+        isSelected: Bool,
+        onSelect: @escaping () -> Void,
+        onEdit: @escaping (Server) -> Void,
+        onMove: ((Server) -> Void)? = nil,
+        onConnect: ((Server) -> Void)? = nil,
+        onLockedTap: (() -> Void)? = nil,
+        onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
+        keyRing: KeyRing,
+        isLockedOverride: Bool? = nil
+    ) {
+        self.server = server
+        self.isSelected = isSelected
+        self.onSelect = onSelect
+        self.onEdit = onEdit
+        self.onMove = onMove
+        self.onConnect = onConnect
+        self.onLockedTap = onLockedTap
+        self.onTeleportSetup = onTeleportSetup
+        self._keyRing = ObservedObject(wrappedValue: keyRing)
+        self.isLockedOverride = isLockedOverride
+    }
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     #endif
 
     private var isLocked: Bool {
-        serverManager.isServerLocked(server)
+        if let override = isLockedOverride {
+            return override
+        }
+        return serverManager.isServerLocked(server)
+    }
+
+    /// The derived Teleport readiness for this server. Only computed for
+    /// Teleport servers (`.faceIDTeleport`); non-Teleport servers return nil
+    /// and the existing tab-count badge is unchanged.
+    private var teleportReadiness: TeleportDeviceReadiness? {
+        guard server.authMethod == .faceIDTeleport else { return nil }
+        return keyRing.readiness(for: server.id)
+    }
+
+    /// Whether this Teleport server needs setup (any non-ready state).
+    private var needsTeleportSetup: Bool {
+        teleportReadiness?.needsSetup == true
     }
 
     private var tabCount: Int {
@@ -53,9 +113,26 @@ struct ServerRow: View {
             .background(selectionBackground)
             .opacity(isLocked ? 0.7 : 1.0)
             .contentShape(Rectangle())
+            // Make the row a single accessibility container so the row
+            // identifier lives on the container and is NOT propagated to
+            // descendant elements (the server name Text, host Text,
+            // environment Text, server icon Image, and the readiness pill).
+            // Without `.contain`, SwiftUI propagates the identifier to every
+            // descendant, which (a) makes `app.staticTexts["vvterm.serverRow.
+            // <uuid>"]` match multiple elements (the name/host/env Texts and
+            // icon Image all inherit it) so the test can't tap a single
+            // element, and (b) overwrites the readiness pill's own identifier
+            // (vvterm.serverRow.readinessPill.setup / .signIn) so
+            // `app.staticTexts["vvterm.serverRow.readinessPill.*"]` never
+            // resolves. `.contain` exposes children as separate elements
+            // under the container without inheriting its identifier.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("vvterm.serverRow.\(server.id.uuidString)")
             .onTapGesture {
                 if isLocked {
                     onLockedTap?()
+                } else if needsTeleportSetup, let readiness = teleportReadiness, let onTeleportSetup {
+                    onTeleportSetup(server, readiness)
                 } else {
                     onSelect()
                 }
@@ -151,6 +228,8 @@ struct ServerRow: View {
 
             if isLocked {
                 LockedBadge()
+            } else if needsTeleportSetup, let readiness = teleportReadiness {
+                readinessBadge(readiness)
             } else if tabCount > 0 {
                 HStack(spacing: 4) {
                     Image(systemName: "terminal")
@@ -174,6 +253,44 @@ struct ServerRow: View {
                 .fill(selectionFillColor)
         }
     }
+
+    // MARK: - Teleport Readiness Badge
+
+    /// The readiness pill for non-ready Teleport servers (design doc mockup B).
+    ///   - `needsBootstrap` / `needsRegistration` → amber "Setup" pill
+    ///     (`lock.rotation` icon)
+    ///   - `needsLogin` → blue "Sign in" pill
+    ///   - `ready` → no badge (the caller doesn't call this for ready state)
+    @ViewBuilder
+    private func readinessBadge(_ readiness: TeleportDeviceReadiness) -> some View {
+        switch readiness {
+        case .ready:
+            // Ready Teleport servers behave like normal SSH servers — show
+            // the tab count (or nothing if no tabs).
+            if tabCount > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("\(tabCount)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .foregroundStyle(sessionIndicatorColor)
+            }
+        case .needsBootstrap, .needsRegistration:
+            PillBadge(
+                text: String(localized: "Setup"),
+                color: .orange,
+                accessibilityID: "vvterm.serverRow.readinessPill.setup"
+            )
+        case .needsLogin:
+            PillBadge(
+                text: String(localized: "Sign in"),
+                color: .blue,
+                accessibilityID: "vvterm.serverRow.readinessPill.signIn"
+            )
+        }
+    }
 }
 
 // MARK: - Pill Badge
@@ -181,6 +298,14 @@ struct ServerRow: View {
 struct PillBadge: View {
     let text: String
     let color: Color
+    /// Optional accessibility identifier applied INSIDE `body`, on the same
+    /// element as `.accessibilityElement(children: .ignore)`. Applying the
+    /// identifier at the call site (on the outer `PillBadge` view) does NOT
+    /// propagate to the inner `Text`'s standalone accessibility element
+    /// created by `.accessibilityElement(children: .ignore)`, so UI tests
+    /// querying `app.staticTexts["<id>"]` failed to resolve it. Passing the
+    /// identifier here guarantees it lands on the element XCUITest sees.
+    var accessibilityID: String? = nil
 
     var body: some View {
         Text(text)
@@ -190,6 +315,41 @@ struct PillBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.15), in: Capsule())
+            // Prevent SwiftUI from merging this Text with adjacent elements in
+            // the enclosing HStack/VStack (e.g. ServerRow.serverLabel,
+            // ServerListRow) into a single accessibility element. Without
+            // this, app.staticTexts["vvterm.serverRow.readinessPill.*"] can't
+            // resolve because the pill is folded into a parent element.
+            // Mirrors the fix pattern from 4b58801 (safariUnavailable URL).
+            //
+            // The identifier is applied immediately after
+            // `.accessibilityElement(children: .ignore)` and before the label
+            // so it unambiguously attaches to the standalone accessibility
+            // element created above (not to the outer `PillBadge` view, which
+            // XCUITest never queries). An explicit accessibilityLabel then
+            // guarantees the element's label equals `text` exactly,
+            // regardless of how SwiftUI composes labels from Text content +
+            // modifiers (mirrors b4df7da).
+            .accessibilityElement(children: .ignore)
+            .modifier(OptionalAccessibilityIdentifier(identifier: accessibilityID))
+            .accessibilityLabel(text)
+    }
+}
+
+/// Applies `.accessibilityIdentifier` only when the identifier is non-nil.
+/// `SwiftUI.AccessibilityIdentifierModifier` requires a non-optional `String`,
+/// so a `nil` value (e.g. `PillBadge` used without an ID for plain count
+/// badges) must be skipped rather than passing an empty string (which would
+/// set a real empty identifier).
+private struct OptionalAccessibilityIdentifier: ViewModifier {
+    let identifier: String?
+
+    func body(content: Content) -> some View {
+        if let identifier {
+            content.accessibilityIdentifier(identifier)
+        } else {
+            content
+        }
     }
 }
 

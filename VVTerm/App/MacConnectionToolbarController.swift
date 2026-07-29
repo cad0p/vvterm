@@ -14,6 +14,9 @@
 import Combine
 import SwiftUI
 import AppKit
+import os.log
+
+private let zenLogger = Logger.forCategory("ZenMode")
 
 extension NSToolbarItem.Identifier {
     static let vvViewPicker = NSToolbarItem.Identifier("vvterm.viewPicker")
@@ -190,6 +193,7 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
     }
 
     @objc private func zenControlsTapped(_ sender: NSToolbarItem) {
+        zenLogger.notice("zenControlsTapped: invoked, isShown=\(zenPopover?.isShown ?? false)")
         if let popover = zenPopover, popover.isShown {
             popover.performClose(nil)
             return
@@ -198,11 +202,25 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: MacZenControlHost())
         zenPopover = popover
-        if #available(macOS 14.0, *) {
-            popover.show(relativeTo: sender)
-        } else if let anchor = NSApp.keyWindow?.contentView {
-            popover.show(relativeTo: .zero, of: anchor, preferredEdge: .maxY)
+
+        // NSToolbarItem is NOT an NSView (it inherits from NSObject), so it
+        // cannot be used as a popover positioning view. Anchoring to it
+        // silently fails ("if the positioning view is not visible, this method
+        // does nothing"), which left users stuck in zen mode with the controls
+        // button doing nothing. Anchor to the window's content view instead,
+        // with a rect at the top-trailing corner where the zen button lives.
+        guard let anchor = NSApp.keyWindow?.contentView else {
+            zenLogger.warning("zenControlsTapped: no key window contentView to anchor popover")
+            return
         }
+        let anchorRect = NSRect(
+            x: anchor.bounds.maxX - 32,
+            y: anchor.bounds.maxY - 8,
+            width: 32,
+            height: 8
+        )
+        zenLogger.notice("zenControlsTapped: showing popover anchored to contentView")
+        popover.show(relativeTo: anchorRect, of: anchor, preferredEdge: .minY)
     }
 
     // MARK: Item builders
@@ -319,6 +337,7 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
     }
 
     @objc private func enterZenTapped() {
+        zenLogger.notice("enterZenTapped")
         bridge.onEnterZen()
     }
 

@@ -7,6 +7,20 @@ struct Server: Identifiable, Codable, Hashable {
     var workspaceId: UUID
     var environment: ServerEnvironment
     var name: String
+    /// The connection target.
+    ///
+    /// For `.faceIDTeleport` servers, `name` is the Teleport NODE name
+    /// (e.g. `pcad-dev`) — the display name doubles as the node name for the
+    /// `proxy:<node>:0` subsystem string. `host` is the PROXY host
+    /// (e.g. `teleport.pcad.it`). This mirrors `tsh ssh pier@pcad-dev`:
+    /// the user names the node, the proxy is separate.
+    ///
+    /// For all other auth methods, `name` is just the display name and
+    /// `host` is the direct SSH target.
+    ///
+    /// This is a model reinterpretation, not a schema change: `Server`'s
+    /// `Codable` is unchanged. Existing Teleport servers (whose `host`
+    /// currently holds the proxy host) require a one-time migration to
     var host: String
     var port: Int
     /// TCP port exposed by etserver. SSH still uses `port` for bootstrap.
@@ -216,14 +230,25 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
     case password
     case sshKey
     case sshKeyWithPassphrase
+    case faceIDTeleport
 
     var id: String { rawValue }
+
+    init(from decoder: Decoder) throws {
+        // Fall back to .password for unknown raw values so old clients that
+        // encounter a future auth method (added after this build was compiled)
+        // don't crash — they decode to the safe default instead.
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        self = AuthMethod(rawValue: raw) ?? .password
+    }
 
     var displayName: String {
         switch self {
         case .password: return String(localized: "Password")
         case .sshKey: return String(localized: "SSH Key")
         case .sshKeyWithPassphrase: return String(localized: "SSH Key + Passphrase")
+        case .faceIDTeleport: return String(localized: "Face ID (Teleport)")
         }
     }
 
@@ -232,6 +257,7 @@ enum AuthMethod: String, Codable, CaseIterable, Identifiable {
         case .password: return "key.fill"
         case .sshKey: return "lock.doc.fill"
         case .sshKeyWithPassphrase: return "lock.shield.fill"
+        case .faceIDTeleport: return "faceid"
         }
     }
 }

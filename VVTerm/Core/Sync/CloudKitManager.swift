@@ -22,8 +22,6 @@ final class CloudKitManager: ObservableObject {
     @Published var isAvailable: Bool = false
     @Published var accountStatusDetail: String = String(localized: "Checking...")
 
-    private let container: CKContainer
-    private let database: CKDatabase
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CloudKit")
     private let recordZoneName = CloudKitSyncConstants.recordZoneName
     private lazy var recordZone = CKRecordZone(zoneName: recordZoneName)
@@ -64,9 +62,29 @@ final class CloudKitManager: ObservableObject {
     private var ensureZoneTask: Task<Void, Error>?
     private var zoneReady: Bool
 
+    /// True when running under a UI test harness (any `--vvterm-ui-test-*`
+    /// launch arg). Under XCUITest the app is built with
+    /// `CODE_SIGNING_ALLOWED=NO`, so the iCloud entitlement isn't applied
+    /// and `CKContainer(identifier:)` traps. Skip container creation in
+    /// that case — harnesses never sync.
+    private static var isUITesting: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(where: {
+            $0.hasPrefix("--vvterm-ui-test-")
+        })
+    }
+
+    private lazy var container: CKContainer? = {
+        guard !Self.isUITesting else { return nil }
+        return CKContainer(identifier: CloudKitSyncConstants.cloudKitContainerIdentifier)
+    }()
+
+    /// The private cloud database. Returns nil when the container is nil
+    /// (UI testing / no entitlements).
+    private lazy var database: CKDatabase? = {
+        container?.privateCloudDatabase
+    }()
+
     private init() {
-        container = CKContainer(identifier: CloudKitSyncConstants.cloudKitContainerIdentifier)
-        database = container.privateCloudDatabase
         zoneReady = UserDefaults.standard.bool(forKey: CloudKitSyncConstants.zoneReadyKey(for: recordZoneName))
         Task { await checkAccountStatus() }
     }
@@ -91,6 +109,7 @@ final class CloudKitManager: ObservableObject {
             accountStatusChecked = true
             return
         }
+        guard let container = container else { return }
 
         do {
             let status = try await container.accountStatus()
@@ -111,7 +130,7 @@ final class CloudKitManager: ObservableObject {
             }
 
             logger.info("CloudKit account status: \(statusDescription)")
-            logger.info("Container identifier: \(self.container.containerIdentifier ?? "nil")")
+            logger.info("Container identifier: \(container.containerIdentifier ?? "nil")")
 
             isAvailable = status == .available
             accountStatusDetail = statusDescription
@@ -295,7 +314,7 @@ final class CloudKitManager: ObservableObject {
             failureLog: "Failed to delete server"
         ) {
             _ = try await withZoneRetry {
-                try await database.modifyRecords(saving: [], deleting: [recordID])
+                try await database!.modifyRecords(saving: [], deleting: [recordID])
             }
         }
     }
@@ -323,7 +342,7 @@ final class CloudKitManager: ObservableObject {
             failureLog: "Failed to delete workspace"
         ) {
             _ = try await withZoneRetry {
-                try await database.modifyRecords(saving: [], deleting: [recordID])
+                try await database!.modifyRecords(saving: [], deleting: [recordID])
             }
         }
     }
@@ -367,7 +386,7 @@ final class CloudKitManager: ObservableObject {
 
         do {
             let record = try await withZoneRetry {
-                try await database.record(for: recordID)
+                try await database!.record(for: recordID)
             }
             return TerminalThemePreference(from: record)
         } catch let ckError as CKError where ckError.code == .unknownItem || ckError.code == .zoneNotFound {
@@ -403,7 +422,7 @@ final class CloudKitManager: ObservableObject {
 
         do {
             let record = try await withZoneRetry {
-                try await database.record(for: recordID)
+                try await database!.record(for: recordID)
             }
             guard let profile = decodeTerminalAccessoryProfile(from: record) else {
                 logger.warning("Terminal accessory profile payload was invalid; ignoring remote value")
@@ -444,7 +463,7 @@ final class CloudKitManager: ObservableObject {
 
         do {
             let remoteRecord = try await withZoneRetry {
-                try await database.record(for: recordID)
+                try await database!.record(for: recordID)
             }
             baseRecord = remoteRecord
             if let remoteProfile = decodeTerminalAccessoryProfile(from: remoteRecord) {
@@ -522,7 +541,7 @@ final class CloudKitManager: ObservableObject {
 
         do {
             let record = try await withZoneRetry {
-                try await database.record(for: recordID)
+                try await database!.record(for: recordID)
             }
             guard let preferences = decodeStatsPreferences(from: record) else {
                 logger.warning("Stats preferences payload was invalid; ignoring remote value")
@@ -563,7 +582,7 @@ final class CloudKitManager: ObservableObject {
 
         do {
             let remoteRecord = try await withZoneRetry {
-                try await database.record(for: recordID)
+                try await database!.record(for: recordID)
             }
             baseRecord = remoteRecord
             if let remotePreferences = decodeStatsPreferences(from: remoteRecord) {
@@ -671,13 +690,13 @@ final class CloudKitManager: ObservableObject {
         subscription.notificationInfo = notification
 
         do {
-            if let existing = try? await database.subscription(for: subscriptionID) as? CKDatabaseSubscription,
+            if let existing = try? await database!.subscription(for: subscriptionID) as? CKDatabaseSubscription,
                existing.notificationInfo?.shouldSendContentAvailable == true {
                 logger.debug("CloudKit database subscription already configured")
                 return
             }
 
-            try await database.save(subscription)
+            try await database!.save(subscription)
             logger.info("Subscribed to database changes")
         } catch {
             logger.error("Failed to subscribe to database changes: \(error.localizedDescription)")
@@ -817,7 +836,7 @@ final class CloudKitManager: ObservableObject {
                 }
             }
 
-            self.database.add(operation)
+            self.database!.add(operation)
         }
     }
 
@@ -979,7 +998,7 @@ final class CloudKitManager: ObservableObject {
                 }
             }
 
-            database.add(operation)
+            database!.add(operation)
         }
     }
 
@@ -1033,7 +1052,7 @@ final class CloudKitManager: ObservableObject {
                     }
                 }
 
-                self.database.add(operation)
+                self.database!.add(operation)
             }
         }
 
@@ -1086,7 +1105,7 @@ final class CloudKitManager: ObservableObject {
     }
 
     private func createZoneIfNeeded() async throws {
-        let results = try await database.recordZones(for: [recordZoneID])
+        let results = try await database!.recordZones(for: [recordZoneID])
         if let result = results[recordZoneID] {
             switch result {
             case .success:
@@ -1094,7 +1113,7 @@ final class CloudKitManager: ObservableObject {
                 return
             case .failure(let error):
                 if isZoneNotFound(error) {
-                    _ = try await database.modifyRecordZones(saving: [recordZone], deleting: [])
+                    _ = try await database!.modifyRecordZones(saving: [recordZone], deleting: [])
                     setZoneReady(true)
                     return
                 }
@@ -1102,7 +1121,7 @@ final class CloudKitManager: ObservableObject {
             }
         }
 
-        _ = try await database.modifyRecordZones(saving: [recordZone], deleting: [])
+        _ = try await database!.modifyRecordZones(saving: [recordZone], deleting: [])
         setZoneReady(true)
     }
 

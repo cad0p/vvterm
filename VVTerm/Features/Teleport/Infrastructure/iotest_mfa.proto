@@ -1,0 +1,190 @@
+// Minimal standalone proto for the session 1.10/1.11 spike.
+// Defines ONLY the messages needed for the gRPC calls:
+//   CreateAuthenticateChallenge, CreateRegisterChallenge, AddMFADeviceSync.
+// Session 1.11 adds Browser MFA types (BrowserMFAChallenge, BrowserMFAResponse,
+//   CreateAuthenticateChallengeRequest.browser_mfa_tsh_redirect_url) to
+//   support the existing-device assertion via the Browser MFA flow.
+// Field NUMBERS match Teleport v18.9.1 exactly (that's what matters on the
+// wire for gRPC). Field *names* use snake_case (proto3 convention) so
+// SwiftProtobuf generates clean camelCase Swift property names. The JSON
+// tags differ from Teleport's, but that only matters for the HTTP/JSON API
+// which we are NOT using — gRPC uses the binary protobuf wire format, keyed
+// by field number.
+syntax = "proto3";
+
+package proto;
+
+message ContextUser {}
+message Passwordless {}
+
+// ── MFA v1 ChallengeExtensions (from mfa/v1/mfa.proto) ──
+enum ChallengeScope {
+  CHALLENGE_SCOPE_UNSPECIFIED = 0;
+  CHALLENGE_SCOPE_LOGIN = 1;
+  CHALLENGE_SCOPE_PASSWORDLESS_LOGIN = 2;
+  CHALLENGE_SCOPE_HEADLESS_LOGIN = 3;
+  CHALLENGE_SCOPE_MANAGE_DEVICES = 4;
+  CHALLENGE_SCOPE_ACCOUNT_RECOVERY = 5;
+  CHALLENGE_SCOPE_USER_SESSION = 6;
+}
+
+message ChallengeExtensions {
+  ChallengeScope scope = 1;
+}
+
+enum DeviceUsage {
+  DEVICE_USAGE_UNSPECIFIED = 0;
+  DEVICE_USAGE_MFA = 1;
+  DEVICE_USAGE_PASSWORDLESS = 2;
+}
+
+enum DeviceType {
+  DEVICE_TYPE_UNSPECIFIED = 0;
+  DEVICE_TYPE_TOTP = 1;
+  reserved 2; // DEVICE_TYPE_U2F (removed in Teleport; WEBAUTHN covers U2F/CTAP1/CTAP2/platform)
+  DEVICE_TYPE_WEBAUTHN = 3;
+}
+
+// ── WebAuthn types (from legacy/types/webauthn/webauthn.proto) ──
+// Field numbers match; names snake_cased for clean Swift.
+message CredentialAssertion {
+  PublicKeyCredentialRequestOptions public_key = 1;
+}
+message PublicKeyCredentialRequestOptions {
+  bytes challenge = 1;
+  int64 timeout_ms = 2;
+  string rp_id = 3;
+  repeated CredentialDescriptor allow_credentials = 4;
+  string user_verification = 6;
+}
+message CredentialDescriptor {
+  string type = 1;
+  bytes id = 2;
+  repeated string transports = 3;
+}
+message CredentialAssertionResponse {
+  string id = 5;
+  string type = 1;
+  bytes raw_id = 2;
+  AuthenticatorAssertionResponse response = 3;
+}
+message AuthenticatorAssertionResponse {
+  bytes client_data_json = 1;
+  bytes authenticator_data = 2;
+  bytes signature = 3;
+  bytes user_handle = 4;
+}
+
+message CredentialCreation {
+  PublicKeyCredentialCreationOptions public_key = 1;
+}
+message PublicKeyCredentialCreationOptions {
+  bytes challenge = 1;
+  RelyingPartyEntity rp = 2;
+  UserEntity user = 3;
+  int64 timeout_ms = 5;
+  string attestation = 7;
+}
+message RelyingPartyEntity {
+  string id = 1;
+  string name = 2;
+}
+message UserEntity {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+}
+message CredentialCreationResponse {
+  string id = 5;
+  string type = 1;
+  bytes raw_id = 2;
+  AuthenticatorAttestationResponse response = 3;
+}
+message AuthenticatorAttestationResponse {
+  bytes client_data_json = 1;
+  bytes attestation_object = 2;
+}
+
+// ── Auth service MFA messages (from authservice.proto) ──
+message MFAAuthenticateChallenge {
+  TOTPChallenge totp = 2;
+  CredentialAssertion webauthn_challenge = 3;
+  int32 mfa_required = 4;
+  // Session 1.11: Browser MFA challenge (field 6, matches Teleport v18.9.1).
+  BrowserMFAChallenge browser_mfa_challenge = 6;
+}
+message TOTPChallenge {}
+
+// ── Browser MFA (session 1.11) ──
+// Matches lib/auth/auth.go BeginBrowserMFAChallenge +
+// api/proto/teleport/legacy/client/proto/authservice.proto:1408-1419.
+message BrowserMFAChallenge {
+  // RequestId is the ID of a browser MFA request. The client opens
+  // https://<proxy>/web/mfa/browser/<request_id> in a browser.
+  string request_id = 1;
+}
+
+// BrowserMFAResponse is sent back as ExistingMFAResponse.Browser in
+// CreateRegisterChallenge, carrying the WebAuthn assertion the browser
+// produced (decrypted from the loopback callback).
+message BrowserMFAResponse {
+  string request_id = 1;
+  CredentialAssertionResponse webauthn_response = 2;
+}
+
+message MFAAuthenticateResponse {
+  oneof response {
+    TOTPResponse totp = 2;
+    CredentialAssertionResponse webauthn = 3;
+    // Session 1.11: Browser MFA response (field 5, matches Teleport v18.9.1).
+    BrowserMFAResponse browser = 5;
+  }
+}
+message TOTPResponse {
+  string code = 1;
+}
+
+message CreateAuthenticateChallengeRequest {
+  oneof request {
+    ContextUser context_user = 3;
+    Passwordless passwordless = 4;
+  }
+  ChallengeExtensions challenge_extensions = 6;
+  // Session 1.11: the loopback callback URL the server will redirect the
+  // browser to after the WebAuthn assertion. Must be
+  // http(s)://localhost|127.0.0.1|[::1]:<port>/callback?secret_key=<key>
+  // (validated by lib/client/sso/redirector.go ValidateClientRedirect).
+  string browser_mfa_tsh_redirect_url = 9;
+}
+
+message CreateRegisterChallengeRequest {
+  string token_id = 1;
+  MFAAuthenticateResponse existing_mfa_response = 4;
+  DeviceType device_type = 2;
+  DeviceUsage device_usage = 3;
+}
+
+message MFARegisterChallenge {
+  oneof request {
+    CredentialCreation webauthn = 3;
+  }
+}
+
+message MFARegisterResponse {
+  oneof response {
+    CredentialCreationResponse webauthn = 3;
+  }
+}
+
+message AddMFADeviceSyncRequest {
+  string token_id = 1;
+  ContextUser context_user = 5;
+  string new_device_name = 2;
+  MFARegisterResponse new_mfa_response = 3;
+  DeviceUsage device_usage = 4;
+}
+
+message AddMFADeviceSyncResponse {
+  // We don't need the full MFADevice; just succeed.
+  bytes device = 1;
+}

@@ -362,9 +362,11 @@ actor RemoteMoshServerLease {
     private let terminate: Terminate
     private var state: State = .bootstrapping
     private var cleanupWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
-    #if DEBUG
+    /// Waiters blocked on `.cleanupPending` state. Only populated by
+    /// `waitForCleanupPendingForTesting()` in DEBUG, but the array itself
+    /// must exist in Release too because `cleanup()` calls
+    /// `resumeCleanupPendingWaiters()` unconditionally.
     private var cleanupPendingWaiters: [CheckedContinuation<Void, Never>] = []
-    #endif
 
     init(terminate: @escaping Terminate) {
         self.terminate = terminate
@@ -423,7 +425,6 @@ actor RemoteMoshServerLease {
         }
     }
     #endif
-
     private func clean(serverPID: Int32?) async {
         state = .cleaning
         await RemoteMoshManager.terminateBootstrappedServer(
@@ -459,11 +460,12 @@ actor RemoteMoshServerLease {
         waiters.forEach { $0.resume() }
     }
 
-    #if DEBUG
+    /// Resumes waiters blocked on `cleanupPending` state. Available in both
+    /// Debug and Release — must NOT be inside `#if DEBUG` because it's called
+    /// from `cleanup()` which is outside the debug block.
     private func resumeCleanupPendingWaiters() {
         let waiters = cleanupPendingWaiters
         cleanupPendingWaiters.removeAll(keepingCapacity: false)
         waiters.forEach { $0.resume() }
     }
-    #endif
 }

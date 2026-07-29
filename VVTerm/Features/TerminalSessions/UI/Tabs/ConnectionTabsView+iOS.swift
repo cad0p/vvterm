@@ -1,5 +1,8 @@
 #if os(iOS)
 import SwiftUI
+import os.log
+
+private let zenLogger = Logger.forCategory("ZenMode")
 
 extension ConnectionTerminalContainer {
     var platformBody: some View {
@@ -60,6 +63,9 @@ extension ConnectionTerminalContainer {
                     && selectedView == ConnectionViewTab.terminal.id
             )
         )
+        .onChange(of: isZenModeEnabled) { newValue in
+            zenLogger.notice("iOS platformChrome: isZenModeEnabled=\(newValue), selectedView=\(selectedView)")
+        }
     }
 
     @ViewBuilder
@@ -187,6 +193,7 @@ extension ConnectionTerminalContainer {
     }
 
     private func exitZenMode() {
+        zenLogger.notice("iOS exitZenMode: called, isZenModeEnabled=\(isZenModeEnabled), showingZenPanel=\(showingZenPanel)")
         showingZenPanel = false
         withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
             isZenModeEnabled = false

@@ -16,7 +16,7 @@ on:
       force_pro:
         description: "Force Pro on for all users (fork-owner builds; bypasses StoreKit)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -247,12 +247,10 @@ jobs:
           # Build the Swift compilation-conditions override for force_pro.
           # When FORCE_PRO=1, pass SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED
           # so StoreManager's #if FORCE_PRO_ENABLED block unlocks Pro at compile time.
-          swift_conditions=""
+          declare -a swift_conditions=()
           if [[ "$FORCE_PRO" == "1" ]]; then
             swift_conditions=(SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED)
             echo "==> FORCE_PRO enabled — Pro will be forced on in this build"
-          else
-            swift_conditions=()
           fi
 
           echo "==> Archiving $SCHEME"
@@ -269,7 +267,7 @@ jobs:
             LIVE_ACTIVITY_CODE_SIGN_STYLE=Manual \
             LIVE_ACTIVITY_CODE_SIGN_IDENTITY="Apple Distribution" \
             LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER="$LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER" \
-            "${swift_conditions[@]}" \
+            ${swift_conditions[@]+"${swift_conditions[@]}"} \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
 
           echo "==> Exporting IPA (manual signing)"

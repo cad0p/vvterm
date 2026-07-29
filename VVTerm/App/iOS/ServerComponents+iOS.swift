@@ -8,24 +8,78 @@ import SwiftUI
 #if os(iOS)
 // MARK: - Server List Row
 
-struct ServerListRow: View {
+/// Generic over `KeyRing` so the row can observe a concrete
+/// `ObservableObject` (either the real `TeleportKeyRing` or a test
+/// `MockTeleportKeyRing`) while still being injectable. Mirrors the
+/// `ServerRow` pattern on macOS. An existential `any TeleportKeyRingStoring`
+/// cannot conform to `ObservableObject`, so `@ObservedObject` requires a
+/// concrete type parameter.
+struct ServerListRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: TeleportKeyRingStoring {
     let server: Server
     let onTap: () -> Void
     let onEdit: () -> Void
     var onMove: (() -> Void)? = nil
     var onLockedTap: (() -> Void)? = nil
+    /// Called when a non-ready Teleport server is tapped. The caller opens
+    /// the appropriate setup sheet (bootstrap/registration/login) based on
+    /// the readiness state. If nil, the tap falls through to `onTap`.
+    var onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil
 
     @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var keyRing: KeyRing
     @Environment(\.privacyModeEnabled) private var privacyModeEnabled
 
+    /// Testability hook: when non-nil, overrides the `ServerManager` lock
+    /// check. UI test harnesses pass `false` so the row's tap → connect /
+    /// tap → setup routing is exercisable without seeding `ServerManager`
+    /// (which would trigger CloudKit). Production callers leave this nil.
+    private let isLockedOverride: Bool?
+
+    init(
+        server: Server,
+        onTap: @escaping () -> Void,
+        onEdit: @escaping () -> Void,
+        onMove: (() -> Void)? = nil,
+        onLockedTap: (() -> Void)? = nil,
+        onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
+        keyRing: KeyRing = TeleportKeyRing.shared,
+        isLockedOverride: Bool? = nil
+    ) {
+        self.server = server
+        self.onTap = onTap
+        self.onEdit = onEdit
+        self.onMove = onMove
+        self.onLockedTap = onLockedTap
+        self.onTeleportSetup = onTeleportSetup
+        self._keyRing = ObservedObject(wrappedValue: keyRing)
+        self.isLockedOverride = isLockedOverride
+    }
+
     private var isLocked: Bool {
-        serverManager.isServerLocked(server)
+        if let override = isLockedOverride {
+            return override
+        }
+        return serverManager.isServerLocked(server)
+    }
+
+    /// The derived Teleport readiness for this server. Only computed for
+    /// Teleport servers (`.faceIDTeleport`); non-Teleport servers return nil.
+    private var teleportReadiness: TeleportDeviceReadiness? {
+        guard server.authMethod == .faceIDTeleport else { return nil }
+        return keyRing.readiness(for: server.id)
+    }
+
+    /// Whether this Teleport server needs setup (any non-ready state).
+    private var needsTeleportSetup: Bool {
+        teleportReadiness?.needsSetup == true
     }
 
     var body: some View {
         Button(action: {
             if isLocked {
                 onLockedTap?()
+            } else if needsTeleportSetup, let readiness = teleportReadiness, let onTeleportSetup {
+                onTeleportSetup(server, readiness)
             } else {
                 onTap()
             }
@@ -60,6 +114,8 @@ struct ServerListRow: View {
 
                 if isLocked {
                     LockedBadge()
+                } else if needsTeleportSetup, let readiness = teleportReadiness {
+                    readinessBadge(readiness)
                 } else {
                     Image(systemName: "chevron.right")
                         .font(.caption)
@@ -70,6 +126,20 @@ struct ServerListRow: View {
             .opacity(isLocked ? 0.7 : 1.0)
         }
         .buttonStyle(.plain)
+        // Make the row a single accessibility container so the row
+        // identifier lives on the container and is NOT propagated to
+        // descendant elements (the server name Text, host Text, server icon
+        // Image, and the readiness pill). Without `.contain`, SwiftUI
+        // propagates the identifier to every descendant, which (a) makes
+        // `app.descendants(matching: .any)["vvterm.serverRow.<uuid>"]` match
+        // multiple elements so the test can't tap a single element, and (b)
+        // overwrites the readiness pill's own identifier
+        // (vvterm.serverRow.readinessPill.setup / .signIn) so
+        // `app.staticTexts["vvterm.serverRow.readinessPill.*"]` never
+        // resolves. `.contain` exposes children as separate elements under
+        // the container without inheriting its identifier.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("vvterm.serverRow.\(server.id.uuidString)")
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
             if let onMove {
                 Button {
@@ -142,6 +212,36 @@ struct ServerListRow: View {
                     Label("Edit", systemImage: "pencil")
                 }
             }
+        }
+    }
+
+    // MARK: - Teleport Readiness Badge
+
+    /// The readiness pill for non-ready Teleport servers (mirrors the macOS
+    /// `ServerRow.readinessBadge`). Reuses the shared `PillBadge` component
+    /// so the accessibility identifiers match across platforms.
+    ///   - `needsBootstrap` / `needsRegistration` → amber "Setup" pill
+    ///   - `needsLogin` → blue "Sign in" pill
+    ///   - `ready` → no badge (the caller doesn't call this for ready state)
+    @ViewBuilder
+    private func readinessBadge(_ readiness: TeleportDeviceReadiness) -> some View {
+        switch readiness {
+        case .ready:
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .needsBootstrap, .needsRegistration:
+            PillBadge(
+                text: String(localized: "Setup"),
+                color: .orange,
+                accessibilityID: "vvterm.serverRow.readinessPill.setup"
+            )
+        case .needsLogin:
+            PillBadge(
+                text: String(localized: "Sign in"),
+                color: .blue,
+                accessibilityID: "vvterm.serverRow.readinessPill.signIn"
+            )
         }
     }
 }

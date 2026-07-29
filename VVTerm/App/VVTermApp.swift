@@ -111,13 +111,53 @@ struct VVTermApp: App {
     private var usesTerminalZenModeUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-zen-mode-harness")
     }
+
+    private var usesTeleportUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-harness")
+    }
+
+    private var usesTeleportServerListUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-serverlist")
+    }
+
+    private var usesTeleportIOSServerListUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-ios-serverlist")
+    }
+
+    private var usesTeleportPhaseChainUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-phase-chain")
+    }
     #endif
+
+    /// True when ANY UI test harness launch arg is present. Used to skip
+    /// app-side singletons (ServerManager → CloudKitManager) that trap in
+    /// the simulator without iCloud entitlements.
+    ///
+    /// Available in both Debug and Release — in Release it always returns
+    /// false (no launch args), so the guard is a no-op. Must NOT be inside
+    /// the `#if DEBUG` block because it's referenced from `.onAppear`/
+    /// `.onChange` modifiers in the `#if os(iOS)` section below.
+    static var isUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("--vvterm-ui-test-") }
+    }
 
     #if os(iOS)
     @ViewBuilder
     private var iOSRootContent: some View {
         #if DEBUG
-        if usesNoticePresentationUITestHarness {
+        if usesTeleportServerListUITestHarness {
+            TeleportServerListUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTeleportIOSServerListUITestHarness {
+            TeleportIOSServerListUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTeleportPhaseChainUITestHarness {
+            TeleportPhaseChainUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTeleportUITestHarness {
+            TeleportUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesNoticePresentationUITestHarness {
             NoticePresentationUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesStatsCardsLayoutUITestHarness {
@@ -209,11 +249,20 @@ struct VVTermApp: App {
                     .environment(\.privacyModeEnabled, privacyModeEnabled)
                     .onAppear {
                         AppLanguage.applySelection(appLanguage)
-                        ServerManager.shared.handleAppLanguageChange()
+                        // Skip ServerManager access under UI test harnesses —
+                        // ServerManager.shared lazily inits CloudKitManager,
+                        // which calls CKContainer(identifier:) and traps
+                        // (EXC_BREAKPOINT) in the simulator without iCloud
+                        // entitlements. The harnesses don't need sync.
+                        if !Self.isUITestHarness {
+                            ServerManager.shared.handleAppLanguageChange()
+                        }
                     }
                     .onChange(of: appLanguage) { newValue in
                         AppLanguage.applySelection(newValue)
-                        ServerManager.shared.handleAppLanguageChange()
+                        if !Self.isUITestHarness {
+                            ServerManager.shared.handleAppLanguageChange()
+                        }
                     }
                 }
             }

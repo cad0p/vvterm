@@ -5915,6 +5915,20 @@ extension GhosttyTerminalView {
         ].joined(separator: " ")
     }
 
+    /// Test-only factory for the keyboard input accessory view. Used by unit
+    /// tests to assert the self-sizing contract (a concrete
+    /// `intrinsicContentSize` height) that prevents UIKit from imposing a
+    /// competing internal `inputHeight` constraint during input-session
+    /// teardown (tab switch / zen mode).
+    func keyboardUITestMakeAccessoryView() -> UIView {
+        TerminalInputAccessoryView(
+            onKey: { _ in },
+            onCustomAction: { _ in },
+            onVoice: nil,
+            onDismissKeyboard: {}
+        )
+    }
+
     func keyboardUITestMoveCursorToBottom() {
         let lines = (0..<200).map { "line-\($0)" }.joined(separator: "\r\n") + "\r\n"
         feedData(Data(lines.utf8))
@@ -6273,6 +6287,14 @@ private class TerminalInputAccessoryView: UIInputView {
         // initial width is only a placeholder.
         super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 48), inputViewStyle: .keyboard)
         accessibilityIdentifier = "vvterm.keyboard.accessory"
+        // Opt into self-sizing so UIKit derives the height from
+        // `intrinsicContentSize` instead of imposing a competing internal
+        // `inputHeight` constraint (available iOS 17+). On iOS 16 the
+        // `intrinsicContentSize` override below still wins because the view
+        // uses Auto Layout for its subviews.
+        if #available(iOS 17.0, *) {
+            allowsSelfSizing = true
+        }
         setupView()
         observeThemeChanges()
         observeAccessoryProfileChanges()
@@ -6291,6 +6313,24 @@ private class TerminalInputAccessoryView: UIInputView {
         }
         stopKeyRepeat()
     }
+
+    /// Self-sizes the accessory so UIKit does not impose a competing internal
+    /// `inputHeight` constraint. Without this, tearing the input session down
+    /// (tab switch, zen mode entry, `reloadInputViews()`) momentarily
+    /// installs a `height == 0` constraint on this view while UIKit's internal
+    /// `inputHeight` (the last keyboard-paired height, e.g. 233) is still
+    /// active, producing "Unable to simultaneously satisfy constraints".
+    /// Returning a concrete height (rather than `UIView.noIntrinsicMetric`)
+    /// marks the view as self-sizing; UIKit then derives the height from this
+    /// value instead of adding its own required constraint. See Apple DTS
+    /// guidance on `UIInputView` height conflicts.
+    override var intrinsicContentSize: CGSize {
+        let height = max(Self.contentHeight, 0)
+        return CGSize(width: UIView.noIntrinsicMetric, height: height)
+    }
+
+    /// Natural content height: 32pt buttons + 8pt top/bottom content margins.
+    private static let contentHeight: CGFloat = 48
 
     private func setupView() {
         autoresizingMask = [.flexibleWidth, .flexibleHeight]

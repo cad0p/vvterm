@@ -81,6 +81,16 @@ final class ServerStatsCollector: ObservableObject {
                     credentials: credentials,
                     disconnectWhenDone: ownsClient
                 ) { connectedClient in
+                    // Teleport's outer session is the PROXY and rejects exec
+                    // with -22. The inner (target-node) session used to be
+                    // established only inside `startShell`, but stats never
+                    // starts a shell — so without this prepare call the inner
+                    // session would never exist, `supportsExec` would stay
+                    // `false`, and every poll (every 2s) would log the skip
+                    // forever. This is a no-op for non-Teleport auth methods
+                    // and idempotent for Teleport.
+                    try await connectedClient.prepareTeleportInnerSession()
+
                     await MainActor.run {
                         self.connectionError = nil
                     }
@@ -126,6 +136,7 @@ final class ServerStatsCollector: ObservableObject {
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
 
         let command: String
         switch remotePlatform {
@@ -143,6 +154,8 @@ final class ServerStatsCollector: ObservableObject {
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
+
         guard let platformCollector else {
             return stats.topProcesses
         }
@@ -155,6 +168,8 @@ final class ServerStatsCollector: ObservableObject {
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
+
         let dockerStats = await dockerCollector.collect(
             client: client,
             platform: remotePlatform,
@@ -171,8 +186,14 @@ final class ServerStatsCollector: ObservableObject {
     /// stale sheet cannot probe an unrelated raw locator after a mount changes.
     func loadStorageHealth(for volume: VolumeInfo) async throws -> StorageHealthResult {
         guard let client = sshClient else {
-            throw ProcessControlError.notConnected
+            return .unavailable(.unsupported)
         }
+        do {
+            try await ensureStatsCapableClient(client: client)
+        } catch {
+            return .unavailable(.unsupported)
+        }
+
         guard let currentVolume = VolumeVisibilityPolicy.normalized(stats.volumes)
             .first(where: { $0.identity == volume.identity }) else {
             return .unavailable(.unmapped)
@@ -260,6 +281,7 @@ final class ServerStatsCollector: ObservableObject {
         guard let client = sshClient else {
             throw ProcessControlError.notConnected
         }
+        try await ensureStatsCapableClient(client: client)
 
         try await dockerCollector.perform(action, container: container, client: client, platform: remotePlatform)
         try? await Task.sleep(for: .milliseconds(500))
@@ -276,7 +298,48 @@ final class ServerStatsCollector: ObservableObject {
 
     // MARK: - Stats Collection
 
+    /// Throws when stats collection cannot run on the current session.
+    ///
+    /// Teleport proxy sessions reject `exec`/`pty`/`shell` channel requests
+    /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). `SSHSession.execute`
+    /// routes exec to the INNER (target-node) session for Teleport, which is
+    /// established by `SSHClient.prepareTeleportInnerSession()` (called in
+    /// `startCollecting` after connect). If the prepare call failed or has
+    /// not completed yet, `SSHClient.supportsExec` returns `false` and this
+    /// throws so the caller surfaces a clear error instead of repeatedly
+    /// failing exec.
+    private func ensureStatsCapableClient(client: SSHClient) async throws {
+        guard await client.supportsExec else {
+            throw ProcessControlError.teleportProxySession
+        }
+    }
+
+    /// Static safety-net hook for future auth methods that can never support
+    /// exec. Currently returns `false` for every auth method: Teleport stats
+    /// route through the inner (target-node) session at runtime via
+    /// `SSHSession.execute`, gated by `SSHClient.supportsExec`. Kept as a
+    /// documented hook so a future auth method that structurally cannot run
+    /// exec can be skipped without a runtime probe.
+    nonisolated static func shouldSkipStatsCollection(for authMethod: AuthMethod) -> Bool {
+        // No auth method is statically skipped: Teleport routes through the
+        // inner session, and every other method uses the direct outer session.
+        _ = authMethod
+        return false
+    }
+
     private func collectStats(client: SSHClient) async {
+        // Teleport's outer session is the PROXY, which rejects exec with -22.
+        // `SSHSession.execute` routes to the inner (target-node) session for
+        // Teleport. That inner session is established by
+        // `SSHClient.prepareTeleportInnerSession()`, called in `startCollecting`
+        // after connect (stats never starts a shell). If the prepare call has
+        // not completed yet (or failed), `supportsExec` returns `false` and
+        // we skip gracefully instead of spinning failing exec calls.
+        let canExec = await client.supportsExec
+        guard canExec else {
+            logger.info("Skipping stats collection: inner session not ready for exec (Teleport proxy session)")
+            return
+        }
         do {
             // Detect platform and create collector on first run
             if remotePlatform == .unknown {
@@ -458,6 +521,7 @@ final class ServerStatsCollector: ObservableObject {
 private enum ProcessControlError: LocalizedError {
     case notConnected
     case protectedProcess
+    case teleportProxySession
 
     var errorDescription: String? {
         switch self {
@@ -465,6 +529,12 @@ private enum ProcessControlError: LocalizedError {
             return String(localized: "Stats is not connected to the server.")
         case .protectedProcess:
             return String(localized: "This process cannot be killed from Stats.")
+        case .teleportProxySession:
+            // The Teleport proxy rejects exec/pty/shell with -22. Stats route
+            // through the inner (target-node) session, established by
+            // `SSHClient.prepareTeleportInnerSession()` after connect. If the
+            // prepare call failed or has not completed yet, exec cannot run.
+            return String(localized: "Stats are not available until the Teleport target node session is ready.")
         }
     }
 }

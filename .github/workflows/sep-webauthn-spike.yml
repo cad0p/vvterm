@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate required secrets
         env:
@@ -68,7 +68,7 @@ jobs:
           xcode-version: '15.4'
 
       - name: Install Go (for fixture generation)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # The fixture generator is self-contained (fxamacker/cbor + stdlib
           # only — the Teleport ECDSAPublicKeyFromRaw helper is inlined).

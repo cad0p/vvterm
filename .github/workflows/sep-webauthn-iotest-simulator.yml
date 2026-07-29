@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: iotest-simulator-logs
           path: |

@@ -28,6 +28,48 @@ enum LibSSH2Runtime {
     }
 }
 
+// MARK: - libssh2 method preferences
+
+/// libssh2 KEX + hostkey algorithm preference strings.
+///
+/// Teleport's TLS-routing proxy (like OpenSSH 8.8+) disables `ssh-rsa`
+/// (SHA-1) hostkey signatures by default. libssh2 1.11.1 with the OpenSSL
+/// backend supports `curve25519-sha256`, ECDH, and `rsa-sha2-256/512`, so we
+/// offer modern algorithms first and keep `ssh-rsa` last as a fallback. This
+/// avoids `LIBSSH2_ERROR_KEX_FAILURE` (-5) when the peer rejects the legacy
+/// hostkey type.
+///
+/// These constants are pure data so they can be unit-tested without a live
+/// libssh2 session; `SSHClient.connect` passes them to
+/// `libssh2_session_method_pref` before `libssh2_session_handshake`.
+enum SSHMethodPreferences {
+    /// KEX algorithms preferred for every SSH connection. Ordered so the
+    /// fastest, most modern algorithms negotiate first.
+    static let kex =
+        "curve25519-sha256,curve25519-sha256@libssh.org," +
+        "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521," +
+        "diffie-hellman-group-exchange-sha256"
+
+    /// Hostkey algorithms preferred for every SSH connection.
+    ///
+    /// Certificate variants (`*-cert-v01@openssh.com`) MUST be listed because
+    /// Teleport's proxy structurally refuses plain hostkeys — it advertises
+    /// only a certificate hostkey algorithm (e.g. `ecdsa-sha2-nistp256-cert-v01@openssh.com`
+    /// for the FIPS suite, `ssh-ed25519-cert-v01@openssh.com` for balanced/hsm,
+    /// `ssh-rsa-cert-v01@openssh.com` for legacy). Without a cert variant in
+    /// our offer, KEX fails with `LIBSSH2_ERROR_KEX_FAILURE` (-5). libssh2
+    /// 1.11.1 (OpenSSL backend) supports all of these. `ssh-rsa` (SHA-1) is
+    /// intentionally last so Teleport/OpenSSH 8.8+ peers that disable it still
+    /// negotiate a SHA-2 or Ed25519 hostkey.
+    static let hostkey =
+        "ssh-ed25519,ssh-ed25519-cert-v01@openssh.com," +
+        "rsa-sha2-512,rsa-sha2-256," +
+        "rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-rsa-cert-v01@openssh.com," +
+        "ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256," +
+        "ecdsa-sha2-nistp521-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com," +
+        "ssh-rsa"
+}
+
 // MARK: - SSH Client using libssh2
 
 nonisolated struct ShellHandle: Sendable {
@@ -173,7 +215,8 @@ actor SSHClient {
             username: server.username,
             connectionMode: server.connectionMode,
             authMethod: server.authMethod,
-            credentials: credentials
+            credentials: credentials,
+            teleportNodeName: server.name
         )
 
         let pendingSession = SSHSession(config: config, startupTrace: startupTrace)
@@ -349,8 +392,39 @@ actor SSHClient {
     }
 
     func remoteEnvironment(forceRefresh: Bool = false) async -> RemoteEnvironment {
-        if !forceRefresh, let resolvedRemoteEnvironment {
+        // Teleport's outer session is the PROXY, which rejects exec with -22.
+        // The resolver's exec probes must run on the INNER (target-node)
+        // session, established by `prepareTeleportInnerSession()`. If the
+        // inner session is not ready yet, establish it BEFORE resolving so
+        // the probes route to the inner session (never the outer). If the
+        // inner session can't be established, swallow the error — the
+        // resolver's exec probes will themselves fail gracefully and return
+        // `.unknown`, matching the prior behavior. This makes every caller of
+        // remoteEnvironment()/remoteTerminalType() safe without each one
+        // needing to know about Teleport.
+        let authMethod = connectedServer?.authMethod ?? .password
+        let innerReady = await (session?.isInnerSessionReady ?? false)
+        if !forceRefresh,
+           let resolvedRemoteEnvironment,
+           // For Teleport, a cached `.unknown` platform means env was resolved
+           // before the inner session existed (the prepare failed or hadn't
+           // run yet). Treat it as a miss when the inner session is now ready
+           // so we re-resolve against the real target node.
+           !(authMethod == .faceIDTeleport && innerReady && resolvedRemoteEnvironment.platform == .unknown) {
             return resolvedRemoteEnvironment
+        }
+
+        if Self.shouldPrepareInnerSessionBeforeResolvingEnvironment(
+            authMethod: authMethod,
+            innerSessionReady: innerReady
+        ) {
+            do {
+                try await prepareTeleportInnerSession()
+            } catch {
+                logger.warning(
+                    "Failed to prepare Teleport inner session before resolving environment: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
 
         let token = startupTrace?.begin(.remoteEnvironment)
@@ -515,6 +589,11 @@ actor SSHClient {
         }
 
         let connectionMode = connectedServer?.connectionMode ?? .standard
+        // Resolve unconditionally: for Teleport, remoteEnvironment() now
+        // establishes the inner (target-node) session first, so the resolver's
+        // exec probes route to the inner session (never the outer proxy).
+        // startShellViaTeleportProxy later calls prepareTeleportInnerSession()
+        // again — that's an idempotent no-op when the inner session is ready.
         let environment = await remoteEnvironment()
         try validateShellStartupSession(sshSession)
         let terminalType = await remoteTerminalType()
@@ -834,6 +913,86 @@ actor SSHClient {
         get async {
             await session?.isConnected ?? false
         }
+    }
+
+    /// Returns `true` when `execute(_:)` can currently succeed on the active
+    /// session. For Teleport this requires the INNER (target-node) session to
+    /// be established; for every other auth method it mirrors `isConnected`.
+    /// Stats collection consults this to skip gracefully before the inner
+    /// session is ready (e.g. before the shell starts) instead of spinning
+    /// failing exec calls.
+    var supportsExec: Bool {
+        get async {
+            await session?.supportsExec ?? false
+        }
+    }
+
+    /// Returns `true` when SFTP (remote file browser) can currently succeed
+    /// on the active session. For Teleport this requires the INNER
+    /// (target-node) session to be established; for every other auth method
+    /// it mirrors `isConnected`. File-browser callers consult this to
+    /// surface a clear "not ready" error before attempting SFTP init (which
+    /// would otherwise fail with "Failed to start SFTP session" on the
+    /// Teleport proxy).
+    var supportsSFTP: Bool {
+        get async {
+            await session?.supportsSFTP ?? false
+        }
+    }
+
+    /// Establish the inner (target-node) session for a Teleport proxy
+    /// connection without starting a shell.
+    ///
+    /// Teleport's outer session is the PROXY, which rejects `exec` with -22.
+    /// Exec must run on the INNER (target-node) session, established by a
+    /// second SSH handshake over a `proxy:<node>:0` subsystem tunnel. That
+    /// second handshake used to only happen inside `startShell`, so exec-only
+    /// consumers (the stats collector creates its own `SSHClient` and never
+    /// starts a shell) never got an inner session — `supportsExec` stayed
+    /// `false` forever and every stats poll logged a skip.
+    ///
+    /// Call this after `connect(to:credentials:)` for Teleport servers when
+    /// the connection will be used for `execute` rather than `startShell`
+    /// (stats collection, process control). It is a no-op for non-Teleport
+    /// auth methods and idempotent for Teleport (a ready inner session is
+    /// reused, so calling it when the terminal already opened a shell is
+    /// safe and cheap).
+    ///
+    /// The terminal shell path also calls this (via `startShell` →
+    /// `startShellViaTeleportProxy` → `prepareTeleportInnerSession`), so the
+    /// live shell behavior is unchanged.
+    func prepareTeleportInnerSession() async throws {
+        guard let session = session else {
+            throw SSHError.notConnected
+        }
+        try await session.prepareTeleportInnerSession()
+        // The inner (target-node) session is now established. If env/terminal
+        // type was resolved before the inner session existed (e.g. a caller
+        // invoked remoteEnvironment() before the shell started and got
+        // `.unknown` defaults because the prepare failed), the cached values
+        // are stale. Clear them so the next remoteEnvironment(forceRefresh:
+        // false) call re-resolves against the now-ready inner session.
+        if connectedServer?.authMethod == .faceIDTeleport {
+            resolvedRemoteEnvironment = nil
+            resolvedRemoteTerminalType = nil
+        }
+    }
+
+    /// Pure decision extracted from `remoteEnvironment()` so it can be unit-
+    /// tested without a live libssh2 session. Returns `true` ONLY for the
+    /// Teleport auth method AND when the inner (target-node) session is not
+    /// yet ready — the client must establish the inner session BEFORE running
+    /// the resolver's exec probes, otherwise the probes exec on the outer
+    /// PROXY session (fails with -22 and poisons the session).
+    ///
+    /// For non-Teleport (outer session supports exec directly) and for
+    /// Teleport-with-ready-inner (prepare is an idempotent no-op), returns
+    /// `false`.
+    nonisolated static func shouldPrepareInnerSessionBeforeResolvingEnvironment(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && !innerSessionReady
     }
 
     // MARK: - Mosh
@@ -1287,6 +1446,13 @@ actor SSHSession {
         var output = Data()
         var stderr = Data()
         var isStarted = false
+        /// `true` for an exec channel backed by the inner (target-node) libssh2
+        /// session of the Teleport proxy-subsystem path. The outer `ioLoop`
+        /// skips these — they're drained by `innerIOLoop`, which polls the
+        /// inner socketpair FD (data for the inner channel arrives via the
+        /// proxy-subsystem pump, not the outer session's socket). Mirrors the
+        /// `ShellChannelState.isInner` flag.
+        var isInner: Bool = false
 
         init(id: UUID, command: String, continuation: CheckedContinuation<String, Error>) {
             self.id = id
@@ -1303,6 +1469,12 @@ actor SSHSession {
         var lastYieldTime: UInt64 = DispatchTime.now().uptimeNanoseconds
         var recentBytesPerRead: Int = 0
         var didRecordFirstByte = false
+        /// `true` for a shell channel backed by the inner (target-node) libssh2
+        /// session of the Teleport proxy-subsystem path. The outer `ioLoop`
+        /// skips these — they're drained by `innerIOLoop`, which polls the
+        /// inner socketpair FD (data for the inner channel arrives via the
+        /// proxy-subsystem pump, not the outer session's socket).
+        var isInner: Bool = false
 
         init(id: UUID, channel: OpaquePointer, continuation: AsyncStream<Data>.Continuation) {
             self.id = id
@@ -1314,9 +1486,48 @@ actor SSHSession {
     let config: SSHSessionConfig
     private var libssh2Session: OpaquePointer?
     private var sftpSession: OpaquePointer?
+    /// `true` when `sftpSession` was created via `libssh2_sftp_init` on the
+    /// inner (target-node) libssh2 session (Teleport proxy-subsystem path).
+    /// `false` when it was created on the outer (direct) session. SFTP I/O
+    /// retries (EAGAIN) must wait on the matching socket: the inner
+    /// socketpair FD for `true`, the outer socket for `false`. Mixing them
+    /// would wait on the wrong FD and hang or spin.
+    private var sftpSessionIsInner: Bool = false
     private var shellChannels: [UUID: ShellChannelState] = [:]
     private var shellStartupsInFlight: Set<UUID> = []
     private var socket: Int32 = -1
+    /// The TLS+ALPN transport backing `socket` when the session connects to a
+    /// Teleport proxy (`.faceIDTeleport`). Non-nil only for the TLS path;
+    /// the raw-TCP path leaves this nil. Retained so `cleanup()` can close it
+    /// (closing the libssh2 FD alone would leak the NWConnection + pump task).
+    private var tlsTransport: SSHTLSTransport?
+    /// The second (target-node) libssh2 session for the Teleport proxy-subsystem
+    /// path. Non-nil only when `config.authMethod == .faceIDTeleport` and the
+    /// shell was started via `startShellViaTeleportProxy`. Owned by this
+    /// `SSHSession`; freed in `cleanupLibssh2`/`cleanup` (after the outer
+    /// session's proxy-subsystem channel + the bridge transport are torn
+    /// down).
+    private var innerLibssh2Session: OpaquePointer?
+    /// The `SSHProxySubsystemTransport` bridging the outer session's
+    /// proxy-subsystem channel to the inner libssh2 session's FD. Retained
+    /// for the inner session's lifetime so its pump keeps forwarding bytes
+    /// between the outer channel and the inner socketpair. Closed in
+    /// `cleanup` (before the inner session is freed).
+    private var innerTransport: SSHProxySubsystemTransport?
+    /// The outer (proxy) session channel that carries the proxy-subsystem
+    /// tunnel. Retained so `cleanup` can free it after the inner session is
+    /// torn down (the pump reads/writes this channel).
+    private var proxySubsystemChannel: OpaquePointer?
+    /// The inner socketpair's libssh2-facing FD. Mirrors `socket` for the
+    /// outer session; closed via `innerAtomicSocket` after the inner libssh2
+    /// session is freed.
+    private var innerSocket: Int32 = -1
+    /// Atomic storage for the inner FD, mirroring `atomicSocket` for the
+    /// outer session. Lets the inner I/O be interrupted from any thread.
+    private let innerAtomicSocket = AtomicSocket()
+    /// The IO loop draining inner (target-node) shell channels. `nil` until
+    /// `startShellViaTeleportProxy` starts it; cancelled in `cleanup`.
+    private var innerIOTask: Task<Void, Never>?
     private var isActive = false
     private var ioTask: Task<Void, Never>?
     private var execRequests: [UUID: ExecRequest] = [:]
@@ -1326,6 +1537,21 @@ actor SSHSession {
 
     /// Atomic socket storage for emergency abort from any thread
     private let atomicSocket = AtomicSocket()
+
+    /// Guards all libssh2 calls on the outer (proxy) session. The Teleport
+    /// proxy-subsystem pump (`SSHProxySubsystemTransport`) runs two concurrent
+    /// loops that read/write the outer session's proxy-subsystem channel via
+    /// `libssh2_channel_read_ex` / `libssh2_channel_write_ex` — both touch
+    /// the same `LIBSSH2_SESSION*`. libssh2 is not thread-safe per-session,
+    /// so without serialization the concurrent `ssh2_transport_read` /
+    /// `ssh2_transport_send` corrupt the session's transport buffer
+    /// accounting (`session->packet.writeidx/readidx`) and trip
+    /// `assert(remainbuf >= 0)` in transport.c. This mutex is shared with the
+    /// pump closures (`makeForChannel`) and acquired here in `sendKeepAlive`
+    /// (and any other outer-session caller) so off-actor pump access and
+    /// actor-isolated access never overlap. See `SessionMutex` for the race
+    /// rationale.
+    private let outerSessionMutex = SessionMutex()
 
     /// Session-specific auth callback context passed to libssh2 session abstract pointer.
     private let keyboardInteractiveContext = KeyboardInteractiveContext()
@@ -1345,6 +1571,61 @@ actor SSHSession {
 
     var isConnected: Bool {
         isActive && libssh2Session != nil
+    }
+
+    /// Returns `true` when `execute(_:)` can currently succeed on this session.
+    ///
+    /// For non-Teleport auth methods this mirrors `isConnected` (the outer
+    /// session supports exec directly). For Teleport (`.faceIDTeleport`) the
+    /// outer session is the PROXY, which rejects exec with -22; exec must be
+    /// routed to the INNER (target-node) session, so this returns `true` only
+    /// when the inner session is established (after the second handshake in
+    /// `startShellViaTeleportProxy`). Stats collection consults this to skip
+    /// gracefully before the shell starts rather than spinning failing exec
+    /// calls.
+    var supportsExec: Bool {
+        guard isActive, !hasBeenCleaned, libssh2Session != nil else { return false }
+        if config.authMethod == .faceIDTeleport {
+            return innerLibssh2Session != nil
+                && innerSocket >= 0
+                && innerAtomicSocket.isUsable
+        }
+        return true
+    }
+
+    /// Returns `true` when the Teleport INNER (target-node) session has been
+    /// established by `prepareTeleportInnerSession()` (non-nil libssh2
+    /// session). This is a lightweight liveness check used by
+    /// `SSHClient.remoteEnvironment()` to decide whether to prepare the inner
+    /// session before running exec probes — distinct from `supportsExec`,
+    /// which additionally gates on socket usability and active state. For
+    /// non-Teleport auth methods this returns `false` (there is no inner
+    /// session, and none is needed).
+    var isInnerSessionReady: Bool {
+        config.authMethod == .faceIDTeleport && innerLibssh2Session != nil
+    }
+
+    /// Returns `true` when SFTP (remote file browser) can currently succeed
+    /// on this session.
+    ///
+    /// Teleport's outer session is the PROXY, which is in `proxyMode` and
+    /// rejects the SFTP subsystem request with -22 (only the
+    /// `proxy:<node>:0` subsystem is accepted). SFTP must run on the INNER
+    /// (target-node) session, established by `prepareTeleportInnerSession()`.
+    /// For non-Teleport auth methods this mirrors `isConnected` (the outer
+    /// session supports SFTP directly).
+    ///
+    /// File-browser callers consult this to surface a clear "not ready"
+    /// error before attempting SFTP init (which would otherwise fail with
+    /// the opaque "Failed to start SFTP session" message on the proxy).
+    var supportsSFTP: Bool {
+        guard isActive, !hasBeenCleaned, libssh2Session != nil else { return false }
+        if config.authMethod == .faceIDTeleport {
+            return innerLibssh2Session != nil
+                && innerSocket >= 0
+                && innerAtomicSocket.isUsable
+        }
+        return true
     }
 
     /// Interrupt socket I/O from any thread; actor-owned cleanup performs the final close.
@@ -1384,28 +1665,23 @@ actor SSHSession {
         socket = -1
         connectedPeerAddress = nil
 
-        socket = try await SSHAddressConnector.connect(
-            host: config.dialHost,
-            port: config.dialPort,
-            trace: startupTrace
-        )
-
-        // Disable Nagle's algorithm for low-latency interactive typing
-        // Without this, small packets (keystrokes) are batched causing 40-200ms delays
-        var noDelay: Int32 = 1
-        setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
-
-        // Optimize socket buffers for interactive SSH:
-        // - Small send buffer (8KB) reduces buffering delay for keystrokes
-        // - Larger receive buffer (64KB) improves throughput for command output
-        var sendBufSize: Int32 = 8192
-        var recvBufSize: Int32 = 65536
-        setsockopt(socket, SOL_SOCKET, SO_SNDBUF, &sendBufSize, socklen_t(MemoryLayout<Int32>.size))
-        setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, socklen_t(MemoryLayout<Int32>.size))
-
-        // Prevent SIGPIPE on broken connections (handle errors in code instead)
-        var noSigPipe: Int32 = 1
-        setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        // Teleport proxies (default since Teleport 13) host SSH on port 443
+        // behind a TLS listener with ALPN `teleport-proxy-ssh` (TLS Routing,
+        // RFD 39). A raw TCP socket receives TLS bytes, not an SSH banner,
+        // so `libssh2_session_handshake` fails immediately. For Teleport
+        // servers we dial TLS+ALPN via `SSHTLSTransport`, which bridges
+        // `NWConnection` to libssh2 through a socketpair + pump. The
+        // non-Teleport path keeps the raw TCP connector unchanged.
+        if config.authMethod == .faceIDTeleport {
+            socket = try await connectTeleportTLS()
+        } else {
+            socket = try await SSHAddressConnector.connect(
+                host: config.dialHost,
+                port: config.dialPort,
+                trace: startupTrace
+            )
+            applyRawTCPSocketOptions(socket)
+        }
 
         // Store in atomic storage for emergency I/O interruption.
         atomicSocket.install(socket)
@@ -1423,27 +1699,69 @@ actor SSHSession {
         // Prefer fast ciphers - AES-GCM and ChaCha20 are hardware-accelerated on Apple Silicon
         // This reduces CPU overhead for encryption/decryption
         let fastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_CS, fastCiphers)
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_SC, fastCiphers)
+        applyMethodPref(session, method: LIBSSH2_METHOD_CRYPT_CS, prefs: fastCiphers, label: "crypt_cs")
+        applyMethodPref(session, method: LIBSSH2_METHOD_CRYPT_SC, prefs: fastCiphers, label: "crypt_sc")
 
         // Prefer fast MACs (message authentication codes)
         let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_MAC_CS, fastMACs)
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_MAC_SC, fastMACs)
+        applyMethodPref(session, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "mac_cs")
+        applyMethodPref(session, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "mac_sc")
+
+        // Force modern KEX + hostkey algorithms (Teleport proxy may reject ssh-rsa).
+        // libssh2 1.11.1 with the OpenSSL backend (linked via libcrypto.a)
+        // supports curve25519-sha256, ECDH, and rsa-sha2-256/512 hostkey
+        // signatures. Teleport's proxy — like OpenSSH 8.8+ — disables
+        // `ssh-rsa` (SHA-1) by default, so offering it first causes a KEX
+        // failure (LIBSSH2_ERROR_KEX_FAILURE / -5). Order the preferences so
+        // modern, SHA-2 based algorithms are tried before legacy `ssh-rsa`.
+        applyMethodPref(session, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "kex")
+        applyMethodPref(session, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "hostkey")
 
         // Set blocking mode for handshake
         libssh2_session_set_blocking(session, 1)
 
-        // Perform SSH handshake
+        // Perform SSH handshake.
+        //
+        // Teleport proxies running TLS Routing (the default since Teleport 13)
+        // multiplex all client protocols on port 443 behind a single TLS
+        // listener. SSH is reached via ALPN `teleport-proxy-ssh` *inside* a TLS
+        // tunnel — a raw TCP socket here will get an immediate handshake
+        // failure because the proxy speaks TLS, not SSH, on the bare socket.
+        // When that happens `libssh2_session_last_error` typically reports a
+        // banner/version error (e.g. "Error starting up SSH session: -1")
+        // rather than a TLS error, because libssh2 never sees a TLS byte.
+        // Capture the libssh2 error string so the live failure surfaces it.
         try Task.checkCancellation()
         let handshakeToken = startupTrace?.begin(.sshHandshake)
+        let dialHost = config.dialHost
+        let dialPort = config.dialPort
+        let peer = connectedPeerAddress ?? "unknown"
+        let fd = socket
+        logger.info(
+            "ssh_handshake_begin fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
+        )
         let handshakeResult = libssh2_session_handshake(session, socket)
         guard handshakeResult == 0 else {
-            if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "failed") }
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "ssh_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
+            )
+            if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "failed", detail: "code_\(handshakeResult)") }
             cleanup()
-            throw SSHError.connectionFailed("SSH handshake failed: \(handshakeResult)")
+            throw SSHError.connectionFailed("SSH handshake failed (code \(handshakeResult)): \(errorMsg)")
         }
-        if let handshakeToken { startupTrace?.end(handshakeToken) }
+
+        // Log the negotiated KEX + hostkey algorithms so future live KEX
+        // mismatches surface what libssh2 actually agreed on with the peer.
+        let negotiatedKex = SSHSession.negotiatedMethod(session, method: LIBSSH2_METHOD_KEX)
+        let negotiatedHostkey = SSHSession.negotiatedMethod(session, method: LIBSSH2_METHOD_HOSTKEY)
+        logger.info(
+            "ssh_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) fd=\(fd) peer=\(peer, privacy: .public)"
+        )
+        if let handshakeToken { startupTrace?.end(handshakeToken, outcome: "ok", detail: "kex_\(negotiatedKex)") }
 
         let hostKeyToken = startupTrace?.begin(.hostKeyVerification)
         do {
@@ -1459,7 +1777,7 @@ actor SSHSession {
         try Task.checkCancellation()
         let authenticationToken = startupTrace?.begin(.authentication)
         do {
-            try authenticate()
+            try await authenticate()
             if let authenticationToken { startupTrace?.end(authenticationToken) }
         } catch {
             if let authenticationToken { startupTrace?.end(authenticationToken, outcome: "failed") }
@@ -1473,7 +1791,85 @@ actor SSHSession {
         logger.info("SSH session established")
     }
 
-    private func authenticate() throws {
+    // MARK: - Teleport TLS transport
+
+    /// Dial the Teleport proxy over TLS+ALPN and return the libssh2-facing FD.
+    ///
+    /// Fetches the cluster name + TLS CA certs (captured at Phase 1 bootstrap,
+    /// persisted in `TeleportKeyRing`) to build the NWProtocolTLS trust
+    /// anchors. The transport is retained for the session lifetime so the
+    /// pump + NWConnection stay alive; `cleanup()` closes it.
+    ///
+    /// If no cluster TLS state is persisted (e.g. the server arrived via
+    /// iCloud on a fresh device, or the bootstrap didn't capture
+    /// host_signers), throw `teleportCertMissing` so the UI layer triggers
+    /// re-bootstrap — the SSH path can't construct the TLS trust store
+    /// without the cluster CA.
+    private func connectTeleportTLS() async throws -> Int32 {
+        let clusterId = config.credentials.serverId
+        let keyRing = TeleportKeyRing.shared
+        guard let tlsState = await keyRing.clusterTLSState(for: clusterId) else {
+            logger.error(
+                "teleport TLS state missing for cluster \(clusterId.uuidString, privacy: .public) — re-bootstrap required"
+            )
+            throw SSHError.teleportCertMissing
+        }
+
+        // For Teleport, `config.host`/`config.dialHost` is the PROXY host
+        // (e.g. teleport.pcad.it). The target node name is `Server.name`
+        // (the display name), used only for the `proxy:<node>:0` subsystem
+        // string. Dial the proxy with TLS+ALPN.
+        let transport = SSHTLSTransport(
+            host: config.dialHost,
+            port: config.dialPort,
+            clusterName: tlsState.clusterName,
+            clusterCAPEMs: tlsState.clusterCAPEMs
+        )
+        let fd: Int32
+        do {
+            fd = try await transport.connect()
+        } catch {
+            // connect() already cleaned up its own FDs + NWConnection on
+            // failure (see SSHTLSTransport.connect). Close once more to be
+            // safe, then rethrow — don't retain the transport.
+            await transport.close()
+            throw error
+        }
+        tlsTransport = transport
+        let dialPort = config.dialPort
+        let dialHost = config.dialHost
+        let caCertCount = tlsState.clusterCAPEMs.count
+        logger.info(
+            "teleport TLS transport connected dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
+        )
+        return fd
+    }
+
+    /// Apply TCP-specific socket options (Nagle, buffer sizes, NOSIGPIPE)
+    /// to a raw TCP socket from `SSHAddressConnector`. Not called for the
+    /// Teleport TLS path — the socket there is an AF_UNIX socketpair end,
+    /// not a TCP socket.
+    private func applyRawTCPSocketOptions(_ fd: Int32) {
+        // Disable Nagle's algorithm for low-latency interactive typing.
+        // Without this, small packets (keystrokes) are batched causing
+        // 40-200ms delays.
+        var noDelay: Int32 = 1
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
+
+        // Optimize socket buffers for interactive SSH:
+        // - Small send buffer (8KB) reduces buffering delay for keystrokes
+        // - Larger receive buffer (64KB) improves throughput for command output
+        var sendBufSize: Int32 = 8192
+        var recvBufSize: Int32 = 65536
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendBufSize, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &recvBufSize, socklen_t(MemoryLayout<Int32>.size))
+
+        // Prevent SIGPIPE on broken connections (handle errors in code instead).
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+    }
+
+    private func authenticate() async throws {
         guard let session = libssh2Session else {
             throw SSHError.notConnected
         }
@@ -1506,6 +1902,49 @@ actor SSHSession {
         }
 
         switch config.authMethod {
+        case .faceIDTeleport:
+            // Teleport cert seam — feed the Teleport-issued SSH cert + the
+            // ed25519 private key to libssh2. The cert (authorized_keys
+            // format: `ssh-ed25519-cert-v01@openssh.com AAAA… comment`) goes
+            // in as `publicKeyData`; the ed25519 private key (OpenSSH PEM)
+            // goes in as `privateKeyData`. No passphrase (Teleport certs
+            // don't have one). Same `libssh2_userauth_publickey_frommemory`
+            // call the `.sshKey` case uses, just with different key material.
+            //
+            // The cert + key are fetched live from `TeleportKeyRing` so a
+            // refresh (Phase 3 re-auth) is picked up without rebuilding the
+            // config. If no live cert (expired/missing) or no private key,
+            // throw `teleportCertMissing` so the UI layer can trigger the
+            // `TeleportLoginCoordinator` flow.
+            let clusterId = config.credentials.serverId
+            let keyRing = TeleportKeyRing.shared
+            guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
+                  let certData = certPEM.data(using: .utf8),
+                  let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {
+                logger.error("No live Teleport cert or ed25519 key for cluster \(clusterId.uuidString, privacy: .public)")
+                throw SSHError.teleportCertMissing
+            }
+            logger.info("Attempting Teleport cert auth for user: \(username)")
+            authResult = certData.withUnsafeBytes { certBuffer -> Int32 in
+                guard let certBase = certBuffer.bindMemory(to: CChar.self).baseAddress else {
+                    return LIBSSH2_ERROR_ALLOC
+                }
+                return keyData.withUnsafeBytes { keyBuffer -> Int32 in
+                    guard let keyBase = keyBuffer.bindMemory(to: CChar.self).baseAddress else {
+                        return LIBSSH2_ERROR_ALLOC
+                    }
+                    return libssh2_userauth_publickey_frommemory(
+                        session,
+                        username,
+                        Int(username.utf8.count),
+                        certBase,
+                        Int(certData.count),
+                        keyBase,
+                        Int(keyData.count),
+                        nil
+                    )
+                }
+            }
         case .password:
             guard let password = config.credentials.password else {
                 logger.error("No password provided")
@@ -1660,9 +2099,17 @@ actor SSHSession {
         abandonAllShellChannels()
         ioTask?.cancel()
         ioTask = nil
+        stopInnerIOLoop()
         failAllExecRequests(error: SSHError.notConnected)
         atomicSocket.interrupt()
+        innerAtomicSocket.interrupt()
+        // Synchronously stop the bridge transport's pump so it stops
+        // reading/writing the outer proxy-subsystem channel (the outer
+        // session is freed next by cleanupLibssh2). The full actor-isolated
+        // close() is deferred to cleanupLibssh2 for bookkeeping.
+        innerTransport?.cancelPumpSync()
         socket = -1
+        innerSocket = -1
     }
 
     private func cleanupLibssh2() {
@@ -1672,6 +2119,55 @@ actor SSHSession {
         // Prevent double cleanup
         guard !hasBeenCleaned else { return }
         sftpSession = nil
+        sftpSessionIsInner = false
+
+        // Free the Teleport inner (target-node) session first, before the
+        // outer session. The inner session's I/O was already interrupted by
+        // invalidateTransport (innerAtomicSocket.interrupt), and its bridge
+        // transport pump was stopped there too, so freeing it is safe. The
+        // inner FD is closed via innerAtomicSocket after the free (mirrors
+        // the outer session's AtomicSocket close ordering).
+        if let innerSession = innerLibssh2Session {
+            var innerFreeResult = Int32(LIBSSH2_ERROR_EAGAIN)
+            for _ in 0..<1_024 {
+                innerFreeResult = libssh2_session_free(innerSession)
+                if innerFreeResult != LIBSSH2_ERROR_EAGAIN {
+                    break
+                }
+            }
+            if innerFreeResult != 0 {
+                logger.error("Abandoning incomplete inner libssh2 session cleanup: \(innerFreeResult)")
+            }
+            innerLibssh2Session = nil
+            innerAtomicSocket.close()
+            innerSocket = -1
+        }
+
+        // Synchronously stop the bridge transport's pump BEFORE freeing the
+        // outer session. The pump reads/writes the outer proxy-subsystem
+        // channel via libssh2_channel_read_ex / libssh2_channel_write_ex;
+        // freeing the outer session underneath a live pump would be a
+        // use-after-free. cancelPumpSync() cancels the pump task + closes the
+        // pump FD (the loops exit on EBADF). The full actor-isolated close()
+        // is also scheduled (below) for the libssh2FD bookkeeping, but the
+        // synchronous cancel is what makes freeing the outer session safe.
+        if let innerTransport = innerTransport {
+            innerTransport.cancelPumpSync()
+        }
+
+        // Free the outer proxy-subsystem channel if it's still around (the
+        // outer session free below may reap it, but close it explicitly to
+        // avoid leaking it if the outer free is abandoned).
+        if let proxyChannel = proxySubsystemChannel {
+            _ = libssh2_channel_close(proxyChannel)
+            _ = libssh2_channel_free(proxyChannel)
+            proxySubsystemChannel = nil
+        }
+
+        if let transport = innerTransport {
+            Task { await transport.close() }
+            innerTransport = nil
+        }
 
         guard let session = libssh2Session else {
             hasBeenCleaned = true
@@ -1702,9 +2198,33 @@ actor SSHSession {
     }
 
     private func cleanup() {
-        // Close socket first to abort any blocking I/O
-        atomicSocket.interrupt()
-        socket = -1
+        // Tear down the Teleport inner session + bridge transport BEFORE the
+        // outer session: the bridge pump must stop before the outer
+        // proxy-subsystem channel is freed (it reads/writes that channel),
+        // and the inner libssh2 session must be interrupted before it is
+        // freed. invalidateTransport() (called by the startShell error path)
+        // stops the inner I/O + closes the bridge transport + interrupts
+        // both sockets; cleanupLibssh2() (called below) then frees the inner
+        // + outer sessions in order. We do NOT duplicate the inner
+        // session/transport/channel teardown here — cleanupLibssh2() owns it.
+        //
+        // The outer TLS transport is closed here (it is not touched by
+        // cleanupLibssh2 because its lifecycle mirrors the outer socket's,
+        // which is owned by AtomicSocket).
+        if let transport = tlsTransport {
+            atomicSocket.interrupt()  // shutdown(libssh2FD) unblocks libssh2 I/O
+            // Detach the transport close so `cleanup()` stays synchronous.
+            // The Task captures `transport` strongly, so it lives until close()
+            // completes even though `tlsTransport` is nilled below. This is
+            // safe because `cleanup()` runs after I/O has stopped.
+            Task { await transport.close() }
+            tlsTransport = nil
+            socket = -1
+        } else {
+            // Close socket first to abort any blocking I/O.
+            atomicSocket.interrupt()
+            socket = -1
+        }
         connectedPeerAddress = nil
         cleanupLibssh2()
     }
@@ -1773,7 +2293,7 @@ actor SSHSession {
             }
 
             if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -1842,7 +2362,7 @@ actor SSHSession {
             }
 
             if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -1902,7 +2422,7 @@ actor SSHSession {
                 }
 
                 if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
-                    await waitForSocket()
+                    await waitForSFTPSocket()
                     continue
                 }
 
@@ -1948,7 +2468,7 @@ actor SSHSession {
             }
 
             if bytesWritten == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -1991,7 +2511,7 @@ actor SSHSession {
             }
 
             if result == Int32(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -2043,7 +2563,7 @@ actor SSHSession {
             }
 
             if result == Int32(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -2164,6 +2684,24 @@ actor SSHSession {
             }
         }
 
+        // Teleport proxy-subsystem path: the proxy listener is in `proxyMode`
+        // and rejects `pty`/`shell`/`exec` on the outer session. Instead,
+        // request a `proxy:<node>:0` subsystem, bridge the channel to a
+        // socketpair, and run a second full SSH handshake (KEX + cert auth)
+        // to the target node over that tunnel. The inner channel becomes
+        // the shell channel. Non-Teleport auth methods keep the existing
+        // direct PTY+shell flow.
+        if config.authMethod == .faceIDTeleport {
+            return try await startShellViaTeleportProxy(
+                cols: cols,
+                rows: rows,
+                pixelSize: pixelSize,
+                startupCommand: startupCommand,
+                environment: environment,
+                terminalType: terminalType
+            )
+        }
+
         do {
             // Keep the shared session nonblocking. libssh2 1.11.1 returns
             // EAGAIN when another caller owns a partial packet; yielding here
@@ -2234,7 +2772,15 @@ actor SSHSession {
                 throw error
             }
             guard ptyResult == 0 else {
-                if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed") }
+                var errmsg: UnsafeMutablePointer<CChar>?
+                var errmsgLen: Int32 = 0
+                libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+                let lastErrno = libssh2_session_last_errno(session)
+                let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+                logger.error(
+                    "pty_request_failed code=\(ptyResult) errno=\(lastErrno) libssh2=\(errorMsg, privacy: .public) term=\(terminalType.rawValue, privacy: .public) cols=\(wireCols) rows=\(wireRows)"
+                )
+                if let ptyToken { startupTrace?.end(ptyToken, outcome: "failed", detail: "code_\(ptyResult)") }
                 throw SSHError.shellRequestFailed
             }
             if let ptyToken { startupTrace?.end(ptyToken) }
@@ -2276,7 +2822,15 @@ actor SSHSession {
                 throw error
             }
             guard shellResult == 0 else {
-                if let shellToken { startupTrace?.end(shellToken, outcome: "failed") }
+                var errmsg: UnsafeMutablePointer<CChar>?
+                var errmsgLen: Int32 = 0
+                libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+                let lastErrno = libssh2_session_last_errno(session)
+                let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+                logger.error(
+                    "shell_request_failed code=\(shellResult) errno=\(lastErrno) libssh2=\(errorMsg, privacy: .public)"
+                )
+                if let shellToken { startupTrace?.end(shellToken, outcome: "failed", detail: "code_\(shellResult)") }
                 throw SSHError.shellRequestFailed
             }
             if let shellToken { startupTrace?.end(shellToken) }
@@ -2317,6 +2871,686 @@ actor SSHSession {
                 }
             }
             throw error
+        }
+    }
+
+    // MARK: - Teleport proxy-subsystem second handshake
+
+    /// Establish the inner (target-node) libssh2 session for a Teleport proxy
+    /// connection WITHOUT opening a shell channel.
+    ///
+    /// Teleport's outer session is the PROXY, which rejects `exec`/`pty`/
+    /// `shell` with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). Exec (used by
+    /// stats collection, process control, and SFTP) must run on the INNER
+    /// (target-node) session, established by a second SSH handshake over a
+    /// `proxy:<node>:0` subsystem tunnel. Previously this second handshake
+    /// only happened inside `startShellViaTeleportProxy`, so exec-only
+    /// consumers (the stats collector creates its own `SSHClient` and never
+    /// starts a shell) never got an inner session — `supportsExec` stayed
+    /// `false` forever and every stats poll (every 2s) logged a skip.
+    ///
+    /// This method performs steps 1-7 of `startShellViaTeleportProxy`
+    /// (open outer channel, request subsystem, bridge transport, create inner
+    /// session, handshake, verify hostkey, cert auth) and switches the inner
+    /// session to non-blocking. It is a no-op for non-Teleport auth methods
+    /// (their outer session supports exec directly) and idempotent for
+    /// Teleport (a ready inner session is reused, so calling it when the
+    /// terminal already opened a shell is safe and cheap). `startShellViaTeleportProxy`
+    /// calls this first, then opens a shell channel on the now-ready inner
+    /// session.
+    ///
+    /// Ownership: the outer proxy-subsystem channel, the bridge transport, and
+    /// the inner session are retained on this `SSHSession` and torn down in
+    /// `cleanup`. On any failure the transport is invalidated so exec-only
+    /// callers also tear down correctly.
+    func prepareTeleportInnerSession() async throws {
+        // Non-Teleport auth methods support exec directly on the outer session.
+        guard config.authMethod == .faceIDTeleport else { return }
+        // Idempotent: a ready inner session means a prior prepare (or shell)
+        // already established the tunnel + second handshake.
+        if innerLibssh2Session != nil { return }
+
+        guard isActive, let outerSession = libssh2Session else {
+            throw SSHError.notConnected
+        }
+
+        var shouldInvalidateTransport = false
+        defer {
+            if shouldInvalidateTransport {
+                invalidateTransport()
+            }
+        }
+
+        // 1. Open a session channel on the outer (proxy) session.
+        let outerChannel: OpaquePointer
+        do {
+            outerChannel = try await openShellStartupChannel(session: outerSession)
+            try validateShellStartup(session: outerSession)
+        } catch {
+            shouldInvalidateTransport = true
+            throw error
+        }
+        proxySubsystemChannel = outerChannel
+
+        // 2. Request the proxy:<node>:0 subsystem. libssh2 returns 0 on
+        //    success, LIBSSH2_ERROR_CHANNEL_FAILURE if the proxy rejects the
+        //    subsystem name, or EAGAIN (handled by performShellStartupCall).
+        //    The node name is normalized: `pcad-dev.teleport.pcad.it` → `pcad-dev`
+        //    The node name is `Server.name` (the display name) — for Teleport
+        //    servers, the display name IS the node name (e.g. "pcad-dev").
+        let nodeName = config.teleportNodeName ?? config.host
+        let subsystem = TeleportProxySubsystem.request(for: nodeName)
+        let subsystemResult: Int32
+        do {
+            subsystemResult = try await performShellStartupCall(session: outerSession) {
+                subsystem.withCString { subsystemPtr in
+                    libssh2_channel_process_startup(
+                        outerChannel,
+                        "subsystem",
+                        UInt32("subsystem".utf8.count),
+                        subsystemPtr,
+                        UInt32(subsystem.utf8.count)
+                    )
+                }
+            }
+        } catch {
+            shouldInvalidateTransport = true
+            throw error
+        }
+        guard subsystemResult == 0 else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(outerSession, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            // Read any extended data (stderr) the proxy may have sent before
+            // rejecting. Teleport sometimes writes a human-readable error to
+            // channel stderr before the CHANNEL_FAILURE.
+            // libssh2_channel_read_stderr doesn't exist as a symbol; use
+            // libssh2_channel_read_ex with stream_id=1 (SSH_EXTENDED_DATA_STDERR).
+            var stderrBuf = [CChar](repeating: 0, count: 4096)
+            let stderrLen = libssh2_channel_read_ex(outerChannel, 1, &stderrBuf, stderrBuf.count)
+            let stderrMsg = stderrLen > 0
+                ? String(cString: stderrBuf, encoding: .utf8) ?? "<non-utf8>"
+                : "<no stderr>"
+            logger.error(
+                "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(stderrMsg, privacy: .public)"
+            )
+            shouldInvalidateTransport = true
+            throw SSHError.shellRequestFailed
+        }
+        logger.info(
+            "teleport_proxy_subsystem_ok subsystem=\(subsystem, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
+        )
+
+        // 3. Bridge the outer channel to a socketpair for the inner session.
+        //    The pump starts before start() returns the FD, so the target
+        //    node's banner is forwarded as soon as it arrives.
+        let transport = SSHProxySubsystemTransport.makeForChannel(
+            channel: outerChannel,
+            outerSession: outerSession,
+            outerSessionMutex: outerSessionMutex
+        )
+        let innerFD: Int32
+        do {
+            innerFD = try await transport.start()
+        } catch {
+            logger.error(
+                "teleport_proxy_transport_start_failed error=\(error.localizedDescription, privacy: .public)"
+            )
+            shouldInvalidateTransport = true
+            throw error
+        }
+        innerTransport = transport
+        innerSocket = innerFD
+        innerAtomicSocket.install(innerFD)
+
+        // 4. Create the inner libssh2 session + set the same method
+        //    preferences. The target node presents a host cert (same HostCA
+        //    as the proxy), so the cert hostkey variants are required here
+        //    too — same fork as the outer session.
+        guard let innerSession = libssh2_session_init_ex(nil, nil, nil, nil) else {
+            shouldInvalidateTransport = true
+            throw SSHError.unknown("Failed to create inner libssh2 session")
+        }
+        innerLibssh2Session = innerSession
+
+        let fastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_CS, prefs: fastCiphers, label: "inner_crypt_cs")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_SC, prefs: fastCiphers, label: "inner_crypt_sc")
+        let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "inner_mac_cs")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "inner_mac_sc")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
+
+        // Blocking mode for the handshake, then non-blocking for I/O.
+        libssh2_session_set_blocking(innerSession, 1)
+
+        // 5. Second handshake to the target node over the bridge FD.
+        let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
+        guard handshakeResult == 0 else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(innerSession, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "teleport_inner_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
+            )
+            shouldInvalidateTransport = true
+            throw SSHError.connectionFailed(
+                "Teleport inner handshake failed (code \(handshakeResult)): \(errorMsg)"
+            )
+        }
+        let negotiatedKex = SSHSession.negotiatedMethod(innerSession, method: LIBSSH2_METHOD_KEX)
+        let negotiatedHostkey = SSHSession.negotiatedMethod(innerSession, method: LIBSSH2_METHOD_HOSTKEY)
+        logger.info(
+            "teleport_inner_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
+        )
+
+        // 6. Verify the inner hostkey against the target node hostname.
+        do {
+            try verifyInnerHostKey(session: innerSession, host: nodeName, port: config.port)
+        } catch {
+            shouldInvalidateTransport = true
+            throw error
+        }
+
+        // 7. Auth with the same cert + ed25519 key.
+        do {
+            try await authenticateInner(session: innerSession)
+        } catch {
+            shouldInvalidateTransport = true
+            throw error
+        }
+
+        // Switch the inner session to non-blocking for I/O.
+        libssh2_session_set_blocking(innerSession, 0)
+    }
+
+    /// Start a shell via the Teleport proxy subsystem + a second SSH handshake
+    /// to the target node.
+    ///
+    /// Teleport's proxy listener is in `proxyMode`: it rejects `pty`/`shell`/
+    /// `exec` channel requests on the outer session. Instead:
+    ///
+    ///   1. Open a `session` channel on the outer (proxy) session.
+    ///   2. Request a `proxy:<node>:0` subsystem — the proxy forwards the
+    ///      channel as a raw TCP tunnel to the target node's SSH service.
+    ///   3. Bridge the channel to a socketpair (`SSHProxySubsystemTransport`)
+    ///      so a second libssh2 session can read/write through it.
+    ///   4. Create the inner libssh2 session + set the same KEX/hostkey
+    ///      preferences (cert hostkey variants — the target node presents a
+    ///      host cert signed by the same HostCA as the proxy).
+    ///   5. `libssh2_session_handshake(innerSession, innerFD)` — the second
+    ///      handshake to the target node.
+    ///   6. Verify the inner hostkey against the target node hostname
+    ///      (`config.host`).
+    ///   7. Auth with the same cert + ed25519 key (publickey auth).
+    ///   8. Open a `session` channel on the inner session.
+    ///   9. PTY + shell on the inner channel.
+    ///  10. Return a `ShellHandle` wrapping the inner channel; `innerIOLoop`
+    ///      drains it.
+    ///
+    /// The outer session + its proxy-subsystem channel + the bridge transport
+    /// are retained for the inner session's lifetime and torn down in `cleanup`.
+    private func startShellViaTeleportProxy(
+        cols: Int,
+        rows: Int,
+        pixelSize: TerminalPixelSize?,
+        startupCommand: String?,
+        environment: RemoteEnvironment,
+        terminalType: RemoteTerminalType
+    ) async throws -> ShellHandle {
+        guard isActive, libssh2Session != nil else {
+            throw SSHError.notConnected
+        }
+        guard let wireCols = Int32(exactly: cols),
+              let wireRows = Int32(exactly: rows) else {
+            throw SSHError.unknown("Invalid terminal size \(cols)x\(rows)")
+        }
+
+        let startupId = UUID()
+        shellStartupsInFlight.insert(startupId)
+        var shouldInvalidateTransport = false
+        defer {
+            if shouldInvalidateTransport {
+                invalidateTransport()
+            }
+            shellStartupsInFlight.remove(startupId)
+            if !isActive {
+                cleanupLibssh2()
+            }
+        }
+
+        // Steps 1-7: establish the inner (target-node) session. This is a
+        // connection-level concern (proxy subsystem + second handshake +
+        // hostkey verify + cert auth), not a shell-level concern, so it is
+        // extracted into `prepareTeleportInnerSession()` which is also called
+        // by exec-only consumers (stats collector) that never start a shell.
+        // Idempotent: a no-op if the inner session is already established by
+        // a prior prepare call (e.g. stats ran before the terminal opened).
+        try await prepareTeleportInnerSession()
+        guard let innerSession = innerLibssh2Session else {
+            shouldInvalidateTransport = true
+            throw SSHError.notConnected
+        }
+
+        // 8. Open a session channel on the inner session.
+        let innerChannel: OpaquePointer
+        do {
+            innerChannel = try await openInnerShellStartupChannel(session: innerSession)
+            try validateInnerShellStartup(session: innerSession)
+        } catch {
+            shouldInvalidateTransport = true
+            throw error
+        }
+
+        // Mirror Ghostty's TERM env forwarding on the inner channel too.
+        for variable in RemoteTerminalBootstrap.terminalEnvironment() {
+            let result = try await performInnerShellStartupCall(session: innerSession) {
+                libssh2_channel_setenv_ex(
+                    innerChannel,
+                    variable.name,
+                    UInt32(variable.name.utf8.count),
+                    variable.value,
+                    UInt32(variable.value.utf8.count)
+                )
+            }
+            if result != 0 {
+                logger.debug("Remote node rejected env \(variable.name, privacy: .public): \(result)")
+            }
+        }
+
+        // 9. PTY + shell on the inner channel.
+        let ptyResult = try await performInnerShellStartupCall(session: innerSession) {
+            libssh2_channel_request_pty_ex(
+                innerChannel,
+                terminalType.rawValue,
+                UInt32(terminalType.rawValue.utf8.count),
+                nil,
+                0,
+                wireCols,
+                wireRows,
+                Int32(pixelSize?.width ?? 0),
+                Int32(pixelSize?.height ?? 0)
+            )
+        }
+        guard ptyResult == 0 else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(innerSession, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "teleport_inner_pty_failed code=\(ptyResult) libssh2=\(errorMsg, privacy: .public) term=\(terminalType.rawValue, privacy: .public)"
+            )
+            shouldInvalidateTransport = true
+            throw SSHError.shellRequestFailed
+        }
+
+        let shellResult: Int32
+        switch RemoteTerminalBootstrap.launchPlan(
+            startupCommand: startupCommand,
+            environment: environment
+        ) {
+        case .shell:
+            shellResult = try await performInnerShellStartupCall(session: innerSession) {
+                libssh2_channel_process_startup(innerChannel, "shell", 5, nil, 0)
+            }
+        case .exec(let command):
+            shellResult = try await performInnerShellStartupCall(session: innerSession) {
+                command.withCString { pointer in
+                    libssh2_channel_process_startup(
+                        innerChannel,
+                        "exec",
+                        4,
+                        pointer,
+                        UInt32(command.utf8.count)
+                    )
+                }
+            }
+        }
+        guard shellResult == 0 else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(innerSession, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "teleport_inner_shell_failed code=\(shellResult) libssh2=\(errorMsg, privacy: .public)"
+            )
+            shouldInvalidateTransport = true
+            throw SSHError.shellRequestFailed
+        }
+        logger.info("Teleport inner shell started (\(cols)x\(rows))")
+
+        // 10. Wrap the inner channel in a ShellHandle. The inner channel is
+        //     marked `isInner` so the outer ioLoop skips it; `innerIOLoop`
+        //     drains it instead.
+        let shellId = UUID()
+        let stream = AsyncStream<Data> { continuation in
+            let state = ShellChannelState(id: shellId, channel: innerChannel, continuation: continuation)
+            state.isInner = true
+            self.shellChannels[shellId] = state
+            continuation.onTermination = { [weak self] _ in
+                Task { [weak self] in
+                    await self?.closeShell(shellId)
+                }
+            }
+        }
+        startInnerIOLoop()
+        return ShellHandle(id: shellId, stream: stream)
+    }
+
+    /// Verify the inner (target-node) session's hostkey against the given
+    /// host + port. Mirrors `verifyHostKey()` but parameterized so the inner
+    /// session verifies against `config.host` (the target node), not the
+    /// proxy host. The cert hostkey verification fork (libssh2) applies here
+    /// too — the target node presents a host cert signed by the same HostCA
+    /// as the proxy.
+    private func verifyInnerHostKey(
+        session: OpaquePointer,
+        host: String,
+        port: Int
+    ) throws {
+        let (fingerprint, keyType) = try innerHostKeyFingerprint(for: session)
+        if let entry = KnownHostsManager.shared.entry(for: host, port: port) {
+            if entry.fingerprint != fingerprint {
+                logger.error(
+                    "Inner host key mismatch for \(host, privacy: .private(mask: .hash)):\(port). Known: \(entry.fingerprint, privacy: .private(mask: .hash)), Presented: \(fingerprint, privacy: .private(mask: .hash))"
+                )
+                throw SSHError.hostKeyVerificationFailed
+            }
+            KnownHostsManager.shared.updateSeen(host: host, port: port)
+            logger.info("Inner host key verified for \(host, privacy: .private(mask: .hash)):\(port)")
+            return
+        }
+        let entry = KnownHostsManager.Entry(
+            host: host,
+            port: port,
+            fingerprint: fingerprint,
+            keyType: keyType,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        )
+        KnownHostsManager.shared.save(entry: entry)
+        logger.info(
+            "Trusted new inner host key for \(host, privacy: .private(mask: .hash)):\(port) (\(fingerprint, privacy: .private(mask: .hash)))"
+        )
+    }
+
+    private func innerHostKeyFingerprint(for session: OpaquePointer) throws -> (String, Int) {
+        guard let hashPtr = libssh2_hostkey_hash(session, Int32(LIBSSH2_HOSTKEY_HASH_SHA256)) else {
+            throw SSHError.hostKeyVerificationFailed
+        }
+        let hash = Data(bytes: hashPtr, count: 32)
+        let base64 = hash.base64EncodedString().trimmingCharacters(in: CharacterSet(charactersIn: "="))
+        let fingerprint = "SHA256:\(base64)"
+        var keyLen: size_t = 0
+        var keyType: Int32 = 0
+        _ = libssh2_session_hostkey(session, &keyLen, &keyType)
+        return (fingerprint, Int(keyType))
+    }
+
+    /// Authenticate the inner (target-node) session with the same Teleport
+    /// cert + ed25519 key used for the outer session.
+    ///
+    /// The SSH `user` for the inner session must be an OS login from the
+    /// cert's `ValidPrincipals` (e.g. `root`), NOT the Teleport username.
+    /// This MVP uses `config.username` (the Teleport username) as a first
+    /// attempt — this works when the Teleport username matches the OS login
+    /// (the common case). A future change should parse the cert's
+    /// `ValidPrincipals` (via `SSHCertExpiryParser`'s wire-format walker) and
+    /// use the first principal as the login, or expose a `teleportLogin`
+    /// field on `Server`.
+    /// TODO: parse cert ValidPrincipals for the inner-session OS login.
+    private func authenticateInner(session: OpaquePointer) async throws {
+        let clusterId = config.credentials.serverId
+        let keyRing = TeleportKeyRing.shared
+        guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
+              let certData = certPEM.data(using: .utf8),
+              let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {
+            logger.error("No live Teleport cert or ed25519 key for inner cluster \(clusterId.uuidString, privacy: .public)")
+            throw SSHError.teleportCertMissing
+        }
+        // TODO: this should be the cert's first ValidPrincipal (OS login),
+        // not the Teleport username. Using config.username as the MVP default.
+        let username = config.username
+        logger.info("Attempting Teleport cert inner auth for user: \(username)")
+        let authResult = certData.withUnsafeBytes { certBuffer -> Int32 in
+            guard let certBase = certBuffer.bindMemory(to: CChar.self).baseAddress else {
+                return LIBSSH2_ERROR_ALLOC
+            }
+            return keyData.withUnsafeBytes { keyBuffer -> Int32 in
+                guard let keyBase = keyBuffer.bindMemory(to: CChar.self).baseAddress else {
+                    return LIBSSH2_ERROR_ALLOC
+                }
+                return libssh2_userauth_publickey_frommemory(
+                    session,
+                    username,
+                    Int(username.utf8.count),
+                    certBase,
+                    Int(certData.count),
+                    keyBase,
+                    Int(keyData.count),
+                    nil
+                )
+            }
+        }
+        guard authResult == 0 else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "Unknown error"
+            logger.error("Inner auth failed (\(authResult)): \(errorMsg)")
+            throw SSHError.authenticationFailed
+        }
+        logger.info("Teleport inner authentication successful")
+    }
+
+    private func validateInnerShellStartup(session: OpaquePointer) throws {
+        try Task.checkCancellation()
+        guard isActive,
+              !hasBeenCleaned,
+              let currentSession = innerLibssh2Session,
+              currentSession == session,
+              innerSocket >= 0,
+              innerAtomicSocket.isUsable else {
+            throw SSHError.notConnected
+        }
+    }
+
+    private func waitForInnerSocket() async {
+        guard let session = innerLibssh2Session, innerSocket >= 0 else { return }
+        let direction = libssh2_session_block_directions(session)
+        guard direction != 0 else { return }
+        var pfd = pollfd()
+        pfd.fd = innerSocket
+        pfd.events = 0
+        if direction & LIBSSH2_SESSION_BLOCK_INBOUND != 0 {
+            pfd.events |= Int16(POLLIN)
+        }
+        if direction & LIBSSH2_SESSION_BLOCK_OUTBOUND != 0 {
+            pfd.events |= Int16(POLLOUT)
+        }
+        _ = poll(&pfd, 1, 5)
+    }
+
+    private func openInnerShellStartupChannel(session: OpaquePointer) async throws -> OpaquePointer {
+        while true {
+            try validateInnerShellStartup(session: session)
+            if let channel = libssh2_channel_open_ex(
+                session,
+                "session",
+                UInt32("session".utf8.count),
+                2 * 1024 * 1024,
+                32768,
+                nil,
+                0
+            ) {
+                return channel
+            }
+            let error = libssh2_session_last_errno(session)
+            guard error == LIBSSH2_ERROR_EAGAIN else {
+                throw SSHError.channelOpenFailed
+            }
+            try await waitForInnerShellStartupRetry(session: session)
+        }
+    }
+
+    private func waitForInnerShellStartupRetry(session: OpaquePointer) async throws {
+        try validateInnerShellStartup(session: session)
+        await waitForInnerSocket()
+        await Task.yield()
+        try validateInnerShellStartup(session: session)
+    }
+
+    private func performInnerShellStartupCall(
+        session: OpaquePointer,
+        operation: () -> Int32
+    ) async throws -> Int32 {
+        while true {
+            try validateInnerShellStartup(session: session)
+            let result = operation()
+            if result != LIBSSH2_ERROR_EAGAIN {
+                try validateInnerShellStartup(session: session)
+                return result
+            }
+            try await waitForInnerShellStartupRetry(session: session)
+        }
+    }
+
+    // MARK: - Inner IO loop
+
+    private func startInnerIOLoop() {
+        guard innerIOTask == nil else { return }
+        innerIOTask = Task { [weak self] in
+            await self?.innerIOLoop()
+        }
+    }
+
+    private func stopInnerIOLoop() {
+        innerIOTask?.cancel()
+        innerIOTask = nil
+    }
+
+    /// Drain inner (target-node) shell channels. Mirrors `ioLoop` but polls
+    /// the inner socketpair FD and reads only channels with `isInner == true`.
+    private func innerIOLoop() async {
+        var buffer = [CChar](repeating: 0, count: 32768)
+        let batchThreshold = 65536
+        let interactiveDelay: UInt64 = 1_000_000
+        let bulkDelay: UInt64 = 5_000_000
+        let interactiveThreshold = 100
+        let bulkThreshold = 1000
+
+        while !Task.isCancelled, innerLibssh2Session != nil {
+            var didWork = false
+
+            let innerStates = shellChannels.values.filter { $0.isInner }
+            for state in innerStates {
+                let bytesRead = libssh2_channel_read_ex(state.channel, 0, &buffer, buffer.count)
+                if bytesRead > 0 {
+                    if !state.didRecordFirstByte {
+                        state.didRecordFirstByte = true
+                        startupTrace?.recordOnce(.firstTerminalByte, detail: "ssh-teleport")
+                    }
+                    let readCount = Int(bytesRead)
+                    state.batchBuffer.append(Data(bytes: buffer, count: readCount))
+                    didWork = true
+                    state.recentBytesPerRead = (state.recentBytesPerRead * 7 + readCount * 3) / 10
+                    let maxBatchDelay: UInt64
+                    if state.recentBytesPerRead < interactiveThreshold {
+                        maxBatchDelay = interactiveDelay
+                    } else if state.recentBytesPerRead > bulkThreshold {
+                        maxBatchDelay = bulkDelay
+                    } else {
+                        let ratio = UInt64(state.recentBytesPerRead - interactiveThreshold) * 100 / UInt64(bulkThreshold - interactiveThreshold)
+                        maxBatchDelay = interactiveDelay + (bulkDelay - interactiveDelay) * ratio / 100
+                    }
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    let timeSinceYield = now - state.lastYieldTime
+                    if state.batchBuffer.count >= batchThreshold || timeSinceYield >= maxBatchDelay {
+                        state.continuation.yield(state.batchBuffer)
+                        state.batchBuffer = Data()
+                        state.lastYieldTime = now
+                    }
+                } else if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
+                    if !state.batchBuffer.isEmpty {
+                        state.continuation.yield(state.batchBuffer)
+                        state.batchBuffer = Data()
+                        state.lastYieldTime = DispatchTime.now().uptimeNanoseconds
+                    }
+                    state.recentBytesPerRead = 0
+                } else if bytesRead < 0 {
+                    if !state.batchBuffer.isEmpty {
+                        state.continuation.yield(state.batchBuffer)
+                    }
+                    logger.error("Inner read error: \(bytesRead)")
+                    closeShellInternal(state.id)
+                    didWork = true
+                    continue
+                }
+
+                if libssh2_channel_eof(state.channel) != 0 {
+                    if !state.batchBuffer.isEmpty {
+                        state.continuation.yield(state.batchBuffer)
+                    }
+                    logger.info("Inner channel EOF")
+                    closeShellInternal(state.id)
+                    didWork = true
+                }
+            }
+
+            let hasInnerChannels = shellChannels.values.contains { $0.isInner }
+            // Drain inner exec requests. Mirrors the exec draining in the
+            // outer `ioLoop`, but opens/reads the channel on the inner
+            // (target-node) libssh2 session. The outer loop skips requests
+            // with `isInner == true`, so they are only drained here.
+            let hasInnerExec = execRequests.values.contains { $0.isInner }
+            if hasInnerExec {
+                let requestIds = Array(execRequests.keys)
+                for requestId in requestIds {
+                    guard let request = execRequests[requestId] else { continue }
+                    guard request.isInner else { continue }
+                    guard ensureInnerExecChannelReady(request) else { continue }
+
+                    guard let execChannel = request.channel else { continue }
+
+                    let bytesRead = libssh2_channel_read_ex(execChannel, 0, &buffer, buffer.count)
+                    if bytesRead > 0 {
+                        request.output.append(Data(bytes: buffer, count: Int(bytesRead)))
+                        didWork = true
+                    } else if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
+                        // No data yet
+                    } else if bytesRead < 0 {
+                        finishExecRequest(requestId, error: SSHError.socketError("Inner exec read failed: \(bytesRead)"))
+                        continue
+                    }
+
+                    let stderrRead = libssh2_channel_read_ex(execChannel, 1, &buffer, buffer.count)
+                    if stderrRead > 0 {
+                        request.stderr.append(Data(bytes: buffer, count: Int(stderrRead)))
+                        didWork = true
+                    } else if stderrRead == Int(LIBSSH2_ERROR_EAGAIN) {
+                        // No stderr data yet
+                    } else if stderrRead < 0 {
+                        finishExecRequest(requestId, error: SSHError.socketError("Inner exec stderr read failed: \(stderrRead)"))
+                        continue
+                    }
+
+                    if let currentChannel = request.channel, libssh2_channel_eof(currentChannel) != 0 {
+                        finishExecRequest(requestId, error: nil)
+                        didWork = true
+                    }
+                }
+            }
+            if !hasInnerChannels, !execRequests.values.contains(where: { $0.isInner }) {
+                break
+            }
+
+            if !didWork {
+                await waitForInnerSocket()
+            }
+            await Task.yield()
         }
     }
 
@@ -2488,6 +3722,11 @@ actor SSHSession {
             if !shellChannels.isEmpty {
                 let states = Array(shellChannels.values)
                 for state in states {
+                    // Inner (Teleport proxy-subsystem) channels are drained by
+                    // `innerIOLoop`, which polls the inner socketpair FD.
+                    // The outer loop must not read them — doing so would race
+                    // the inner loop for the same channel and double-yield.
+                    if state.isInner { continue }
                     // Use _ex variant since macros not available in Swift (stream_id 0 = stdout)
                     let bytesRead = libssh2_channel_read_ex(state.channel, 0, &buffer, buffer.count)
 
@@ -2559,6 +3798,12 @@ actor SSHSession {
                 let requestIds = Array(execRequests.keys)
                 for requestId in requestIds {
                     guard let request = execRequests[requestId] else { continue }
+                    // Inner (Teleport proxy-subsystem) exec requests are
+                    // drained by `innerIOLoop`, which polls the inner
+                    // socketpair FD. The outer loop must not touch them —
+                    // doing so would open/read the channel on the outer
+                    // (proxy) session and fail with -22.
+                    if request.isInner { continue }
                     guard ensureExecChannelReady(request) else { continue }
 
                     guard let execChannel = request.channel else { continue }
@@ -2592,7 +3837,14 @@ actor SSHSession {
                 }
             }
 
-            if shellChannels.isEmpty, execRequests.isEmpty {
+            // Exit the outer loop when there are no outer shell channels
+            // AND no outer exec requests. Inner (Teleport) shell/exec
+            // requests are tracked in the same dictionaries but drained by
+            // `innerIOLoop`; they must not keep the outer loop alive (it
+            // would spin on `waitForSocket` with no work to do).
+            let hasOuterShell = shellChannels.values.contains { !$0.isInner }
+            let hasOuterExec = execRequests.values.contains { !$0.isInner }
+            if !hasOuterShell, !hasOuterExec {
                 break
             }
 
@@ -2705,6 +3957,65 @@ actor SSHSession {
         return true
     }
 
+    /// Mirror of `ensureExecChannelReady` for the inner (target-node) libssh2
+    /// session. Opens a `session` channel on `innerLibssh2Session` and
+    /// requests `exec` on it. The inner session is non-blocking, so
+    /// EAGAIN retries are handled by the next `innerIOLoop` pass (which
+    /// re-enties this via the per-request guard). Returns `false` (without
+    /// failing the request) on EAGAIN so the loop retries; returns `false`
+    /// (failing the request) on a hard error.
+    private func ensureInnerExecChannelReady(_ request: ExecRequest) -> Bool {
+        guard let session = innerLibssh2Session,
+              innerSocket >= 0,
+              innerAtomicSocket.isUsable,
+              !hasBeenCleaned else {
+            finishExecRequest(request.id, error: SSHError.notConnected)
+            return false
+        }
+
+        if request.channel == nil {
+            let newChannel = libssh2_channel_open_ex(
+                session,
+                "session",
+                UInt32("session".utf8.count),
+                2 * 1024 * 1024,
+                32768,
+                nil,
+                0
+            )
+            if let newChannel = newChannel {
+                request.channel = newChannel
+            } else {
+                let lastError = libssh2_session_last_errno(session)
+                if lastError == LIBSSH2_ERROR_EAGAIN {
+                    return false
+                }
+                finishExecRequest(request.id, error: SSHError.channelOpenFailed)
+                return false
+            }
+        }
+
+        if !request.isStarted, let execChannel = request.channel {
+            let execResult = libssh2_channel_process_startup(
+                execChannel,
+                "exec",
+                4,
+                request.command,
+                UInt32(request.command.utf8.count)
+            )
+            if execResult == Int32(LIBSSH2_ERROR_EAGAIN) {
+                return false
+            }
+            if execResult != 0 {
+                finishExecRequest(request.id, error: SSHError.unknown("Inner exec failed: \(execResult)"))
+                return false
+            }
+            request.isStarted = true
+        }
+
+        return true
+    }
+
     private func cancelExecRequest(_ requestId: UUID, error: Error) {
         guard execRequests[requestId] != nil else { return }
         finishExecRequest(requestId, error: error)
@@ -2754,6 +4065,22 @@ actor SSHSession {
 
         // Poll with 5ms timeout - short enough for responsiveness, long enough to avoid busy spinning
         _ = poll(&pfd, 1, 5)
+    }
+
+    /// Wait for the SFTP session's backing socket to become readable/writable.
+    /// SFTP operations retry on EAGAIN; the socket they must wait on depends
+    /// on which libssh2 session the SFTP handle is bound to: the inner
+    /// socketpair FD for the Teleport proxy-subsystem path
+    /// (`sftpSessionIsInner == true`), the outer socket for the direct path.
+    /// Waiting on the wrong FD would either hang (inner FD never sees the
+    /// outer socket's traffic) or spin busily (outer socket is always
+    /// ready, but the inner session is still EAGAIN).
+    private func waitForSFTPSocket() async {
+        if sftpSessionIsInner {
+            await waitForInnerSocket()
+        } else {
+            await waitForSocket()
+        }
     }
 
     private func resolveNumericPeerAddress(for socket: Int32) -> String? {
@@ -2826,6 +4153,23 @@ actor SSHSession {
         permissions: Int32 = 0o600,
         strategy: SSHUploadStrategy = .automatic
     ) async throws {
+        // Teleport's outer session is the PROXY, which rejects SCP channel
+        // opens and exec channel requests with -22. SCP and exec uploads
+        // would both fail on the outer session. Route uploads through the
+        // SFTP `writeFile` path instead — SFTP runs on the INNER (target-
+        // node) session for Teleport (see `ensureSFTPSession`), so the
+        // upload succeeds there. Non-Teleport auth methods keep the existing
+        // SCP-then-exec strategy (faster than SFTP for large uploads).
+        let routeToInner = Self.shouldRouteSFTPToInnerSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        )
+        if routeToInner {
+            logger.info("Using SFTP upload for Teleport inner session [path: \(remotePath, privacy: .public)]")
+            try await writeFile(data, to: remotePath, permissions: permissions)
+            return
+        }
+
         if strategy == .execPreferred {
             logger.info("Using exec-preferred upload strategy [path: \(remotePath, privacy: .public)]")
             try await uploadViaExec(data, to: remotePath)
@@ -3145,15 +4489,122 @@ actor SSHSession {
     // MARK: - Execute Command
 
     func execute(_ command: String) async throws -> String {
+        // Teleport's outer session is the PROXY — it rejects exec/pty/shell
+        // with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE (-22). Route exec to
+        // the inner (target-node) session when one exists. The inner session
+        // is created inside `startShellViaTeleportProxy` (second handshake
+        // over the `proxy:<node>:0` subsystem tunnel); before the shell
+        // starts it is nil, so we surface `notConnected` and the caller
+        // (stats collector) skips gracefully.
+        let routeToInner = Self.shouldRouteExecToInnerSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        )
+        if routeToInner {
+            guard let inner = innerLibssh2Session,
+                  innerSocket >= 0,
+                  innerAtomicSocket.isUsable,
+                  !hasBeenCleaned else {
+                throw SSHError.notConnected
+            }
+            startInnerIOLoopIfNeeded()
+            return try await enqueueExecRequest(command, isInner: true)
+        }
+
+        // Safety net: Teleport-without-inner must NEVER exec on the outer
+        // proxy session — it would fail with -22 and poison the outer
+        // session state so the subsequent subsystem request also fails.
+        // Callers that want exec for a Teleport connection must first
+        // establish the inner session via `prepareTeleportInnerSession()`
+        // (or `SSHClient.remoteEnvironment()`, which does it automatically).
+        if Self.shouldRejectExecOnOuterSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        ) {
+            throw SSHError.notConnected
+        }
+
         guard libssh2Session != nil else {
             throw SSHError.notConnected
         }
         startIOLoop()
+        return try await enqueueExecRequest(command, isInner: false)
+    }
 
+    /// Pure routing decision extracted from `execute()` so it can be unit-
+    /// tested without a live libssh2 session. Returns `true` only for the
+    /// Teleport auth method AND when the inner (target-node) session is
+    /// ready (non-nil). For every other combination the outer path is
+    /// used.
+    nonisolated static func shouldRouteExecToInnerSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && innerSessionReady
+    }
+
+    /// Pure safety-net decision extracted from `execute()` so it can be unit-
+    /// tested without a live libssh2 session. Returns `true` ONLY for the
+    /// Teleport auth method AND when the inner (target-node) session is NOT
+    /// ready — exec must be rejected in this case rather than falling through
+    /// to the outer PROXY session, which rejects exec with -22 and poisons
+    /// the outer session state so the subsequent subsystem request also
+    /// fails.
+    ///
+    /// For non-Teleport (outer session supports exec directly) and for
+    /// Teleport-with-ready-inner (exec routes to the inner session via
+    /// `shouldRouteExecToInnerSession`), returns `false`.
+    nonisolated static func shouldRejectExecOnOuterSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && !innerSessionReady
+    }
+
+    /// Pure routing decision extracted from `ensureSFTPSession()` so it can
+    /// be unit-tested without a live libssh2 session. Returns `true` only
+    /// for the Teleport auth method AND when the inner (target-node)
+    /// session is ready (non-nil). For every other combination the outer
+    /// path is used.
+    ///
+    /// Teleport's outer session is the PROXY, which rejects the SFTP
+    /// subsystem request (`libssh2_sftp_init` on the outer session fails
+    /// with LIBSSH2_ERROR_CHANNEL_REQUEST_FAILURE, -22) because the proxy
+    /// is in `proxyMode` and only accepts the `proxy:<node>:0` subsystem.
+    /// SFTP must run on the INNER (target-node) session, established by
+    /// `prepareTeleportInnerSession()` (second handshake over the
+    /// `proxy:<node>:0` subsystem tunnel).
+    nonisolated static func shouldRouteSFTPToInnerSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && innerSessionReady
+    }
+
+    /// Pure safety-net decision extracted from `ensureSFTPSession()` so it
+    /// can be unit-tested without a live libssh2 session. Returns `true` ONLY
+    /// for the Teleport auth method AND when the inner (target-node) session
+    /// is NOT ready — SFTP init must be rejected in this case rather than
+    /// falling through to the outer PROXY session, which rejects the SFTP
+    /// subsystem request with -22 and poisons the outer session state so
+    /// the subsequent subsystem request also fails.
+    ///
+    /// For non-Teleport (outer session supports SFTP directly) and for
+    /// Teleport-with-ready-inner (SFTP routes to the inner session via
+    /// `shouldRouteSFTPToInnerSession`), returns `false`.
+    nonisolated static func shouldRejectSFTPOnOuterSession(
+        authMethod: AuthMethod,
+        innerSessionReady: Bool
+    ) -> Bool {
+        authMethod == .faceIDTeleport && !innerSessionReady
+    }
+
+    private func enqueueExecRequest(_ command: String, isInner: Bool) async throws -> String {
         let requestId = UUID()
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let request = ExecRequest(id: requestId, command: command, continuation: continuation)
+                request.isInner = isInner
                 execRequests[request.id] = request
             }
         }, onCancel: { [weak self] in
@@ -3163,17 +4614,89 @@ actor SSHSession {
         })
     }
 
+    /// Start the inner I/O loop if it is not already running. Called when an
+    /// exec request is routed to the inner session without a shell channel
+    /// already keeping the loop alive.
+    private func startInnerIOLoopIfNeeded() {
+        startInnerIOLoop()
+    }
+
     // MARK: - Keep Alive
 
     func sendKeepAlive() {
         guard let session = libssh2Session else { return }
         var secondsToNext: Int32 = 0
-        libssh2_keepalive_send(session, &secondsToNext)
+        // Acquire the outer-session mutex: the Teleport proxy-subsystem pump
+        // may be reading/writing the outer session's proxy channel off-actor
+        // at this moment. Without the lock, `libssh2_keepalive_send` (->
+        // `ssh2_transport_send`) races the pump's `ssh2_transport_read` /
+        // `ssh2_transport_send` and corrupts the session transport buffer
+        // (the `remainbuf >= 0` assertion). No-op when the pump isn't active
+        // (non-Teleport path) — the lock is uncontended.
+        outerSessionMutex.withLock {
+            libssh2_keepalive_send(session, &secondsToNext)
+        }
     }
 
     private func ensureSFTPSession() async throws -> OpaquePointer {
         if let sftpSession {
             return sftpSession
+        }
+
+        // Teleport's outer session is the PROXY, which is in `proxyMode` and
+        // rejects the SFTP subsystem request with -22 (only the
+        // `proxy:<node>:0` subsystem is accepted). SFTP must run on the INNER
+        // (target-node) session, established by `prepareTeleportInnerSession()`.
+        // When the inner session is not ready yet, surface a clear error instead
+        // of attempting SFTP init on the outer session (which fails with the
+        // opaque "Failed to start SFTP session" message).
+        let routeToInner = Self.shouldRouteSFTPToInnerSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        )
+
+        if routeToInner {
+            guard let inner = innerLibssh2Session,
+                  innerSocket >= 0,
+                  innerAtomicSocket.isUsable,
+                  !hasBeenCleaned else {
+                throw RemoteFileBrowserError.failed(
+                    String(localized: "The Teleport target node session is not ready for file browsing.")
+                )
+            }
+
+            while true {
+                try Task.checkCancellation()
+
+                if let sftpSession = libssh2_sftp_init(inner) {
+                    self.sftpSession = sftpSession
+                    self.sftpSessionIsInner = true
+                    return sftpSession
+                }
+
+                let lastError = libssh2_session_last_errno(inner)
+                if lastError == LIBSSH2_ERROR_EAGAIN {
+                    await waitForInnerSocket()
+                    continue
+                }
+
+                throw Self.remoteFileError(from: nil, operation: "start SFTP session", path: nil)
+            }
+        }
+
+        // Safety net: Teleport-without-inner must NEVER run SFTP on the
+        // outer proxy session — `libssh2_sftp_init` on the PROXY fails with
+        // -22 and poisons the outer session state so the subsequent
+        // subsystem request also fails. Callers (the SFTP adapter already
+        // calls `prepareTeleportInnerSession()` before SFTP init) should not
+        // reach this branch, but guard defensively.
+        if Self.shouldRejectSFTPOnOuterSession(
+            authMethod: config.authMethod,
+            innerSessionReady: innerLibssh2Session != nil
+        ) {
+            throw RemoteFileBrowserError.failed(
+                String(localized: "The Teleport target node session is not ready for file browsing.")
+            )
         }
 
         guard let session = libssh2Session else {
@@ -3185,6 +4708,7 @@ actor SSHSession {
 
             if let sftpSession = libssh2_sftp_init(session) {
                 self.sftpSession = sftpSession
+                self.sftpSessionIsInner = false
                 return sftpSession
             }
 
@@ -3234,7 +4758,13 @@ actor SSHSession {
         openType: Int32,
         operation: String
     ) async throws -> OpaquePointer {
-        guard let session = libssh2Session else {
+        // The libssh2 session that backs `sftp` — used for EAGAIN detection
+        // via `libssh2_session_last_errno`. For Teleport this is the INNER
+        // (target-node) session; for direct connections it is the outer
+        // session. Picking the wrong one would misread the error code and
+        // either hang (treating a real error as EAGAIN) or throw a misleading
+        // error (treating EAGAIN as a hard failure).
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
             throw RemoteFileBrowserError.disconnected
         }
 
@@ -3257,7 +4787,7 @@ actor SSHSession {
 
             let lastError = libssh2_session_last_errno(session)
             if lastError == LIBSSH2_ERROR_EAGAIN {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -3271,7 +4801,12 @@ actor SSHSession {
         operation: String,
         mutation: (OpaquePointer, UnsafePointer<CChar>, UInt32) -> Int
     ) async throws {
-        guard libssh2Session != nil else {
+        // The libssh2 session backing `sftp` (inner for Teleport, outer for
+        // direct). `performSFTPMutation` does not itself read the errno, but
+        // the nil-check gates the EAGAIN wait path: if the backing session
+        // is gone there is nothing to wait on.
+        let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session
+        guard session != nil else {
             throw RemoteFileBrowserError.disconnected
         }
 
@@ -3288,7 +4823,7 @@ actor SSHSession {
             }
 
             if result == Int(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -3330,7 +4865,7 @@ actor SSHSession {
             }
 
             if result == Int32(LIBSSH2_ERROR_EAGAIN) {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -3347,7 +4882,11 @@ actor SSHSession {
         linkType: Int32,
         sftp: OpaquePointer
     ) async throws -> String {
-        guard let session = libssh2Session else {
+        // The libssh2 session backing `sftp` (inner for Teleport, outer for
+        // direct). `readSymlinkTarget` reads `libssh2_session_last_errno` to
+        // distinguish EAGAIN from a hard failure, so it must consult the
+        // session that actually owns the SFTP channel.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
             throw RemoteFileBrowserError.disconnected
         }
 
@@ -3383,7 +4922,7 @@ actor SSHSession {
 
             let lastError = libssh2_session_last_errno(session)
             if lastError == LIBSSH2_ERROR_EAGAIN {
-                await waitForSocket()
+                await waitForSFTPSocket()
                 continue
             }
 
@@ -3404,6 +4943,44 @@ actor SSHSession {
     private static func string(from buffer: [CChar], length: Int) -> String {
         let bytes = buffer.prefix(length).map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// Returns the algorithm libssh2 negotiated for the given method type after
+    /// a successful handshake, or `"unknown"` if libssh2 could not report it.
+    /// Used for diagnostics so future KEX mismatches surface the agreed value.
+    nonisolated static func negotiatedMethod(_ session: OpaquePointer?, method: Int32) -> String {
+        guard let session else { return "unknown" }
+        guard let raw = libssh2_session_methods(session, method) else {
+            return "unknown"
+        }
+        return String(cString: raw)
+    }
+
+    /// Apply a libssh2 method preference and log the result (0 = success).
+    ///
+    /// A non-zero return means libssh2 rejected the preference string (e.g.
+    /// none of the listed algorithms are compiled in, or a name is
+    /// misspelled). The caller does not abort on failure — libssh2 will fall
+    /// back to its built-in defaults — but the log surfaces the rejection so a
+    /// KEX mismatch is not misdiagnosed as a server problem.
+    private func applyMethodPref(
+        _ session: OpaquePointer,
+        method: Int32,
+        prefs: String,
+        label: String
+    ) {
+        let rc = prefs.withCString { libssh2_session_method_pref(session, method, $0) }
+        if rc == 0 {
+            logger.info("ssh_method_pref_ok label=\(label, privacy: .public) rc=\(rc)")
+        } else {
+            var errmsg: UnsafeMutablePointer<CChar>?
+            var errmsgLen: Int32 = 0
+            libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            logger.error(
+                "ssh_method_pref_fail label=\(label, privacy: .public) rc=\(rc) libssh2=\(errorMsg, privacy: .public)"
+            )
+        }
     }
 
     private static func remoteFileError(
@@ -3442,6 +5019,12 @@ actor SSHSession {
 
 struct SSHSessionConfig {
     let host: String
+    /// For `.faceIDTeleport`, the Teleport target node name (e.g. `pcad-dev`).
+    /// This is `Server.name` (the display name) — for Teleport servers, the
+    /// display name IS the node name the user wants to connect to. Used to
+    /// build the `proxy:<node>:0` subsystem string. Ignored for other auth
+    /// methods.
+    let teleportNodeName: String?
     let port: Int
     let dialHost: String
     let dialPort: Int
@@ -3466,10 +5049,12 @@ struct SSHSessionConfig {
         connectionMode: SSHConnectionMode,
         authMethod: AuthMethod,
         credentials: ServerCredentials,
+        teleportNodeName: String? = nil,
         connectionTimeout: TimeInterval = 30,
         keepAliveInterval: TimeInterval = 30
     ) {
         self.host = host
+        self.teleportNodeName = teleportNodeName
         self.port = port
         self.dialHost = dialHost ?? host
         self.dialPort = dialPort ?? port
@@ -3506,6 +5091,7 @@ enum SSHError: LocalizedError {
     case shellRequestFailed
     case hostKeyVerificationFailed
     case socketError(String)
+    case teleportCertMissing
     case unknown(String)
 
     var allowsAutomaticReconnectRetry: Bool {
@@ -3530,6 +5116,7 @@ enum SSHError: LocalizedError {
              .moshBootstrapFailed,
              .moshInvalidEndpoint,
              .hostKeyVerificationFailed,
+             .teleportCertMissing,
              .unknown:
             return false
         }
@@ -3568,6 +5155,8 @@ enum SSHError: LocalizedError {
         case .hostKeyVerificationFailed:
             return "Host key verification failed. The saved SSH host fingerprint does not match the server's current key."
         case .socketError(let msg): return "Socket error: \(msg)"
+        case .teleportCertMissing:
+            return String(localized: "Teleport certificate is missing or expired. Sign in with Face ID to refresh it.")
         case .unknown(let msg): return "Unknown error: \(msg)"
         }
     }

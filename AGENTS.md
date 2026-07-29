@@ -170,12 +170,12 @@ Remote shell and multiplexer ownership:
 
 ## Product Planning and Repository Documentation
 
-- Keep product ideas, future specifications, roadmap decisions, pricing or packaging strategy, and internal rollout plans in the VVTerm Linear project, not in this repository.
-- Search Linear before creating work. Reuse or update an existing issue when it owns the same scope.
-- Create a Linear issue before a large implementation begins, and keep its decisions, acceptance criteria, and status current as the scope changes.
+- Keep product ideas, future specifications, roadmap decisions, pricing or packaging strategy, and internal rollout plans in GitHub Issues, not in this repository.
+- Search GitHub Issues before creating work. Reuse or update an existing issue when it owns the same scope.
+- Create a GitHub Issue before a large implementation begins, and keep its decisions, acceptance criteria, and status current as the scope changes.
 - Keep repository documentation limited to current architecture, build, test, security, contribution, protocol, and intentionally public user contracts that must evolve with code.
 - Enforce completed behavior with tests and concise current architecture rules instead of retaining speculative or completed implementation plans.
-- Linear is not a secret manager. Do not store credentials, tokens, private keys, customer data, or production secrets in either Linear or the repository.
+- GitHub Issues is not a secret manager. Do not store credentials, tokens, private keys, customer data, or production secrets in either GitHub Issues or the repository.
 
 ## Refactoring Rules
 
@@ -205,6 +205,16 @@ Safe refactor expectation:
 - Keyboard and terminal input changes require focused regression coverage. At minimum, cover the relevant policy/model path in unit tests and the user-visible iOS behavior in XCUITest when software keyboard, accessory bar, hardware keyboard, IME/preedit, backspace repeat, find UI, floating controls, focus, or tab/view switching behavior is touched.
 - Do not rely on "checked on my phone" or manual Xcode testing as the only validation for keyboard/input regressions. Keep simulator UI tests or unit tests that can be rerun by future agents.
 - Before finishing non-documentation code changes, run the narrowest reliable build/test commands that exercise the touched behavior and report exactly what was run. If a test cannot run because of tooling or environment issues, report that as a residual risk.
+
+### CI Performance Budget (target wall-clock ≤ 20m)
+
+- GitHub Actions caps this repo at **5 concurrent macOS jobs**. The workflow is sized to fit that cap with zero queueing: `build` (1) runs first, then `unit-tests` (1) + 4 `ui-tests` shards (4) = 5 in parallel. Do NOT add a 5th UI shard — it would queue behind a finished job and add its full runtime to the wall-clock.
+- **Monitor per-shard runtime on every CI run.** Pull `gh run view <id> --json jobs` and compute each job's `completedAt - startedAt`. The wall-clock is `build` + `max(shard runtimes)` because the test phase is fully parallel. The slowest shard is the bottleneck.
+- **Rebalance shards when the max/min ratio exceeds ~1.3.** Move tests from the slowest shard to the fastest shard via LPT bin-packing of measured per-method runtimes (extract from the `test.log` `Test Case '-[...]' passed (N seconds)` lines). Keep the shard count at 4.
+- **Flaky tests are a performance bug, not just a correctness bug.** A test that times out burns the full simulator diagnostic-collection budget (600s = 10m) before failing. When a shard's runtime is ~10m longer than its peers, suspect a timeout/hang, not a slow test. File a GitHub Issue, and either fix the flake, mark `XCTSkip` with a reference to the issue, or quarantine the test into a separate non-blocking job until fixed. Do not let flakes persist in the hot path.
+- **Shorten tests that take too long.** A single UI test over ~60s is a candidate for optimization: reduce sleep/animation waits, avoid full app relaunches where a view-harness suffices, split into smaller focused tests, or move the logic to a unit test. The `notice-outlier` shard pattern (pair the one slow outlier with the smallest other tests) is a last resort, not a permanent home.
+- The `unit-tests` job should stay under ~5m. If it creeps past that, the test target is recompiling SPM deps it should reuse from the build artifact — check the DerivedData cache hit rate and the `IgnoreFileSystemDeviceInodeChanges` / mtime-restore steps.
+- **Temporary exception — `ota-archive` job (pcad.it-infra #154, OTA testing phase).** The per-PR ad-hoc OTA pipeline adds an unsigned-Release-archive job to `vvterm-pr-ci.yml` with NO `needs:` (starts in parallel with `build` so the installable IPA lands as early as possible). This raises the workflow to 7 macOS jobs vs the 5-concurrent cap, so test shards can transiently queue behind it. Accepted deliberately for fast IPA iteration during Phase 1 testing; revisit once it settles (gate behind tests or drop back into the budget). Do not "fix" the queueing without checking #154 status.
 
 ## Commits
 
