@@ -12,6 +12,20 @@
 #                    artifact and running a subset of VVTermUITests via
 #                    -only-testing:. fail-fast is disabled so one failing
 #                    shard does not cancel the others.
+#   4. ota-archive — UNSIGNED Release device archive (CODE_SIGNING_ALLOWED=NO),
+#                    uploaded as the `ota-unsigned-archive` artifact. Consumed
+#                    by the `ios-adhoc-pr` workflow (workflow_run, main context),
+#                    which ad-hoc signs it and publishes it to R2
+#                    (pcad.it-infra #154 Phase 1). No `needs:` — it starts with
+#                    `build` so the installable IPA lands as early as possible
+#                    during the OTA testing phase; if the code doesn't build,
+#                    this job fails on its own.
+#
+#   CAP EXCEPTION (temporary): ota-archive raises this workflow to 7 macOS
+#   jobs vs the repo's 5-concurrent cap, so test shards can transiently queue
+#   behind it. Accepted during the #154 OTA testing phase for fast IPA
+#   iteration; revisit once Phase 1 settles (options: gate behind tests, or
+#   drop back into the budget).
 #
 # Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
 # feedback (unit tests finish first) and isolates UI test failures/hangs
@@ -88,10 +102,13 @@
 #
 # The mock coordinators + mock SEP signer cover the failure-matrix UX in
 # the simulator. The device smoke test (per the 2.2 prompt's runtime
-# verification checklist item 6) is the final confidence check.
+# verification checklist item 6) is the final confidence check — the
+# ota-archive/ios-adhoc-pr pair exists to make that device test installable
+# per PR.
 #
 # See:
 #   2026-07-23-strategy-b-session2.2-teleport-ui-design.md (CI strategy)
+#   cad0p/pcad.it-infra#154 (OTA ad-hoc distribution, short-lived R2 creds)
 
 name: VVTerm PR CI
 
@@ -221,6 +238,104 @@ jobs:
         with:
           name: build-log
           path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+
+  # ota-archive: unsigned Release/device archive for per-PR ad-hoc OTA
+  # distribution (#154 Phase 1).
+  #
+  # Security shape: this job holds NO secrets and NO OIDC — the repo is
+  # public and pull_request jobs execute untrusted code. Signing + credential
+  # mint happen later in `ios-adhoc-pr` (workflow_run → refs/heads/main,
+  # pinned by the ci-vvterm-ota-bot Teleport join rule and the ci-vvterm-ota
+  # Vault JWT role). This job's output is bytes only; nothing here is trusted.
+  #
+  # No `needs:` — starts in parallel with `build` so the IPA is available as
+  # early as possible (OTA testing phase). Fails independently when the code
+  # does not compile. See the CAP EXCEPTION note in the header.
+  ota-archive:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Restore source mtimes
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
+        # Empty restore-keys for DerivedData: the build job's cache is a
+        # Debug/simulator build, useless for a Release/device archive —
+        # restoring it would only waste minutes downloading unusable
+        # intermediates. The shared SPM cache key IS reused (skips package
+        # resolution + source fetch).
+        uses: irgaly/xcode-cache@v1
+        with:
+          key: xcode27-ota-deriveddata-${{ github.workflow }}-${{ github.sha }}
+          restore-keys: ""
+          deriveddata-directory: ${{ runner.temp }}/DerivedData
+          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          swiftpm-cache-restore-keys: |
+            xcode27-spm-
+
+      - name: Clear stale PCM module cache
+        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+
+      - name: Download Metal toolchain
+        # Same as the other jobs: mlx-swift Cmlx shaders + libghostty's Metal
+        # renderer need the toolchain that the xcode-27 image does not ship.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Archive unsigned Release build (iOS device)
+        run: |
+          set -euo pipefail
+
+          # CODE_SIGNING_ALLOWED=NO: archive without any Apple credential —
+          # signing is deferred to the ios-adhoc-pr workflow, which re-signs
+          # at `xcodebuild -exportArchive` time (ad-hoc, manual signing).
+          #
+          # FORCE_PRO_ENABLED: mirrors the TestFlight workflow default —
+          # owner device-test builds should have Pro unlocked without
+          # StoreKit (TestFlight default force_pro=true).
+          xcodebuild archive \
+            -scheme VVTerm \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/VVTerm.xcarchive" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED \
+            | tee "$RUNNER_TEMP/ota-archive.log"
+
+      - name: Package unsigned archive
+        # Tar preserves the symlinks inside .app bundles (see the build job's
+        # "Archive build products" step for why upload-artifact alone breaks
+        # them).
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          tar -czf ota-unsigned-archive.tar.gz VVTerm.xcarchive
+
+      - name: Upload unsigned archive artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ota-unsigned-archive
+          path: ${{ runner.temp }}/ota-unsigned-archive.tar.gz
+          retention-days: 1
+
+      - name: Upload archive log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ota-archive-log
+          path: ${{ runner.temp }}/ota-archive.log
           if-no-files-found: ignore
 
   unit-tests:
