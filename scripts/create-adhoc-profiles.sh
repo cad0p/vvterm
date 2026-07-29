@@ -7,13 +7,23 @@
 # What it does (idempotent):
 #   1. Ensures each --device-udid is registered in App Store Connect
 #      (registers when missing, reuses when present).
-#   2. For each --profile "bundle_id:Profile Name:SECRET_NAME" triple:
+#   2. Ensures each --ensure-bundle-id "bundle_id:Display Name:CAPS" App ID
+#      exists (creates when missing) and has the listed capabilities
+#      (comma-separated, e.g. ICLOUD,PUSH_NOTIFICATIONS; already-present
+#      capabilities are left alone; ICLOUD is added with ICLOUD_VERSION
+#      XCODE_6 settings — the CloudKit-era iCloud capability).
+#      NOTE: CloudKit CONTAINER assignment to an App ID is not exposed by
+#      the App Store Connect API — if your entitlements claim
+#      com.apple.developer.icloud-container-identifiers, assign the
+#      container for the new App ID once in the developer portal
+#      (identifiers > the App ID > iCloud > assign containers).
+#   3. For each --profile "bundle_id:Profile Name:SECRET_NAME" triple:
 #      deletes any existing profile with the same name, creates a fresh
 #      IOS_APP_ADHOC profile bound to the bundle id + distribution
 #      certificate + the device set, and downloads the .mobileprovision.
 #      (Recreate-on-run is deliberate: ASC profiles are immutable w.r.t.
 #      devices/certs via the API, so "add a device" = re-run this script.)
-#   3. With --set-secrets, base64-encodes each profile and pushes it to the
+#   4. With --set-secrets, base64-encodes each profile and pushes it to the
 #      given GitHub repo secret via gh.
 #
 # Certificate selection: pass --certificate-id explicitly (recommended —
@@ -33,9 +43,15 @@
 #   ./scripts/create-adhoc-profiles.sh \
 #     --certificate-id T5P4KKH2A6 \
 #     --device-udid 00008101-0011353A00E1401E \
-#     --profile "it.pcad.vvterm:VVTerm AdHoc OTA:IOS_ADHOC_PROFILE_B64" \
-#     --profile "it.pcad.vvterm.liveactivity:VVTerm LiveActivity AdHoc OTA:IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64" \
+#     --ensure-bundle-id "it.pcad.vvterm.ota:VVTerm OTA:ICLOUD,PUSH_NOTIFICATIONS" \
+#     --ensure-bundle-id "it.pcad.vvterm.ota.liveactivity:VVTerm OTA LiveActivity:" \
+#     --profile "it.pcad.vvterm.ota:VVTerm AdHoc OTA:IOS_ADHOC_PROFILE_B64" \
+#     --profile "it.pcad.vvterm.ota.liveactivity:VVTerm LiveActivity AdHoc OTA:IOS_LIVE_ACTIVITY_ADHOC_PROFILE_B64" \
 #     --repo cad0p/vvterm --set-secrets
+#
+#   (OTA builds use dedicated bundle ids: Apple refuses an OTA install whose
+#   id matches an installed App Store/TestFlight build — .ota ids let PR
+#   builds coexist with TestFlight.)
 #
 # Related: .github/workflows/ios-adhoc-pr.yml (consumer), pcad.it-infra #154.
 
@@ -58,6 +74,7 @@ CERTIFICATE_ID=""
 DEVICE_UDIDS=()
 DEVICE_NAME="OTA device"
 ALL_DEVICES=0
+ENSURE_SPECS=()
 PROFILE_SPECS=()
 REPO=""
 SET_SECRETS=0
@@ -75,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     --device-name)    DEVICE_NAME="$2"; shift 2 ;;
     --all-devices)    ALL_DEVICES=1; shift ;;
     --profile)        PROFILE_SPECS+=("$2"); shift 2 ;;
+    --ensure-bundle-id) ENSURE_SPECS+=("$2"); shift 2 ;;
     --repo)           REPO="$2"; shift 2 ;;
     --set-secrets)    SET_SECRETS=1; shift ;;
     --out-dir)        OUT_DIR="$2"; shift 2 ;;
@@ -143,6 +161,55 @@ done
 DEVICE_IDS=($(printf '%s\n' "${DEVICE_IDS[@]}" | sort -u))
 DEVICE_CSV="$(IFS=,; printf '%s' "${DEVICE_IDS[*]}")"
 log "Device set (${#DEVICE_IDS[@]}): $DEVICE_CSV"
+
+# --- 1b. Bundle ids + capabilities (ensure) -----------------------------------
+
+if [[ ${#ENSURE_SPECS[@]} -gt 0 ]]; then
+  bundle_ids_json="$(asc bundle-ids list --paginate --output json)"
+  for spec in "${ENSURE_SPECS[@]}"; do
+    IFS=':' read -r bid _bname caps <<< "$spec"
+    [[ -n "$bid" ]] || die "Malformed --ensure-bundle-id spec (want bundle_id:Name:CAPS): $spec"
+
+    # asc capabilities subcommands want the App ID RESOURCE id (e.g.
+    # VW84CU9FF9), not the reverse-DNS identifier — resolve it.
+    bid_resource="$(printf '%s' "$bundle_ids_json" | jqv "
+for b in d.get('data', []):
+    if b['attributes'].get('identifier') == '${bid}':
+        print(b['id'])
+        break
+")"
+    if [[ -z "$bid_resource" ]]; then
+      log "Creating bundle id $bid (\"${_bname:-$bid}\", IOS)..."
+      bid_resource="$(asc bundle-ids create --identifier "$bid" --name "${_bname:-$bid}" --platform IOS --output json | jqv "print(d['data']['id'])")"
+      bundle_ids_json="$(asc bundle-ids list --paginate --output json)"
+      log "Created bundle id $bid ($bid_resource)"
+    else
+      log "Bundle id $bid already exists ($bid_resource)"
+    fi
+
+    [[ -n "${caps:-}" ]] || continue
+    existing_caps="$(asc bundle-ids capabilities list --bundle "$bid_resource" --output json)"
+    IFS=',' read -ra want_caps <<< "$caps"
+    for cap in "${want_caps[@]}"; do
+      [[ -n "$cap" ]] || continue
+      if printf '%s' "$existing_caps" | jqv "
+import sys
+hit = any(c['attributes'].get('capabilityType') == '$cap' for c in d.get('data', []))
+sys.exit(0 if hit else 1)
+"; then
+        log "  capability $cap already present"
+      else
+        log "  adding capability $cap..."
+        if [[ "$cap" == "ICLOUD" ]]; then
+          asc bundle-ids capabilities add --bundle "$bid_resource" --capability "$cap" \
+            --settings '[{"key":"ICLOUD_VERSION","options":[{"key":"XCODE_6","enabled":true}]}]' --output json >/dev/null
+        else
+          asc bundle-ids capabilities add --bundle "$bid_resource" --capability "$cap" --output json >/dev/null
+        fi
+      fi
+    done
+  done
+fi
 
 # --- 2. Certificate ----------------------------------------------------------
 

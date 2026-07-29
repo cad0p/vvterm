@@ -91,8 +91,13 @@ jobs:
       R2_BUCKET: ota-builds
       R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
       OTA_BASE_URL: https://ota.pcad.it
-      APP_BUNDLE_ID: it.pcad.vvterm
-      LIVE_ACTIVITY_BUNDLE_ID: it.pcad.vvterm.liveactivity
+      # OTA builds ship under dedicated bundle ids (managed by
+      # scripts/create-adhoc-profiles.sh) so they coexist with the
+      # TestFlight install: Apple refuses an OTA install whose bundle id
+      # matches an already-installed App Store/TestFlight build. The
+      # unsigned archive's ids are rewritten to these before export.
+      APP_BUNDLE_ID: it.pcad.vvterm.ota
+      LIVE_ACTIVITY_BUNDLE_ID: it.pcad.vvterm.ota.liveactivity
 
     steps:
       - name: Resolve run context
@@ -220,11 +225,55 @@ jobs:
           install_profile "$APP_PROFILE_PATH" "APP_PROVISIONING_PROFILE_SPECIFIER"
           install_profile "$LIVE_ACTIVITY_PROFILE_PATH" "LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER"
 
+          # Preflight: every iCloud container the archive claims must be in
+          # the profile. CloudKit container→App ID assignment is portal-only
+          # (not in the ASC API), so fail here with the exact fix instead of
+          # 3 minutes into export with an opaque xcodebuild validation error.
+          XCENT="$ARCHIVE_PATH/Products/Applications/VVTerm.app/archived-expanded-entitlements.xcent"
+          claimed="$(plutil -extract com.apple.developer.icloud-container-identifiers json -o - "$XCENT" 2>/dev/null || echo '[]')"
+          profiled="$(security cms -D -i "$APP_PROFILE_PATH" | plutil -extract "Entitlements.com\.apple\.developer\.icloud-container-identifiers" json -o - 2>/dev/null || echo '[]')"
+          for cid in $(printf '%s' "$claimed" | tr -d '[]", '); do
+            printf '%s' "$profiled" | grep -q "$cid" || {
+              echo "::error::Profile '$APP_PROVISIONING_PROFILE_SPECIFIER' lacks iCloud container $cid."
+              echo "::error::Assign it once in the developer portal: Identifiers → $APP_BUNDLE_ID → iCloud"
+              echo "::error::→ assign container ${cid#iCloud.} → Save, then re-run scripts/create-adhoc-profiles.sh."
+              exit 1
+            }
+          done
+
       - name: Export ad-hoc signed IPA
         env:
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
           set -euo pipefail
+
+          # Rewrite bundle ids (+ entitlement values bound to them) in the
+          # unsigned archive to the dedicated OTA ids before re-signing.
+          APP_DIR="$ARCHIVE_PATH/Products/Applications/VVTerm.app"
+          APPEX_DIR="$(find "$APP_DIR/PlugIns" -maxdepth 1 -name '*.appex' | head -1)"
+          [[ -n "$APPEX_DIR" ]] || { echo "::error::No .appex in $APP_DIR/PlugIns"; exit 1; }
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $APP_BUNDLE_ID" "$APP_DIR/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $LIVE_ACTIVITY_BUNDLE_ID" "$APPEX_DIR/Info.plist"
+          # Distinct home-screen name next to the TestFlight install
+          # (icons stay identical; the name is the differentiator).
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 'VVTerm PR'" "$APP_DIR/Info.plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 'VVTerm PR'" "$APP_DIR/Info.plist"
+
+          # Entitlement values baked at build time that are bound to the
+          # original bundle id must follow the rewrite (export derives
+          # application-identifier/keychain-access-groups/kvstore from the
+          # profile, but validates claims against the profile first).
+          # Set only keys that already exist (idempotent across targets).
+          set_ent() { # <plist> <keypath> <value>
+            /usr/libexec/PlistBuddy -c "Print :$2" "$1" >/dev/null 2>&1 || return 0
+            /usr/libexec/PlistBuddy -c "Set :$2 $3" "$1"
+          }
+          XCENT="$APP_DIR/archived-expanded-entitlements.xcent"
+          [[ -f "$XCENT" ]] && {
+            set_ent "$XCENT" "com.apple.developer.ubiquity-kvstore-identifier" "$TEAM_ID.$APP_BUNDLE_ID"
+            set_ent "$XCENT" "keychain-access-groups:0" "$TEAM_ID.$APP_BUNDLE_ID"
+          }
 
           EXPORT_PATH="$RUNNER_TEMP/export"
           EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
