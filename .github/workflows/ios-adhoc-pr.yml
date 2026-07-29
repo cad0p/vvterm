@@ -426,12 +426,18 @@ jobs:
           jwt="$(printf '%s' "$token_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
 
           # Vault JWT login over the tunnel (HTTP API, no vault CLI).
-          # --fail-with-body keeps Vault's error JSON visible in the log
-          # (Vault error payloads carry no secrets).
-          login_json="$(curl -fsSL --fail-with-body --request PUT \
+          # No -f/--fail-with-body (unsupported by the image's curl) — check
+          # the response body for Vault's .errors array explicitly. Vault
+          # error payloads carry no secrets, so logging them is safe.
+          login_json="$(curl -sS --request PUT \
             --data "$(jq -n --arg role "${VAULT_JWT_ROLE}" --arg jwt "${jwt}" '{role:$role, jwt:$jwt}')" \
             "${VAULT_LOCAL_ADDR}/v1/auth/jwt/login")"
-          VAULT_TOKEN="$(printf '%s' "$login_json" | jq -r '.auth.client_token')"
+          if printf '%s' "$login_json" | jq -e '.errors' >/dev/null 2>&1; then
+            printf '::error::Vault JWT login failed: %s\n' "$(printf '%s' "$login_json" | jq -c '.errors')"
+            exit 1
+          fi
+          VAULT_TOKEN="$(printf '%s' "$login_json" | jq -r '.auth.client_token // empty')"
+          [[ -n "$VAULT_TOKEN" ]] || { echo "::error::Vault login response has no client_token"; exit 1; }
           echo "Vault login OK; token policies:"
           printf '%s' "$login_json" | jq -r '.auth.policies[]' | sed 's/^/  - /'
 
@@ -439,8 +445,12 @@ jobs:
           # operator-pinned role template. The Cloudflare parent token never
           # leaves Vault. GET with query params = `vault read path pr=N`
           # (policy grants read + update).
-          creds_json="$(curl -fsSL --fail-with-body -H "X-Vault-Token: ${VAULT_TOKEN}" \
+          creds_json="$(curl -sS -H "X-Vault-Token: ${VAULT_TOKEN}" \
             "${VAULT_LOCAL_ADDR}/v1/cloudflare/r2-creds/ota-builds?pr=${PR_NUMBER}")"
+          if printf '%s' "$creds_json" | jq -e '.errors' >/dev/null 2>&1; then
+            printf '::error::R2 cred mint failed: %s\n' "$(printf '%s' "$creds_json" | jq -c '.errors')"
+            exit 1
+          fi
           export AWS_ACCESS_KEY_ID="$(printf '%s' "$creds_json" | jq -r '.data.access_key_id')"
           export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$creds_json" | jq -r '.data.secret_access_key')"
           export AWS_SESSION_TOKEN="$(printf '%s' "$creds_json" | jq -r '.data.session_token')"
