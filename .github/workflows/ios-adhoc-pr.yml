@@ -353,11 +353,25 @@ jobs:
           echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
           echo "BUILD_VERSION=${VERSION} (${BUILD})" >> "$GITHUB_ENV"
 
-      - name: Install Teleport client (tbot + tsh)
-        uses: teleport-actions/setup@v1
-        with:
-          version: auto
-          proxy: ${{ env.TELEPORT_PROXY }}
+      - name: Install Teleport client (tbot)
+        # teleport-actions/setup does NOT support darwin runners ("platform
+        # darwin not supported"), so fetch the tbot tarball directly. Version
+        # pinned to the proxy-reported server version (same policy as the
+        # infra repo's use of teleport-actions/setup version: auto).
+        run: |
+          set -euo pipefail
+          VERSION="$(curl -fsSL "https://${TELEPORT_PROXY}/webapi/ping" | python3 -c 'import json,sys; print(json.load(sys.stdin)["server_version"])')"
+          echo "Teleport proxy version: $VERSION"
+          base="https://cdn.teleport.dev/teleport-v${VERSION}-darwin-arm64-bin.tar.gz"
+          curl -fsSL "$base" -o /tmp/teleport.tar.gz
+          curl -fsSL "$base.sha256" -o /tmp/teleport.tar.gz.sha256
+          expected="$(awk '{print $1}' /tmp/teleport.tar.gz.sha256)"
+          actual="$(shasum -a 256 /tmp/teleport.tar.gz | awk '{print $1}')"
+          [[ "$actual" == "$expected" ]] || { echo "::error::tbot tarball checksum mismatch (got $actual, want $expected)"; exit 1; }
+          mkdir -p /tmp/teleport-bin
+          tar -xzf /tmp/teleport.tar.gz -C /tmp/teleport-bin
+          sudo install -m 755 /tmp/teleport-bin/teleport/tbot /usr/local/bin/tbot
+          tbot version
 
       - name: Install CLI tools
         run: |
