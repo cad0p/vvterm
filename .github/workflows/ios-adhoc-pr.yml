@@ -443,10 +443,13 @@ jobs:
 
           # Mint the ~900s derived R2 triple, scoped to pr-<N>/* by the
           # operator-pinned role template. The Cloudflare parent token never
-          # leaves Vault. GET with query params = `vault read path pr=N`
-          # (policy grants read + update).
+          # leaves Vault. The plugin takes a single `params` field formatted
+          # "key=value" (see scripts/076 smoke: `vault read ... params=pr=N`)
+          # — POST the JSON body (policy grants read + update; both mint).
           creds_json="$(curl -sS -H "X-Vault-Token: ${VAULT_TOKEN}" \
-            "${VAULT_LOCAL_ADDR}/v1/cloudflare/r2-creds/ota-builds?pr=${PR_NUMBER}")"
+            --request POST \
+            --data "$(jq -n --arg p "pr=${PR_NUMBER}" '{params:$p}')" \
+            "${VAULT_LOCAL_ADDR}/v1/cloudflare/r2-creds/ota-builds")"
           if printf '%s' "$creds_json" | jq -e '.errors' >/dev/null 2>&1; then
             printf '::error::R2 cred mint failed: %s\n' "$(printf '%s' "$creds_json" | jq -c '.errors')"
             exit 1
