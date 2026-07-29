@@ -468,6 +468,22 @@ jobs:
           # response (the plugin computes it from the role's jurisdiction) —
           # never hardcode a host here.
           endpoint="$(printf '%s' "$creds_json" | jq -r '.data.endpoint')"
+          echo "Minted: endpoint=$endpoint bucket=$(printf '%s' "$creds_json" | jq -r '.data.bucket') role=$(printf '%s' "$creds_json" | jq -r '.data.role')"
+
+          # Diagnostics (temporary, #154 bring-up): prove the credential works
+          # at all before the big upload. A tiny single-part PUT exercises
+          # PutObject; ls exercises ListObjectsV2; retries absorb any
+          # parent-token propagation lag inside Cloudflare. Non-fatal: the
+          # results are log data for the real upload's error, if any.
+          probe_ok=0
+          for attempt in 1 2 3 4 5 6; do
+            if echo ota-probe | aws s3 cp - "s3://${R2_BUCKET}/pr-${PR_NUMBER}/.probe" --endpoint-url "$endpoint" 2>&1 | tail -2; then
+              probe_ok=1; echo "PROBE put-object: OK (attempt $attempt)"; break
+            fi
+            echo "PROBE put-object attempt $attempt failed; retrying in 10s"; sleep 10
+          done
+          [[ $probe_ok -eq 1 ]] && aws s3 ls "s3://${R2_BUCKET}/pr-${PR_NUMBER}/" --endpoint-url "$endpoint" 2>&1 | tail -3 || true
+
           cd "$OUT_DIR/.."
           aws s3 cp "pr-${PR_NUMBER}/VVTerm.ipa"      "s3://${R2_BUCKET}/pr-${PR_NUMBER}/VVTerm.ipa"      --endpoint-url "$endpoint"
           aws s3 cp "pr-${PR_NUMBER}/manifest.plist"  "s3://${R2_BUCKET}/pr-${PR_NUMBER}/manifest.plist"  --endpoint-url "$endpoint" --content-type "application/x-plist"
