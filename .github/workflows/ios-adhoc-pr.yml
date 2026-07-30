@@ -363,7 +363,15 @@ jobs:
           # landed in the signed app — fail HERE, not on the device.
           SIG_WORK="$(mktemp -d "$RUNNER_TEMP/verify.XXXXXX")"
           unzip -q "$IPA_PATH" -d "$SIG_WORK"
-          SIGNED_ENT="$(codesign -d --entitlements :- "$SIG_WORK/Payload/VVTerm.app")"
+          # Diagnostics: dump BOTH sides before checking (a failing check
+          # without the evidence costs a full dispatch cycle).
+          echo "--- stamped xcent in the archive:"
+          cat "$ARCHIVE_PATH/Products/Applications/VVTerm.app/archived-expanded-entitlements.xcent" 2>/dev/null || echo "(missing)"
+          echo "--- entitlements embedded in the signed app:"
+          # NOTE: '--entitlements -' (stdout). The older colon form ':-' is
+          # deprecated by codesign on this macOS (warning in run 30540465546).
+          SIGNED_ENT="$(codesign -d --entitlements - "$SIG_WORK/Payload/VVTerm.app" 2>&1)"
+          printf '%s\n' "$SIGNED_ENT"
           for key in com.apple.developer.icloud-container-identifiers \
                      com.apple.developer.icloud-services \
                      aps-environment \
