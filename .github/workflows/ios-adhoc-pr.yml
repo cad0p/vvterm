@@ -220,6 +220,7 @@ jobs:
             profile_name="$(security cms -D -i "$profile_path" | plutil -extract Name raw -)"
             cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
             echo "$env_name=$profile_name" >> "$GITHUB_ENV"
+            printf -v "$env_name" '%s' "$profile_name"   # also bind for THIS step (GITHUB_ENV applies to later steps only)
           }
 
           install_profile "$APP_PROFILE_PATH" "APP_PROVISIONING_PROFILE_SPECIFIER"
@@ -232,7 +233,7 @@ jobs:
           # Container→App ID assignment is portal-only (not in the ASC API),
           # so fail here with the exact fix instead of an opaque xcodebuild
           # validation error minutes into export.
-          profiled="$(security cms -D -i "$APP_PROFILE_PATH" | plutil -extract "Entitlements.com\.apple\.developer\.icloud-container-identifiers" json -o - 2>/dev/null || echo '[]')"
+          profiled="$(security cms -D -i "$APP_PROFILE_PATH" | plutil -convert json -o - -- - 2>/dev/null || echo '[]')"
           printf '%s' "$profiled" | grep -q "iCloud.it.pcad.vvterm" || {
             echo "::error::Profile '$APP_PROVISIONING_PROFILE_SPECIFIER' lacks iCloud container iCloud.it.pcad.vvterm."
             echo "::error::Assign it once in the developer portal: Identifiers → $APP_BUNDLE_ID → iCloud"
