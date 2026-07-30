@@ -20,11 +20,12 @@
 #   - This job NEVER checks out or executes PR code. It only signs bytes
 #     produced as an artifact by the untrusted PR CI run. The Apple
 #     distribution certificate (long-lived) and the Vault-derived R2
-#     credential (short-lived, pr-<N>/ prefix only) never share a job with
+#     credential (short-lived, vvterm/ios/pr-<N>/ prefix only) never share a job with
 #     untrusted code — invariant #3 (runner-held = short-lived only).
 #   - The R2 parent token never leaves Vault; the derived triple minted here
-#     expires in ~900s and is scoped to bucket ota-builds, prefix pr-<N>/*.
-#     pr-* objects auto-expire after 7 days via the bucket lifecycle rule
+#     expires in ~900s and is scoped to bucket ota-builds, prefix
+#     vvterm/ios/pr-<N>/* (app/platform-first layout, #154). vvterm/ios/pr-*
+#     objects auto-expire after 7 days via the bucket lifecycle rule
 #     (pcad.it-infra terraform/cloudflare_r2.tf) — no cleanup workflow, by
 #     design.
 #
@@ -55,7 +56,7 @@ on:
         required: true
         type: string
       pr_number:
-        description: "PR number (R2 prefix pr-<N> and comment target)"
+        description: "PR number (R2 prefix vvterm/ios/pr-<N> and comment target)"
         required: true
         type: string
 
@@ -420,7 +421,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          OUT_DIR="$RUNNER_TEMP/ota-out/pr-${PR_NUMBER}"
+          OUT_DIR="$RUNNER_TEMP/ota-out"
           mkdir -p "$OUT_DIR"
           cp "$IPA_PATH" "$OUT_DIR/VVTerm.ipa"
 
@@ -429,8 +430,8 @@ jobs:
           VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")"
           BUILD="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST")"
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")"
-          MANIFEST_URL="${OTA_BASE_URL}/pr-${PR_NUMBER}/manifest.plist"
-          IPA_URL="${OTA_BASE_URL}/pr-${PR_NUMBER}/VVTerm.ipa"
+          MANIFEST_URL="${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist"
+          IPA_URL="${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/VVTerm.ipa"
 
           cat > "$OUT_DIR/manifest.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -583,7 +584,7 @@ jobs:
           echo "Vault login OK; token policies:"
           printf '%s' "$login_json" | jq -r '.auth.policies[]' | sed 's/^/  - /'
 
-          # Mint the ~900s derived R2 triple, scoped to pr-<N>/* by the
+          # Mint the ~900s derived R2 triple, scoped to vvterm/ios/pr-<N>/* by the
           # operator-pinned role template. The Cloudflare parent token never
           # leaves Vault. The plugin takes a single `params` field formatted
           # "key=value" (see scripts/076 smoke: `vault read ... params=pr=N`)
@@ -619,19 +620,29 @@ jobs:
           # results are log data for the real upload's error, if any.
           probe_ok=0
           for attempt in 1 2 3 4 5 6; do
-            if echo ota-probe | aws s3 cp - "s3://${R2_BUCKET}/pr-${PR_NUMBER}/.probe" --endpoint-url "$endpoint" 2>&1 | tail -2; then
+            if echo ota-probe | aws s3 cp - "s3://${R2_BUCKET}/vvterm/ios/pr-${PR_NUMBER}/.probe" --endpoint-url "$endpoint" 2>&1 | tail -2; then
               probe_ok=1; echo "PROBE put-object: OK (attempt $attempt)"; break
             fi
             echo "PROBE put-object attempt $attempt failed; retrying in 10s"; sleep 10
           done
-          [[ $probe_ok -eq 1 ]] && aws s3 ls "s3://${R2_BUCKET}/pr-${PR_NUMBER}/" --endpoint-url "$endpoint" 2>&1 | tail -3 || true
+          [[ $probe_ok -eq 1 ]] && aws s3 ls "s3://${R2_BUCKET}/vvterm/ios/pr-${PR_NUMBER}/" --endpoint-url "$endpoint" 2>&1 | tail -3 || true
 
-          cd "$OUT_DIR/.."
-          aws s3 cp "pr-${PR_NUMBER}/VVTerm.ipa"      "s3://${R2_BUCKET}/pr-${PR_NUMBER}/VVTerm.ipa"      --endpoint-url "$endpoint"
-          aws s3 cp "pr-${PR_NUMBER}/manifest.plist"  "s3://${R2_BUCKET}/pr-${PR_NUMBER}/manifest.plist"  --endpoint-url "$endpoint" --content-type "application/x-plist"
-          aws s3 cp "pr-${PR_NUMBER}/index.html"      "s3://${R2_BUCKET}/pr-${PR_NUMBER}/index.html"      --endpoint-url "$endpoint" --content-type "text/html"
+          PREFIX="vvterm/ios/pr-${PR_NUMBER}"
+          # IPA: short edge cache absorbs repeat downloads (R2 egress is free,
+          # but edge hits skip origin ops). Manifest/page: always revalidate
+          # so a re-publish takes effect immediately.
+          aws s3 cp "$OUT_DIR/VVTerm.ipa"     "s3://${R2_BUCKET}/${PREFIX}/VVTerm.ipa"     --endpoint-url "$endpoint" --content-type "application/octet-stream" --cache-control "public, max-age=300"
+          aws s3 cp "$OUT_DIR/manifest.plist" "s3://${R2_BUCKET}/${PREFIX}/manifest.plist" --endpoint-url "$endpoint" --content-type "application/x-plist"        --cache-control "no-store, no-cache, must-revalidate"
+          aws s3 cp "$OUT_DIR/index.html"     "s3://${R2_BUCKET}/${PREFIX}/index.html"     --endpoint-url "$endpoint" --content-type "text/html"                --cache-control "no-store, no-cache, must-revalidate"
+          # Directory index without a Worker: R2 has no website mode (no auto
+          # slash redirect / directory-index suffix), so serve the page at both
+          # directory URLs via objects keyed exactly at the directory path,
+          # with and without trailing slash. `aws s3 cp` treats a trailing-/
+          # destination as a prefix, hence s3api put-object with explicit keys.
+          aws s3api put-object --bucket "$R2_BUCKET" --key "${PREFIX}"  --body "$OUT_DIR/index.html" --endpoint-url "$endpoint" --content-type "text/html" --cache-control "no-store, no-cache, must-revalidate" >/dev/null
+          aws s3api put-object --bucket "$R2_BUCKET" --key "${PREFIX}/" --body "$OUT_DIR/index.html" --endpoint-url "$endpoint" --content-type "text/html" --cache-control "no-store, no-cache, must-revalidate" >/dev/null
 
-          echo "Published: ${OTA_BASE_URL}/pr-${PR_NUMBER}/index.html"
+          echo "Published: ${OTA_BASE_URL}/${PREFIX}/"
 
       - name: Comment install link on PR
         if: success()
@@ -640,7 +651,7 @@ jobs:
         run: |
           set -euo pipefail
           MARKER="<!-- ios-adhoc-pr -->"
-          INSTALL_URL="${OTA_BASE_URL}/pr-${PR_NUMBER}/index.html"
+          INSTALL_URL="${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           body="${MARKER}
@@ -650,8 +661,9 @@ jobs:
 
           - Commit: \`${HEAD_SHA}\`
           - Version: ${BUILD_VERSION}
-          - Manifest: \`${OTA_BASE_URL}/pr-${PR_NUMBER}/manifest.plist\`
-          - Expires: 7 days after upload (R2 lifecycle \`pr-*\`)
+          - Manifest: \`${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist\`
+          - Expires: 7 days after upload (R2 lifecycle \`vvterm/ios/pr-*\`)
+          - To renew: push a commit to this PR, or re-run \`ios-adhoc-pr\` with the same \`ci_run_id\`
 
           _Published by [\`ios-adhoc-pr\`](${RUN_URL}) — Vault-brokered short-lived R2 credentials (pcad.it-infra #154)._"
 
