@@ -12,20 +12,12 @@
 #                    artifact and running a subset of VVTermUITests via
 #                    -only-testing:. fail-fast is disabled so one failing
 #                    shard does not cancel the others.
-#   4. ota-archive — UNSIGNED Release device archive (CODE_SIGNING_ALLOWED=NO),
-#                    uploaded as the `ota-unsigned-archive` artifact. Consumed
-#                    by the `ios-adhoc-pr` workflow (workflow_run, main context),
-#                    which ad-hoc signs it and publishes it to R2
-#                    (pcad.it-infra #154 Phase 1). No `needs:` — it starts with
-#                    `build` so the installable IPA lands as early as possible
-#                    during the OTA testing phase; if the code doesn't build,
-#                    this job fails on its own.
-#
-#   CAP EXCEPTION (temporary): ota-archive raises this workflow to 7 macOS
-#   jobs vs the repo's 5-concurrent cap, so test shards can transiently queue
-#   behind it. Accepted during the #154 OTA testing phase for fast IPA
-#   iteration; revisit once Phase 1 settles (options: gate behind tests, or
-#   drop back into the budget).
+#   (The unsigned Release device archive for per-PR OTA distribution —
+#   formerly job 4, ota-archive — moved to vvterm-pr-ota.yml. Split out so
+#   ios-adhoc-pr's workflow_run trigger fires when the archive is ready
+#   (~12 min after push) instead of waiting for this workflow's test
+#   shards to complete. This also retires the temporary CAP EXCEPTION:
+#   this workflow is back inside the 5-concurrent-macOS-job budget.)
 #
 # Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
 # feedback (unit tests finish first) and isolates UI test failures/hangs
@@ -103,8 +95,10 @@
 # The mock coordinators + mock SEP signer cover the failure-matrix UX in
 # the simulator. The device smoke test (per the 2.2 prompt's runtime
 # verification checklist item 6) is the final confidence check — the
-# ota-archive/ios-adhoc-pr pair exists to make that device test installable
-# per PR.
+# installable per-PR build is produced by the `ota-archive` job, which
+# lives in vvterm-pr-ota.yml (split out so ios-adhoc-pr's workflow_run
+# trigger fires ~12 min after push instead of waiting for the test
+# shards).
 #
 # See:
 #   2026-07-23-strategy-b-session2.2-teleport-ui-design.md (CI strategy)
@@ -146,45 +140,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore source mtimes
-        # Git does not store file mtimes; `actions/checkout` writes files
-        # with the clone timestamp. Xcode keys incremental validity on
-        # nanosecond-resolution mtimes, so freshly-checked-out source files
-        # appear newer than cached DerivedData artifacts → full recompile.
-        # This sets each file's mtime to its last-commit time, making them
-        # consistent across runs. Requires fetch-depth: 0 (set above).
-        uses: chetan/git-restore-mtime-action@v2
-
-      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
-        # Replace actions/cache with irgaly/xcode-cache, which is purpose-built
-        # for Xcode DerivedData caching. It stores a sidecar
-        # `xcode-cache-mtime.json` mapping {path, mtime, sha256} and re-applies
-        # mtimes via File.utime after restore (only when SHA-256 matches).
-        # It also handles the SourcePackages cache key separately. This fixes
-        # the cross-runner mtime+inode invalidation that caused full SPM
-        # recompiles even on cache hits.
-        uses: irgaly/xcode-cache@v1
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        uses: ./.github/actions/prepare-xcode-build
         with:
-          key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
-          restore-keys: |
-            xcode27-deriveddata-${{ github.workflow }}-
-          deriveddata-directory: ${{ runner.temp }}/DerivedData
-          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          swiftpm-cache-restore-keys: |
-            xcode27-spm-
-
-      - name: Clear stale PCM module cache
-        # Remove the Clang module cache so restored .pcm files from an older
-        # runner image don't trigger "file has been modified since the module
-        # file was built" errors. The rebuild is cheap and deterministic.
-        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
-
-      - name: Download Metal toolchain
-        # The xcode-27 public-preview image does not ship the Metal toolchain,
-        # which mlx-swift's Cmlx Metal shaders and libghostty's Metal renderer
-        # require. Download it on first use (cached via SPM cache key below so
-        # subsequent runs skip the download).
-        run: xcodebuild -downloadComponent MetalToolchain
+          deriveddata-key-prefix: xcode27-deriveddata
+          deriveddata-restore-keys: xcode27-deriveddata-${{ github.workflow }}-
 
       - name: Build for iOS Simulator (build-for-testing)
         run: |
@@ -240,104 +200,6 @@ jobs:
           path: ${{ runner.temp }}/build.log
           if-no-files-found: ignore
 
-  # ota-archive: unsigned Release/device archive for per-PR ad-hoc OTA
-  # distribution (#154 Phase 1).
-  #
-  # Security shape: this job holds NO secrets and NO OIDC — the repo is
-  # public and pull_request jobs execute untrusted code. Signing + credential
-  # mint happen later in `ios-adhoc-pr` (workflow_run → refs/heads/main,
-  # pinned by the ci-vvterm-ota-bot Teleport join rule and the ci-vvterm-ota
-  # Vault JWT role). This job's output is bytes only; nothing here is trusted.
-  #
-  # No `needs:` — starts in parallel with `build` so the IPA is available as
-  # early as possible (OTA testing phase). Fails independently when the code
-  # does not compile. See the CAP EXCEPTION note in the header.
-  ota-archive:
-    runs-on: xcode-27
-    timeout-minutes: 30
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        uses: chetan/git-restore-mtime-action@v2
-
-      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
-        # Empty restore-keys for DerivedData: the build job's cache is a
-        # Debug/simulator build, useless for a Release/device archive —
-        # restoring it would only waste minutes downloading unusable
-        # intermediates. The shared SPM cache key IS reused (skips package
-        # resolution + source fetch).
-        uses: irgaly/xcode-cache@v1
-        with:
-          key: xcode27-ota-deriveddata-${{ github.workflow }}-${{ github.sha }}
-          restore-keys: ""
-          deriveddata-directory: ${{ runner.temp }}/DerivedData
-          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          swiftpm-cache-restore-keys: |
-            xcode27-spm-
-
-      - name: Clear stale PCM module cache
-        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
-
-      - name: Download Metal toolchain
-        # Same as the other jobs: mlx-swift Cmlx shaders + libghostty's Metal
-        # renderer need the toolchain that the xcode-27 image does not ship.
-        run: xcodebuild -downloadComponent MetalToolchain
-
-      - name: Archive unsigned Release build (iOS device)
-        run: |
-          set -euo pipefail
-
-          # CODE_SIGNING_ALLOWED=NO: archive without any Apple credential —
-          # signing is deferred to the ios-adhoc-pr workflow, which re-signs
-          # at `xcodebuild -exportArchive` time (ad-hoc, manual signing).
-          #
-          # FORCE_PRO_ENABLED: mirrors the TestFlight workflow default —
-          # owner device-test builds should have Pro unlocked without
-          # StoreKit (TestFlight default force_pro=true).
-          xcodebuild archive \
-            -scheme VVTerm \
-            -configuration Release \
-            -archivePath "$RUNNER_TEMP/VVTerm.xcarchive" \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            EXPANDED_CODE_SIGN_IDENTITY="" \
-            SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED \
-            | tee "$RUNNER_TEMP/ota-archive.log"
-
-      - name: Package unsigned archive
-        # Tar preserves the symlinks inside .app bundles (see the build job's
-        # "Archive build products" step for why upload-artifact alone breaks
-        # them).
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP"
-          tar -czf ota-unsigned-archive.tar.gz VVTerm.xcarchive
-
-      - name: Upload unsigned archive artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ota-unsigned-archive
-          path: ${{ runner.temp }}/ota-unsigned-archive.tar.gz
-          retention-days: 1
-
-      - name: Upload archive log on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ota-archive-log
-          path: ${{ runner.temp }}/ota-archive.log
-          if-no-files-found: ignore
-
   unit-tests:
     runs-on: xcode-27
     timeout-minutes: 20
@@ -351,52 +213,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore source mtimes
-        # Git does not store file mtimes; `actions/checkout` writes files
-        # with the clone timestamp. Xcode keys incremental validity on
-        # nanosecond-resolution mtimes, so freshly-checked-out source files
-        # appear newer than cached DerivedData artifacts → full recompile.
-        # This sets each file's mtime to its last-commit time, making them
-        # consistent across runs. Requires fetch-depth: 0 (set above).
-        uses: chetan/git-restore-mtime-action@v2
-
-      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
-        # Restore the DerivedData cache saved by the `build` job. irgaly/xcode-cache
-        # re-applies nanosecond mtimes from the sidecar `xcode-cache-mtime.json`
-        # (only when SHA-256 matches), so the restored artifacts are not seen as
-        # stale by Xcode. Combined with `git-restore-mtime` above and
-        # `IgnoreFileSystemDeviceInodeChanges=YES` below, this lets Xcode
-        # recognize that only VVTermTests changed → recompiles only the test
-        # target (~3m) instead of all SPM deps (~6m).
-        #
-        # NOTE: This job does NOT download the build artifact (unlike ui-tests).
-        # The cache alone provides Products + Intermediates.noindex + SourcePackages
-        # with correct mtimes. Downloading the artifact and extracting it over
-        # the cache-restored files gave them fresh tar mtimes, which caused
-        # xcodebuild to re-validate and recompile all SPM deps (~6m waste) even
-        # though the .o files were present. The cache's mtime sidecar is the
-        # source of truth; the artifact is only needed by ui-tests (which uses
-        # test-without-building and does zero compilation).
-        uses: irgaly/xcode-cache@v1
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        # NOTE: This job does NOT download the build artifact (unlike
+        # ui-tests). The cache alone provides Products + Intermediates.noindex
+        # + SourcePackages with correct mtimes — the artifact's fresh tar
+        # mtimes would make xcodebuild re-validate and recompile all SPM deps
+        # (~6m waste). The cache's mtime sidecar is the source of truth.
+        uses: ./.github/actions/prepare-xcode-build
         with:
-          key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
-          restore-keys: |
-            xcode27-deriveddata-${{ github.workflow }}-
-          deriveddata-directory: ${{ runner.temp }}/DerivedData
-          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          swiftpm-cache-restore-keys: |
-            xcode27-spm-
-
-      - name: Clear stale PCM module cache
-        # Remove the Clang module cache so restored .pcm files from an older
-        # runner image don't trigger "file has been modified since the module
-        # file was built" errors. The rebuild is cheap and deterministic.
-        run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
-
-      - name: Download Metal toolchain
-        # The xcode-27 public-preview image does not ship the Metal toolchain.
-        # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
-        run: xcodebuild -downloadComponent MetalToolchain
+          deriveddata-key-prefix: xcode27-deriveddata
+          deriveddata-restore-keys: xcode27-deriveddata-${{ github.workflow }}-
 
       - name: Run unit tests (VVTermTests)
         run: |
@@ -658,19 +484,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore source mtimes
-        uses: chetan/git-restore-mtime-action@v2
-
-      - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
-        uses: irgaly/xcode-cache@v1
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        uses: ./.github/actions/prepare-xcode-build
         with:
-          key: xcode27-deriveddata-${{ github.workflow }}-${{ github.sha }}
-          restore-keys: |
-            xcode27-deriveddata-${{ github.workflow }}-
-          deriveddata-directory: ${{ runner.temp }}/DerivedData
-          swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          swiftpm-cache-restore-keys: |
-            xcode27-spm-
+          deriveddata-key-prefix: xcode27-deriveddata
+          deriveddata-restore-keys: xcode27-deriveddata-${{ github.workflow }}-
 
       - name: Download build products
         uses: actions/download-artifact@v8
@@ -683,9 +501,6 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/DerivedData/Build"
           tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
-
-      - name: Download Metal toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Install xcparse
         run: brew install chargepoint/xcparse/xcparse
