@@ -249,6 +249,19 @@ jobs:
           }
           echo "Preflight OK: profile grants iCloud.it.pcad.vvterm"
 
+          # Resolve the signing identity NOW (same shell context as the import
+          # — proven-good context) and hand it to later steps via GITHUB_ENV.
+          # Match any identity line: the cert CN may be "Apple Distribution:"
+          # or the legacy "iPhone Distribution:" (a /Apple/ grep missed it in
+          # run 30545868274's export step).
+          SIGNING_IDENTITY_SHA="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | awk '/^[[:space:]]*[0-9]+\)/{print $2; exit}')"
+          if [[ -z "$SIGNING_IDENTITY_SHA" ]]; then
+            echo "::error::No codesigning identity in the temporary keychain after import"
+            security find-identity -v "$KEYCHAIN_PATH" || true
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY_SHA=$SIGNING_IDENTITY_SHA" >> "$GITHUB_ENV"
+
       - name: Export ad-hoc signed IPA
         env:
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
@@ -318,9 +331,8 @@ jobs:
           # IN THE ARCHIVE with the full entitlements first — export then
           # re-signs, preserving the embedded entitlement set and validating
           # it against the profile (mismatches become clear export errors).
-          IDENTITY_SHA="$(security find-identity -v -p codesigning "$RUNNER_TEMP/build.keychain-db" | awk '/Apple/{print $2; exit}')"
-          [[ -n "$IDENTITY_SHA" ]] || { echo "::error::No Apple signing identity in the export keychain"; exit 1; }
-          codesign --force --sign "$IDENTITY_SHA" --entitlements "$APP_DIR/archived-expanded-entitlements.xcent" --timestamp=none "$APP_DIR"
+          [[ -n "$SIGNING_IDENTITY_SHA" ]] || { echo "::error::SIGNING_IDENTITY_SHA not set by the profiles step"; exit 1; }
+          codesign --force --sign "$SIGNING_IDENTITY_SHA" --entitlements "$APP_DIR/archived-expanded-entitlements.xcent" --timestamp=none "$APP_DIR"
 
           EXPORT_PATH="$RUNNER_TEMP/export"
           EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
