@@ -311,6 +311,17 @@ jobs:
           </plist>
           EOF
 
+          # xcodebuild -exportArchive IGNORES archived-expanded-entitlements.xcent
+          # in this flow (run 30544141849: signed app carried only the identity
+          # triplet). Community/Apple-forums-verified fix for unsigned-archive
+          # flows (developer.apple.com/forums/thread/756119): codesign the .app
+          # IN THE ARCHIVE with the full entitlements first — export then
+          # re-signs, preserving the embedded entitlement set and validating
+          # it against the profile (mismatches become clear export errors).
+          IDENTITY_SHA="$(security find-identity -v -p codesigning "$RUNNER_TEMP/build.keychain-db" | awk '/Apple/{print $2; exit}')"
+          [[ -n "$IDENTITY_SHA" ]] || { echo "::error::No Apple signing identity in the export keychain"; exit 1; }
+          codesign --force --sign "$IDENTITY_SHA" --entitlements "$APP_DIR/archived-expanded-entitlements.xcent" --timestamp=none "$APP_DIR"
+
           EXPORT_PATH="$RUNNER_TEMP/export"
           EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
 
