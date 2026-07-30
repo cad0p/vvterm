@@ -225,21 +225,21 @@ jobs:
           install_profile "$APP_PROFILE_PATH" "APP_PROVISIONING_PROFILE_SPECIFIER"
           install_profile "$LIVE_ACTIVITY_PROFILE_PATH" "LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER"
 
-          # Preflight: every iCloud container the archive claims must be in
-          # the profile. CloudKit container→App ID assignment is portal-only
-          # (not in the ASC API), so fail here with the exact fix instead of
-          # 3 minutes into export with an opaque xcodebuild validation error.
-          XCENT="$ARCHIVE_PATH/Products/Applications/VVTerm.app/archived-expanded-entitlements.xcent"
-          claimed="$(plutil -extract com.apple.developer.icloud-container-identifiers json -o - "$XCENT" 2>/dev/null || echo '[]')"
+          # Preflight: the profile must grant the iCloud container the
+          # export step's entitlements stamp claims. archived-expanded-
+          # entitlements.xcent is ABSENT in CODE_SIGNING_ALLOWED=NO archives
+          # (confirmed live), so claims come from the stamp, not the build.
+          # Container→App ID assignment is portal-only (not in the ASC API),
+          # so fail here with the exact fix instead of an opaque xcodebuild
+          # validation error minutes into export.
           profiled="$(security cms -D -i "$APP_PROFILE_PATH" | plutil -extract "Entitlements.com\.apple\.developer\.icloud-container-identifiers" json -o - 2>/dev/null || echo '[]')"
-          for cid in $(printf '%s' "$claimed" | tr -d '[]", '); do
-            printf '%s' "$profiled" | grep -q "$cid" || {
-              echo "::error::Profile '$APP_PROVISIONING_PROFILE_SPECIFIER' lacks iCloud container $cid."
-              echo "::error::Assign it once in the developer portal: Identifiers → $APP_BUNDLE_ID → iCloud"
-              echo "::error::→ assign container ${cid#iCloud.} → Save, then re-run scripts/create-adhoc-profiles.sh."
-              exit 1
-            }
-          done
+          printf '%s' "$profiled" | grep -q "iCloud.it.pcad.vvterm" || {
+            echo "::error::Profile '$APP_PROVISIONING_PROFILE_SPECIFIER' lacks iCloud container iCloud.it.pcad.vvterm."
+            echo "::error::Assign it once in the developer portal: Identifiers → $APP_BUNDLE_ID → iCloud"
+            echo "::error::→ assign container it.pcad.vvterm → Save, then re-run scripts/create-adhoc-profiles.sh --set-secrets."
+            exit 1
+          }
+          echo "Preflight OK: profile grants iCloud.it.pcad.vvterm"
 
       - name: Export ad-hoc signed IPA
         env:
@@ -260,20 +260,48 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 'VVTerm PR'" "$APP_DIR/Info.plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 'VVTerm PR'" "$APP_DIR/Info.plist"
 
-          # Entitlement values baked at build time that are bound to the
-          # original bundle id must follow the rewrite (export derives
-          # application-identifier/keychain-access-groups/kvstore from the
-          # profile, but validates claims against the profile first).
-          # Set only keys that already exist (idempotent across targets).
-          set_ent() { # <plist> <keypath> <value>
-            /usr/libexec/PlistBuddy -c "Print :$2" "$1" >/dev/null 2>&1 || return 0
-            /usr/libexec/PlistBuddy -c "Set :$2 $3" "$1"
-          }
-          XCENT="$APP_DIR/archived-expanded-entitlements.xcent"
-          [[ -f "$XCENT" ]] && {
-            set_ent "$XCENT" "com.apple.developer.ubiquity-kvstore-identifier" "$TEAM_ID.$APP_BUNDLE_ID"
-            set_ent "$XCENT" "keychain-access-groups:0" "$TEAM_ID.$APP_BUNDLE_ID"
-          }
+          # Stamp the full entitlements into the archive. CODE_SIGNING_ALLOWED=NO
+          # archives contain NO archived-expanded-entitlements.xcent (verified
+          # live), and -exportArchive then signs only the profile-derived
+          # triplet (application-identifier/team-identifier/get-task-allow) —
+          # the app traps at launch in CKContainer(identifier:) and keychain
+          # ops fail with errSecMissingEntitlement. This stamp mirrors
+          # VVTerm-iOS/VVTerm.entitlements with the OTA bundle id bound; the
+          # Verify signed entitlements step fails loudly on drift.
+          cat > "$APP_DIR/archived-expanded-entitlements.xcent" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>application-identifier</key>
+              <string>${TEAM_ID}.${APP_BUNDLE_ID}</string>
+              <key>com.apple.developer.team-identifier</key>
+              <string>${TEAM_ID}</string>
+              <key>get-task-allow</key>
+              <false/>
+              <key>aps-environment</key>
+              <string>production</string>
+              <key>com.apple.developer.icloud-container-identifiers</key>
+              <array>
+                  <string>iCloud.it.pcad.vvterm</string>
+              </array>
+              <key>com.apple.developer.icloud-services</key>
+              <array>
+                  <string>CloudKit</string>
+              </array>
+              <key>com.apple.developer.ubiquity-kvstore-identifier</key>
+              <string>${TEAM_ID}.${APP_BUNDLE_ID}</string>
+              <key>com.apple.security.network.client</key>
+              <true/>
+              <key>com.apple.security.network.server</key>
+              <true/>
+              <key>keychain-access-groups</key>
+              <array>
+                  <string>${TEAM_ID}.${APP_BUNDLE_ID}</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
 
           EXPORT_PATH="$RUNNER_TEMP/export"
           EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
@@ -318,6 +346,32 @@ jobs:
             exit 1
           fi
           echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+
+      - name: Verify signed entitlements
+        run: |
+          set -euo pipefail
+          # The minimal-entitlements trap (unsigned archive with no .xcent)
+          # shipped a crashing OTA build silently once. Verify the full set
+          # landed in the signed app — fail HERE, not on the device.
+          SIG_WORK="$(mktemp -d "$RUNNER_TEMP/verify.XXXXXX")"
+          unzip -q "$IPA_PATH" -d "$SIG_WORK"
+          SIGNED_ENT="$(codesign -d --entitlements :- "$SIG_WORK/Payload/VVTerm.app")"
+          for key in com.apple.developer.icloud-container-identifiers \
+                     com.apple.developer.icloud-services \
+                     aps-environment \
+                     keychain-access-groups \
+                     com.apple.developer.ubiquity-kvstore-identifier; do
+            printf '%s' "$SIGNED_ENT" | grep -q "$key" || {
+              echo "::error::Signed app is missing entitlement: $key"
+              echo "::error::The entitlements stamp in the export step did not apply (or the profile lacks the capability)."
+              exit 1
+            }
+          done
+          printf '%s' "$SIGNED_ENT" | grep -q "iCloud.it.pcad.vvterm" || {
+            echo "::error::Signed app is missing the iCloud.it.pcad.vvterm container entry"
+            exit 1
+          }
+          echo "Signed entitlements OK (iCloud container + push + keychain + network present)"
 
       - name: Generate install manifest + landing page
         # itms-services:// links are not clickable inside GitHub comments
