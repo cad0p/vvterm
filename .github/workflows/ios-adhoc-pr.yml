@@ -1,7 +1,7 @@
 # ios-adhoc-pr — per-PR ad-hoc OTA distribution (pcad.it-infra #154 Phase 1).
 #
 # Signs the unsigned Release .xcarchive produced by the `ota-archive` job of
-# "VVTerm PR CI" with the ad-hoc provisioning profiles, mints a ~900s
+# "VVTerm PR OTA" with the ad-hoc provisioning profiles, mints a ~900s
 # scoped R2 credential via Teleport Machine ID → Vault JWT → cloudflare
 # secrets engine, uploads the IPA + install manifest to the ota-builds
 # bucket (served at https://ota.pcad.it), and posts a sticky PR comment with
@@ -30,30 +30,42 @@
 #     design.
 #
 # Triggering:
-#   - workflow_run: fires when "VVTerm PR CI" completes for a pull_request,
-#     regardless of test conclusions (device smoke builds are wanted even
-#     when a UI shard flakes). Gated in-job on the run's `ota-archive` job
+#   - workflow_run: fires when "VVTerm PR OTA" completes — for a PR push
+#     (pull_request source) or a renewal rebuild (workflow_dispatch source,
+#     PR resolved from the run's head branch). The source workflow is a
+#     single self-contained job (~12 min), so the install comment lands
+#     ~15 min after push. Gated in-job on the run's `ota-archive` job
 #     having succeeded.
-#   - workflow_dispatch: manual verification — needs the VVTerm PR CI run id
-#     to pull the artifact from, and the PR number for the prefix/comment.
+#   - workflow_dispatch mode=publish: manual verification — needs the
+#     VVTerm PR OTA run id to pull the artifact from, and the PR number.
+#   - workflow_dispatch mode=renew: renew an expired build without
+#     pushing — the `renew` job dispatches "VVTerm PR OTA" on the PR's
+#     head branch and the workflow_run chain republishes automatically.
 #     NOTE: this workflow only becomes triggerable once it exists on main
 #     (workflow_run/workflow_dispatch both read the workflow file from the
 #     default branch).
 #
 # Cost: ~3-5 min on xcode-27 (same toolchain that produced the archive;
-# export-only, no compilation).
+# export-only, no compilation). mode=renew runs on ubuntu-latest (dispatch
+# only — building PR code in this trusted workflow is forbidden by design).
 
 name: ios-adhoc-pr
 
 on:
   workflow_run:
-    workflows: ["VVTerm PR CI"]
+    workflows: ["VVTerm PR OTA"]
     types: [completed]
   workflow_dispatch:
     inputs:
-      ci_run_id:
-        description: "VVTerm PR CI run ID whose ota-unsigned-archive artifact to sign"
+      mode:
+        description: "publish: sign an existing run's archive. renew: rebuild the PR head and republish (expired build)."
         required: true
+        type: choice
+        options: [publish, renew]
+        default: publish
+      ci_run_id:
+        description: "mode=publish only: VVTerm PR OTA run ID whose ota-unsigned-archive artifact to sign"
+        required: false
         type: string
       pr_number:
         description: "PR number (R2 prefix vvterm/ios/pr-<N> and comment target)"
@@ -71,13 +83,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  renew:
+    # mode=renew: rebuild an expired OTA build from the PR's current head
+    # without pushing an empty commit. Dispatches "VVTerm PR OTA" on the
+    # PR head branch; its completion re-triggers sign-and-publish via
+    # workflow_run. Cheap runner, no checkout, no build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'renew'
+    permissions:
+      actions: write       # gh workflow run
+      pull-requests: read  # gh pr view (head branch resolution)
+    steps:
+      - name: Dispatch VVTerm PR OTA on the PR head branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ inputs.pr_number }}"
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::pr_number must be numeric"; exit 1; }
+          HEAD_BRANCH="$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefName --jq .headRefName)"
+          [[ -n "$HEAD_BRANCH" ]] || { echo "::error::cannot resolve PR #${PR_NUMBER} head branch"; exit 1; }
+          gh workflow run vvterm-pr-ota.yml --repo "${{ github.repository }}" --ref "$HEAD_BRANCH"
+          echo "Renewal started: dispatched 'VVTerm PR OTA' on '${HEAD_BRANCH}'."
+          echo "On completion, ios-adhoc-pr publishes automatically and bumps the PR #${PR_NUMBER} comment."
+
   sign-and-publish:
     runs-on: xcode-27
     timeout-minutes: 25
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.pull_requests[0].number != null)
+      (github.event_name == 'workflow_dispatch' && inputs.mode != 'renew') ||
+      (github.event_name == 'workflow_run' &&
+       (github.event.workflow_run.event == 'workflow_dispatch' ||
+        (github.event.workflow_run.event == 'pull_request' &&
+         github.event.workflow_run.pull_requests[0].number != null)))
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       TELEPORT_PROXY: teleport.pcad.it:443
@@ -107,14 +146,27 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            CI_RUN_ID="${{ inputs.ci_run_id }}"
+            [[ -n "$CI_RUN_ID" ]] || { echo "::error::mode=publish requires ci_run_id"; exit 1; }
             echo "PR_NUMBER=${{ inputs.pr_number }}" >> "$GITHUB_ENV"
-            echo "SOURCE_RUN_ID=${{ inputs.ci_run_id }}" >> "$GITHUB_ENV"
-            SHA="$(gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.ci_run_id }}" --jq '.head_sha')"
+            echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+            SHA="$(gh api "repos/${{ github.repository }}/actions/runs/${CI_RUN_ID}" --jq '.head_sha')"
             echo "HEAD_SHA=$SHA" >> "$GITHUB_ENV"
           else
-            echo "PR_NUMBER=${{ github.event.workflow_run.pull_requests[0].number }}" >> "$GITHUB_ENV"
             echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
             echo "HEAD_SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
+            PR_NUMBER="${{ github.event.workflow_run.pull_requests[0].number }}"
+            if [[ -z "$PR_NUMBER" ]]; then
+              # workflow_dispatch-sourced OTA run (mode=renew): resolve the
+              # open PR for the source run's head branch. Exactly one must
+              # exist, else refuse to pick a comment target.
+              HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+              PRS="$(gh pr list --repo "${{ github.repository }}" --head "$HEAD_BRANCH" --state open --json number)"
+              COUNT="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' <<<"$PRS")"
+              [[ "$COUNT" == "1" ]] || { echo "::error::expected exactly one open PR for branch '${HEAD_BRANCH}', found ${COUNT}"; exit 1; }
+              PR_NUMBER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["number"])' <<<"$PRS")"
+            fi
+            echo "PR_NUMBER=${PR_NUMBER}" >> "$GITHUB_ENV"
           fi
 
       - name: Validate inputs + secrets
@@ -668,7 +720,7 @@ jobs:
           - Version: ${BUILD_VERSION}
           - Manifest: \`${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist\`
           - Expires: 7 days after upload (R2 lifecycle \`vvterm/ios/pr-*\`)
-          - To renew: push a commit to this PR, or re-run \`ios-adhoc-pr\` with the same \`ci_run_id\`
+          - Renew: \`gh workflow run ios-adhoc-pr.yml -R ${{ github.repository }} -f mode=renew -f pr_number=${PR_NUMBER}\` (or push any commit)
 
           _Published by [\`ios-adhoc-pr\`](${RUN_URL}) — Vault-brokered short-lived R2 credentials (pcad.it-infra #154)._"
 
