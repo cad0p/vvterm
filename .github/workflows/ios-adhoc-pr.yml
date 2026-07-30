@@ -233,7 +233,14 @@ jobs:
           # Container→App ID assignment is portal-only (not in the ASC API),
           # so fail here with the exact fix instead of an opaque xcodebuild
           # validation error minutes into export.
-          profiled="$(security cms -D -i "$APP_PROFILE_PATH" | plutil -convert json -o - -- - 2>/dev/null || echo '[]')"
+          # Decode via PlistBuddy (colon keypaths, no dot-escaping games).
+          # Both plutil forms tried earlier (-extract dotted keypath,
+          # -convert json via stdin) returned nothing on this runner's macOS;
+          # PlistBuddy + security cms is the combination the install_profile
+          # helper already proves works here.
+          APP_PROFILE_DECODED="$RUNNER_TEMP/app-profile-decoded.plist"
+          security cms -D -i "$APP_PROFILE_PATH" > "$APP_PROFILE_DECODED"
+          profiled="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.icloud-container-identifiers" "$APP_PROFILE_DECODED" 2>/dev/null || echo 'MISSING')"
           printf '%s' "$profiled" | grep -q "iCloud.it.pcad.vvterm" || {
             echo "::error::Profile '$APP_PROVISIONING_PROFILE_SPECIFIER' lacks iCloud container iCloud.it.pcad.vvterm."
             echo "::error::Assign it once in the developer portal: Identifiers → $APP_BUNDLE_ID → iCloud"
