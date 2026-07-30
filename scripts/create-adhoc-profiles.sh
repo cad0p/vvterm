@@ -15,8 +15,11 @@
 #      NOTE: CloudKit CONTAINER assignment to an App ID is not exposed by
 #      the App Store Connect API — if your entitlements claim
 #      com.apple.developer.icloud-container-identifiers, assign the
-#      container for the new App ID once in the developer portal
-#      (identifiers > the App ID > iCloud > assign containers).
+#      container for the new App ID once via either:
+#        - scripts/assign-icloud-container.rb (automated: fastlane
+#          spaceship + the portal's own private API, Apple ID + 2FA), or
+#        - the developer portal manually (identifiers > the App ID >
+#          iCloud > assign containers).
 #   3. For each --profile "bundle_id:Profile Name:SECRET_NAME" triple:
 #      deletes any existing profile with the same name, creates a fresh
 #      IOS_APP_ADHOC profile bound to the bundle id + distribution
