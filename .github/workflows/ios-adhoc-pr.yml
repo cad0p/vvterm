@@ -123,10 +123,11 @@ jobs:
           platform=all
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             matched=true
-            echo "PR_NUMBER=${{ inputs.pr_number }}" >> "$GITHUB_ENV"
+            PR_NUMBER="${{ inputs.pr_number }}"
           else
-            echo "PR_NUMBER=${{ github.event.issue.number }}" >> "$GITHUB_ENV"
-            echo "COMMENT_ID=${{ github.event.comment.id }}" >> "$GITHUB_ENV"
+            PR_NUMBER="${{ github.event.issue.number }}"
+            COMMENT_ID="${{ github.event.comment.id }}"
+            echo "COMMENT_ID=$COMMENT_ID" >> "$GITHUB_ENV"
             # The job-level gate is a coarse startsWith; require the first
             # line to be exactly the command + optional platform arg.
             cmdline="$(printf '%s' "$COMMENT_BODY" | head -1 | tr -d '\r')"
@@ -135,6 +136,10 @@ jobs:
               platform="${BASH_REMATCH[2]:-all}"
             fi
           fi
+          # Bind the shell var above AND export for later steps — GITHUB_ENV
+          # only takes effect in SUBSEQUENT steps; the same-step validation
+          # below reads the shell variable.
+          echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
           echo "matched=$matched" >> "$GITHUB_OUTPUT"
           echo "platform=$platform" >> "$GITHUB_OUTPUT"
           if [[ "$matched" == false ]]; then
