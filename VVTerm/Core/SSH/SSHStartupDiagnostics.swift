@@ -18,6 +18,12 @@ nonisolated enum SSHStartupStage: String, Sendable {
     case moshEndpoint
     case moshUDPSession
     case sshFallback
+    case teleportProxySubsystem
+    case teleportInnerHandshake
+    case teleportInnerAuthentication
+    case teleportInnerChannel
+    case teleportInnerPTY
+    case teleportInnerShellRequest
 }
 
 nonisolated final class SSHStartupTrace: Sendable {
