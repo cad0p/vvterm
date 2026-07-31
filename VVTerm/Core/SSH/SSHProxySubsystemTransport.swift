@@ -390,7 +390,7 @@ actor SSHProxySubsystemTransport {
                 // `read(pumpFD)` — the in-flight syscall holds a file
                 // reference, so the socket stays half-alive and the libssh2FD
                 // peer never sees EOF.
-                log.info("pump_channel_to_fd_eof_or_err ret=\(n) bytes=\(channelToFDBytes)")
+                log.diagInfo("SSH-Proxy-Subsystem-Pump", "pump_channel_to_fd_eof_or_err ret=\(n) bytes=\(channelToFDBytes)")
                 closer.closeOnce(pair.pumpFD)
                 return
             }
@@ -421,7 +421,7 @@ actor SSHProxySubsystemTransport {
             let n = Darwin.read(pair.pumpFD, buffer, 64 * 1024)
             if n <= 0 {
                 // EOF or error — stop sending.
-                log.info("pump_fd_to_channel_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToChannelBytes)")
+                log.diagInfo("SSH-Proxy-Subsystem-Pump", "pump_fd_to_channel_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToChannelBytes)")
                 return
             }
             fdToChannelBytes += n

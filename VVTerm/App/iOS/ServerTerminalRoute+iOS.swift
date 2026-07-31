@@ -6,11 +6,13 @@
 import SwiftUI
 
 #if os(iOS)
+import OSLog
 import UIKit
 
 // MARK: - Server Terminal Route
 
 struct ServerTerminalRoute: View {
+    private static let logger = Logger.forCategory("ServerTerminalRoute")
     private enum PresentedRouteSheet: Hashable, Identifiable {
         case settings
         case editServer(Server)
@@ -191,7 +193,11 @@ struct ServerTerminalRoute: View {
                 reconcileZenMode()
                 updateTerminalRouteActivation()
             }
-            .onChange(of: selectedTab?.id) { _ in
+            .onChange(of: selectedTab?.id) { newValue in
+                Self.logger.diagInfo(
+                    "ServerTerminalRoute",
+                    "Tab selection changed: tab=\(newValue?.uuidString ?? "nil") pane=\(self.selectedTab?.focusedPaneId.uuidString ?? "nil")"
+                )
                 reconcileZenMode()
                 updateTerminalRouteActivation()
             }
@@ -210,7 +216,8 @@ struct ServerTerminalRoute: View {
                 dismissIfContextEnded()
                 updateTerminalRouteActivation()
             }
-            .onChange(of: scenePhase) { _ in
+            .onChange(of: scenePhase) { newPhase in
+                Self.logger.diagInfo("ServerTerminalRoute", "Scene phase changed: \(String(describing: newPhase))")
                 updateTerminalRouteActivation()
             }
             .onChange(of: isContentObscured) { _ in
@@ -549,6 +556,10 @@ struct ServerTerminalRoute: View {
 
     private func dismissIfContextEnded() {
         guard !hasNavigationContext else { return }
+        Self.logger.diagInfo(
+            "ServerTerminalRoute",
+            "Route context ended (isConnecting=\(self.route.isConnecting), tabs=\(self.tabManager.tabs(for: self.route.serverId).count), fileTabs=\(self.fileTabs.tabs(for: self.route.serverId).count)); leaving route"
+        )
         isZenModeEnabled = false
         leaveRoute()
     }

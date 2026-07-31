@@ -281,7 +281,7 @@ final class TerminalTabManager: ObservableObject {
         // Select the new tab
         selectedTabByServer[server.id] = tab.id
 
-        logger.info("Opened new tab for \(server.name), pane: \(tab.rootPaneId)")
+        logger.diagInfo("TerminalTabManager", "Opened new tab id=\(tab.id) pane=\(tab.rootPaneId)")
         return tab
     }
 
@@ -335,7 +335,7 @@ final class TerminalTabManager: ObservableObject {
             otherTerminalsActive: hasConnectedPanes
         )
 
-        logger.info("Closed tab \(currentTab.id)")
+        logger.diagInfo("TerminalTabManager", "Closed tab \(currentTab.id) intent=\(intent)")
     }
 
     /// Close all tabs for a server
@@ -361,7 +361,7 @@ final class TerminalTabManager: ObservableObject {
         selectedViewByServer.removeValue(forKey: serverId)
         connectedServerIds.remove(serverId)
         persistSnapshot()
-        logger.info("Disconnected all terminal tabs for server \(serverId.uuidString, privacy: .public)")
+        logger.diagInfo("TerminalTabManager", "Disconnected all terminal tabs for server \(serverId.uuidString)")
     }
 
     /// Disconnect every active terminal tab.
@@ -372,7 +372,7 @@ final class TerminalTabManager: ObservableObject {
         }
         connectedServerIds.removeAll()
         persistSnapshot()
-        logger.info("Disconnected all terminal tabs")
+        logger.diagInfo("TerminalTabManager", "Disconnected all terminal tabs")
     }
 
     /// Flushes reconnectable state and releases local runtime resources without
@@ -399,7 +399,7 @@ final class TerminalTabManager: ObservableObject {
         connectedServerIds.removeAll()
         runtimeTitleByPane.removeAll()
 
-        logger.info("Preserved terminal tabs while releasing application runtime state")
+        logger.diagInfo("TerminalTabManager", "Preserved terminal tabs while releasing application runtime state")
         return Task { [weak self] in
             guard let self else { return }
             await self.prepareResumableSessionsForApplicationBackground()

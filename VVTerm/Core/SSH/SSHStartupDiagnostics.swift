@@ -98,8 +98,9 @@ nonisolated final class SSHStartupTrace: Sendable {
             detail: detail
         )
         events.withLock { $0.append(event) }
-        logger.info(
-            "startup stage=\(stage.rawValue, privacy: .public) stageMs=\(stageMilliseconds) totalMs=\(totalMilliseconds) outcome=\(outcome, privacy: .public) detail=\(detail, privacy: .public)"
+        logger.diagInfo(
+            "SSH",
+            "startup stage=\(stage.rawValue) stageMs=\(stageMilliseconds) totalMs=\(totalMilliseconds) outcome=\(outcome) detail=\(detail)"
         )
         eventHandler?(event)
     }
