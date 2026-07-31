@@ -158,12 +158,14 @@ jobs:
             PR_NUMBER="${{ github.event.workflow_run.pull_requests[0].number }}"
             if [[ -z "$PR_NUMBER" ]]; then
               # workflow_dispatch-sourced OTA run (mode=renew): resolve the
-              # open PR for the source run's head branch. Exactly one must
-              # exist, else refuse to pick a comment target.
+              # PR for the source run's head branch — ANY state, so renewal
+              # also works for closed test PRs (e.g. #33). Exactly one must
+              # exist for the branch, else refuse to pick an R2 prefix /
+              # comment target.
               HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
-              PRS="$(gh pr list --repo "${{ github.repository }}" --head "$HEAD_BRANCH" --state open --json number)"
+              PRS="$(gh pr list --repo "${{ github.repository }}" --head "$HEAD_BRANCH" --state all --json number)"
               COUNT="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' <<<"$PRS")"
-              [[ "$COUNT" == "1" ]] || { echo "::error::expected exactly one open PR for branch '${HEAD_BRANCH}', found ${COUNT}"; exit 1; }
+              [[ "$COUNT" == "1" ]] || { echo "::error::expected exactly one PR for branch '${HEAD_BRANCH}', found ${COUNT}"; exit 1; }
               PR_NUMBER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["number"])' <<<"$PRS")"
             fi
             echo "PR_NUMBER=${PR_NUMBER}" >> "$GITHUB_ENV"
