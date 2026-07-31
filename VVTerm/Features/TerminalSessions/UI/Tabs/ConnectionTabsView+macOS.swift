@@ -196,6 +196,17 @@ extension ConnectionTerminalContainer {
                     maxHeight: 680
                 )
             }
+            .overlay(alignment: .topTrailing) {
+                if let diagnosticsShareItem {
+                    FileSharePicker(item: diagnosticsShareItem) {
+                        DiagnosticsExporter.cleanup(reportAt: diagnosticsShareItem.fileURL)
+                        self.diagnosticsShareItem = nil
+                    }
+                    .frame(width: 1, height: 1)
+                    .padding(.top, 12)
+                    .padding(.trailing, 12)
+                }
+            }
     }
 
     /// Publishes this server's toolbar content to the AppKit toolbar bridge,
@@ -466,6 +477,7 @@ extension ConnectionTerminalContainer {
                 showingZenPanel = false
                 showingDisconnectConfirmation = true
             },
+            onShareDiagnostics: shareDiagnostics,
             canFilesGoUp: selectedFileTab.map { fileBrowser.currentPath(for: $0) != "/" } ?? false,
             filesShowHiddenBinding: Binding(
                 get: { selectedFileTab.map { fileBrowser.showHiddenFiles(for: $0) } ?? false },

@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import os.log
 
 // MARK: - Connection Terminal Container
 
@@ -42,6 +43,9 @@ struct ConnectionTerminalContainer: View {
     @State var showingPaneCloseConfirmation = false
     @State var serverToEdit: Server?
 
+    /// Diagnostics report being shared from the zen panel
+    @State var diagnosticsShareItem: FileShareItem?
+
     /// Tab limit alert
     @State private var showingTabLimitAlert = false
     @State var showingFileTabLimitAlert = false
@@ -59,6 +63,23 @@ struct ConnectionTerminalContainer: View {
     var visibleViewTabs: [ConnectionViewTab] {
         viewTabConfig.currentVisibleTabs
     }
+
+    /// Exports this process's recent logs and presents the platform share UI.
+    /// Triggered from the zen mode panel; available in every build so users
+    /// can attach diagnostics to bug reports.
+    func shareDiagnostics() {
+        showingZenPanel = false
+        Task {
+            do {
+                let url = try await DiagnosticsExporter.export()
+                diagnosticsShareItem = FileShareItem(fileURL: url)
+            } catch {
+                Self.diagnosticsLogger.error("diagnostics export failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private static let diagnosticsLogger = Logger.forCategory("Diagnostics")
 
     var shouldShowViewPicker: Bool {
         visibleViewTabs.count > 1

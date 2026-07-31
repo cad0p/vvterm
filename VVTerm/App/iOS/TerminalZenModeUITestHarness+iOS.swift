@@ -7,6 +7,7 @@ struct TerminalZenModeUITestHarness: View {
     @State private var selectedView = ConnectionViewTab.terminal.id
     @State private var selectedTerminalTabId: UUID?
     @State private var selectedFileTabId: UUID?
+    @State private var diagnosticsTapped = false
 
     var body: some View {
         NavigationStack {
@@ -14,6 +15,13 @@ struct TerminalZenModeUITestHarness: View {
                 .overlay {
                     Text("Terminal")
                         .foregroundStyle(.white)
+                }
+                .overlay(alignment: .bottom) {
+                    if diagnosticsTapped {
+                        Text("diagnostics-tapped")
+                            .foregroundStyle(.white)
+                            .accessibilityIdentifier("vvterm.zenTest.diagnosticsTapped")
+                    }
                 }
                 .overlay(alignment: .topTrailing) {
                     if isZenModeEnabled {
@@ -40,6 +48,7 @@ struct TerminalZenModeUITestHarness: View {
                                 onEditServer: {},
                                 onDisconnect: {},
                                 onBack: {},
+                                onShareDiagnostics: { diagnosticsTapped = true },
                                 onExitZen: exitZenMode
                             )
                         }

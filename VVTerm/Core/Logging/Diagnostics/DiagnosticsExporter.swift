@@ -88,6 +88,12 @@ enum DiagnosticsExporter {
         }.value
     }
 
+    /// Removes a previously exported report once sharing completed, so
+    /// timestamped reports don't accumulate in the temporary directory.
+    static func cleanup(reportAt url: URL) {
+        try? FileManager.default.removeItem(at: url)
+    }
+
     /// Real start time of this process, so the report covers exactly the
     /// current app launch without needing an early startup hook.
     private static func processStartDate() -> Date? {

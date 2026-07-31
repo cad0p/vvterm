@@ -35,6 +35,7 @@ struct ZenModePanel: View {
     let isSidebarVisible: Bool
     let onToggleSidebar: () -> Void
     let onDisconnect: () -> Void
+    let onShareDiagnostics: () -> Void
     let canFilesGoUp: Bool
     let filesShowHiddenBinding: Binding<Bool>
     let onFilesGoUp: () -> Void
@@ -202,6 +203,16 @@ struct ZenModePanel: View {
             ) {
                 onDisconnect()
             }
+        }
+
+        ZenModeSection("Support") {
+            ZenModeActionButton(
+                title: "Share Diagnostics",
+                systemImage: "ladybug"
+            ) {
+                onShareDiagnostics()
+            }
+            .accessibilityIdentifier("vvterm.terminal.zen.shareDiagnostics")
         }
 
         ZenModeSection("Zen") {
