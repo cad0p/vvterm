@@ -110,8 +110,11 @@ jobs:
        startsWith(github.event.comment.body, '/renew-ota'))
     permissions:
       actions: write       # gh workflow run (OTA rebuild + mode=publish)
-      pull-requests: read  # gh pr view (head branch) + gh pr comment (mac reply)
-      issues: write        # 👀/🚀 reactions on the command comment
+      # write (not read): reactions on a PR comment live under the
+      # pull-requests scope for GITHUB_TOKEN — issues: write only covers
+      # plain issues (verified live: HTTP 403 on POST .../reactions).
+      # Also covers gh pr view + gh pr comment (mac reply).
+      pull-requests: write
     steps:
       - name: Resolve + validate the renewal command
         id: cmd
