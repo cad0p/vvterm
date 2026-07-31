@@ -484,6 +484,14 @@ jobs:
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")"
           MANIFEST_URL="${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist"
           IPA_URL="${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/VVTerm.ipa"
+          # Absolute expiry for the landing page + comment. The lifecycle
+          # rule deletes 7 days after each object's upload, and upload runs
+          # minutes after this step — generation-time + 7d is accurate to
+          # within a few minutes. BSD date (-v): the runner is macOS.
+          # EXPIRES_AT feeds the comment; EXPIRES_ISO feeds the page's JS
+          # countdown (ISO 8601 + Z parses reliably in every browser).
+          EXPIRES_AT="$(date -u -v+7d '+%Y-%m-%d %H:%M UTC')"
+          EXPIRES_ISO="$(date -u -v+7d '+%Y-%m-%dT%H:%M:%SZ')"
 
           cat > "$OUT_DIR/manifest.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -537,16 +545,35 @@ jobs:
           <body>
             <h1>VVTerm — PR ${PR_NUMBER}</h1>
             <p class="meta">Commit <code>${HEAD_SHA}</code><br>
-            Version ${VERSION} (${BUILD}) · ad-hoc · expires 7 days after upload</p>
+            Version ${VERSION} (${BUILD}) · ad-hoc · <span id="exp" data-expires="${EXPIRES_ISO}">expires ${EXPIRES_AT}</span></p>
             <p><a class="button" href="itms-services://?action=download-manifest&amp;url=${MANIFEST_URL}">Install on this device</a></p>
             <p class="meta">Requires a device UDID registered in the ad-hoc profile.
             Raw manifest: <code>${MANIFEST_URL}</code></p>
+            <script>
+              // Live countdown from the stamped expiry; the static absolute
+              // date above is the no-JS fallback. Past expiry the objects
+              // (including this page) are deleted, so the zero state is only
+              // reachable on an already-open page.
+              (function () {
+                var el = document.getElementById('exp');
+                var end = new Date(el.dataset.expires).getTime();
+                function tick() {
+                  var ms = end - Date.now();
+                  if (ms <= 0) { el.textContent = 'expired — renew from the PR'; return; }
+                  var d = Math.floor(ms / 864e5), h = Math.floor(ms / 36e5) % 24, m = Math.floor(ms / 6e4) % 60;
+                  el.textContent = 'expires in ' + d + 'd ' + h + 'h ' + m + 'm (' + el.dataset.expires + ')';
+                  setTimeout(tick, 30000);
+                }
+                tick();
+              })();
+            </script>
           </body>
           </html>
           EOF
 
           echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
           echo "BUILD_VERSION=${VERSION} (${BUILD})" >> "$GITHUB_ENV"
+          echo "EXPIRES_AT=${EXPIRES_AT}" >> "$GITHUB_ENV"
 
       - name: Install Teleport client (tbot)
         # teleport-actions/setup does NOT support darwin runners ("platform
@@ -719,7 +746,7 @@ jobs:
           - Commit: \`${HEAD_SHA}\`
           - Version: ${BUILD_VERSION}
           - Manifest: \`${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist\`
-          - Expires: 7 days after upload (R2 lifecycle \`vvterm/ios/pr-*\`)
+          - Expires: ${EXPIRES_AT} (R2 lifecycle \`vvterm/ios/pr-*\`)
           - Renew: \`gh workflow run ios-adhoc-pr.yml -R ${{ github.repository }} -f mode=renew -f pr_number=${PR_NUMBER}\` (or push any commit)
 
           _Published by [\`ios-adhoc-pr\`](${RUN_URL}) — Vault-brokered short-lived R2 credentials (pcad.it-infra #154)._"
