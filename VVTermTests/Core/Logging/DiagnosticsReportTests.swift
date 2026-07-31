@@ -79,6 +79,32 @@ struct DiagnosticsReportFormatterTests {
     }
 
     @Test
+    func formatAndParseRoundTrip() {
+        let entry = DiagnosticsLogEntry(
+            date: Date(timeIntervalSince1970: 1_758_999_500.25),
+            category: "SSH",
+            level: .info,
+            message: "startup stage=sshHandshake stageMs=345 totalMs=462 outcome=ok detail=none"
+        )
+
+        let parsed = DiagnosticsReportFormatter.parse(DiagnosticsReportFormatter.format(entry))
+
+        #expect(parsed?.category == entry.category)
+        #expect(parsed?.level == entry.level)
+        #expect(parsed?.message == entry.message)
+        // Millisecond precision survives the round trip.
+        #expect(abs((parsed?.date.timeIntervalSince(entry.date)) ?? 1) < 0.001)
+    }
+
+    @Test
+    func parseRejectsTruncatedOrForeignLines() {
+        #expect(DiagnosticsReportFormatter.parse("") == nil)
+        #expect(DiagnosticsReportFormatter.parse("not a log line") == nil)
+        // Truncated rotation boundary: line cut mid-timestamp.
+        #expect(DiagnosticsReportFormatter.parse("6-07-31 13:22:57.877 [info] [SSH] x") == nil)
+    }
+
+    @Test
     func fileNameIsTimestampedAndStable() {
         let name = DiagnosticsReportFormatter.fileName(
             for: Date(timeIntervalSince1970: 1_759_000_000)
@@ -118,18 +144,27 @@ struct DiagnosticsExporterTests {
                 message: "connected"
             )
         ])
+        let recorder = DiagnosticsRecorder(fileURL: freshRingURL())
 
         let url = try await DiagnosticsExporter.export(
             collector: collector,
+            recorder: recorder,
             subsystem: "it.pcad.vvterm",
             exportDate: Date(timeIntervalSince1970: 1_759_000_000)
         )
         defer { try? FileManager.default.removeItem(at: url) }
 
         let contents = try String(contentsOf: url, encoding: .utf8)
-        #expect(contents.contains("Entries:       1"))
+        // Stub entry + the export marker recorded into the fresh ring.
+        #expect(contents.contains("Entries:       2"))
         #expect(contents.contains("[info] [SSH] connected"))
+        #expect(contents.contains("[notice] [Diagnostics] export requested"))
         #expect(url.lastPathComponent.hasPrefix("vvterm-diagnostics-"))
+    }
+
+    private func freshRingURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("vvterm-test-ring-\(UUID().uuidString).log")
     }
 
     @Test
@@ -138,6 +173,7 @@ struct DiagnosticsExporterTests {
         // tests in parallel and identical dates would collide on one filename.
         let url = try await DiagnosticsExporter.export(
             collector: FailingCollector(),
+            recorder: DiagnosticsRecorder(fileURL: freshRingURL()),
             subsystem: "it.pcad.vvterm",
             exportDate: Date(timeIntervalSince1970: 1_759_000_001)
         )
@@ -145,7 +181,86 @@ struct DiagnosticsExporterTests {
 
         let contents = try String(contentsOf: url, encoding: .utf8)
         #expect(contents.contains("Log collection failed:"))
-        #expect(contents.contains("(no log entries collected)"))
+        // Even when unified-log collection fails, the ring-buffer spine
+        // (here: the export marker itself) still lands in the report.
+        #expect(contents.contains("[notice] [Diagnostics] export requested"))
+    }
+
+    @Test
+    func mergeDeduplicatesMirroredEvents() {
+        let base = Date(timeIntervalSince1970: 1_759_000_000)
+        let mirroredRing = DiagnosticsLogEntry(
+            date: base, category: "SSH", level: .info, message: "Disconnected"
+        )
+        // Same event via OSLog, 300ms later, same text.
+        let mirroredOSLog = DiagnosticsLogEntry(
+            date: base.addingTimeInterval(0.3), category: "SSH", level: .info, message: "Disconnected"
+        )
+        let oslogOnly = DiagnosticsLogEntry(
+            date: base.addingTimeInterval(1), category: "Ghostty", level: .info, message: "surface ready"
+        )
+        let ringOnly = DiagnosticsLogEntry(
+            date: base.addingTimeInterval(2), category: "TerminalTabManager", level: .info, message: "Closed tab"
+        )
+
+        let merged = DiagnosticsExporter.mergedEntries(
+            ring: [mirroredRing, ringOnly],
+            oslog: [mirroredOSLog, oslogOnly]
+        )
+
+        #expect(merged.count == 3)
+        #expect(merged.contains(mirroredRing))
+        #expect(merged.contains(oslogOnly))
+        #expect(merged.contains(ringOnly))
+        #expect(!merged.contains(mirroredOSLog))
+        #expect(merged.map(\.date) == merged.map(\.date).sorted())
+    }
+
+    @Test
+    func mergePassesThroughWhenRingIsEmpty() {
+        let entry = DiagnosticsLogEntry(
+            date: Date(timeIntervalSince1970: 1_759_000_000),
+            category: "SSH",
+            level: .info,
+            message: "connected"
+        )
+        #expect(DiagnosticsExporter.mergedEntries(ring: [], oslog: [entry]) == [entry])
+    }
+
+    @Test
+    func collectionWindowExtendsToRecentPriorLaunches() {
+        let exportDate = Date(timeIntervalSince1970: 1_759_000_000)
+        // Process started 5 minutes ago: window reaches back the full 2h so
+        // a previous launch that died mid-reproduction is still captured.
+        let recentStart = exportDate.addingTimeInterval(-5 * 60)
+        let since = DiagnosticsExporter.collectionStartDate(
+            processStart: recentStart,
+            exportDate: exportDate
+        )
+        #expect(since == exportDate.addingTimeInterval(-DiagnosticsExporter.maxCollectionWindow))
+    }
+
+    @Test
+    func collectionWindowCoversWholeLongRunningProcess() {
+        let exportDate = Date(timeIntervalSince1970: 1_759_000_000)
+        // Process started 3 hours ago (beyond the window): collect from
+        // process start so the current session is never truncated.
+        let oldStart = exportDate.addingTimeInterval(-3 * 60 * 60)
+        let since = DiagnosticsExporter.collectionStartDate(
+            processStart: oldStart,
+            exportDate: exportDate
+        )
+        #expect(since == oldStart)
+    }
+
+    @Test
+    func collectionWindowWithoutProcessStartFallsBackToWindow() {
+        let exportDate = Date(timeIntervalSince1970: 1_759_000_000)
+        let since = DiagnosticsExporter.collectionStartDate(
+            processStart: nil,
+            exportDate: exportDate
+        )
+        #expect(since == exportDate.addingTimeInterval(-DiagnosticsExporter.maxCollectionWindow))
     }
 
     @Test
@@ -167,5 +282,74 @@ struct DiagnosticsExporterTests {
         }
 
         #expect(found)
+    }
+}
+
+@Suite
+struct DiagnosticsRecorderTests {
+    private func freshRecorder(maxBytes: Int = 2_000_000, keepBytes: Int = 1_000_000) -> DiagnosticsRecorder {
+        DiagnosticsRecorder(
+            fileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("vvterm-test-ring-\(UUID().uuidString).log"),
+            maxBytes: maxBytes,
+            keepBytes: keepBytes
+        )
+    }
+
+    @Test
+    func recordedEntriesAreReadableByExportPipeline() {
+        let recorder = freshRecorder()
+        let before = Date().addingTimeInterval(-1)
+        recorder.record(level: .info, category: "TerminalTabManager", message: "Closed tab abc")
+        recorder.record(level: .notice, category: "Diagnostics", message: "export requested")
+
+        let entries = recorder.entries(since: before)
+
+        #expect(entries.count == 2)
+        #expect(entries[0].category == "TerminalTabManager")
+        #expect(entries[0].level == .info)
+        #expect(entries[0].message == "Closed tab abc")
+        #expect(entries[1].level == .notice)
+    }
+
+    @Test
+    func entriesNewerThanSinceAreFiltered() {
+        let recorder = freshRecorder()
+        recorder.record(level: .info, category: "SSH", message: "old")
+
+        let entries = recorder.entries(since: Date().addingTimeInterval(60))
+
+        #expect(entries.isEmpty)
+    }
+
+    @Test
+    func multilineMessagesAreSanitizedToOneLine() {
+        let recorder = freshRecorder()
+        recorder.record(level: .info, category: "SSH", message: "line one\nline two")
+
+        let entries = recorder.entries(since: .distantPast)
+
+        #expect(entries.count == 1)
+        #expect(entries[0].message == "line one line two")
+    }
+
+    @Test
+    func rotationKeepsFileBoundedAndParseable() {
+        let recorder = freshRecorder(maxBytes: 400, keepBytes: 200)
+        for index in 0..<20 {
+            recorder.record(
+                level: .info,
+                category: "SSH",
+                message: "event number \(index) with some padding text"
+            )
+        }
+
+        let entries = recorder.entries(since: .distantPast)
+
+        // Oldest events were rotated away, newest survive, all parse.
+        #expect(entries.count < 20)
+        #expect(entries.contains { $0.message.contains("event number 19") })
+        #expect(!entries.contains { $0.message.contains("event number 0 ") })
+        #expect(entries.map(\.date) == entries.map(\.date).sorted())
     }
 }

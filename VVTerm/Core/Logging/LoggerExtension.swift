@@ -16,6 +16,17 @@ extension Logger {
     nonisolated static func forCategory(_ category: String) -> Logger {
         Logger(subsystem: appSubsystem, category: category)
     }
+
+    /// Info-level lifecycle event mirrored into the on-device diagnostics
+    /// ring buffer, which survives logd buffer purges under memory pressure
+    /// (see DiagnosticsRecorder). Use only for non-sensitive narrative
+    /// events (stage names, UUIDs, counts, outcomes) — never credentials,
+    /// raw hosts, or terminal content.
+    func diagInfo(_ category: String, _ message: @autoclosure () -> String) {
+        let text = message()
+        info("\(text, privacy: .public)")
+        DiagnosticsRecorder.shared.record(level: .info, category: category, message: text)
+    }
 }
 
 enum DebugLogConfiguration {

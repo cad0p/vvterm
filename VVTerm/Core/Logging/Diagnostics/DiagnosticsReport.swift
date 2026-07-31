@@ -102,6 +102,34 @@ enum DiagnosticsReportFormatter {
         "\(entryFormatter.string(from: entry.date)) [\(entry.level.rawValue)] [\(entry.category)] \(entry.message)"
     }
 
+    /// Inverse of `format(_:)`, used to read ring-buffer lines back. Returns
+    /// nil for lines that were not produced by `format(_:)` (e.g. truncated
+    /// rotation boundaries).
+    static func parse(_ line: String) -> DiagnosticsLogEntry? {
+        // Layout: "yyyy-MM-dd HH:mm:ss.SSS [level] [category] message"
+        guard line.count > 27 else { return nil }
+        let timestamp = line.prefix(23)
+        guard let date = entryFormatter.date(from: String(timestamp)) else { return nil }
+
+        var rest = line.dropFirst(23)
+        guard rest.hasPrefix(" [") else { return nil }
+        rest = rest.dropFirst(2)
+        guard let levelEnd = rest.firstIndex(of: "]") else { return nil }
+        let level = DiagnosticsLogEntry.Level(rawValue: String(rest[..<levelEnd])) ?? .other
+
+        rest = rest[rest.index(after: levelEnd)...]
+        guard rest.hasPrefix(" [") else { return nil }
+        rest = rest.dropFirst(2)
+        guard let categoryEnd = rest.firstIndex(of: "]") else { return nil }
+        let category = String(rest[..<categoryEnd])
+
+        rest = rest[rest.index(after: categoryEnd)...]
+        guard rest.hasPrefix(" ") else { return nil }
+        let message = String(rest.dropFirst())
+
+        return DiagnosticsLogEntry(date: date, category: category, level: level, message: message)
+    }
+
     /// UTC timestamps keep device logs easy to correlate across timezones.
     private static let headerFormatter: DateFormatter = {
         let formatter = DateFormatter()
