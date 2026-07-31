@@ -400,12 +400,21 @@ jobs:
           done
           echo "Shard test args:$ONLY_TESTING_ARGS"
 
+          # -test-timeouts-enabled + 180s execution allowance: a hanging test
+          # is KILLED and recorded as a failure BY NAME ("Exceeded execution
+          # time allowance") instead of wedging the shard until XCTest's own
+          # launch/activity timeouts fire — hangs become identifiable,
+          # skippable tests instead of silent wall-clock burn. 180s = ~2x the
+          # slowest legitimate test (~91s observed on CI).
           xcodebuild test-without-building -collect-test-diagnostics never \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             $ONLY_TESTING_ARGS \
             -parallel-testing-enabled \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 180 \
+            -maximum-test-execution-time-allowance 180 \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
           # Preserve xcodebuild's exit code for the step status, but don't
