@@ -3,6 +3,13 @@ import XCTest
 final class NoticePresentationUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // #43: the launchNoticeHarness path reproducibly wedges at launch/AX
+        // layer on CI runners (5 of 8 tests in this class have hit it across
+        // #75/#79 — launch hang, slow-startup sheet misses, and
+        // "does not have a process ID"; zero non-notice tests affected).
+        // Quarantine the whole class until the harness startup stall is
+        // root-caused and fixed in #43.
+        throw XCTSkip("#43: notice-harness startup wedge on CI — class quarantined")
     }
 
     @MainActor
@@ -117,10 +124,6 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInitialConnectionSheetYieldsToTmuxSelectionSheet() throws {
-        // #43: 3× CI failures in two modes (launch hang, sheet wait expiring
-        // after slow startup). Skipped per repo flake policy until the
-        // notice-harness startup wedge is fixed.
-        throw XCTSkip("#43: notice-harness startup wedge on CI")
         let app = launchNoticeHarness(
             additionalArguments: ["--vvterm-ui-test-connection-sheet-handoff"]
         )
@@ -157,9 +160,6 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testConcurrentOperationsStackAboveBottomToolbar() throws {
-        // #43: 3× CI launch-hang failures (notice-harness startup wedge).
-        // Skipped per repo flake policy until the wedge is fixed.
-        throw XCTSkip("#43: notice-harness startup wedge on CI")
         let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-operation-stack"])
         let first = app.staticTexts["Upload 1"]
         let second = app.staticTexts["Upload 2"]
