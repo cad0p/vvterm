@@ -22,7 +22,10 @@ struct OSLogDiagnosticsCollector: DiagnosticsLogCollecting {
     }
 
     func collectEntries(since: Date) throws -> [DiagnosticsLogEntry] {
-        // On iOS/macOS an app may only read its own process's entries.
+        // On iOS an app may only read its own process's entries (the
+        // persisted-store APIs are macOS-only). That in-memory buffer is
+        // purged by logd under memory pressure — DiagnosticsRecorder is the
+        // reliable spine and is merged in by the exporter.
         let store = try OSLogStore(scope: .currentProcessIdentifier)
         let position = store.position(date: since)
 
@@ -59,19 +62,33 @@ enum DiagnosticsExporter {
     /// throwing, so the user always gets a shareable file.
     static func export(
         collector: any DiagnosticsLogCollecting = OSLogDiagnosticsCollector(),
+        recorder: DiagnosticsRecorder = .shared,
         subsystem: String = Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
         exportDate: Date = Date(),
         fileManager: FileManager = .default
     ) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
+        // Marker lands in the ring ahead of the collection below (same
+        // serial queue), so the report shows exactly when sharing happened.
+        recorder.record(
+            level: .notice,
+            category: "Diagnostics",
+            message: "export requested"
+        )
+        return try await Task.detached(priority: .userInitiated) {
             let processStart = processStartDate()
             var collectionError: String?
-            var entries: [DiagnosticsLogEntry] = []
+            var oslogEntries: [DiagnosticsLogEntry] = []
+            let since = collectionStartDate(processStart: processStart, exportDate: exportDate)
             do {
-                entries = try collector.collectEntries(since: processStart ?? .distantPast)
+                oslogEntries = try collector.collectEntries(since: since)
             } catch {
                 collectionError = error.localizedDescription
             }
+            // The ring buffer survives logd buffer purges under memory
+            // pressure, so the narrative spine is present even when the
+            // unified-log collection comes back gutted or fails outright.
+            let ringEntries = recorder.entries(since: since)
+            let entries = mergedEntries(ring: ringEntries, oslog: oslogEntries)
 
             let report = DiagnosticsReportFormatter.makeReport(
                 metadata: .current(exportDate: exportDate),
@@ -92,6 +109,51 @@ enum DiagnosticsExporter {
     /// timestamped reports don't accumulate in the temporary directory.
     static func cleanup(reportAt url: URL) {
         try? FileManager.default.removeItem(at: url)
+    }
+
+    /// How far back before the export the report may reach. Covers the
+    /// current launch plus recent prior launches, so a reproduction that
+    /// ended in an app restart still has its lead-up captured.
+    static let maxCollectionWindow: TimeInterval = 2 * 60 * 60
+
+    /// Earliest timestamp collected into a report: the full current process
+    /// lifetime, extended backwards up to `maxCollectionWindow` so previous
+    /// launches are included when the process started recently.
+    static func collectionStartDate(processStart: Date?, exportDate: Date) -> Date {
+        let windowStart = exportDate.addingTimeInterval(-maxCollectionWindow)
+        guard let processStart else { return windowStart }
+        return min(processStart, windowStart)
+    }
+
+    /// Merges ring-buffer and unified-log entries into one timeline. Events
+    /// mirrored to both sources appear once (ring copy wins); entries unique
+    /// to either source are all kept.
+    static func mergedEntries(
+        ring: [DiagnosticsLogEntry],
+        oslog: [DiagnosticsLogEntry]
+    ) -> [DiagnosticsLogEntry] {
+        guard !ring.isEmpty else { return oslog }
+
+        // Dedupe key: category + message, bucketed by 2s so mirrored events
+        // match even if the two timestamps differ by a fraction of a second.
+        var buckets: [Int: Set<String>] = [:]
+        for entry in ring {
+            let bucket = Int(entry.date.timeIntervalSince1970 / 2)
+            buckets[bucket, default: []].insert("\(entry.category)\u{0}\(entry.message)")
+        }
+
+        var merged = ring
+        for entry in oslog {
+            let key = "\(entry.category)\u{0}\(entry.message)"
+            let bucket = Int(entry.date.timeIntervalSince1970 / 2)
+            let isDuplicate = (bucket - 1 ... bucket + 1).contains {
+                buckets[$0]?.contains(key) == true
+            }
+            if !isDuplicate {
+                merged.append(entry)
+            }
+        }
+        return merged.sorted { $0.date < $1.date }
     }
 
     /// Real start time of this process, so the report covers exactly the

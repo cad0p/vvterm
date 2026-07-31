@@ -342,7 +342,7 @@ actor SSHClient {
                 logger: logger
             )
             self.finishDisconnect(operationID: operationID)
-            logger.info("Disconnected")
+            logger.diagInfo("SSHSession", "Disconnected (graceful)")
         }
         disconnectOperation = DisconnectOperation(id: operationID, task: task)
         await task.value
@@ -2090,7 +2090,7 @@ actor SSHSession {
         invalidateTransport()
         cleanupLibssh2()
 
-        logger.info("Disconnected")
+        logger.diagInfo("SSHSession", "Disconnected")
     }
 
     private func invalidateTransport() {
@@ -3276,7 +3276,7 @@ actor SSHSession {
             throw SSHError.shellRequestFailed
         }
         if let innerShellToken { startupTrace?.end(innerShellToken) }
-        logger.info("Teleport inner shell started (\(cols)x\(rows))")
+        logger.diagInfo("SSHSession", "Teleport inner shell started (\(cols)x\(rows))")
 
         // 10. Wrap the inner channel in a ShellHandle. The inner channel is
         //     marked `isInner` so the outer ioLoop skips it; `innerIOLoop`
