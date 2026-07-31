@@ -4,7 +4,7 @@ import os.log
 
 private let zenPanelLogger = Logger.forCategory("ZenMode")
 
-struct IOSZenModePanel: View {
+struct ZenModePanel: View {
     let width: CGFloat
     let serverName: String
     let selectedView: String

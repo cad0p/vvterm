@@ -26,7 +26,7 @@ struct TerminalZenModeUITestHarness: View {
                 .overlay(alignment: .topTrailing) {
                     if isZenModeEnabled {
                         ZenModeFloatingOverlay(isPanelPresented: $showingZenPanel) { width in
-                            IOSZenModePanel(
+                            ZenModePanel(
                                 width: width,
                                 serverName: "Test Server",
                                 selectedView: selectedView,
