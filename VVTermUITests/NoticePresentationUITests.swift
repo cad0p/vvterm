@@ -220,7 +220,7 @@ final class NoticePresentationUITests: XCTestCase {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US"
         ] + additionalArguments
-        app.launch()
+        _ = launchForTest(app)
         return app
     }
 }

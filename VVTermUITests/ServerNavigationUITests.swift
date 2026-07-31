@@ -200,13 +200,13 @@ final class ServerNavigationUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO",
         ]
-        app.launch()
+        _ = launchForTest(app)
 
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         if !diagnostics.waitForExistence(timeout: 5),
            app.state == .runningForeground {
             app.terminate()
-            app.launch()
+            _ = launchForTest(app)
         }
         return app
     }

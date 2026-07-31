@@ -35,7 +35,7 @@ final class TerminalReconnectUITests: XCTestCase {
             "-security.lockOnBackground", "NO",
         ]
         app.launchArguments = commonArguments + ["--vvterm-ui-test-seed-cold-relaunch"]
-        app.launch()
+        _ = launchForTest(app)
         defer { app.terminate() }
 
         let relaunchDiagnostics = app.staticTexts["vvterm.coldRelaunchTest.diagnostics"]
@@ -53,7 +53,7 @@ final class TerminalReconnectUITests: XCTestCase {
 
         app.terminate()
         app.launchArguments = commonArguments
-        app.launch()
+        _ = launchForTest(app)
 
         XCTAssertTrue(relaunchDiagnostics.waitForExistence(timeout: 45))
         wait(for: relaunchDiagnostics, containing: "tabs=2 panes=3", timeout: 15, app: app)
@@ -89,7 +89,7 @@ final class TerminalReconnectUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO",
         ]
-        app.launch()
+        _ = launchForTest(app)
         defer { app.terminate() }
 
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
@@ -100,7 +100,7 @@ final class TerminalReconnectUITests: XCTestCase {
             // arguments. Relaunch after installation so the harness owns the
             // process from its first scene.
             app.terminate()
-            app.launch()
+            _ = launchForTest(app)
         }
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 45), "Production reconnect harness did not mount")
         wait(
@@ -402,13 +402,13 @@ final class TerminalReconnectUITests: XCTestCase {
                 "--vvterm-ui-test-native-find-navigator",
             ]
         }
-        app.launch()
+        _ = launchForTest(app)
 
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         if !diagnostics.waitForExistence(timeout: 5),
            app.state == .runningForeground {
             app.terminate()
-            app.launch()
+            _ = launchForTest(app)
         }
         XCTAssertTrue(
             diagnostics.waitForExistence(timeout: 45),

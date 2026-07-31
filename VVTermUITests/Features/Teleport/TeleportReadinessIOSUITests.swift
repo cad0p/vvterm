@@ -53,7 +53,7 @@ final class TeleportReadinessIOSUITests: XCTestCase {
             "-security.lockOnBackground", "NO",
             "-iCloudSyncEnabled", "NO",
         ]
-        app.launch()
+        _ = launchForTest(app)
         return app
     }
 

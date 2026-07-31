@@ -9,7 +9,7 @@ final class StatsAppearancePresentationUITests: XCTestCase {
     @MainActor
     func testStatsAppearanceCanBeClosedFromGeneralSettings() throws {
         let app = XCUIApplication()
-        app.launch()
+        _ = launchForTest(app)
 
         app.typeKey(",", modifierFlags: .command)
 

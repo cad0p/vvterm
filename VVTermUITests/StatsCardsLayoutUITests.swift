@@ -73,7 +73,7 @@ final class StatsCardsLayoutUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO"
         ] + extraArguments
-        app.launch()
+        _ = launchForTest(app)
 
         XCTAssertTrue(container.waitForExistence(timeout: 8))
         XCTAssertTrue(card("system").waitForExistence(timeout: 5))

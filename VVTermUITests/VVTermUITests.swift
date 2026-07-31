@@ -26,7 +26,7 @@ final class VVTermUITests: XCTestCase {
     func testExample() throws {
         // UI tests must launch the application that they test.
         let app = XCUIApplication()
-        app.launch()
+        _ = launchForTest(app)
 
         // Use XCTAssert and related functions to verify your tests produce the correct results.
     }

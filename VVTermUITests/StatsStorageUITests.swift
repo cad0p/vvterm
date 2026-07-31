@@ -15,7 +15,7 @@ final class StatsStorageUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO"
         ]
-        app.launch()
+        _ = launchForTest(app)
         XCTAssertTrue(app.otherElements["vvterm.stats.storage.details"].waitForExistence(timeout: 8))
     }
 
