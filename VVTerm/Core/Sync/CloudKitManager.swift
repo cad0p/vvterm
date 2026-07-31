@@ -22,7 +22,7 @@ final class CloudKitManager: ObservableObject {
     @Published var isAvailable: Bool = false
     @Published var accountStatusDetail: String = String(localized: "Checking...")
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CloudKit")
+    private let logger = Logger.forCategory("CloudKit")
     private let recordZoneName = CloudKitSyncConstants.recordZoneName
     private lazy var recordZone = CKRecordZone(zoneName: recordZoneName)
     private var recordZoneID: CKRecordZone.ID { recordZone.zoneID }

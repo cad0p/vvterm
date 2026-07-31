@@ -5,10 +5,7 @@ import os.log
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastForegroundSyncAt: Date = .distantPast
     private let foregroundSyncMinimumInterval: TimeInterval = 20
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
-        category: "Lifecycle"
-    )
+    private let logger = Logger.forCategory("Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task {

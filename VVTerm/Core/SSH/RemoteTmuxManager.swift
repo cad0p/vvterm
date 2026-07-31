@@ -122,10 +122,7 @@ actor RemoteTmuxManager {
     private let killTimeout: Duration = .seconds(10)
     private let cleanupTimeout: Duration = .seconds(20)
     private let pathTimeout: Duration = .seconds(10)
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
-        category: "Tmux"
-    )
+    private let logger = Logger.forCategory("Tmux")
 
     private init() {}
 

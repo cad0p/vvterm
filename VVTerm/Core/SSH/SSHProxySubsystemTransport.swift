@@ -209,10 +209,7 @@ actor SSHProxySubsystemTransport {
         var closer: PumpFDCloser?
     }
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "SSH-Proxy-Subsystem-Transport"
-    )
+    private let logger = Logger.forCategory("SSH-Proxy-Subsystem-Transport")
 
     init(channelRead: @escaping ChannelRead, channelWrite: @escaping ChannelWrite) {
         self.channelRead = channelRead
@@ -353,10 +350,7 @@ actor SSHProxySubsystemTransport {
     /// the detached task's thread without hopping onto the actor (which would
     /// serialize + stall the pump).
     nonisolated private func runPump(pair: SocketPair, closer: PumpFDCloser) async {
-        let pumpLog = Logger(
-            subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-            category: "SSH-Proxy-Subsystem-Pump"
-        )
+        let pumpLog = Logger.forCategory("SSH-Proxy-Subsystem-Pump")
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
         await withTaskGroup(of: Void.self) { group in
             // channel -> pumpFD

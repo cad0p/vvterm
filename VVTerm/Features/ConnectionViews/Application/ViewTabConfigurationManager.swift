@@ -22,7 +22,7 @@ final class ViewTabConfigurationManager: ObservableObject {
     private let showStatsKey = "showStatsTab"
     private let showTerminalKey = "showTerminalTab"
     private let showFilesKey = "showFilesTab"
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.vivy.vvterm", category: "ViewTabConfigurationManager")
+    private let logger = Logger.forCategory("ViewTabConfigurationManager")
 
     @Published private(set) var tabOrder: [ConnectionViewTab] = ConnectionViewTab.defaultOrder
     @Published private(set) var defaultTab: String = "stats"

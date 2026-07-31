@@ -37,7 +37,7 @@ class GhosttyIMEHandler {
     /// Set to non-nil during keyDown to track if IME inserted text
     private(set) var keyTextAccumulator: [String]?
 
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "win.aizen.app", category: "GhosttyIME")
+    private static let logger = Logger.forCategory("GhosttyIME")
 
     // MARK: - Initialization
 

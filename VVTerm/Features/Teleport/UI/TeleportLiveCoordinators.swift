@@ -44,10 +44,7 @@ import AppKit
 /// static `HeadlessLogin.post` directly for Phase 1 (to return the raw
 /// `HeadlessLoginResponse` that the coordinator decodes itself).
 final class LiveTeleportHTTPClient: TeleportHTTPClienting {
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-http"
-    )
+    private let logger = Logger.forCategory("teleport-http")
 
     func headlessLogin(
         baseURL: URL,
@@ -137,10 +134,7 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
 /// a Phase-2 registration run; `disconnect()` closes it.
 final class LiveTeleportGRPCClient: TeleportGRPCClienting {
     private var connection: TeleportGRPCConnection?
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-grpc"
-    )
+    private let logger = Logger.forCategory("teleport-grpc")
 
     func connect(
         host: String,
@@ -269,10 +263,7 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
 /// `ValidateClientRedirect` → "unable to create MFA challenges" (gRPC code 7)
 /// — that was the live-device regression.
 final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-browsermfa"
-    )
+    private let logger = Logger.forCategory("teleport-browsermfa")
 
     func run(
         grpcClient: any TeleportGRPCClienting,
@@ -299,10 +290,7 @@ final class WebAuthenticationSessionPresenter: NSObject, WebAuthenticationSessio
     static let shared = WebAuthenticationSessionPresenter()
 
     private var session: ASWebAuthenticationSession?
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-safari"
-    )
+    private let logger = Logger.forCategory("teleport-safari")
 
     func open(url: URL) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in

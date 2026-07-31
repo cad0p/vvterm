@@ -18,7 +18,7 @@ import UIKit
 /// Manages Metal rendering setup and configuration for Ghostty terminal
 @MainActor
 class GhosttyRenderingSetup {
-    nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm", category: "GhosttyRendering")
+    nonisolated private static let logger = Logger.forCategory("GhosttyRendering")
 
     // MARK: - Terminal Settings from AppStorage
 

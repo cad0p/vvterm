@@ -133,10 +133,7 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
     /// a mock that returns a scripted response. Defaults to the real impl.
     private let webAuthnBuilder: any TeleportWebAuthnBuilding
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-registration"
-    )
+    private let logger = Logger.forCategory("teleport-registration")
 
     init(
         grpcClient: any TeleportGRPCClienting,

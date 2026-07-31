@@ -78,10 +78,7 @@ final class NetworkMonitor: ObservableObject {
 
     private let monitor: NWPathMonitor
     private let queue = DispatchQueue(label: "com.vivy.vvterm.networkmonitor")
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
-        category: "Network"
-    )
+    private let logger = Logger.forCategory("Network")
 
     private init() {
         monitor = NWPathMonitor()

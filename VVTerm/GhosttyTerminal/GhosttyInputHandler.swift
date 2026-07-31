@@ -18,7 +18,7 @@ class GhosttyInputHandler {
     private weak var surface: Ghostty.Surface?
     private weak var imeHandler: GhosttyIMEHandler?
 
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "win.aizen.app", category: "GhosttyInput")
+    private static let logger = Logger.forCategory("GhosttyInput")
 
     // MARK: - Initialization
 

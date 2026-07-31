@@ -17,7 +17,7 @@ final class TerminalPaneSSHCoordinator {
     private let richPasteRuntime: TerminalRichPasteRuntime
     private let transportWriteQueue = TerminalTransportWriteQueue()
     private var lastTerminalSize: (cols: Int, rows: Int, pixels: TerminalPixelSize?) = (0, 0, nil)
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "SSHPane")
+    private let logger = Logger.forCategory("SSHPane")
 
     init(
         paneId: UUID,

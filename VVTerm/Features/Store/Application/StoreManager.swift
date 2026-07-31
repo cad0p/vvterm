@@ -24,7 +24,7 @@ final class StoreManager: ObservableObject {
     private var updateListenerTask: Task<Void, Error>?
     private var reviewModeExpiryTask: Task<Void, Never>?
     private var reviewModeExpiresAt: Date?
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Store")
+    private let logger = Logger.forCategory("Store")
     private let reviewModeDuration: TimeInterval = 60 * 60 * 5
 
     // MARK: - Sorted Products

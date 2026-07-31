@@ -7,10 +7,7 @@ final class CloudKitSyncCoordinator {
     static let shared = CloudKitSyncCoordinator()
 
     private let cloudKit = CloudKitManager.shared
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm",
-        category: "CloudKitSyncCoordinator"
-    )
+    private let logger = Logger.forCategory("CloudKitSyncCoordinator")
     private let queue = PendingCloudKitSyncQueue()
     private var isDraining = false
     private var shouldDrainAgain = false

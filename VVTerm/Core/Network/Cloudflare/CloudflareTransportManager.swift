@@ -31,7 +31,7 @@ actor CloudflareTransportManager {
     private let metadataStorageKey = "cache.v1"
     private var activeSession: SessionActor?
     private var metadataCache: [String: AccessMetadata] = [:]
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "CloudflareTransport")
+    private let logger = Logger.forCategory("CloudflareTransport")
 
     func connect(server: Server, credentials: ServerCredentials) async throws -> UInt16 {
         await disconnect()

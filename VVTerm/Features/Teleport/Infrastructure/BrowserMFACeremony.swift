@@ -219,5 +219,5 @@ extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
 /// Shared logger for the Browser MFA ceremony. Uses VVTerm's logging convention
 /// (subsystem = bundle id, category = feature).
 enum BrowserMFACeremonyLog {
-    static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "TeleportBrowserMFA")
+    static let logger = Logger.forCategory("TeleportBrowserMFA")
 }

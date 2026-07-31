@@ -130,7 +130,7 @@ actor SSHClient {
     }
 
     private var session: SSHSession?
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "SSH")
+    private let logger = Logger.forCategory("SSH")
     private var keepAliveTask: Task<Void, Never>?
     private var connectTask: Task<SSHSession, Error>?
     private var pendingConnectSession: SSHSession?
@@ -1532,7 +1532,7 @@ actor SSHSession {
     private var ioTask: Task<Void, Never>?
     private var execRequests: [UUID: ExecRequest] = [:]
     private var connectedPeerAddress: String?
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "SSHSession")
+    private let logger = Logger.forCategory("SSHSession")
     private let startupTrace: SSHStartupTrace?
 
     /// Atomic socket storage for emergency abort from any thread

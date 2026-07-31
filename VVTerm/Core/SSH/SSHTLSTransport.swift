@@ -73,10 +73,7 @@ actor SSHTLSTransport {
     private var socketPair: SocketPair?
     private var pumpTask: Task<Void, Never>?
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "SSH-TLS-Transport"
-    )
+    private let logger = Logger.forCategory("SSH-TLS-Transport")
 
     init(host: String,
          port: Int,
@@ -334,10 +331,7 @@ actor SSHTLSTransport {
     /// the detached task's thread without hopping onto the actor (which would
     /// serialize + stall the pump).
     nonisolated private func runPump(connection: NWConnection, pair: SocketPair) async {
-        let pumpLog = Logger(
-            subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-            category: "SSH-TLS-Pump"
-        )
+        let pumpLog = Logger.forCategory("SSH-TLS-Pump")
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
         await withTaskGroup(of: Void.self) { group in
             // NWConnection -> pumpFD

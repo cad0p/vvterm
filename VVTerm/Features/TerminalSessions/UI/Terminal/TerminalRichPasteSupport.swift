@@ -288,7 +288,7 @@ final class TerminalRichPasteRuntime: TerminalRichPasteContext {
 
 @MainActor
 final class TerminalRichPasteController {
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "TerminalRichPaste")
+    private let logger = Logger.forCategory("TerminalRichPaste")
     private unowned let context: any TerminalRichPasteContext
     private let coordinator: TerminalRichPasteCoordinator
     private var activePasteTask: Task<Void, Never>?

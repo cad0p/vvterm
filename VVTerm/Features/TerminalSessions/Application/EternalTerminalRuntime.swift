@@ -193,10 +193,7 @@ final class EternalTerminalRuntime {
     private var tmuxLifecycle: EternalTerminalTmuxResumeContext?
     private var tmuxLifecycleParser: TmuxLifecycleStreamParser?
     private var lastTerminalSize: (cols: Int, rows: Int, pixels: TerminalPixelSize?) = (0, 0, nil)
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "VVTerm",
-        category: "EternalTerminal"
-    )
+    private let logger = Logger.forCategory("EternalTerminal")
 
     init(
         paneId: UUID,

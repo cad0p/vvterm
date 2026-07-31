@@ -4,10 +4,7 @@ import os
 enum RemoteTerminalTypeResolver {
     typealias CommandExecutor = @Sendable (_ command: String, _ timeout: Duration?) async throws -> String
 
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "VVTerm",
-        category: "RemoteTerminalTypeResolver"
-    )
+    private static let logger = Logger.forCategory("RemoteTerminalTypeResolver")
     private static let probeTimeout: Duration = .seconds(5)
     private static let installTimeout: Duration = .seconds(12)
     private static let probeMarker = "__VVTERM_XTERM_GHOSTTY_OK__"
