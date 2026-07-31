@@ -430,10 +430,23 @@ jobs:
             if [ "$XC_EXIT" -eq 0 ]; then
               break
             fi
-            if [ "$ATTEMPT" -lt 2 ] && grep -q "Failed to initialize for UI testing" "$RUNNER_TEMP/test.log" \
-               && ! grep -q "Test Case" "$RUNNER_TEMP/test.log"; then
-              echo "Runner failed to initialize before any test executed (AX wedge); retrying shard (attempt 2/2)."
-              continue
+            if [ "$ATTEMPT" -lt 2 ]; then
+              # Case 1 — runner-init wedge: no test executed at all.
+              if grep -q "Failed to initialize for UI testing" "$RUNNER_TEMP/test.log" \
+                 && ! grep -q "Test Case" "$RUNNER_TEMP/test.log"; then
+                echo "Runner failed to initialize before any test executed (AX wedge); retrying shard (attempt 2/2)."
+                continue
+              fi
+              # Case 2 — launch-level failures only (simulator infra: "Failed to
+              # launch", "does not have a process ID", AX timeouts) with zero
+              # assertion failures. These are never product bugs in the UI-test
+              # harnesses; a real crash-on-launch regression simply fails again
+              # on attempt 2, costing ~3 minutes.
+              if ! grep -q "XCTAssert" "$RUNNER_TEMP/test.log" \
+                 && grep -qE "Failed to launch|does not have a process ID|AX loaded notification" "$RUNNER_TEMP/test.log"; then
+                echo "Only launch-level failures (simulator infra, no assertions); retrying shard (attempt 2/2)."
+                continue
+              fi
             fi
             break
           done
