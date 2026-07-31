@@ -635,11 +635,16 @@ jobs:
           aws s3 cp "$OUT_DIR/manifest.plist" "s3://${R2_BUCKET}/${PREFIX}/manifest.plist" --endpoint-url "$endpoint" --content-type "application/x-plist"        --cache-control "no-store, no-cache, must-revalidate"
           aws s3 cp "$OUT_DIR/index.html"     "s3://${R2_BUCKET}/${PREFIX}/index.html"     --endpoint-url "$endpoint" --content-type "text/html"                --cache-control "no-store, no-cache, must-revalidate"
           # Directory index without a Worker: R2 has no website mode (no auto
-          # slash redirect / directory-index suffix), so serve the page at both
-          # directory URLs via objects keyed exactly at the directory path,
-          # with and without trailing slash. `aws s3 cp` treats a trailing-/
-          # destination as a prefix, hence s3api put-object with explicit keys.
-          aws s3api put-object --bucket "$R2_BUCKET" --key "${PREFIX}"  --body "$OUT_DIR/index.html" --endpoint-url "$endpoint" --content-type "text/html" --cache-control "no-store, no-cache, must-revalidate" >/dev/null
+          # slash redirect / directory-index suffix), so serve the page at the
+          # directory URL via an object keyed exactly at "${PREFIX}/". `aws s3
+          # cp` treats a trailing-/ destination as a prefix, hence s3api
+          # put-object with an explicit key.
+          # The no-slash key "${PREFIX}" is deliberately NOT written: it sits
+          # outside the Vault role's allowed prefix "vvterm/ios/pr-<N>/"
+          # (AccessDenied by design), and widening the template to match it
+          # would also match pr-<N><anything>/ — cross-PR write bleed. The
+          # canonical URL is therefore the trailing-slash form; the PR comment
+          # link carries it (markdown preserves the slash).
           aws s3api put-object --bucket "$R2_BUCKET" --key "${PREFIX}/" --body "$OUT_DIR/index.html" --endpoint-url "$endpoint" --content-type "text/html" --cache-control "no-store, no-cache, must-revalidate" >/dev/null
 
           echo "Published: ${OTA_BASE_URL}/${PREFIX}/"
