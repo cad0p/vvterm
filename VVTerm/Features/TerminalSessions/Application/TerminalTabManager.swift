@@ -122,7 +122,7 @@ final class TerminalTabManager: ObservableObject {
     /// Servers that already ran tmux cleanup (per app launch)
     private var tmuxCleanupServers: Set<UUID> = []
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "TerminalTabManager")
+    private let logger = Logger.forCategory("TerminalTabManager")
 
     private let persistenceKey = "terminalTabsSnapshot.v1"
     private var persistTask: Task<Void, Never>?

@@ -16,10 +16,7 @@ final class PreferencesStore: ObservableObject {
     private let defaults: UserDefaults
     private let cloudKit: CloudKitManager
     private let syncCoordinator = CloudKitSyncCoordinator.shared
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm",
-        category: "StatsPreferences"
-    )
+    private let logger = Logger.forCategory("StatsPreferences")
 
     private var foregroundObserver: NSObjectProtocol?
     private var syncToggleObserver: NSObjectProtocol?

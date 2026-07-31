@@ -6,7 +6,7 @@ import os.log
 
 extension Server {
     init?(from record: CKRecord) {
-        let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Server.CloudKit")
+        let logger = Logger.forCategory("Server.CloudKit")
 
         guard let idString = record.recordID.recordName as String?,
               let id = UUID(uuidString: idString) else {

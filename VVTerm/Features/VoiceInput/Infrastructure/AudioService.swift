@@ -43,7 +43,7 @@ class AudioService: NSObject, ObservableObject {
         }
     }
 
-    private let logger = Logger.audio
+    private let logger = Logger.forCategory("Audio")
     @Published private var recordingState: RecordingState = .idle
     @Published var transcribedText = ""
     @Published var partialTranscription = ""

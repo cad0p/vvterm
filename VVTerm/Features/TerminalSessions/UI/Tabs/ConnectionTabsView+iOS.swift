@@ -36,6 +36,12 @@ extension ConnectionTerminalContainer {
                 }
                 .adaptiveSoftScrollEdges()
             }
+            .sheet(item: $diagnosticsShareItem) { item in
+                FileShareSheet(item: item) {
+                    DiagnosticsExporter.cleanup(reportAt: item.fileURL)
+                    diagnosticsShareItem = nil
+                }
+            }
     }
 
     func platformChrome<Content: View>(
@@ -187,6 +193,7 @@ extension ConnectionTerminalContainer {
                     showingZenPanel = false
                     onLeaveRoute?()
                 },
+                onShareDiagnostics: shareDiagnostics,
                 onExitZen: exitZenMode
             )
         }

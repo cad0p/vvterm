@@ -19,7 +19,7 @@ final class ServerStatsCollector: ObservableObject {
     @Published var connectionError: String?
 
     private var collectTask: Task<Void, Never>?
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "Stats")
+    private let logger = Logger.forCategory("Stats")
 
     // Own SSH client for stats collection
     private var sshClient: SSHClient?

@@ -1120,12 +1120,9 @@ class GhosttyTerminalView: UIView {
     /// Current scrollbar state from Ghostty core
     var scrollbar: Ghostty.Action.Scrollbar?
 
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm", category: "GhosttyTerminal")
+    private static let logger = Logger.forCategory("GhosttyTerminal")
     private static let keyboardLifecycleLoggingEnabled = DebugLogConfiguration.isEnabled("keyboard")
-    private static let keyboardLifecycleLogger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
-        category: "TerminalKeyboardInput"
-    )
+    private static let keyboardLifecycleLogger = Logger.forCategory("TerminalKeyboardInput")
 
     private var isSelecting = false
     private var isScrolling = false

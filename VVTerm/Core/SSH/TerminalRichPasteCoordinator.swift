@@ -46,7 +46,7 @@ private enum RemoteClipboardSeedCapability: Sendable {
 }
 
 actor TerminalRichPasteCoordinator {
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "TerminalRichPasteCoordinator")
+    private let logger = Logger.forCategory("TerminalRichPasteCoordinator")
     private let sessionId: UUID
     private let transferService: RemoteClipboardTransferService
     private var remoteClipboardCapabilities: [ObjectIdentifier: RemoteClipboardSeedCapability] = [:]

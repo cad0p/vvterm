@@ -147,10 +147,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// pub key). Used to build the Safari URL.
     private var headlessID: String = ""
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-bootstrap"
-    )
+    private let logger = Logger.forCategory("teleport-bootstrap")
 
     /// The result of a successful Phase 1 bootstrap. Passed to the Phase 2
     /// registration coordinator (the cert authenticates the gRPC dial).

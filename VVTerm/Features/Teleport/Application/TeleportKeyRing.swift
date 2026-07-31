@@ -150,10 +150,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
 
     @Published private(set) var credentials: [UUID: TeleportCredential] = [:]
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-keyring"
-    )
+    private let logger = Logger.forCategory("teleport-keyring")
 
     init(signer: any TeleportSEPSigning = SecureEnclaveSigner()) {
         self.signer = signer

@@ -19,7 +19,7 @@ class TerminalPresetManager: ObservableObject {
 
     private let defaults: UserDefaults
     private let presetsKey = "terminalPresets"
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.aizen", category: "TerminalPresetManager")
+    private let logger = Logger.forCategory("TerminalPresetManager")
 
     @Published private(set) var presets: [TerminalPreset] = []
 

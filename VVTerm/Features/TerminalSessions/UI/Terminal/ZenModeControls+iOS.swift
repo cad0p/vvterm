@@ -26,6 +26,7 @@ struct IOSZenModePanel: View {
     let onEditServer: () -> Void
     let onDisconnect: () -> Void
     let onBack: () -> Void
+    let onShareDiagnostics: () -> Void
     let onExitZen: () -> Void
 
     var body: some View {
@@ -83,6 +84,15 @@ struct IOSZenModePanel: View {
                     action: onDisconnect
                 )
                 .accessibilityIdentifier("vvterm.terminal.zen.disconnect")
+            }
+
+            ZenModeSection("Support") {
+                ZenModeActionButton(
+                    title: "Share Diagnostics",
+                    systemImage: "ladybug",
+                    action: onShareDiagnostics
+                )
+                .accessibilityIdentifier("vvterm.terminal.zen.shareDiagnostics")
             }
 
             ZenModeSection("Zen") {

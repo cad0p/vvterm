@@ -9,9 +9,26 @@ extension SupportSheet {
     }
 }
 
+extension View {
+    /// Presents the diagnostics file via the iOS share sheet.
+    func diagnosticsSharePresentation(item: Binding<FileShareItem?>) -> some View {
+        sheet(item: item) { shareItem in
+            FileShareSheet(item: shareItem) {
+                DiagnosticsExporter.cleanup(reportAt: shareItem.fileURL)
+                item.wrappedValue = nil
+            }
+        }
+    }
+}
+
 // MARK: - Support Settings View (iOS)
 
 struct SupportSettingsView: View {
+    /// Diagnostics export state — available in every build so users can
+    /// attach recent logs when reporting a bug.
+    @State private var diagnosticsShareItem: FileShareItem?
+    @State private var isExportingDiagnostics = false
+
     private struct ContactOption: Identifiable {
         let id = UUID()
         let title: String
@@ -33,6 +50,40 @@ struct SupportSettingsView: View {
 
     var body: some View {
         List {
+            Section {
+                Button {
+                    exportDiagnostics()
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "ladybug.fill")
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(.indigo)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(String(localized: "Share Diagnostics"))
+                                .font(.body)
+                                .foregroundStyle(.primary)
+
+                            Text(String(localized: "Attach recent logs to your bug report"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        if isExportingDiagnostics {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .disabled(isExportingDiagnostics)
+                .accessibilityIdentifier("vvterm.support.shareDiagnostics")
+            }
+
             Section {
                 ForEach(contactOptions) { option in
                     Button {
@@ -93,6 +144,19 @@ struct SupportSettingsView: View {
             }
         }
         .adaptiveSoftScrollEdges()
+        .diagnosticsSharePresentation(item: $diagnosticsShareItem)
+    }
+
+    private func exportDiagnostics() {
+        guard !isExportingDiagnostics else { return }
+        isExportingDiagnostics = true
+        Task {
+            let item = await SupportDiagnostics.exportReport()
+            isExportingDiagnostics = false
+            if let item {
+                diagnosticsShareItem = item
+            }
+        }
     }
 
     private func openURL(_ urlString: String) {

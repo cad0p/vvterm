@@ -492,5 +492,5 @@ extension WebAuthnAssertionResponse {
 /// Shared logger for the Browser MFA listener. Uses VVTerm's logging convention
 /// (subsystem = bundle id, category = feature).
 enum BrowserMFAListenerLog {
-    static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "TeleportBrowserMFA")
+    static let logger = Logger.forCategory("TeleportBrowserMFA")
 }

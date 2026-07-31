@@ -9,7 +9,7 @@ final class KeychainManager {
     static let shared = KeychainManager()
 
     private let store: KeychainStore
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Keychain")
+    private let logger = Logger.forCategory("Keychain")
     private var isSyncEnabled: Bool { SyncSettings.isEnabled }
 
     private init() {

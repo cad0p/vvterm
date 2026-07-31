@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 actor RemoteClipboardTransferService {
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "RemoteClipboardTransfer")
+    private let logger = Logger.forCategory("RemoteClipboardTransfer")
     private let sessionId: UUID
     private var didSweepStaleFiles = false
 
@@ -135,7 +135,7 @@ actor RemoteClipboardTransferService {
         logger.debug("Scheduling stale clipboard temp file sweep [session: \(self.sessionId.uuidString, privacy: .public)]")
 
         Task(priority: .utility) {
-            let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "RemoteClipboardTransfer")
+            let logger = Logger.forCategory("RemoteClipboardTransfer")
             try? await Task.sleep(for: .seconds(10))
             guard !Task.isCancelled else { return }
             logger.debug("Sweeping stale clipboard temp files [session: \(sessionId.uuidString, privacy: .public)]")

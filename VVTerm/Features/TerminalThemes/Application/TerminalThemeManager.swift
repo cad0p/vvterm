@@ -27,7 +27,7 @@ final class TerminalThemeManager: ObservableObject {
     private let defaults: UserDefaults
     private let cloudKit: CloudKitManager
     private let syncCoordinator = CloudKitSyncCoordinator.shared
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.vvterm", category: "TerminalThemeManager")
+    private let logger = Logger.forCategory("TerminalThemeManager")
 
     private let customThemesKey = CloudKitSyncConstants.terminalCustomThemesStorageKey
     private let darkThemeKey = CloudKitSyncConstants.terminalThemeNameKey

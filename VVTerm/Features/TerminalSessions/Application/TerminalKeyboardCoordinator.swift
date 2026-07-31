@@ -231,10 +231,7 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         }
     }
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "app.vivy.VivyTerm",
-        category: "KeyboardCoordinator"
-    )
+    private let logger = Logger.forCategory("KeyboardCoordinator")
 
     #if DEBUG
     nonisolated private static var usesUITestKeyboardFrameSimulation: Bool {

@@ -52,6 +52,43 @@ final class TerminalZenModeUITests: XCTestCase {
         )
     }
 
+    /// The zen tray exposes an ungated "Share Diagnostics" button so users
+    /// can attach recent logs to bug reports (see GitHub issue #74).
+    @MainActor
+    func testZenPanelShareDiagnosticsButtonTriggersHandler() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--vvterm-ui-test-terminal-zen-mode-harness",
+            "-AppleLanguages",
+            "(en)",
+            "-AppleLocale",
+            "en_US"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["vvterm.zenTest.chrome"].waitForExistence(timeout: 5))
+
+        app.buttons["vvterm.terminal.moreMenu"].tap()
+        let enterZenMode = app.buttons["vvterm.terminal.enterZenMode"]
+        XCTAssertTrue(enterZenMode.waitForExistence(timeout: 5))
+        enterZenMode.tap()
+
+        app.buttons["vvterm.zen.controls"].tap()
+        let shareDiagnostics = app.buttons["vvterm.terminal.zen.shareDiagnostics"]
+        XCTAssertTrue(shareDiagnostics.waitForExistence(timeout: 5))
+        var scrollAttempts = 0
+        while !shareDiagnostics.isHittable && scrollAttempts < 3 {
+            app.scrollViews["vvterm.terminal.zenPanel"].swipeUp()
+            scrollAttempts += 1
+        }
+        XCTAssertTrue(shareDiagnostics.isHittable)
+        shareDiagnostics.tap()
+
+        XCTAssertTrue(
+            app.staticTexts["vvterm.zenTest.diagnosticsTapped"].waitForExistence(timeout: 5)
+        )
+    }
+
     /// The zen launcher is a glass circle with a thin SF Symbol inside.
     /// Without a `.contentShape`, only the symbol's opaque strokes were
     /// tappable, so tapping the visible glass circle (the obvious target)

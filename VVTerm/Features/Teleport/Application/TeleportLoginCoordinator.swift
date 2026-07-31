@@ -112,10 +112,7 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// The injected WebAuthn builder wrapper. Defaults to the real impl.
     private let webAuthnBuilder: any TeleportWebAuthnBuilding
 
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "it.pcad.vvterm",
-        category: "teleport-login"
-    )
+    private let logger = Logger.forCategory("teleport-login")
 
     init(
         httpClient: any TeleportHTTPClienting,

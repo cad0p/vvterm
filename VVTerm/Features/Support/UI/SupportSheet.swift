@@ -1,9 +1,15 @@
 import SwiftUI
+import os.log
 
 // MARK: - Support Sheet
 
 struct SupportSheet: View {
     @Environment(\.dismiss) private var dismiss
+
+    /// Diagnostics export state — available in every build so users can
+    /// attach recent logs when reporting a bug.
+    @State private var diagnosticsShareItem: FileShareItem?
+    @State private var isExportingDiagnostics = false
 
     private struct ContactOption: Identifiable {
         let id = UUID()
@@ -51,6 +57,47 @@ struct SupportSheet: View {
             }
 
             Divider()
+
+            // Diagnostics export
+            Button {
+                exportDiagnostics()
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "ladybug.fill")
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.indigo)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(localized: "Share Diagnostics"))
+                            .font(.body)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.primary)
+
+                        Text(String(localized: "Attach recent logs to your bug report"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if isExportingDiagnostics {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isExportingDiagnostics)
+            .accessibilityIdentifier("vvterm.support.shareDiagnostics")
+
+            Divider()
+                .padding(.leading, 58)
 
             // Options
             VStack(spacing: 0) {
@@ -123,6 +170,34 @@ struct SupportSheet: View {
         }
         .frame(width: 340)
         .adaptiveSoftScrollEdges()
+        .diagnosticsSharePresentation(item: $diagnosticsShareItem)
+    }
+
+    private func exportDiagnostics() {
+        guard !isExportingDiagnostics else { return }
+        isExportingDiagnostics = true
+        Task {
+            let item = await SupportDiagnostics.exportReport()
+            isExportingDiagnostics = false
+            if let item {
+                diagnosticsShareItem = item
+            }
+        }
+    }
+}
+
+/// Shared export helper for the support surfaces (sheet + settings list).
+enum SupportDiagnostics {
+    static func exportReport() async -> FileShareItem? {
+        do {
+            let url = try await DiagnosticsExporter.export()
+            return FileShareItem(fileURL: url)
+        } catch {
+            Logger.forCategory("Diagnostics").error(
+                "diagnostics export failed: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
     }
 }
 

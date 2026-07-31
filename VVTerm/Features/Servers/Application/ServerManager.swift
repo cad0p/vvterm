@@ -17,7 +17,7 @@ final class ServerManager: ObservableObject {
     private let cloudKit = CloudKitManager.shared
     private let syncCoordinator = CloudKitSyncCoordinator.shared
     private let keychain = KeychainManager.shared
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ServerManager")
+    private let logger = Logger.forCategory("ServerManager")
     private var isSyncEnabled: Bool { SyncSettings.isEnabled }
 
     // Local storage keys

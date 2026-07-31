@@ -307,7 +307,7 @@ final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendab
 /// Shared logger for the gRPC transport layer. Uses VVTerm's logging convention
 /// (subsystem = bundle id, category = feature).
 enum GRPCTransportLog {
-    static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VVTerm", category: "TeleportGRPC")
+    static let logger = Logger.forCategory("TeleportGRPC")
 }
 
 #endif // canImport(Network)

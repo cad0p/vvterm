@@ -55,7 +55,7 @@ final class MLXModelManager: NSObject, ObservableObject {
 
     let kind: MLXModelKind
 
-    private let logger = Logger.settings
+    private let logger = Logger.forCategory("Settings")
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
     private var activeItem: DownloadItem?
