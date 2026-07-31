@@ -431,10 +431,13 @@ jobs:
               break
             fi
             if [ "$ATTEMPT" -lt 2 ]; then
-              # Case 1 — runner-init wedge: no test executed at all.
-              if grep -q "Failed to initialize for UI testing" "$RUNNER_TEMP/test.log" \
-                 && ! grep -q "Test Case" "$RUNNER_TEMP/test.log"; then
-                echo "Runner failed to initialize before any test executed (AX wedge); retrying shard (attempt 2/2)."
+              # Case 1 — runner died before ANY test executed (zero "Test
+              # Case" lines). Message varies: "Failed to initialize for UI
+              # testing" (AX timeout), "Early unexpected exit ... signal abrt
+              # while preparing to run tests", etc. All are infra by
+              # definition — no product assertion can fail before tests run.
+              if ! grep -q "Test Case '-\[" "$RUNNER_TEMP/test.log"; then
+                echo "Runner failed before any test executed (infra wedge); retrying shard (attempt 2/2)."
                 continue
               fi
               # Case 2 — launch-level failures only (simulator infra: "Failed to
