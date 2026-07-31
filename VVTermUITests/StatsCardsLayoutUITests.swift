@@ -75,9 +75,12 @@ final class StatsCardsLayoutUITests: XCTestCase {
         ] + extraArguments
         _ = launchForTest(app)
 
-        XCTAssertTrue(container.waitForExistence(timeout: 8))
-        XCTAssertTrue(card("system").waitForExistence(timeout: 5))
-        XCTAssertTrue(card("cpu").waitForExistence(timeout: 5))
+        // Tolerate degraded CI sims: after a slow/retried launch the harness
+        // view can take far longer than 8s to materialize (observed failure on
+        // run 30643100567 after ~50s of launch retries).
+        XCTAssertTrue(container.waitForExistence(timeout: 20))
+        XCTAssertTrue(card("system").waitForExistence(timeout: 10))
+        XCTAssertTrue(card("cpu").waitForExistence(timeout: 10))
     }
 
     @MainActor
