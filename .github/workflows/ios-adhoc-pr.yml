@@ -820,7 +820,7 @@ jobs:
 
           - Commit: \`${HEAD_SHA}\`
           - Version: ${BUILD_VERSION}
-          - Manifest: \`${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist\`
+          - Manifest: [manifest.plist](${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist)
           - Expires: ${EXPIRES_AT} (R2 lifecycle \`vvterm/ios/pr-*\`)
           - Renew: comment \`/renew-ota\` on this PR — or \`gh workflow run ios-adhoc-pr.yml -R ${{ github.repository }} -f mode=renew -f pr_number=${PR_NUMBER}\`
 
