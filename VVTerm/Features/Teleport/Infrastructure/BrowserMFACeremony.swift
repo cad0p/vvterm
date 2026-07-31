@@ -105,7 +105,10 @@ final class BrowserMFACeremony: NSObject {
         } catch {
             throw BrowserMFACeremonyError.listenerFailed(error.localizedDescription)
         }
-        BrowserMFACeremonyLog.logger.info("listener on \(clientCallbackURL, privacy: .public)")
+        // Never log the full callback URL: its secret_key query is a session
+        // credential and would leak into exported diagnostics reports.
+        let redactedCallbackURL = clientCallbackURL.components(separatedBy: "?").first ?? clientCallbackURL
+        BrowserMFACeremonyLog.logger.info("listener on \(redactedCallbackURL, privacy: .public)")
 
         // ── 2. CreateAuthenticateChallenge with BrowserMFATSHRedirectURL ──
         // The ceremony passes the REAL loopback URL (a non-zero, OS-assigned
@@ -129,7 +132,9 @@ final class BrowserMFACeremony: NSObject {
 
         // ── 4. Open Safari to /web/mfa/browser/<id> ───────────────────────
         let browserMFAURL = "https://\(host)/web/mfa/browser/\(requestID)"
-        BrowserMFACeremonyLog.logger.info("open_safari \(browserMFAURL, privacy: .public)")
+        // Log only the request-id prefix (as above): the full id is a bearer
+        // for the MFA challenge and must not land in diagnostics reports.
+        BrowserMFACeremonyLog.logger.info("open_safari https://\(host, privacy: .public)/web/mfa/browser/\(requestID.prefix(16), privacy: .public)…")
         // We use ASWebAuthenticationSession to present Safari in-app. The
         // callback scheme "vvterm" is set but won't fire for the loopback
         // redirect — we cancel the session after the listener receives the
