@@ -3518,8 +3518,48 @@ actor SSHSession {
     private func startInnerIOLoop() {
         guard innerIOTask == nil else { return }
         innerIOTask = Task { [weak self] in
-            await self?.innerIOLoop()
+            guard let self else { return }
+            await self.innerIOLoop()
+            await self.innerIOLoopDidExit()
         }
+    }
+
+    /// Clears the completed loop task so future `startInnerIOLoop()` calls
+    /// can start a fresh loop, and restarts immediately when inner work
+    /// arrived while the previous loop was winding down (lost-wakeup guard).
+    ///
+    /// Root cause of issue #77: `innerIOLoop` breaks when idle, but
+    /// `innerIOTask` stayed non-nil (a *completed* task), so the
+    /// `innerIOTask == nil` guard in `startInnerIOLoop()` rejected every
+    /// later restart. Inner exec requests enqueued after that point were
+    /// never drained (the Ghostty terminfo install stalled until its 12s
+    /// timeout on every connect), and the inner shell channel was never
+    /// read — the shell "started" but no bytes ever reached the terminal.
+    private func innerIOLoopDidExit() {
+        innerIOTask = nil
+        // A cancelled task means `stopInnerIOLoop()` ran (teardown) — do
+        // not resurrect the loop during cleanup.
+        guard !Task.isCancelled else { return }
+        guard innerLibssh2Session != nil, !hasBeenCleaned else { return }
+        let hasInnerChannels = shellChannels.values.contains { $0.isInner }
+        let hasInnerExec = execRequests.values.contains { $0.isInner }
+        if Self.shouldRestartInnerIOLoop(
+            hasInnerChannels: hasInnerChannels,
+            hasInnerExec: hasInnerExec
+        ) {
+            startInnerIOLoop()
+        }
+    }
+
+    /// Pure restart decision extracted from `innerIOLoopDidExit()` so it can
+    /// be unit-tested without a live libssh2 session. The loop must restart
+    /// when any inner shell channel or inner exec request is still pending
+    /// at the moment the previous loop exited.
+    nonisolated static func shouldRestartInnerIOLoop(
+        hasInnerChannels: Bool,
+        hasInnerExec: Bool
+    ) -> Bool {
+        hasInnerChannels || hasInnerExec
     }
 
     private func stopInnerIOLoop() {
