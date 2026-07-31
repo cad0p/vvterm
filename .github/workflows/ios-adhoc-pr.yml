@@ -30,20 +30,22 @@
 #     design.
 #
 # Triggering:
-#   - workflow_run: fires when "VVTerm PR OTA" completes — for a PR push
-#     (pull_request source) or a renewal rebuild (workflow_dispatch source,
-#     PR resolved from the run's head branch). The source workflow is a
-#     single self-contained job (~12 min), so the install comment lands
-#     ~15 min after push. Gated in-job on the run's `ota-archive` job
-#     having succeeded.
-#   - workflow_dispatch mode=publish: manual verification — needs the
+#   - workflow_run: fires when "VVTerm PR OTA" completes for a pull_request
+#     source run. The single-job source workflow completes in ~12 min, so
+#     the install comment lands ~15 min after push. Gated in-job on the
+#     run's `ota-archive` job having succeeded.
+#   - issue_comment `/renew-ota [ios|mac|all]` on a PR (OWNER/MEMBER/
+#     COLLABORATOR only — the repo is public and anyone can comment): the
+#     `renew` job orchestrates a rebuild. The comment event carries the PR
+#     number in github.event.issue.number, and the job dispatches
+#     sign-and-publish with explicit ids at the end — no branch→PR
+#     reverse lookup exists anywhere in this workflow.
+#   - workflow_dispatch mode=renew: the same renewal flow via gh CLI
+#     (pr_number input). mode=publish: manual verification — needs the
 #     VVTerm PR OTA run id to pull the artifact from, and the PR number.
-#   - workflow_dispatch mode=renew: renew an expired build without
-#     pushing — the `renew` job dispatches "VVTerm PR OTA" on the PR's
-#     head branch and the workflow_run chain republishes automatically.
 #     NOTE: this workflow only becomes triggerable once it exists on main
-#     (workflow_run/workflow_dispatch both read the workflow file from the
-#     default branch).
+#     (workflow_run/workflow_dispatch/issue_comment all read the workflow
+#     file from the default branch).
 #
 # Cost: ~3-5 min on xcode-27 (same toolchain that produced the archive;
 # export-only, no compilation). mode=renew runs on ubuntu-latest (dispatch
@@ -55,6 +57,8 @@ on:
   workflow_run:
     workflows: ["VVTerm PR OTA"]
     types: [completed]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       mode:
@@ -84,29 +88,112 @@ concurrency:
 
 jobs:
   renew:
-    # mode=renew: rebuild an expired OTA build from the PR's current head
-    # without pushing an empty commit. Dispatches "VVTerm PR OTA" on the
-    # PR head branch; its completion re-triggers sign-and-publish via
-    # workflow_run. Cheap runner, no checkout, no build.
+    # Rebuild + republish an expired OTA build from the PR's current head,
+    # without pushing an empty commit. Two equivalent entry points:
+    #   - PR comment `/renew-ota [ios|mac|all]` (issue_comment): the event
+    #     carries the PR number in github.event.issue.number. Gated to PR
+    #     comments by OWNER/MEMBER/COLLABORATOR whose body starts with the
+    #     command (public repo: anyone can comment).
+    #   - gh workflow run ios-adhoc-pr.yml -f mode=renew -f pr_number=N
+    # The job then orchestrates the whole chain with explicit references:
+    # dispatch "VVTerm PR OTA" on the PR head branch, watch it, dispatch
+    # sign-and-publish (mode=publish) with that run's id + the PR number.
+    # Cheap runner, no checkout, no build (building PR code in this
+    # trusted workflow is forbidden by design).
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'renew'
+    timeout-minutes: 30
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'renew') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       startsWith(github.event.comment.body, '/renew-ota'))
     permissions:
-      actions: write       # gh workflow run
-      pull-requests: read  # gh pr view (head branch resolution)
+      actions: write       # gh workflow run (OTA rebuild + mode=publish)
+      pull-requests: read  # gh pr view (head branch) + gh pr comment (mac reply)
+      issues: write        # 👀/🚀 reactions on the command comment
     steps:
-      - name: Dispatch VVTerm PR OTA on the PR head branch
+      - name: Resolve + validate the renewal command
+        id: cmd
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+        run: |
+          set -euo pipefail
+          matched=false
+          platform=all
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            matched=true
+            echo "PR_NUMBER=${{ inputs.pr_number }}" >> "$GITHUB_ENV"
+          else
+            echo "PR_NUMBER=${{ github.event.issue.number }}" >> "$GITHUB_ENV"
+            echo "COMMENT_ID=${{ github.event.comment.id }}" >> "$GITHUB_ENV"
+            # The job-level gate is a coarse startsWith; require the first
+            # line to be exactly the command + optional platform arg.
+            cmdline="$(printf '%s' "$COMMENT_BODY" | head -1 | tr -d '\r')"
+            if [[ "$cmdline" =~ ^/renew-ota([[:space:]]+(ios|mac|all))?[[:space:]]*$ ]]; then
+              matched=true
+              platform="${BASH_REMATCH[2]:-all}"
+            fi
+          fi
+          echo "matched=$matched" >> "$GITHUB_OUTPUT"
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          if [[ "$matched" == false ]]; then
+            echo "not a /renew-ota command — ignoring"
+            exit 0
+          fi
+          [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || { echo "::error::PR number '${PR_NUMBER:-}' is not numeric"; exit 1; }
+          echo "Renewal requested for PR #${PR_NUMBER} (platform: $platform)"
+
+      - name: Acknowledge command with 👀
+        if: steps.cmd.outputs.matched == 'true' && env.COMMENT_ID != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}/reactions" -f content=eyes --silent
+
+      - name: Reply when platform=mac (not yet available)
+        if: steps.cmd.outputs.matched == 'true' && steps.cmd.outputs.platform == 'mac'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${PR_NUMBER}" --repo "${{ github.repository }}" \
+            --body "macOS OTA builds aren't available yet — use \`/renew-ota\` (all) or \`/renew-ota ios\`."
+
+      - name: Dispatch OTA rebuild, watch, dispatch publish
+        if: steps.cmd.outputs.matched == 'true' && steps.cmd.outputs.platform != 'mac'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          PR_NUMBER="${{ inputs.pr_number }}"
-          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::pr_number must be numeric"; exit 1; }
-          HEAD_BRANCH="$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefName --jq .headRefName)"
+          REPO="${{ github.repository }}"
+
+          HEAD_BRANCH="$(gh pr view "${PR_NUMBER}" --repo "$REPO" --json headRefName --jq .headRefName)"
           [[ -n "$HEAD_BRANCH" ]] || { echo "::error::cannot resolve PR #${PR_NUMBER} head branch"; exit 1; }
-          gh workflow run vvterm-pr-ota.yml --repo "${{ github.repository }}" --ref "$HEAD_BRANCH"
-          echo "Renewal started: dispatched 'VVTerm PR OTA' on '${HEAD_BRANCH}'."
-          echo "On completion, ios-adhoc-pr publishes automatically and bumps the PR #${PR_NUMBER} comment."
+
+          DISPATCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run vvterm-pr-ota.yml --repo "$REPO" --ref "$HEAD_BRANCH"
+
+          # Find the run created by this dispatch (created after DISPATCHED_AT).
+          RUN_ID=""
+          for i in $(seq 1 12); do
+            RUN_ID="$(gh run list --repo "$REPO" --workflow vvterm-pr-ota.yml --branch "$HEAD_BRANCH" --event workflow_dispatch \
+              --json databaseId,createdAt --jq "map(select(.createdAt >= \"$DISPATCHED_AT\")) | .[0].databaseId // empty")"
+            [[ -n "$RUN_ID" ]] && break
+            sleep 5
+          done
+          [[ -n "$RUN_ID" ]] || { echo "::error::could not find the dispatched OTA run"; exit 1; }
+          echo "OTA rebuild: https://github.com/$REPO/actions/runs/$RUN_ID"
+
+          gh run watch "$RUN_ID" --repo "$REPO" --exit-status --interval 30 > /dev/null || {
+            echo "::error::OTA run $RUN_ID failed or was cancelled — not dispatching publish"
+            exit 1
+          }
+
+          gh workflow run ios-adhoc-pr.yml --repo "$REPO" -f mode=publish -f "ci_run_id=$RUN_ID" -f "pr_number=$PR_NUMBER"
+          echo "Publish dispatched (mode=publish, ci_run_id=$RUN_ID, pr_number=$PR_NUMBER) — ios-adhoc-pr will sign, upload to vvterm/ios/pr-${PR_NUMBER}/, and bump the PR comment."
+
+          if [[ -n "${COMMENT_ID:-}" ]]; then
+            gh api "repos/$REPO/issues/comments/${COMMENT_ID}/reactions" -f content=rocket --silent || true
+          fi
 
   sign-and-publish:
     runs-on: xcode-27
@@ -114,9 +201,8 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.mode != 'renew') ||
       (github.event_name == 'workflow_run' &&
-       (github.event.workflow_run.event == 'workflow_dispatch' ||
-        (github.event.workflow_run.event == 'pull_request' &&
-         github.event.workflow_run.pull_requests[0].number != null)))
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.pull_requests[0].number != null)
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       TELEPORT_PROXY: teleport.pcad.it:443
@@ -153,20 +239,9 @@ jobs:
             SHA="$(gh api "repos/${{ github.repository }}/actions/runs/${CI_RUN_ID}" --jq '.head_sha')"
             echo "HEAD_SHA=$SHA" >> "$GITHUB_ENV"
           else
+            echo "PR_NUMBER=${{ github.event.workflow_run.pull_requests[0].number }}" >> "$GITHUB_ENV"
             echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
             echo "HEAD_SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
-            PR_NUMBER="${{ github.event.workflow_run.pull_requests[0].number }}"
-            if [[ -z "$PR_NUMBER" ]]; then
-              # workflow_dispatch-sourced OTA run (mode=renew): resolve the
-              # open PR for the source run's head branch. Exactly one must
-              # exist, else refuse to pick a comment target.
-              HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
-              PRS="$(gh pr list --repo "${{ github.repository }}" --head "$HEAD_BRANCH" --state open --json number)"
-              COUNT="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' <<<"$PRS")"
-              [[ "$COUNT" == "1" ]] || { echo "::error::expected exactly one open PR for branch '${HEAD_BRANCH}', found ${COUNT}"; exit 1; }
-              PR_NUMBER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["number"])' <<<"$PRS")"
-            fi
-            echo "PR_NUMBER=${PR_NUMBER}" >> "$GITHUB_ENV"
           fi
 
       - name: Validate inputs + secrets
@@ -745,9 +820,9 @@ jobs:
 
           - Commit: \`${HEAD_SHA}\`
           - Version: ${BUILD_VERSION}
-          - Manifest: \`${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist\`
+          - Manifest: [manifest.plist](${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist)
           - Expires: ${EXPIRES_AT} (R2 lifecycle \`vvterm/ios/pr-*\`)
-          - Renew: \`gh workflow run ios-adhoc-pr.yml -R ${{ github.repository }} -f mode=renew -f pr_number=${PR_NUMBER}\` (or push any commit)
+          - Renew: comment \`/renew-ota\` on this PR — or \`gh workflow run ios-adhoc-pr.yml -R ${{ github.repository }} -f mode=renew -f pr_number=${PR_NUMBER}\`
 
           _Published by [\`ios-adhoc-pr\`](${RUN_URL}) — Vault-brokered short-lived R2 credentials (pcad.it-infra #154)._"
 
