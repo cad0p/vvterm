@@ -117,6 +117,10 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInitialConnectionSheetYieldsToTmuxSelectionSheet() throws {
+        // #43: 3× CI failures in two modes (launch hang, sheet wait expiring
+        // after slow startup). Skipped per repo flake policy until the
+        // notice-harness startup wedge is fixed.
+        throw XCTSkip("#43: notice-harness startup wedge on CI")
         let app = launchNoticeHarness(
             additionalArguments: ["--vvterm-ui-test-connection-sheet-handoff"]
         )
@@ -153,6 +157,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testConcurrentOperationsStackAboveBottomToolbar() throws {
+        // #43: 3× CI launch-hang failures (notice-harness startup wedge).
+        // Skipped per repo flake policy until the wedge is fixed.
+        throw XCTSkip("#43: notice-harness startup wedge on CI")
         let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-operation-stack"])
         let first = app.staticTexts["Upload 1"]
         let second = app.staticTexts["Upload 2"]
