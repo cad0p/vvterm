@@ -2922,11 +2922,19 @@ actor SSHSession {
         }
 
         // 1. Open a session channel on the outer (proxy) session.
+        let proxyToken = startupTrace?.begin(.teleportProxySubsystem)
         let outerChannel: OpaquePointer
         do {
             outerChannel = try await openShellStartupChannel(session: outerSession)
             try validateShellStartup(session: outerSession)
         } catch {
+            if let proxyToken {
+                startupTrace?.end(
+                    proxyToken,
+                    outcome: error is CancellationError ? "cancelled" : "failed",
+                    detail: "outer_channel"
+                )
+            }
             shouldInvalidateTransport = true
             throw error
         }
@@ -2954,6 +2962,13 @@ actor SSHSession {
                 }
             }
         } catch {
+            if let proxyToken {
+                startupTrace?.end(
+                    proxyToken,
+                    outcome: error is CancellationError ? "cancelled" : "failed",
+                    detail: "subsystem_request"
+                )
+            }
             shouldInvalidateTransport = true
             throw error
         }
@@ -2975,16 +2990,21 @@ actor SSHSession {
             logger.error(
                 "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(stderrMsg, privacy: .public)"
             )
+            if let proxyToken {
+                startupTrace?.end(proxyToken, outcome: "failed", detail: "code_\(subsystemResult)")
+            }
             shouldInvalidateTransport = true
             throw SSHError.shellRequestFailed
         }
         logger.info(
             "teleport_proxy_subsystem_ok subsystem=\(subsystem, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
         )
+        if let proxyToken { startupTrace?.end(proxyToken, detail: nodeName) }
 
         // 3. Bridge the outer channel to a socketpair for the inner session.
         //    The pump starts before start() returns the FD, so the target
         //    node's banner is forwarded as soon as it arrives.
+        let handshakeToken = startupTrace?.begin(.teleportInnerHandshake)
         let transport = SSHProxySubsystemTransport.makeForChannel(
             channel: outerChannel,
             outerSession: outerSession,
@@ -3036,6 +3056,9 @@ actor SSHSession {
             logger.error(
                 "teleport_inner_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
             )
+            if let handshakeToken {
+                startupTrace?.end(handshakeToken, outcome: "failed", detail: "code_\(handshakeResult)")
+            }
             shouldInvalidateTransport = true
             throw SSHError.connectionFailed(
                 "Teleport inner handshake failed (code \(handshakeResult)): \(errorMsg)"
@@ -3046,11 +3069,16 @@ actor SSHSession {
         logger.info(
             "teleport_inner_handshake_ok kex=\(negotiatedKex, privacy: .public) hostkey=\(negotiatedHostkey, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
         )
+        if let handshakeToken { startupTrace?.end(handshakeToken, detail: negotiatedKex) }
 
         // 6. Verify the inner hostkey against the target node hostname.
+        let innerAuthToken = startupTrace?.begin(.teleportInnerAuthentication)
         do {
             try verifyInnerHostKey(session: innerSession, host: nodeName, port: config.port)
         } catch {
+            if let innerAuthToken {
+                startupTrace?.end(innerAuthToken, outcome: "failed", detail: "hostkey")
+            }
             shouldInvalidateTransport = true
             throw error
         }
@@ -3059,9 +3087,17 @@ actor SSHSession {
         do {
             try await authenticateInner(session: innerSession)
         } catch {
+            if let innerAuthToken {
+                startupTrace?.end(
+                    innerAuthToken,
+                    outcome: error is CancellationError ? "cancelled" : "failed",
+                    detail: "auth"
+                )
+            }
             shouldInvalidateTransport = true
             throw error
         }
+        if let innerAuthToken { startupTrace?.end(innerAuthToken) }
 
         // Switch the inner session to non-blocking for I/O.
         libssh2_session_set_blocking(innerSession, 0)
@@ -3136,11 +3172,19 @@ actor SSHSession {
         }
 
         // 8. Open a session channel on the inner session.
+        let innerChannelToken = startupTrace?.begin(.teleportInnerChannel)
         let innerChannel: OpaquePointer
         do {
             innerChannel = try await openInnerShellStartupChannel(session: innerSession)
             try validateInnerShellStartup(session: innerSession)
         } catch {
+            if let innerChannelToken {
+                startupTrace?.end(
+                    innerChannelToken,
+                    outcome: error is CancellationError ? "cancelled" : "failed",
+                    detail: "channel_open"
+                )
+            }
             shouldInvalidateTransport = true
             throw error
         }
@@ -3161,8 +3205,11 @@ actor SSHSession {
             }
         }
 
+        if let innerChannelToken { startupTrace?.end(innerChannelToken) }
+
         // 9. PTY + shell on the inner channel.
-        let ptyResult = try await performInnerShellStartupCall(session: innerSession) {
+        let innerPTYToken = startupTrace?.begin(.teleportInnerPTY)
+        let ptyResult = try await performInnerShellStartupCall(session: innerSession, label: "pty_request") {
             libssh2_channel_request_pty_ex(
                 innerChannel,
                 terminalType.rawValue,
@@ -3183,21 +3230,26 @@ actor SSHSession {
             logger.error(
                 "teleport_inner_pty_failed code=\(ptyResult) libssh2=\(errorMsg, privacy: .public) term=\(terminalType.rawValue, privacy: .public)"
             )
+            if let innerPTYToken {
+                startupTrace?.end(innerPTYToken, outcome: "failed", detail: "code_\(ptyResult)")
+            }
             shouldInvalidateTransport = true
             throw SSHError.shellRequestFailed
         }
+        if let innerPTYToken { startupTrace?.end(innerPTYToken, detail: terminalType.rawValue) }
 
+        let innerShellToken = startupTrace?.begin(.teleportInnerShellRequest)
         let shellResult: Int32
         switch RemoteTerminalBootstrap.launchPlan(
             startupCommand: startupCommand,
             environment: environment
         ) {
         case .shell:
-            shellResult = try await performInnerShellStartupCall(session: innerSession) {
+            shellResult = try await performInnerShellStartupCall(session: innerSession, label: "shell_request") {
                 libssh2_channel_process_startup(innerChannel, "shell", 5, nil, 0)
             }
         case .exec(let command):
-            shellResult = try await performInnerShellStartupCall(session: innerSession) {
+            shellResult = try await performInnerShellStartupCall(session: innerSession, label: "exec_request") {
                 command.withCString { pointer in
                     libssh2_channel_process_startup(
                         innerChannel,
@@ -3217,9 +3269,13 @@ actor SSHSession {
             logger.error(
                 "teleport_inner_shell_failed code=\(shellResult) libssh2=\(errorMsg, privacy: .public)"
             )
+            if let innerShellToken {
+                startupTrace?.end(innerShellToken, outcome: "failed", detail: "code_\(shellResult)")
+            }
             shouldInvalidateTransport = true
             throw SSHError.shellRequestFailed
         }
+        if let innerShellToken { startupTrace?.end(innerShellToken) }
         logger.info("Teleport inner shell started (\(cols)x\(rows))")
 
         // 10. Wrap the inner channel in a ShellHandle. The inner channel is
@@ -3375,6 +3431,7 @@ actor SSHSession {
     }
 
     private func openInnerShellStartupChannel(session: OpaquePointer) async throws -> OpaquePointer {
+        let stallTracker = InnerStartupStallTracker(operation: "channel_open")
         while true {
             try validateInnerShellStartup(session: session)
             if let channel = libssh2_channel_open_ex(
@@ -3392,7 +3449,42 @@ actor SSHSession {
             guard error == LIBSSH2_ERROR_EAGAIN else {
                 throw SSHError.channelOpenFailed
             }
+            stallTracker.logIfStalled(session: session, logger: logger)
             try await waitForInnerShellStartupRetry(session: session)
+        }
+    }
+
+    /// Logs a warning when an inner-session startup call spins on EAGAIN for
+    /// more than ~2s (and every ~5s after that). The Teleport inner startup
+    /// path previously had zero visibility between "inner auth successful"
+    /// and "inner shell started" — a stall here produced a silent hang
+    /// (issue #77).
+    private final class InnerStartupStallTracker {
+        private let operation: String
+        private let startedAt = ContinuousClock.now
+        private var lastLogAt = ContinuousClock.now
+
+        init(operation: String) {
+            self.operation = operation
+        }
+
+        func logIfStalled(session: OpaquePointer, logger: Logger) {
+            let now = ContinuousClock.now
+            let elapsed = startedAt.duration(to: now)
+            guard elapsed >= .seconds(2) else { return }
+            let sinceLastLog = lastLogAt.duration(to: now)
+            guard sinceLastLog >= .seconds(5) || lastLogAt == startedAt else { return }
+            lastLogAt = now
+            let directions = libssh2_session_block_directions(session)
+            let elapsedMs = Self.milliseconds(elapsed)
+            logger.warning(
+                "teleport_inner_startup_stall op=\(self.operation, privacy: .public) elapsedMs=\(elapsedMs) blockDirections=\(directions)"
+            )
+        }
+
+        private static func milliseconds(_ duration: Duration) -> Int {
+            let components = duration.components
+            return Int(components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000)
         }
     }
 
@@ -3405,8 +3497,10 @@ actor SSHSession {
 
     private func performInnerShellStartupCall(
         session: OpaquePointer,
+        label: String = "startup_call",
         operation: () -> Int32
     ) async throws -> Int32 {
+        let stallTracker = InnerStartupStallTracker(operation: label)
         while true {
             try validateInnerShellStartup(session: session)
             let result = operation()
@@ -3414,6 +3508,7 @@ actor SSHSession {
                 try validateInnerShellStartup(session: session)
                 return result
             }
+            stallTracker.logIfStalled(session: session, logger: logger)
             try await waitForInnerShellStartupRetry(session: session)
         }
     }
@@ -3423,8 +3518,48 @@ actor SSHSession {
     private func startInnerIOLoop() {
         guard innerIOTask == nil else { return }
         innerIOTask = Task { [weak self] in
-            await self?.innerIOLoop()
+            guard let self else { return }
+            await self.innerIOLoop()
+            await self.innerIOLoopDidExit()
         }
+    }
+
+    /// Clears the completed loop task so future `startInnerIOLoop()` calls
+    /// can start a fresh loop, and restarts immediately when inner work
+    /// arrived while the previous loop was winding down (lost-wakeup guard).
+    ///
+    /// Root cause of issue #77: `innerIOLoop` breaks when idle, but
+    /// `innerIOTask` stayed non-nil (a *completed* task), so the
+    /// `innerIOTask == nil` guard in `startInnerIOLoop()` rejected every
+    /// later restart. Inner exec requests enqueued after that point were
+    /// never drained (the Ghostty terminfo install stalled until its 12s
+    /// timeout on every connect), and the inner shell channel was never
+    /// read — the shell "started" but no bytes ever reached the terminal.
+    private func innerIOLoopDidExit() {
+        innerIOTask = nil
+        // A cancelled task means `stopInnerIOLoop()` ran (teardown) — do
+        // not resurrect the loop during cleanup.
+        guard !Task.isCancelled else { return }
+        guard innerLibssh2Session != nil, !hasBeenCleaned else { return }
+        let hasInnerChannels = shellChannels.values.contains { $0.isInner }
+        let hasInnerExec = execRequests.values.contains { $0.isInner }
+        if Self.shouldRestartInnerIOLoop(
+            hasInnerChannels: hasInnerChannels,
+            hasInnerExec: hasInnerExec
+        ) {
+            startInnerIOLoop()
+        }
+    }
+
+    /// Pure restart decision extracted from `innerIOLoopDidExit()` so it can
+    /// be unit-tested without a live libssh2 session. The loop must restart
+    /// when any inner shell channel or inner exec request is still pending
+    /// at the moment the previous loop exited.
+    nonisolated static func shouldRestartInnerIOLoop(
+        hasInnerChannels: Bool,
+        hasInnerExec: Bool
+    ) -> Bool {
+        hasInnerChannels || hasInnerExec
     }
 
     private func stopInnerIOLoop() {
