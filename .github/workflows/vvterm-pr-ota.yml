@@ -1,0 +1,109 @@
+# VVTerm PR OTA — unsigned Release archive for per-PR device smoke builds.
+#
+# Split out of vvterm-pr-ci.yml (pcad.it-infra #154): the trusted
+# ios-adhoc-pr workflow triggers on workflow_run COMPLETION of this
+# workflow. When ota-archive was a PR CI job, the publish waited for the
+# unit/UI shards (~25-40 min after push) even though the archive was ready
+# ~11 min in. This single-job workflow completes in ~12 min, so the
+# installable PR build + sticky comment land ~15 min after push.
+#
+# Security shape (unchanged): this workflow is UNTRUSTED — it runs the
+# PR's workflow file on pull_request, holds NO secrets and NO OIDC, and
+# outputs bytes only. Signing + credential mint happen in `ios-adhoc-pr`
+# (workflow_run → refs/heads/main, pinned by the ci-vvterm-ota-bot
+# Teleport join rule and the ci-vvterm-ota Vault JWT role), which never
+# checks out PR code. No `needs:` and a single job by design: it starts
+# immediately and fails independently when the code does not compile.
+#
+# The `ota-unsigned-archive` artifact handoff (tarred .xcarchive, 1-day
+# retention) is byte-identical to the old PR CI job; ios-adhoc-pr consumes
+# it via cross-run download exactly as before.
+#
+# workflow_dispatch exists for ios-adhoc-pr's mode=renew: it dispatches
+# this workflow on a PR's head branch to rebuild an expired OTA build
+# without an empty commit. Completion re-triggers ios-adhoc-pr via
+# workflow_run (which resolves the PR number from the head branch).
+#
+# Cost: ~12 min on xcode-27 per push (self-contained Release archive;
+# SPM cache shared with PR CI via the xcode27-spm- key prefix).
+
+name: VVTerm PR OTA
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ota-archive:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        uses: ./.github/actions/prepare-xcode-build
+        with:
+          deriveddata-key-prefix: xcode27-ota-deriveddata
+          deriveddata-restore-keys: ""
+
+      - name: Archive unsigned Release build (iOS device)
+        run: |
+          set -euo pipefail
+
+          # CODE_SIGNING_ALLOWED=NO: archive without any Apple credential —
+          # signing is deferred to the ios-adhoc-pr workflow, which re-signs
+          # at `xcodebuild -exportArchive` time (ad-hoc, manual signing).
+          #
+          # FORCE_PRO_ENABLED: mirrors the TestFlight workflow default —
+          # owner device-test builds should have Pro unlocked without
+          # StoreKit (TestFlight default force_pro=true).
+          xcodebuild archive \
+            -scheme VVTerm \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/VVTerm.xcarchive" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED \
+            | tee "$RUNNER_TEMP/ota-archive.log"
+
+      - name: Package unsigned archive
+        # Tar preserves the symlinks inside .app bundles (see the build job's
+        # "Archive build products" step for why upload-artifact alone breaks
+        # them).
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          tar -czf ota-unsigned-archive.tar.gz VVTerm.xcarchive
+
+      - name: Upload unsigned archive artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ota-unsigned-archive
+          path: ${{ runner.temp }}/ota-unsigned-archive.tar.gz
+          retention-days: 1
+
+      - name: Upload archive log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ota-archive-log
+          path: ${{ runner.temp }}/ota-archive.log
+          if-no-files-found: ignore

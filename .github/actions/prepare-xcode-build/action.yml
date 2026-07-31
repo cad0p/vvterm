@@ -1,0 +1,74 @@
+# Shared Xcode build preparation for xcode-27 jobs: source-mtime
+# restoration, mtime-aware DerivedData/SPM caching, stale PCM cache
+# clearing, and the Metal toolchain download. Used by vvterm-pr-ci.yml
+# (build, unit-tests, debug-test) and vvterm-pr-ota.yml (ota-archive) —
+# do not fork these steps back into the workflows. (ui-tests is the one
+# job NOT using this: it runs test-without-building off the downloaded
+# vvterm-build artifact and does zero compilation, so it has no cache.)
+#
+# Callers must run actions/checkout (fetch-depth: 0) first — local
+# composite actions resolve from the checked-out repo, and the mtime
+# restore requires full history.
+name: Prepare Xcode build
+description: >-
+  Restore source mtimes, restore/save mtime-aware DerivedData + SPM caches,
+  clear the stale PCM module cache, and download the Metal toolchain.
+inputs:
+  deriveddata-key-prefix:
+    description: >-
+      DerivedData cache key prefix. The full key is
+      '<prefix>-<workflow name>-<sha>'. Test jobs pass 'xcode27-deriveddata'
+      (Debug/simulator); ota-archive passes 'xcode27-ota-deriveddata'
+      (Release/device).
+    required: true
+  deriveddata-restore-keys:
+    description: >-
+      Restore keys for the DerivedData cache (newline-separated). Pass ''
+      for exact-key-only: ota-archive must NOT fall back to the build job's
+      Debug/simulator cache — restoring it would waste minutes downloading
+      intermediates that are unusable for a Release/device archive.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Restore source mtimes
+      # Git does not store file mtimes; `actions/checkout` writes files
+      # with the clone timestamp. Xcode keys incremental validity on
+      # nanosecond-resolution mtimes, so freshly-checked-out source files
+      # appear newer than cached DerivedData artifacts → full recompile.
+      # This sets each file's mtime to its last-commit time, making them
+      # consistent across runs. Requires fetch-depth: 0 on checkout.
+      uses: chetan/git-restore-mtime-action@v2
+
+    - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
+      # irgaly/xcode-cache is purpose-built for Xcode DerivedData caching.
+      # It stores a sidecar `xcode-cache-mtime.json` mapping
+      # {path, mtime, sha256} and re-applies mtimes via File.utime after
+      # restore (only when SHA-256 matches). It also handles the
+      # SourcePackages cache key separately. This fixes the cross-runner
+      # mtime+inode invalidation that caused full SPM recompiles even on
+      # cache hits. The SPM key is shared by every job and workflow.
+      uses: irgaly/xcode-cache@v1
+      with:
+        key: ${{ inputs.deriveddata-key-prefix }}-${{ github.workflow }}-${{ github.sha }}
+        restore-keys: ${{ inputs.deriveddata-restore-keys }}
+        deriveddata-directory: ${{ runner.temp }}/DerivedData
+        swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+        swiftpm-cache-restore-keys: |
+          xcode27-spm-
+
+    - name: Clear stale PCM module cache
+      # Remove the Clang module cache so restored .pcm files from an older
+      # runner image don't trigger "file has been modified since the module
+      # file was built" errors. The rebuild is cheap and deterministic.
+      run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
+      shell: bash
+
+    - name: Download Metal toolchain
+      # The xcode-27 public-preview image does not ship the Metal toolchain,
+      # which mlx-swift's Cmlx Metal shaders and libghostty's Metal renderer
+      # require. Download it on first use (SPM-cached so subsequent runs
+      # skip the download).
+      run: xcodebuild -downloadComponent MetalToolchain
+      shell: bash
