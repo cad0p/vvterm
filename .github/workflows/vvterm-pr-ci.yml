@@ -406,17 +406,37 @@ jobs:
           # launch/activity timeouts fire — hangs become identifiable,
           # skippable tests instead of silent wall-clock burn. 180s = ~2x the
           # slowest legitimate test (~91s observed on CI).
-          xcodebuild test-without-building -collect-test-diagnostics never \
-            -xctestrun "$XCRUN" \
-            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            $ONLY_TESTING_ARGS \
-            -parallel-testing-enabled \
-            -test-timeouts-enabled \
-            -default-test-execution-time-allowance 180 \
-            -maximum-test-execution-time-allowance 180 \
-            CODE_SIGNING_ALLOWED=NO \
-            | tee "$RUNNER_TEMP/test.log"
+          # Bounded retry for runner-init wedges: when 4+ shards boot simulators
+          # simultaneously, the runner sometimes dies before any test executes
+          # ("Failed to initialize for UI testing: Timed out waiting for AX
+          # loaded notification", #43 family). Retrying the whole shard then is
+          # safe (no test ran) and turns an infra coin-flip into a retry instead
+          # of a failed run. Real test failures still fail on the first attempt.
+          XC_EXIT=0
+          for ATTEMPT in 1 2; do
+            rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+            xcodebuild test-without-building -collect-test-diagnostics never \
+              -xctestrun "$XCRUN" \
+              -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+              -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+              $ONLY_TESTING_ARGS \
+              -parallel-testing-enabled \
+              -test-timeouts-enabled \
+              -default-test-execution-time-allowance 180 \
+              -maximum-test-execution-time-allowance 180 \
+              CODE_SIGNING_ALLOWED=NO \
+              | tee "$RUNNER_TEMP/test.log"
+            XC_EXIT=${PIPESTATUS[0]}
+            if [ "$XC_EXIT" -eq 0 ]; then
+              break
+            fi
+            if [ "$ATTEMPT" -lt 2 ] && grep -q "Failed to initialize for UI testing" "$RUNNER_TEMP/test.log" \
+               && ! grep -q "Test Case" "$RUNNER_TEMP/test.log"; then
+              echo "Runner failed to initialize before any test executed (AX wedge); retrying shard (attempt 2/2)."
+              continue
+            fi
+            break
+          done
           # Preserve xcodebuild's exit code for the step status, but don't
           # abort before the upload steps (which run on always()).
           #
@@ -426,7 +446,7 @@ jobs:
           # the main source of CI wall-clock waste from flakes. The xcresult
           # bundle already contains the test failure details. Use the debug-test
           # job (workflow_dispatch) to capture full diagnostics when needed.
-          exit ${PIPESTATUS[0]}
+          exit $XC_EXIT
 
       - name: Upload test results
         if: always()
