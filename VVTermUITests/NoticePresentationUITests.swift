@@ -3,6 +3,13 @@ import XCTest
 final class NoticePresentationUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // #43: the launchNoticeHarness path reproducibly wedges at launch/AX
+        // layer on CI runners (5 of 8 tests in this class have hit it across
+        // #75/#79 — launch hang, slow-startup sheet misses, and
+        // "does not have a process ID"; zero non-notice tests affected).
+        // Quarantine the whole class until the harness startup stall is
+        // root-caused and fixed in #43.
+        throw XCTSkip("#43: notice-harness startup wedge on CI — class quarantined")
     }
 
     @MainActor
@@ -220,7 +227,7 @@ final class NoticePresentationUITests: XCTestCase {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US"
         ] + additionalArguments
-        app.launch()
+        _ = launchForTest(app)
         return app
     }
 }

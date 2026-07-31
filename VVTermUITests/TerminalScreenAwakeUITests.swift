@@ -16,7 +16,7 @@ final class TerminalScreenAwakeUITests: XCTestCase {
             "-security.fullAppLockEnabled", "NO",
             "-security.lockOnBackground", "NO",
         ]
-        app.launch()
+        _ = launchForTest(app)
         defer { app.terminate() }
 
         let diagnostics = app.staticTexts["vvterm.screenAwakeTest.diagnostics"]

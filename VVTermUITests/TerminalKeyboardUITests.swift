@@ -480,10 +480,11 @@ final class TerminalKeyboardUITests: XCTestCase {
 
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
         app.buttons["vvterm.keyboardTest.scene.inactive"].tap()
+        // 10s (not 5s): scene-lifecycle propagation stalls under CI load (#78).
         wait(
             for: diagnostics,
             labelContaining: "reconnect=inactive",
-            timeout: 5,
+            timeout: 10,
             diagnostics: diagnosticsText(in: app)
         )
         assertKeyboardAndAccessoryVisible(in: app)
@@ -492,7 +493,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         wait(
             for: diagnostics,
             labelContaining: "reconnect=connected",
-            timeout: 5,
+            timeout: 10,
             diagnostics: diagnosticsText(in: app)
         )
         assertKeyboardAndAccessoryVisible(in: app)
@@ -1698,7 +1699,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         if usesNativeFindNavigator {
             app.launchArguments.append("--vvterm-ui-test-native-find-navigator")
         }
-        app.launch()
+        _ = launchForTest(app)
 
         let ready = app.staticTexts["vvterm.keyboardTest.ready"]
         let readinessTimeout: TimeInterval = 45

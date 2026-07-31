@@ -292,7 +292,7 @@ jobs:
           - name: shard-1
             only-testing: "VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity"
           - name: shard-2
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim"
+            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryClearsStaleSurfacePreservation,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionSheet,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim"
           - name: shard-3
             only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferPreservesTerminalInputWithoutRebuild,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/VVTermUITests/testExample,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesVisibleKeyboardAndTyping,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy"
 
@@ -400,14 +400,59 @@ jobs:
           done
           echo "Shard test args:$ONLY_TESTING_ARGS"
 
-          xcodebuild test-without-building -collect-test-diagnostics never \
-            -xctestrun "$XCRUN" \
-            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            $ONLY_TESTING_ARGS \
-            -parallel-testing-enabled \
-            CODE_SIGNING_ALLOWED=NO \
-            | tee "$RUNNER_TEMP/test.log"
+          # -test-timeouts-enabled + 180s execution allowance: a hanging test
+          # is KILLED and recorded as a failure BY NAME ("Exceeded execution
+          # time allowance") instead of wedging the shard until XCTest's own
+          # launch/activity timeouts fire — hangs become identifiable,
+          # skippable tests instead of silent wall-clock burn. 180s = ~2x the
+          # slowest legitimate test (~91s observed on CI).
+          # Bounded retry for runner-init wedges: when 4+ shards boot simulators
+          # simultaneously, the runner sometimes dies before any test executes
+          # ("Failed to initialize for UI testing: Timed out waiting for AX
+          # loaded notification", #43 family). Retrying the whole shard then is
+          # safe (no test ran) and turns an infra coin-flip into a retry instead
+          # of a failed run. Real test failures still fail on the first attempt.
+          XC_EXIT=0
+          for ATTEMPT in 1 2; do
+            rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+            xcodebuild test-without-building -collect-test-diagnostics never \
+              -xctestrun "$XCRUN" \
+              -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+              -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+              $ONLY_TESTING_ARGS \
+              -parallel-testing-enabled \
+              -test-timeouts-enabled \
+              -default-test-execution-time-allowance 180 \
+              -maximum-test-execution-time-allowance 180 \
+              CODE_SIGNING_ALLOWED=NO \
+              | tee "$RUNNER_TEMP/test.log"
+            XC_EXIT=${PIPESTATUS[0]}
+            if [ "$XC_EXIT" -eq 0 ]; then
+              break
+            fi
+            if [ "$ATTEMPT" -lt 2 ]; then
+              # Case 1 — runner died before ANY test executed (zero "Test
+              # Case" lines). Message varies: "Failed to initialize for UI
+              # testing" (AX timeout), "Early unexpected exit ... signal abrt
+              # while preparing to run tests", etc. All are infra by
+              # definition — no product assertion can fail before tests run.
+              if ! grep -q "Test Case '-\[" "$RUNNER_TEMP/test.log"; then
+                echo "Runner failed before any test executed (infra wedge); retrying shard (attempt 2/2)."
+                continue
+              fi
+              # Case 2 — launch-level failures only (simulator infra: "Failed to
+              # launch", "does not have a process ID", AX timeouts) with zero
+              # assertion failures. These are never product bugs in the UI-test
+              # harnesses; a real crash-on-launch regression simply fails again
+              # on attempt 2, costing ~3 minutes.
+              if ! grep -q "XCTAssert" "$RUNNER_TEMP/test.log" \
+                 && grep -qE "Failed to launch|does not have a process ID|AX loaded notification" "$RUNNER_TEMP/test.log"; then
+                echo "Only launch-level failures (simulator infra, no assertions); retrying shard (attempt 2/2)."
+                continue
+              fi
+            fi
+            break
+          done
           # Preserve xcodebuild's exit code for the step status, but don't
           # abort before the upload steps (which run on always()).
           #
@@ -417,7 +462,7 @@ jobs:
           # the main source of CI wall-clock waste from flakes. The xcresult
           # bundle already contains the test failure details. Use the debug-test
           # job (workflow_dispatch) to capture full diagnostics when needed.
-          exit ${PIPESTATUS[0]}
+          exit $XC_EXIT
 
       - name: Upload test results
         if: always()
@@ -535,7 +580,7 @@ jobs:
             -only-testing:"${{ github.event.inputs.debug_test }}" \
             -parallel-testing-enabled \
             -collect-test-diagnostics always \
-            -test-timeouts-enabled YES \
+            -test-timeouts-enabled \
             -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"

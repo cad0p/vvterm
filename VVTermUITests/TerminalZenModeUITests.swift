@@ -11,7 +11,7 @@ final class TerminalZenModeUITests: XCTestCase {
             "-AppleLocale",
             "en_US"
         ]
-        app.launch()
+        _ = launchForTest(app)
 
         let chrome = app.buttons["vvterm.zenTest.chrome"]
         XCTAssertTrue(chrome.waitForExistence(timeout: 5))
@@ -64,7 +64,7 @@ final class TerminalZenModeUITests: XCTestCase {
             "-AppleLocale",
             "en_US"
         ]
-        app.launch()
+        _ = launchForTest(app)
 
         XCTAssertTrue(app.buttons["vvterm.zenTest.chrome"].waitForExistence(timeout: 5))
 
@@ -105,7 +105,7 @@ final class TerminalZenModeUITests: XCTestCase {
             "-AppleLocale",
             "en_US"
         ]
-        app.launch()
+        _ = launchForTest(app)
 
         XCTAssertTrue(app.buttons["vvterm.zenTest.chrome"].waitForExistence(timeout: 5))
 
