@@ -412,7 +412,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             $ONLY_TESTING_ARGS \
             -parallel-testing-enabled \
-            -test-timeouts-enabled YES \
+            -test-timeouts-enabled \
             -default-test-execution-time-allowance 180 \
             -maximum-test-execution-time-allowance 180 \
             CODE_SIGNING_ALLOWED=NO \
@@ -544,7 +544,7 @@ jobs:
             -only-testing:"${{ github.event.inputs.debug_test }}" \
             -parallel-testing-enabled \
             -collect-test-diagnostics always \
-            -test-timeouts-enabled YES \
+            -test-timeouts-enabled \
             -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
