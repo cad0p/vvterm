@@ -14,11 +14,11 @@
 //  simulator test process (same mechanism as `VVTERM_UNREACHABLE_TEST_HOST`
 //  in PR CI).
 //
-//  In PR CI the env is absent, so the E2E test `skip`s (Swift Testing's
-//  `skip()` API) and costs ~0s. The negative test needs no server and runs
-//  everywhere. Both tests use fresh cluster UUIDs and clean up the keyring,
-//  so they are safe to run in parallel with each other and with the rest of
-//  the suite.
+//  In PR CI the env is absent, so the E2E test is skipped via the
+//  `.enabled(if:)` trait (evaluated at run time in the test runner process)
+//  and costs ~0s. The negative test needs no server and runs everywhere.
+//  Both tests use fresh cluster UUIDs and clean up the keyring, so they are
+//  safe to run in parallel with each other and with the rest of the suite.
 //
 
 import Foundation
@@ -27,14 +27,23 @@ import Testing
 
 struct TeleportServerIntegrationTests {
 
+    /// True when `scripts/ci/teleport-server.sh` fixtures are present. Read
+    /// at run time by the `.enabled(if:)` trait below — absent in PR CI/dev
+    /// (skipped), present in the teleport-e2e workflow (runs).
+    private static var teleportEnvPresent: Bool {
+        ProcessInfo.processInfo.environment["VVTERM_TELEPORT_CERT"] != nil
+    }
+
     /// Full E2E: TLS+ALPN dial of the proxy, `proxy:<node>:0` subsystem,
     /// outer + inner libssh2 handshakes, cert auth, and exec routed to the
     /// target node.
-    @Test @MainActor
+    @Test(.enabled(if: teleportEnvPresent)) @MainActor
     func teleportSSHConnectsThroughTLSRoutingAndExecutes() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let cert = environment["VVTERM_TELEPORT_CERT"] else {
-            try skip("VVTERM_TELEPORT_CERT not set — run scripts/ci/teleport-server.sh install start bootstrap first")
+            throw SSHError.connectionFailed(
+                "VVTERM_TELEPORT_CERT missing despite .enabled(if:) — env changed between trait eval and test body"
+            )
         }
         let key = environment["VVTERM_TELEPORT_KEY"] ?? ""
         let caCerts = environment["VVTERM_TELEPORT_CA_CERTS"] ?? ""
