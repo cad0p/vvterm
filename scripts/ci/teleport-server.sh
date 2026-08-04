@@ -24,7 +24,16 @@
 #         so CI can compute codes, sends the code with the password PUT
 #         (`second_factor_token`), and verifies a full password+TOTP login
 #         (POST /v1/webapi/sessions/web).
-#   webauthn/passwordless — milestone M3 (software WebAuthn key).
+#   webauthn/passwordless — milestone M3 (software WebAuthn key). Bootstrap
+#         provisions an MFA credential via registerchallenge + password PUT
+#         (`webauthnCreationResponse`), verifies the password+WebAuthn login
+#         (mfa/login/begin + finishsession), then runs two smokes with the
+#         resulting session: (1) headless-approval — approve a blocking
+#         headless SSH cert request with a WebAuthn assertion; (2) passwordless
+#         — provision a resident credential (privilege token -> passwordless
+#         registerchallenge -> mfa/devices) and log in without a password
+#         (login/begin {passwordless:true} + finishsession without a user).
+#         Credentials are signed by scripts/ci/teleport-webauthn.py (fido2).
 #
 # Local user: the Teleport node runs SSH sessions as a LOCAL system user, so
 # bootstrap ensures the SSH login exists (`useradd`/`sysadminctl`, falling
@@ -45,8 +54,7 @@
 #   the OpenSSH PEM ed25519 private key + the cluster TLS CA PEMs (see
 #   `SSHSession.authenticate` / `connectTeleportTLS` in SSHClient.swift).
 #   M2 (TOTP + headless approval) and M3 (passwordless WebAuthn) build on
-#   this same server, later.
-#
+#   this same server, later.#
 # Ports (all overridable):
 #   VVTERM_TELEPORT_WEB_PORT   default 443   — TLS-routing multiplex listener
 #                                              (needs root/sudo on CI; use a
@@ -77,7 +85,11 @@ TELEPORT_NODE="${TELEPORT_NODE:-ci-node}"
 TELEPORT_CLUSTER="${TELEPORT_CLUSTER:-ci-cluster}"
 TELEPORT_USER="${TELEPORT_USER:-ci-user}"
 TELEPORT_LOGIN="${TELEPORT_LOGIN:-ci-user}"       # SSH login/principal in the cert
-TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR:-off}"  # off | otp (webauthn in M3)
+TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR:-off}"  # off | otp | webauthn
+# WebAuthn relying-party ID — must match the clientDataJSON origin host the
+# signer emits (lib/auth/webauthn/origin.go: only host==rp_id or subdomains
+# are accepted). Defaults to the dial host.
+TELEPORT_RP_ID="${TELEPORT_RP_ID:-${TELEPORT_HOST}}"
 TELEPORT_PASSWORD="${TELEPORT_PASSWORD:-}"          # random if empty
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -166,6 +178,16 @@ auth_service:
     # webauthn/passwordless.
     second_factor: ${TELEPORT_SECOND_FACTOR}
     local_auth: "yes"
+EOF
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+    cat >> "${CONF_FILE}" <<EOF2
+    webauthn:
+      # Software-signer ceremony origin is https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT};
+      # rp_id must equal the origin HOST (or be a parent domain of it).
+      rp_id: ${TELEPORT_RP_ID}
+EOF2
+  fi
+  cat >> "${CONF_FILE}" <<EOF3
 ssh_service:
   enabled: "yes"
   listen_addr: 0.0.0.0:3022
@@ -181,7 +203,7 @@ proxy_service:
   public_addr: ${TELEPORT_HOST}:${TELEPORT_WEB_PORT}
   https_keypairs: []
   acme: {}
-EOF
+EOF3
   log "wrote ${CONF_FILE}"
 }
 
@@ -296,8 +318,34 @@ cmd_bootstrap() {
   # and returns it only as a QR (image/png otpauth:// URI); CI decodes it
   # with scripts/ci/teleport-totp.py so it can compute the codes the PUT
   # (second_factor_token) and later logins require.
+  # M3: for a `webauthn` cluster, provision a SOFTWARE WebAuthn credential
+  # bound to the invite token (scripts/ci/teleport-webauthn.py — fido2). The
+  # registerchallenge options come back as
+  # {"webauthn":{"publicKey":{...}}} (attestation "none", which the CI
+  # cluster accepts by default); the password PUT then carries the signed
+  # creation response instead of a TOTP code. The same credential signs the
+  # later login/headless assertions.
   local second_factor_arg=""
-  if [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+    log "provisioning software WebAuthn device (POST /v1/webapi/mfa/token/{token}/registerchallenge)"
+    curl -ksS -b "${cookie_jar}" -X POST \
+      "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/token/${token}/registerchallenge" \
+      -H "X-CSRF-Token: ${csrf}" \
+      -H 'Content-Type: application/json' \
+      -d '{"deviceType":"webauthn"}' \
+      -o "${FIXTURES_DIR}/webauthn-register-options.json"
+    if [ ! -s "${FIXTURES_DIR}/webauthn-register-options.json" ]; then
+      echo "error: registerchallenge returned no response" >&2
+      exit 1
+    fi
+    python3 "${SCRIPT_DIR}/teleport-webauthn.py" register \
+      --options "${FIXTURES_DIR}/webauthn-register-options.json" \
+      --out "${FIXTURES_DIR}/webauthn-register-response.json" \
+      --origin "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" \
+      --state "${WORK_DIR}/webauthn-state"
+    log "software WebAuthn credential provisioned"
+    second_factor_arg=",\"webauthnCreationResponse\":$(cat "${FIXTURES_DIR}/webauthn-register-response.json")"
+  elif [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
     log "provisioning TOTP device (POST /v1/webapi/mfa/token/{token}/registerchallenge)"
     curl -ksS -b "${cookie_jar}" -X POST \
       "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/token/${token}/registerchallenge" \
@@ -337,7 +385,61 @@ cmd_bootstrap() {
   # Teleport treats TOTP codes as single-use (the PUT consumed the code from
   # its 30s window, so the login in the same window is rejected with
   # "invalid credentials" — retry once after the window rolls, ≤30s).
-  if [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+    # M3: verify the full password+WebAuthn chain. NOTE: POST
+    # /v1/webapi/sessions/web REJECTS webauthn clusters ("unknown second
+    # factor type", lib/web/apiserver.go createWebSession) — the web UI's
+    # flow is mfa/login/begin -> mfa/login/finishsession, which sets the
+    # __Host-session cookie used by the headless approval below.
+    log "verifying webauthn login (POST /v1/webapi/mfa/login/begin + finishsession)"
+    curl -ksS -c "${cookie_jar}" -o /dev/null "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/web/login"
+    local csrf2
+    csrf2="$(awk '$6 == "__Host-grv_csrf" {print $7}' "${cookie_jar}" | head -1)"
+    local begin_resp
+    begin_resp="$(
+      curl -ksS -b "${cookie_jar}" -c "${cookie_jar}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/login/begin" \
+        -H "X-CSRF-Token: ${csrf2}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"passwordless\":false,\"user\":\"${TELEPORT_USER}\",\"pass\":\"${TELEPORT_PASSWORD}\"}"
+    )"
+    if ! printf '%s' "${begin_resp}" | grep -q 'webauthn_challenge'; then
+      echo "error: webauthn login/begin failed:" >&2
+      printf '%s\n' "${begin_resp}" >&2
+      exit 1
+    fi
+    printf '%s' "${begin_resp}" > "${FIXTURES_DIR}/webauthn-login-options.json"
+    python3 "${SCRIPT_DIR}/teleport-webauthn.py" assert \
+      --options "${FIXTURES_DIR}/webauthn-login-options.json" \
+      --out "${FIXTURES_DIR}/webauthn-login-assertion.json" \
+      --origin "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" \
+      --state "${WORK_DIR}/webauthn-state" \
+      --no-user-handle
+    local finish_resp
+    finish_resp="$(
+      curl -ksS -b "${cookie_jar}" -c "${cookie_jar}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/login/finishsession" \
+        -H "X-CSRF-Token: ${csrf2}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"user\":\"${TELEPORT_USER}\",\"webauthnAssertionResponse\":$(cat "${FIXTURES_DIR}/webauthn-login-assertion.json")}"
+    )"
+    if ! printf '%s' "${finish_resp}" | grep -q '"token"'; then
+      echo "error: webauthn login/finishsession failed:" >&2
+      printf '%s\n' "${finish_resp}" >&2
+      exit 1
+    fi
+    local bearer
+    bearer="$(printf '%s' "${finish_resp}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+    # The session cookie + bearer token are the approver identity for the
+    # headless approval smoke below.
+    printf '%s' "${bearer}" > "${WORK_DIR}/approver-bearer.txt"
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${bearer}" \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/sites" | grep -q '\"name\"'; then
+      echo "error: webauthn session not usable (GET /v1/webapi/sites)" >&2
+      exit 1
+    fi
+    log "webauthn login verified (session + bearer)"
+  elif [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
     log "verifying otp login (POST /v1/webapi/sessions/web)"
     curl -ksS -c "${cookie_jar}" -o /dev/null "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/web/login"
     local csrf2
@@ -416,6 +518,238 @@ cmd_bootstrap() {
     exit 1
   fi
   log "smoke passed: ${smoke}"
+
+  # 7. M3: headless-approval smoke (webauthn clusters only). This is the
+  #    CI-able version of the app's Phase-1 ceremony: a client requests a
+  #    cert via the blocking headless login, and an already-logged-in
+  #    approver approves it with a WebAuthn assertion signed by the same
+  #    software credential. The approval is REQUIRED to be WebAuthn
+  #    (lib/auth/auth_with_roles.go UpdateHeadlessAuthenticationState —
+  #    scope CHALLENGE_SCOPE_HEADLESS_LOGIN=3), so this only runs when the
+  #    cluster has webauthn enabled.
+  #
+  #    Sequence (verified against v16.4.0):
+  #      a. POST /v1/webapi/ssh/certs with headless_id + pub_key — BLOCKS
+  #         until approved (run in background). NOTE: v16 routes headless
+  #         login under ssh/certs with a `headless_id`; the app's
+  #         /webapi/headless/login path is v17+.
+  #      b. GET /v1/webapi/headless/{id} (approver session) — upserts the
+  #         stub that lets the login process insert the real resource.
+  #      c. POST /v1/webapi/mfa/authenticatechallenge
+  #         {"challenge_scope": 3} (headless login scope).
+  #      d. Sign the assertion + PUT /v1/webapi/headless/{id}
+  #         {"action":"accept","webauthnAssertionResponse":{...}}.
+  #      e. The background POST returns the signed SSH cert.
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+    log "headless-approval smoke (software WebAuthn approver)"
+    if [ ! -s "${WORK_DIR}/approver-bearer.txt" ]; then
+      echo "error: headless smoke needs the webauthn approver session (login step must run first)" >&2
+      exit 1
+    fi
+    local hl_key="${WORK_DIR}/hl-key"
+    rm -f "${hl_key}" "${hl_key}.pub"
+    ssh-keygen -t ed25519 -f "${hl_key}" -N "" -q
+    local hl_id
+    hl_id="$(python3 "${SCRIPT_DIR}/teleport-webauthn.py" headless-id --pubkey "${hl_key}.pub")"
+    log "headless id: ${hl_id}"
+    local hl_pub_b64
+    hl_pub_b64="$(base64 < "${hl_key}.pub" | tr -d '\n')"
+    local hl_bearer
+    hl_bearer="$(cat "${WORK_DIR}/approver-bearer.txt")"
+    # a. Blocking client request in the background.
+    curl -ksS -X POST \
+      "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/ssh/certs" \
+      -H 'Content-Type: application/json' \
+      -d "{\"user\":\"${TELEPORT_USER}\",\"headless_id\":\"${hl_id}\",\"pub_key\":\"${hl_pub_b64}\",\"ttl\":1800000000000,\"compatibility\":\"\"}" \
+      -o "${FIXTURES_DIR}/headless-cert.json" -w '%{http_code}' > "${WORK_DIR}/headless-http.txt" 2>&1 &
+    local hl_curl_pid=$!
+    # b. Approver GET — creates the stub / waits for the resource.
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${hl_bearer}" \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/headless/${hl_id}" \
+        -o "${WORK_DIR}/headless-get.json" -w '%{http_code}' | grep -q '200'; then
+      kill "${hl_curl_pid}" 2>/dev/null || true
+      echo "error: headless GET (stub) failed:" >&2
+      cat "${WORK_DIR}/headless-get.json" >&2
+      exit 1
+    fi
+    # c. Authenticate challenge, headless-login scope.
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${hl_bearer}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/authenticatechallenge" \
+        -H 'Content-Type: application/json' \
+        -d '{"challenge_scope": 3, "challenge_allow_reuse": false}' \
+        -o "${FIXTURES_DIR}/webauthn-headless-options.json" -w '%{http_code}' | grep -q '200'; then
+      kill "${hl_curl_pid}" 2>/dev/null || true
+      echo "error: headless authenticatechallenge failed:" >&2
+      cat "${FIXTURES_DIR}/webauthn-headless-options.json" >&2
+      exit 1
+    fi
+    python3 "${SCRIPT_DIR}/teleport-webauthn.py" assert \
+      --options "${FIXTURES_DIR}/webauthn-headless-options.json" \
+      --out "${FIXTURES_DIR}/webauthn-headless-assertion.json" \
+      --origin "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" \
+      --state "${WORK_DIR}/webauthn-state" \
+      --no-user-handle
+    # d. Approve.
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${hl_bearer}" -X PUT \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/headless/${hl_id}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"action\":\"accept\",\"webauthnAssertionResponse\":$(cat "${FIXTURES_DIR}/webauthn-headless-assertion.json")}" \
+        -w '%{http_code}' -o "${WORK_DIR}/headless-put.json" | grep -q '200'; then
+      kill "${hl_curl_pid}" 2>/dev/null || true
+      echo "error: headless approval PUT failed:" >&2
+      cat "${WORK_DIR}/headless-put.json" >&2
+      exit 1
+    fi
+    # e. Wait for the blocking client POST to complete with a signed cert.
+    local hl_wait=0
+    while kill -0 "${hl_curl_pid}" 2>/dev/null && [ "${hl_wait}" -lt 20 ]; do
+      sleep 1
+      hl_wait=$((hl_wait + 1))
+    done
+    if kill -0 "${hl_curl_pid}" 2>/dev/null; then
+      kill "${hl_curl_pid}" 2>/dev/null || true
+      echo "error: headless client POST did not complete after approval" >&2
+      exit 1
+    fi
+    if ! grep -q '200' "${WORK_DIR}/headless-http.txt" \
+       || ! python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("cert") else 1)' "${FIXTURES_DIR}/headless-cert.json"; then
+      echo "error: headless login did not issue a cert:" >&2
+      cat "${FIXTURES_DIR}/headless-cert.json" >&2
+      exit 1
+    fi
+    log "headless-approval smoke passed (cert issued)"
+  fi
+
+  # 8. M3: passwordless smoke (webauthn clusters only). This is the CI-able
+  #    version of the app's Phase-3 passwordless login: the already-logged-in
+  #    approver provisions a resident credential (privilege token -> passwordless
+  #    registerchallenge -> mfa/devices) and then logs in WITHOUT a password
+  #    (login/begin passwordless -> finishsession). Verified against v16.4.0:
+  #
+  #    a. POST /v1/webapi/mfa/authenticatechallenge
+  #       {"challenge_scope": 4} (MANAGE_DEVICES) — the web UI's
+  #       createPrivilegeTokenWithWebauthn uses this exact scope.
+  #    b. POST /v1/webapi/users/privilege/token
+  #       {"webauthnAssertionResponse": ...} — NOTE the field name is
+  #       webauthnAssertionResponse (users.go privilegeTokenRequest), not
+  #       webauthnResponse.
+  #    c. POST /v1/webapi/mfa/token/{privilege_token}/registerchallenge
+  #       {"deviceType":"webauthn","deviceUsage":"passwordless"} — the
+  #       challenge demands userVerification "required" and a resident key.
+  #    d. POST /v1/webapi/mfa/devices with the registration response
+  #       {"tokenId","deviceName","deviceUsage":"passwordless",
+  #        "webauthnRegisterResponse"}.
+  #    e. POST /v1/webapi/mfa/login/begin {"passwordless": true} -> assert
+  #       (UV flag + userHandle echo) -> finishsession WITHOUT a "user" field
+  #       (sending it switches the server to LOGIN scope and the challenge
+  #       lookup fails; the web UI omits it exactly this way).
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+    log "passwordless smoke (resident credential + passwordless login)"
+    if [ ! -s "${WORK_DIR}/approver-bearer.txt" ]; then
+      echo "error: passwordless smoke needs the webauthn approver session" >&2
+      exit 1
+    fi
+    local pl_bearer
+    pl_bearer="$(cat "${WORK_DIR}/approver-bearer.txt")"
+    # a. Manage-devices authenticate challenge.
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${pl_bearer}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/authenticatechallenge" \
+        -H 'Content-Type: application/json' \
+        -d '{"challenge_scope": 4, "challenge_allow_reuse": false}' \
+        -o "${FIXTURES_DIR}/webauthn-pt-options.json" -w '%{http_code}' | grep -q '200'; then
+      echo "error: passwordless privilege challenge failed:" >&2
+      cat "${FIXTURES_DIR}/webauthn-pt-options.json" >&2
+      exit 1
+    fi
+    python3 "${SCRIPT_DIR}/teleport-webauthn.py" assert \
+      --options "${FIXTURES_DIR}/webauthn-pt-options.json" \
+      --out "${FIXTURES_DIR}/webauthn-pt-assertion.json" \
+      --origin "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" \
+      --state "${WORK_DIR}/webauthn-state" \
+      --no-user-handle
+    # b. Privilege token (field name webauthnAssertionResponse).
+    local pt_token
+    pt_token="$(
+      curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${pl_bearer}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/users/privilege/token" \
+        -H 'Content-Type: application/json' \
+        -d "{\"webauthnAssertionResponse\":$(cat "${FIXTURES_DIR}/webauthn-pt-assertion.json")}"
+    )"
+    if ! printf '%s' "${pt_token}" | grep -qE '^"[a-f0-9]{32}"$'; then
+      echo "error: privilege token request failed:" >&2
+      printf '%s\n' "${pt_token}" >&2
+      exit 1
+    fi
+    local pt_id
+    pt_id="$(printf '%s' "${pt_token}" | tr -d '"')"
+    # c. Passwordless register challenge (token-scoped).
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${pl_bearer}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/token/${pt_id}/registerchallenge" \
+        -H 'Content-Type: application/json' \
+        -d '{"deviceType":"webauthn","deviceUsage":"passwordless"}' \
+        -o "${FIXTURES_DIR}/webauthn-pl-register-options.json" -w '%{http_code}' | grep -q '200'; then
+      echo "error: passwordless registerchallenge failed:" >&2
+      cat "${FIXTURES_DIR}/webauthn-pl-register-options.json" >&2
+      exit 1
+    fi
+    if ! grep -q '"userVerification":"required"' "${FIXTURES_DIR}/webauthn-pl-register-options.json"; then
+      echo "error: passwordless challenge must demand user verification:" >&2
+      cat "${FIXTURES_DIR}/webauthn-pl-register-options.json" >&2
+      exit 1
+    fi
+    local pl_state="${WORK_DIR}/webauthn-passwordless-state"
+    rm -rf "${pl_state}"
+    python3 "${SCRIPT_DIR}/teleport-webauthn.py" register \
+      --options "${FIXTURES_DIR}/webauthn-pl-register-options.json" \
+      --out "${FIXTURES_DIR}/webauthn-pl-register-response.json" \
+      --origin "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" \
+      --state "${pl_state}"
+    # d. Register the resident device.
+    if ! curl -ksS -b "${cookie_jar}" -H "Authorization: Bearer ${pl_bearer}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/devices" \
+        -H 'Content-Type: application/json' \
+        -d "{\"tokenId\":\"${pt_id}\",\"deviceName\":\"ci-passwordless\",\"deviceUsage\":\"passwordless\",\"webauthnRegisterResponse\":$(cat "${FIXTURES_DIR}/webauthn-pl-register-response.json")}" \
+        -o "${WORK_DIR}/pl-add-device.json" -w '%{http_code}' | grep -q '200'; then
+      echo "error: passwordless device registration failed:" >&2
+      cat "${WORK_DIR}/pl-add-device.json" >&2
+      exit 1
+    fi
+    # e. Passwordless login: begin -> assert -> finishsession (NO user field).
+    local pl_cookie="${WORK_DIR}/pl-cookies.txt"
+    rm -f "${pl_cookie}"
+    curl -ksS -c "${pl_cookie}" -o /dev/null "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/web/login"
+    local pl_csrf
+    pl_csrf="$(awk '$6 == "__Host-grv_csrf" {print $7}' "${pl_cookie}" | head -1)"
+    if ! curl -ksS -b "${pl_cookie}" -c "${pl_cookie}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/login/begin" \
+        -H "X-CSRF-Token: ${pl_csrf}" \
+        -H 'Content-Type: application/json' \
+        -d '{"passwordless": true}' \
+        -o "${FIXTURES_DIR}/webauthn-pl-login-options.json" -w '%{http_code}' | grep -q '200'; then
+      echo "error: passwordless login/begin failed:" >&2
+      cat "${FIXTURES_DIR}/webauthn-pl-login-options.json" >&2
+      exit 1
+    fi
+    python3 "${SCRIPT_DIR}/teleport-webauthn.py" assert \
+      --options "${FIXTURES_DIR}/webauthn-pl-login-options.json" \
+      --out "${FIXTURES_DIR}/webauthn-pl-login-assertion.json" \
+      --origin "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" \
+      --state "${pl_state}"
+    local pl_finish
+    pl_finish="$(
+      curl -ksS -b "${pl_cookie}" -c "${pl_cookie}" -X POST \
+        "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/login/finishsession" \
+        -H "X-CSRF-Token: ${pl_csrf}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"webauthnAssertionResponse\":$(cat "${FIXTURES_DIR}/webauthn-pl-login-assertion.json")}"
+    )"
+    if ! printf '%s' "${pl_finish}" | grep -q '"token"'; then
+      echo "error: passwordless login/finishsession failed:" >&2
+      printf '%s\n' "${pl_finish}" >&2
+      exit 1
+    fi
+    log "passwordless smoke passed (resident credential + passwordless login)"
+  fi
 }
 
 # ---------------------------------------------------------------------------

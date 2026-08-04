@@ -11,9 +11,12 @@
 #     libssh2 handshakes, and exec through the target node — using a
 #     server-minted cert (tctl auth sign), the same cert shape the app's
 #     Phase-1 bootstrap produces
-#   - the TOTP provisioning + login chain on an `otp` cluster (server-smoke
-#     matrix job): registerchallenge → QR decode (opencv-python-headless) →
-#     password PUT with second_factor_token → sessions/web login
+#   - the TOTP provisioning + login chain on an `otp` cluster and the
+#     WebAuthn chains on a `webauthn` cluster (server-smoke matrix job):
+#     registerchallenge → QR decode (opencv-python-headless) → password PUT
+#     with second_factor_token → sessions/web login; plus the software-key
+#     registration, password+WebAuthn login, headless approval, and
+#     passwordless login (scripts/ci/teleport-webauthn.py + fido2)
 #
 # Why dispatch/schedule and not PR CI:
 #   - PR CI is capped at 5 concurrent macOS jobs (build + unit-tests + 4
@@ -66,19 +69,21 @@ concurrency:
 
 jobs:
   # Server-only smoke matrix: boots a cluster and completes the full
-  # bootstrap for each MFA mode (M1: off, M2: otp) WITHOUT building the app
-  # (~4 min/job vs ~15 min for the xcodebuild path). The otp leg exercises
-  # the TOTP provisioning chain (registerchallenge → QR decode → password
-  # PUT with second_factor_token → sessions/web login) — the same webapi
+  # bootstrap for each MFA mode (M1: off, M2: otp, M3: webauthn) WITHOUT
+  # building the app (~4-6 min/job vs ~15 min for the xcodebuild path). The
+  # otp leg exercises the TOTP provisioning chain (registerchallenge → QR
+  # decode → password PUT with second_factor_token → sessions/web login);
+  # the webauthn leg exercises software-key registration → password+WebAuthn
+  # login → headless approval → passwordless login — the same webapi
   # machinery the app's login flows use. Runs on a high web port (no sudo
-  # needed for <1024 on this job — nothing binds :443 here).
+  # needed — nothing binds :443 here).
   server-smoke:
     runs-on: xcode-27
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        second-factor: [off, otp]
+        second-factor: [off, otp, webauthn]
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -97,17 +102,21 @@ jobs:
       - name: Install Teleport binaries
         run: bash scripts/ci/teleport-server.sh install
 
-      - name: Install QR decoder (opencv-python-headless)
-        # Required only for the otp leg (Teleport returns the TOTP secret as
-        # a QR). Homebrew python is first on arm64 runner PATHs, so pip3
+      - name: Install Python deps (QR decoder + fido2 WebAuthn signer)
+        # opencv-python-headless is required only for the otp leg (Teleport
+        # returns the TOTP secret as a QR); fido2 (Yubico's pure-Python
+        # WebAuthn lib) powers the software credential used by the webauthn
+        # leg. Homebrew python is first on arm64 runner PATHs, so pip3
         # targets the same interpreter the script's `python3` resolves to.
         run: |
           set -euo pipefail
-          if ! python3 -c 'import cv2' 2>/dev/null; then
-            python3 -m pip install --user --quiet opencv-python-headless \
-              || pip3 install --user --quiet opencv-python-headless
-          fi
-          python3 -c 'import cv2; print("cv2", cv2.__version__)'
+          for mod in cv2 fido2; do
+            if ! python3 -c "import $mod" 2>/dev/null; then
+              python3 -m pip install --user --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)" \
+                || pip3 install --user --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)"
+            fi
+          done
+          python3 -c 'import cv2, fido2; print("cv2", cv2.__version__, "| fido2", fido2.__version__)'
 
       - name: Start Teleport cluster (second_factor=${{ matrix.second-factor }})
         run: |
@@ -117,7 +126,7 @@ jobs:
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           bash scripts/ci/teleport-server.sh start
 
-      - name: Bootstrap (webapi invite + TOTP provisioning + cert + tsh smoke)
+      - name: Bootstrap (webapi invite + MFA provisioning + cert + smokes)
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
