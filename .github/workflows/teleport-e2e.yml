@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Teleport E2E — real Teleport server + real SSH stack integration tests
-# (issue #83, milestone M1).
+# (issue #83: milestone M1 = SSH path, M2 = TOTP server capability).
 #
 # What this verifies that PR CI cannot:
 #   - a REAL Teleport cluster (auth + proxy + node, TLS Routing on :443)
@@ -11,6 +11,9 @@
 #     libssh2 handshakes, and exec through the target node — using a
 #     server-minted cert (tctl auth sign), the same cert shape the app's
 #     Phase-1 bootstrap produces
+#   - the TOTP provisioning + login chain on an `otp` cluster (server-smoke
+#     matrix job): registerchallenge → QR decode (opencv-python-headless) →
+#     password PUT with second_factor_token → sessions/web login
 #
 # Why dispatch/schedule and not PR CI:
 #   - PR CI is capped at 5 concurrent macOS jobs (build + unit-tests + 4
@@ -62,6 +65,84 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Server-only smoke matrix: boots a cluster and completes the full
+  # bootstrap for each MFA mode (M1: off, M2: otp) WITHOUT building the app
+  # (~4 min/job vs ~15 min for the xcodebuild path). The otp leg exercises
+  # the TOTP provisioning chain (registerchallenge → QR decode → password
+  # PUT with second_factor_token → sessions/web login) — the same webapi
+  # machinery the app's login flows use. Runs on a high web port (no sudo
+  # needed for <1024 on this job — nothing binds :443 here).
+  server-smoke:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        second-factor: [off, otp]
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Cache Teleport binaries
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/vvterm-teleport/bin
+          key: teleport-v16.4.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Teleport binaries
+        run: bash scripts/ci/teleport-server.sh install
+
+      - name: Install QR decoder (opencv-python-headless)
+        # Required only for the otp leg (Teleport returns the TOTP secret as
+        # a QR). Homebrew python is first on arm64 runner PATHs, so pip3
+        # targets the same interpreter the script's `python3` resolves to.
+        run: |
+          set -euo pipefail
+          if ! python3 -c 'import cv2' 2>/dev/null; then
+            python3 -m pip install --user --quiet opencv-python-headless \
+              || pip3 install --user --quiet opencv-python-headless
+          fi
+          python3 -c 'import cv2; print("cv2", cv2.__version__)'
+
+      - name: Start Teleport cluster (second_factor=${{ matrix.second-factor }})
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          bash scripts/ci/teleport-server.sh start
+
+      - name: Bootstrap (webapi invite + TOTP provisioning + cert + tsh smoke)
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          bash scripts/ci/teleport-server.sh bootstrap
+
+      - name: Confirm server health
+        run: bash scripts/ci/teleport-server.sh status
+
+      - name: Upload teleport logs (always)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: teleport-server-smoke-${{ matrix.second-factor }}-logs
+          path: |
+            ${{ runner.temp }}/vvterm-teleport/teleport.log
+            ${{ runner.temp }}/vvterm-teleport/teleport.yaml
+            ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
+          if-no-files-found: ignore
+
+      - name: Stop Teleport (always)
+        if: always()
+        run: TELEPORT_WEB_PORT=8443 bash scripts/ci/teleport-server.sh stop || true
+
   teleport-e2e:
     runs-on: xcode-27
     timeout-minutes: 45
@@ -93,8 +174,11 @@ jobs:
           # script when the web port needs root. All knobs are pinned
           # explicitly — the script's TELEPORT_* knobs can collide with
           # ambient teleport env on dev machines, so never inherit them.
+          # The app test runs against the M1 (no-MFA) cluster; the M2 otp
+          # chain is covered by the server-smoke matrix job.
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
           TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=off \
           bash scripts/ci/teleport-server.sh start
 
       - name: Bootstrap user + cert fixtures (webapi invite, tctl auth sign, tsh smoke)

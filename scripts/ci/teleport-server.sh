@@ -15,6 +15,21 @@
 #               the webapi (sets the password non-interactively), mint an SSH
 #               cert with `tctl auth sign`, export the cluster TLS CA, and
 #               run a tsh login + tsh ssh smoke test
+#
+# MFA (TELEPORT_SECOND_FACTOR, default off):
+#   off — no MFA. `tctl users add` invite completes with just a password.
+#   otp — TOTP. bootstrap additionally provisions a server-side TOTP device
+#         (POST /v1/webapi/mfa/token/{token}/registerchallenge), decodes the
+#         returned QR (scripts/ci/teleport-totp.py + opencv-python-headless)
+#         so CI can compute codes, sends the code with the password PUT
+#         (`second_factor_token`), and verifies a full password+TOTP login
+#         (POST /v1/webapi/sessions/web).
+#   webauthn/passwordless — milestone M3 (software WebAuthn key).
+#
+# Local user: the Teleport node runs SSH sessions as a LOCAL system user, so
+# bootstrap ensures the SSH login exists (`useradd`/`sysadminctl`, falling
+# back to the current user) — `ssh ci-user@node` would otherwise fail with
+# "unknown user".
 #   env-export— write a source-able .env file with the fixture PEMs + server
 #               coordinates for the xcodebuild test step
 #   status    — is the server up?
@@ -62,7 +77,10 @@ TELEPORT_NODE="${TELEPORT_NODE:-ci-node}"
 TELEPORT_CLUSTER="${TELEPORT_CLUSTER:-ci-cluster}"
 TELEPORT_USER="${TELEPORT_USER:-ci-user}"
 TELEPORT_LOGIN="${TELEPORT_LOGIN:-ci-user}"       # SSH login/principal in the cert
+TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR:-off}"  # off | otp (webauthn in M3)
 TELEPORT_PASSWORD="${TELEPORT_PASSWORD:-}"          # random if empty
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-/tmp}/vvterm-teleport}"
 BIN_DIR="${WORK_DIR}/bin"
@@ -143,8 +161,10 @@ auth_service:
   cluster_name: ${TELEPORT_CLUSTER}
   proxy_listener_mode: multiplex
   authentication:
-    # M1: no MFA. M2 adds TOTP (otp), M3 adds webauthn/passwordless.
-    second_factor: off
+    # M1: no MFA (off). M2: TOTP (otp) — bootstrap registers a server-side
+    # TOTP device and completes the invite with its code. M3 adds
+    # webauthn/passwordless.
+    second_factor: ${TELEPORT_SECOND_FACTOR}
     local_auth: "yes"
 ssh_service:
   enabled: "yes"
@@ -201,7 +221,38 @@ cmd_start() {
 # ---------------------------------------------------------------------------
 # bootstrap — create user, set password via invite webapi, mint cert, smoke
 # ---------------------------------------------------------------------------
+ensure_local_login_user() {
+  # The Teleport node (regular mode) runs the SSH session as a LOCAL system
+  # user — `ssh ci-user@node` fails with "unknown user" when the login has no
+  # matching local account. CI runners don't ship a `ci-user` account, so
+  # create one when possible (sudo is available on GH runners); fall back to
+  # the current user, which exists by definition.
+  if id "${TELEPORT_LOGIN}" >/dev/null 2>&1; then
+    return
+  fi
+  local prefix=()
+  if [ "$(id -u)" -ne 0 ]; then
+    if ! sudo -n true 2>/dev/null; then
+      log "cannot create local user ${TELEPORT_LOGIN} (no sudo) — falling back to $(id -un)"
+      TELEPORT_LOGIN="$(id -un)"
+      return
+    fi
+    prefix=(sudo -n)
+  fi
+  if command -v useradd >/dev/null 2>&1; then
+    "${prefix[@]}" useradd -m -s /bin/bash "${TELEPORT_LOGIN}" 2>/dev/null || true
+  fi
+  if command -v sysadminctl >/dev/null 2>&1; then
+    "${prefix[@]}" sysadminctl -addUser "${TELEPORT_LOGIN}" -shell /bin/zsh 2>/dev/null || true
+  fi
+  if ! id "${TELEPORT_LOGIN}" >/dev/null 2>&1; then
+    log "could not create local user ${TELEPORT_LOGIN} — falling back to $(id -un)"
+    TELEPORT_LOGIN="$(id -un)"
+  fi
+}
+
 cmd_bootstrap() {
+  ensure_local_login_user
   local tctl=("${SUDO_PREFIX[@]}" "${BIN_DIR}/tctl" -c "${CONF_FILE}")
 
   # 1. Create the user (inactive) + parse the invite token from the output.
@@ -239,18 +290,82 @@ cmd_bootstrap() {
     cat "${cookie_jar}" >&2
     exit 1
   fi
+
+  # M2: for an `otp` cluster, provision a TOTP device bound to the invite
+  # token BEFORE the password PUT. Teleport generates the secret server-side
+  # and returns it only as a QR (image/png otpauth:// URI); CI decodes it
+  # with scripts/ci/teleport-totp.py so it can compute the codes the PUT
+  # (second_factor_token) and later logins require.
+  local second_factor_arg=""
+  if [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
+    log "provisioning TOTP device (POST /v1/webapi/mfa/token/{token}/registerchallenge)"
+    curl -ksS -b "${cookie_jar}" -X POST \
+      "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/mfa/token/${token}/registerchallenge" \
+      -H "X-CSRF-Token: ${csrf}" \
+      -H 'Content-Type: application/json' \
+      -d '{"deviceType":"totp"}' \
+      -o "${FIXTURES_DIR}/totp-qr.json"
+    if [ ! -s "${FIXTURES_DIR}/totp-qr.json" ]; then
+      echo "error: registerchallenge returned no response" >&2
+      exit 1
+    fi
+    # v16 returns JSON {"webauthn":null,"totp":{"qrCode":"<base64 PNG>"}};
+    # teleport-totp.py handles both that envelope and a raw PNG.
+    TOTP_SECRET="$(python3 "${SCRIPT_DIR}/teleport-totp.py" qr-secret "${FIXTURES_DIR}/totp-qr.json")"
+    log "TOTP device provisioned (secret ${#TOTP_SECRET} chars base32)"
+    # The password step requires a fresh valid code from the registered device.
+    second_factor_arg=",\"second_factor_token\":\"$(python3 "${SCRIPT_DIR}/teleport-totp.py" code "${TOTP_SECRET}")\""
+  fi
+
   local invite_resp
   invite_resp="$(
     curl -ksS -b "${cookie_jar}" -X PUT \
       "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/users/password/token" \
       -H "X-CSRF-Token: ${csrf}" \
       -H 'Content-Type: application/json' \
-      -d "{\"token\":\"${token}\",\"password\":\"$(printf '%s' "${TELEPORT_PASSWORD}" | base64)\",\"deviceName\":\"ci\"}"
+      -d "{\"token\":\"${token}\",\"password\":\"$(printf '%s' "${TELEPORT_PASSWORD}" | base64)\",\"deviceName\":\"ci\"${second_factor_arg}}"
   )"
   if ! printf '%s' "${invite_resp}" | grep -q '"kind"\|"session"\|"recovery"\|^{}$'; then
     echo "error: invite completion failed:" >&2
     printf '%s\n' "${invite_resp}" >&2
     exit 1
+  fi
+
+  # M2: verify the full password+TOTP chain through the webapi — the same
+  # CSRF double-submit + cookie machinery the app's login flows use.
+  # Two gotchas: the password PUT rotates the CSRF cookie (re-fetch it), and
+  # Teleport treats TOTP codes as single-use (the PUT consumed the code from
+  # its 30s window, so the login in the same window is rejected with
+  # "invalid credentials" — retry once after the window rolls, ≤30s).
+  if [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
+    log "verifying otp login (POST /v1/webapi/sessions/web)"
+    curl -ksS -c "${cookie_jar}" -o /dev/null "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/web/login"
+    local csrf2
+    csrf2="$(awk '$6 == "__Host-grv_csrf" {print $7}' "${cookie_jar}" | head -1)"
+    local login_resp=""
+    local attempt
+    for attempt in 1 2; do
+      login_resp="$(
+        curl -ksS -b "${cookie_jar}" -c "${cookie_jar}" -X POST \
+          "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/sessions/web" \
+          -H "X-CSRF-Token: ${csrf2}" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user\":\"${TELEPORT_USER}\",\"pass\":\"${TELEPORT_PASSWORD}\",\"second_factor_token\":\"$(python3 "${SCRIPT_DIR}/teleport-totp.py" code "${TOTP_SECRET}")\"}"
+      )"
+      if printf '%s' "${login_resp}" | grep -q '"token"\|"session"'; then
+        break
+      fi
+      if [ "${attempt}" -lt 2 ]; then
+        log "login rejected (code consumed by password step?) — waiting for next TOTP window"
+        sleep "$((30 - ($(date +%s) % 30) + 1))"
+      fi
+    done
+    if ! printf '%s' "${login_resp}" | grep -q '"token"\|"session"'; then
+      echo "error: otp login verification failed:" >&2
+      printf '%s\n' "${login_resp}" >&2
+      exit 1
+    fi
+    log "otp login verified"
   fi
 
   # 3. Mint the SSH cert + key for the app's SSH path.
@@ -319,6 +434,10 @@ VVTERM_TELEPORT_NODE="${TELEPORT_NODE}"
 VVTERM_TELEPORT_USER="${TELEPORT_USER}"
 # The SSH login the app must present — must be a principal in the cert.
 VVTERM_TELEPORT_LOGIN="${TELEPORT_LOGIN}"
+# MFA mode the cluster was booted with (off | otp). TOTP secret is the
+# base32 shared secret of the CI-registered device (empty when off).
+VVTERM_TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR}"
+VVTERM_TELEPORT_TOTP_SECRET="${TOTP_SECRET:-}"
 EOF
   log "wrote ${ENV_FILE}"
 }
