@@ -338,6 +338,18 @@ jobs:
           # recompiles only the changed files.
           save-always: true
 
+      - name: Capture inner handshake diag file
+        if: always()
+        run: |
+          DIAG=$(ls -t /tmp/vvterm-diag-*.txt 2>/dev/null | head -1 || true)
+          if [ -n "$DIAG" ]; then
+            cp "$DIAG" "$RUNNER_TEMP/vvterm-diag.txt"
+            echo "diag file: $DIAG"
+            cat "$DIAG"
+          else
+            echo "no diag file found"
+          fi
+
       - name: Capture simulator logs (diagnostics)
         # os_log from the app under test — NWConnection state, TLS transport
         # logs, sandbox denials. Needed to diagnose runner-side hangs.
@@ -360,6 +372,7 @@ jobs:
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
             ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
             ${{ runner.temp }}/sim-vvterm.log
+            ${{ runner.temp }}/vvterm-diag.txt
           if-no-files-found: ignore
 
       - name: Upload test results on failure
