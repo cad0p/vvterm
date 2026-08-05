@@ -3078,10 +3078,10 @@ actor SSHSession {
         d("after set_blocking")
         libssh2_session_set_timeout(innerSession, 30_000)
         d("after set_timeout")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
-        d("after inner_kex")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
-        d("after inner_hostkey")
+        // Use default KEX/HOSTKEY for inner session to avoid stall on
+        // socketpair fd (outer session works with custom prefs but inner
+        // session on socketpair fd stalls at KEX pref).
+        d("after set_timeout, using default KEX/HOSTKEY")
         d("creating watchdog")
         let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
             d("watchdog sleeping")
