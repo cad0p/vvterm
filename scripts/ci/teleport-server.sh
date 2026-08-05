@@ -85,6 +85,13 @@ TELEPORT_NODE="${TELEPORT_NODE:-ci-node}"
 TELEPORT_CLUSTER="${TELEPORT_CLUSTER:-ci-cluster}"
 TELEPORT_USER="${TELEPORT_USER:-ci-user}"
 TELEPORT_LOGIN="${TELEPORT_LOGIN:-ci-user}"       # SSH login/principal in the cert
+# The ceremony-test user (M4): a device-less user the APP registers its
+# first MFA device for via Phase 2 gRPC (first-device path — no Safari
+# Browser-MFA ceremony). The invite is deliberately left pending: the user
+# never logs in with a password (cert auth + passwordless are
+# invite-independent), and a completed invite would force an MFA device,
+# breaking the first-device path.
+TELEPORT_APP_USER="${TELEPORT_APP_USER:-ci-app}"
 TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR:-off}"  # off | otp | webauthn
 # WebAuthn relying-party ID — must match the clientDataJSON origin host the
 # signer emits (lib/auth/webauthn/origin.go: only host==rp_id or subdomains
@@ -179,7 +186,7 @@ auth_service:
     second_factor: ${TELEPORT_SECOND_FACTOR}
     local_auth: "yes"
 EOF
-  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ] || [ "${TELEPORT_SECOND_FACTOR}" = "optional" ]; then
     cat >> "${CONF_FILE}" <<EOF2
     webauthn:
       # Software-signer ceremony origin is https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT};
@@ -494,6 +501,42 @@ cmd_bootstrap() {
   "${tctl[@]}" auth export --type=tls-host > "${FIXTURES_DIR}/tls-ca.pem"
   log "tls-ca: $(grep -c 'BEGIN CERTIFICATE' "${FIXTURES_DIR}/tls-ca.pem") cert(s) exported"
 
+  # 4b. M4: the app-ceremony identity (webauthn clusters only). The app's
+  #     Phase-2 gRPC registration needs a user with NO MFA devices
+  #     (first-device path — no Safari Browser-MFA ceremony;
+  #     CreateAuthenticateChallenge returns an empty challenge for a
+  #     device-less user) and a TLS cert identity for the mTLS auth dial.
+  #     `tctl auth sign --format=tls` mints exactly the identity shape
+  #     Phase 1 would produce:
+  #       app-identity.crt  — the signed TLS certificate (client cert)
+  #       app-identity.key  — the private key (RSA PKCS1 PEM)
+  #       app-identity.cas  — the cluster CA bundle (PEMs)
+  #     The invite is deliberately left pending (see TELEPORT_APP_USER
+  #     above): the user never logs in with a password (cert auth +
+  #     passwordless are invite-independent), and a completed invite would
+  #     force an MFA device, breaking the first-device path.
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
+    log "minting app-ceremony identity (${TELEPORT_APP_USER}, TLS identity)"
+    "${tctl[@]}" users add "${TELEPORT_APP_USER}" --roles=access --logins="${TELEPORT_LOGIN}" >/dev/null
+    rm -f "${FIXTURES_DIR}/app-identity"*
+    "${tctl[@]}" auth sign --user="${TELEPORT_APP_USER}" --format=tls --out="${FIXTURES_DIR}/app-identity" >/dev/null
+    for f in "${FIXTURES_DIR}/app-identity.crt" "${FIXTURES_DIR}/app-identity.key" "${FIXTURES_DIR}/app-identity.cas"; do
+      if [ ! -s "$f" ]; then
+        echo "error: tctl auth sign --format=tls did not produce $f" >&2
+        ls -la "${FIXTURES_DIR}" >&2
+        exit 1
+      fi
+    done
+    APP_IDENTITY_CRT="$(cat "${FIXTURES_DIR}/app-identity.crt")"
+    APP_IDENTITY_KEY="$(cat "${FIXTURES_DIR}/app-identity.key")"
+    APP_IDENTITY_CAS="$(cat "${FIXTURES_DIR}/app-identity.cas")"
+    log "app-ceremony identity minted (crt/key/cas)"
+  else
+    APP_IDENTITY_CRT=""
+    APP_IDENTITY_KEY=""
+    APP_IDENTITY_CAS=""
+  fi
+
   # 5. Write the source-able env file for the xcodebuild test step.
   write_env_file
 
@@ -772,6 +815,15 @@ VVTERM_TELEPORT_LOGIN="${TELEPORT_LOGIN}"
 # base32 shared secret of the CI-registered device (empty when off).
 VVTERM_TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR}"
 VVTERM_TELEPORT_TOTP_SECRET="${TOTP_SECRET:-}"
+# M4 ceremony-test identity (webauthn clusters only — empty otherwise):
+# a device-less user + the TLS identity the app's Phase-2 gRPC dial uses
+# (tctl auth sign --format=tls: crt = client cert, key = private key
+# [RSA PKCS1 PEM], cas = cluster CA bundle). The app's Phase-2
+# registration registers this user's first (passwordless) MFA device.
+VVTERM_TELEPORT_APP_USER="${TELEPORT_APP_USER:-}"
+VVTERM_TELEPORT_APP_TLS_CERT="${APP_IDENTITY_CRT:-}"
+VVTERM_TELEPORT_APP_TLS_KEY="${APP_IDENTITY_KEY:-}"
+VVTERM_TELEPORT_APP_TLS_CAS="${APP_IDENTITY_CAS:-}"
 EOF
   log "wrote ${ENV_FILE}"
 }

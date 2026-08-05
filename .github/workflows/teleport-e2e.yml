@@ -83,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        second-factor: [off, otp, webauthn]
+        second-factor: ['off', 'otp', 'webauthn']
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -155,6 +155,14 @@ jobs:
   teleport-e2e:
     runs-on: xcode-27
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # off — M1: the app's SSH path against a no-MFA cluster.
+        # webauthn — M4: additionally drives the app's real Phase-2
+        # registration + Phase-3 passwordless ceremonies (env-gated tests
+        # self-skip on the leg they don't belong to).
+        second-factor: ['off', 'webauthn']
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -176,25 +184,41 @@ jobs:
       - name: Install Teleport binaries
         run: bash scripts/ci/teleport-server.sh install
 
-      - name: Start Teleport cluster (TLS routing on :443)
+      - name: Install Python deps (fido2 WebAuthn signer)
+        # Required only for the webauthn leg (the harness provisions the
+        # server-side MFA credential + runs the headless/passwordless
+        # smokes with the Python software authenticator).
+        if: matrix.second-factor == 'webauthn'
+        run: |
+          set -euo pipefail
+          if ! python3 -c 'import fido2' 2>/dev/null; then
+            python3 -m pip install --user --quiet fido2 \
+              || pip3 install --user --quiet fido2
+          fi
+          python3 -c 'import fido2; print("fido2", fido2.__version__)'
+
+      - name: Start Teleport cluster (TLS routing on :443, ${{ matrix.second-factor }})
         run: |
           set -euo pipefail
           # sudo -n (passwordless on GH runners) is handled inside the
           # script when the web port needs root. All knobs are pinned
           # explicitly — the script's TELEPORT_* knobs can collide with
           # ambient teleport env on dev machines, so never inherit them.
-          # The app test runs against the M1 (no-MFA) cluster; the M2 otp
-          # chain is covered by the server-smoke matrix job.
+          # off — the M1 app SSH path. webauthn — the M3 smokes + the M4
+          # app ceremony (Phase-2 registration + Phase-3 passwordless).
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
           TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
-          TELEPORT_SECOND_FACTOR=off \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_PASSWORD=VmTestPassw0rd! \
           bash scripts/ci/teleport-server.sh start
 
-      - name: Bootstrap user + cert fixtures (webapi invite, tctl auth sign, tsh smoke)
+      - name: Bootstrap user + cert fixtures (webapi invite, MFA provisioning, smokes)
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
           TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_PASSWORD=VmTestPassw0rd! \
           bash scripts/ci/teleport-server.sh bootstrap
 
       - name: Confirm server health
@@ -242,7 +266,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: teleport-e2e-logs
+          name: teleport-e2e-${{ matrix.second-factor }}-logs
           path: |
             ${{ runner.temp }}/vvterm-teleport/teleport.log
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
@@ -253,7 +277,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: teleport-e2e-test-results
+          name: teleport-e2e-${{ matrix.second-factor }}-test-results
           path: |
             ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
