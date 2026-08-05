@@ -58,10 +58,16 @@ struct LoginFinishResponse: Decodable {
 struct LoginFinishReq: Encodable {
     let webauthnChallengeResponse: CredentialAssertionResponse
     let sshPubKey: Data
+    let pubKey: Data
     let ttl: Int64
     enum CodingKeys: String, CodingKey {
         case webauthnChallengeResponse = "webauthn_challenge_response"
         case sshPubKey = "ssh_pub_key"
+        // v16-era proxies read `pub_key` ([]byte) and ignore `ssh_pub_key`
+        // (introduced in v17); v17 prefers `ssh_pub_key` and still accepts
+        // the deprecated `pub_key`. Send both so the login/finish ceremony
+        // works against both server generations.
+        case pubKey = "pub_key"
         case ttl
     }
 }

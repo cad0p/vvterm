@@ -215,6 +215,7 @@ struct TeleportHTTPClient {
         let finishReq = LoginFinishReq(
             webauthnChallengeResponse: assertion,
             sshPubKey: Data(sshPubKey.utf8),
+            pubKey: Data(sshPubKey.utf8),
             ttl: ttl
         )
         let finishBody = try JSONEncoder().encode(finishReq)
