@@ -3071,14 +3071,17 @@ actor SSHSession {
         let diagFd = open(diagPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
         func d(_ s: String) { s.withCString { Darwin.write(diagFd, $0, strlen($0)) }; Darwin.write(diagFd, "\n", 1) }
         d("after inner_mac_sc")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
-        d("after inner_kex")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
-        d("after inner_hostkey")
+        // Blocking mode for the handshake, then non-blocking for I/O.
+        // Set BEFORE remaining prefs as a safeguard (inner session exhibited
+        // a stall on KEX pref before blocking mode was set).
         libssh2_session_set_blocking(innerSession, 1)
         d("after set_blocking")
         libssh2_session_set_timeout(innerSession, 30_000)
         d("after set_timeout")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
+        d("after inner_kex")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
+        d("after inner_hostkey")
         d("creating watchdog")
         let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
             d("watchdog sleeping")
