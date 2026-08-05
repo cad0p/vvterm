@@ -3081,15 +3081,15 @@ actor SSHSession {
         // Match outer session KEX/HOSTKEY prefs for inner session.
         // Inner session on socketpair fd was stalling at KEX pref with
         // explicit set_blocking(); with detached thread that stall is fixed.
-        let fastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_CS, prefs: fastCiphers, label: "inner_crypt_cs")
+        let innerFastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_CS, prefs: innerFastCiphers, label: "inner_crypt_cs")
         d("after inner_crypt_cs")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_SC, prefs: fastCiphers, label: "inner_crypt_sc")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_SC, prefs: innerFastCiphers, label: "inner_crypt_sc")
         d("after inner_crypt_sc")
-        let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "inner_mac_cs")
+        let innerFastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: innerFastMACs, label: "inner_mac_cs")
         d("after inner_mac_cs")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "inner_mac_sc")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: innerFastMACs, label: "inner_mac_sc")
         d("after inner_mac_sc")
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
         d("after inner_kex")
