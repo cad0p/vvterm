@@ -141,6 +141,24 @@ fi
 
 log() { echo "[teleport-server] $*"; }
 
+# macOS ships no GNU `timeout`; emulate it (background + bounded sleep).
+# Only used where a hung child would otherwise wedge the bootstrap.
+if ! command -v timeout >/dev/null 2>&1; then
+  timeout() {
+    local seconds="$1"
+    shift
+    local pid rc killer
+    "$@" &
+    pid=$!
+    ( sleep "${seconds}"; kill "${pid}" 2>/dev/null ) &
+    killer=$!
+    wait "${pid}" 2>/dev/null || rc=$?
+    kill "${killer}" 2>/dev/null || true
+    wait "${killer}" 2>/dev/null || true
+    return "${rc:-0}"
+  }
+fi
+
 # ---------------------------------------------------------------------------
 # install — fetch + extract the binaries (idempotent)
 # ---------------------------------------------------------------------------
