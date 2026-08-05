@@ -1740,6 +1740,10 @@ actor SSHSession {
         logger.info(
             "ssh_handshake_begin fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
         )
+        // Bound the blocking handshake so a stalled transport fails with a
+        // real error instead of hanging the session forever (Teleport's mux
+        // waits for client bytes; a wedged pump would otherwise stall us).
+        libssh2_session_set_timeout(session, 30_000)
         let handshakeResult = libssh2_session_handshake(session, socket)
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
@@ -3045,6 +3049,8 @@ actor SSHSession {
 
         // Blocking mode for the handshake, then non-blocking for I/O.
         libssh2_session_set_blocking(innerSession, 1)
+        // Bound the inner handshake the same way (see outer handshake).
+        libssh2_session_set_timeout(innerSession, 30_000)
 
         // 5. Second handshake to the target node over the bridge FD.
         let handshakeResult = libssh2_session_handshake(innerSession, innerFD)

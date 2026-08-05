@@ -305,6 +305,7 @@ jobs:
             ${{ runner.temp }}/vvterm-teleport/teleport.log
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
             ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
+            ${{ runner.temp }}/sim-vvterm.log
           if-no-files-found: ignore
 
       - name: Upload test results on failure

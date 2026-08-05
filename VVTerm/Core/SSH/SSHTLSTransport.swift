@@ -287,6 +287,20 @@ actor SSHTLSTransport {
             let resumed = OSAllocatedUnfairLock(initialState: false)
 
             connection.stateUpdateHandler = { state in
+                // Diagnose stalls: log every transition (esp. .waiting —
+                // sandbox-denied paths sit there forever).
+                switch state {
+                case .waiting(let error):
+                    self.logger.error("tls_conn_waiting error=\(String(describing: error), privacy: .public)")
+                case .ready:
+                    self.logger.info("tls_conn_ready")
+                case .failed(let error):
+                    self.logger.error("tls_conn_failed error=\(String(describing: error), privacy: .public)")
+                case .cancelled:
+                    self.logger.info("tls_conn_cancelled")
+                default:
+                    break
+                }
                 switch state {
                 case .ready:
                     let already = resumed.withLock { isResumed -> Bool in
@@ -385,6 +399,11 @@ actor SSHTLSTransport {
                 return
             }
             nwToFDBytes += data.count
+            if nwToFDBytes == data.count {
+                // First bytes delivered to libssh2 (the server banner or
+                // proxy response) — the handshake is progressing.
+                log.info("pump_nw_to_fd_first_bytes count=\(data.count) total=\(nwToFDBytes)")
+            }
             // Write all bytes to the pump FD (may need multiple writes).
             var written = 0
             data.withUnsafeBytes { rawBuffer in
@@ -419,6 +438,11 @@ actor SSHTLSTransport {
             }
             let data = Data(bytes: buffer, count: n)
             fdToNWBytes += n
+            if fdToNWBytes == n {
+                // First bytes from libssh2 (its banner) — the handshake is
+                // writing; the pump must forward them to the server.
+                log.info("pump_fd_to_nw_first_bytes count=\(n) total=\(fdToNWBytes)")
+            }
             // NWConnection.send has only a completion-handler form. Bridge to
             // async + treat the completion error as a stop signal.
             let sendError: NWError? = await withCheckedContinuation { (continuation: CheckedContinuation<NWError?, Never>) in
