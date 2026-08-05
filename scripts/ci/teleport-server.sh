@@ -128,12 +128,17 @@ if [ -z "${TELEPORT_PASSWORD}" ]; then
   TELEPORT_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr -d '+/=' | cut -c1-16)"
 fi
 
-# Sudo prefix when the web port needs root and we don't have it.
+# Sudo prefix for root-only operations (binding a privileged web port,
+# tctl access to the root-owned auth data dir on macOS runners). Populate
+# whenever passwordless sudo exists — macOS ships bash 3.2, where expanding
+# an EMPTY array under `set -u` is an unbound-variable error, and the 8443
+# smoke legs must not trip it. Fail hard only when a privileged port
+# actually requires root and none is available.
 SUDO_PREFIX=()
-if [ "${TELEPORT_WEB_PORT}" -lt 1024 ] && [ "$(id -u)" -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ]; then
   if sudo -n true 2>/dev/null; then
     SUDO_PREFIX=(sudo -n)
-  else
+  elif [ "${TELEPORT_WEB_PORT}" -lt 1024 ]; then
     echo "error: web port ${TELEPORT_WEB_PORT} requires root (no passwordless sudo)" >&2
     exit 1
   fi
@@ -248,14 +253,14 @@ cmd_start() {
   # TELEPORT_ALLOW_NO_SECOND_FACTOR: v16 guards `second_factor: off` at cluster
   # init (modules.ErrCannotDisableSecondFactor) unless this dev/test escape
   # hatch is set — see lib/auth/init.go initializeAuthPreference. CI only.
-  "${SUDO_PREFIX[@]}" env TELEPORT_ALLOW_NO_SECOND_FACTOR=yes \
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} env TELEPORT_ALLOW_NO_SECOND_FACTOR=yes \
     nohup "${BIN_DIR}/teleport" start -c "${CONF_FILE}" > "${LOG_FILE}" 2>&1 &
   echo "$!" > "${PID_FILE}"
   # Wait for the auth service to come up (poll tctl status).
   local deadline=$((SECONDS + 90))
   while [ "${SECONDS}" -lt "${deadline}" ]; do
     if cmd_status >/dev/null 2>&1; then
-      log "teleport is up: $("${SUDO_PREFIX[@]}" "${BIN_DIR}/tctl" -c "${CONF_FILE}" status 2>/dev/null | head -1)"
+      log "teleport is up: $(${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "${BIN_DIR}/tctl" -c "${CONF_FILE}" status 2>/dev/null | head -1)"
       return
     fi
     sleep 2
@@ -300,7 +305,7 @@ ensure_local_login_user() {
 
 cmd_bootstrap() {
   ensure_local_login_user
-  local tctl=("${SUDO_PREFIX[@]}" "${BIN_DIR}/tctl" -c "${CONF_FILE}")
+  local tctl=(${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "${BIN_DIR}/tctl" -c "${CONF_FILE}")
 
   # 1. Create the user (inactive) + parse the invite token from the output.
   log "creating user ${TELEPORT_USER} (roles: access,editor; logins: ${TELEPORT_LOGIN})"
@@ -516,7 +521,7 @@ cmd_bootstrap() {
   # tctl runs as root on macOS runners (passwordless sudo), so its output
   # files land root-owned 0600. Hand the fixtures to the runner user or
   # every read below fails with EACCES (Linux/no-sudo: no-op).
-  "${SUDO_PREFIX[@]}" chown -R "$(id -un):$(id -gn)" "${FIXTURES_DIR}"
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} chown -R "$(id -un):$(id -gn)" "${FIXTURES_DIR}"
 
   log "cert: $(head -c 40 "${cert_file}")…"
 
@@ -553,7 +558,7 @@ cmd_bootstrap() {
     done
     # tctl runs as root on macOS runners (passwordless sudo) — hand the
     # fixtures to the runner user before reading them (Linux/no-sudo: no-op).
-    "${SUDO_PREFIX[@]}" chown -R "$(id -un):$(id -gn)" "${FIXTURES_DIR}"
+    ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} chown -R "$(id -un):$(id -gn)" "${FIXTURES_DIR}"
     APP_IDENTITY_CRT="$(cat "${FIXTURES_DIR}/app-identity.crt")"
     APP_IDENTITY_KEY="$(cat "${FIXTURES_DIR}/app-identity.key")"
     APP_IDENTITY_CAS="$(cat "${FIXTURES_DIR}/app-identity.cas")"
@@ -877,7 +882,7 @@ cmd_status() {
     echo "not running (pid ${pid} dead)" >&2
     return 1
   fi
-  if ! "${SUDO_PREFIX[@]}" "${BIN_DIR}/tctl" -c "${CONF_FILE}" status >/dev/null 2>&1; then
+  if ! ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "${BIN_DIR}/tctl" -c "${CONF_FILE}" status >/dev/null 2>&1; then
     echo "pid ${pid} alive but auth not ready" >&2
     return 1
   fi
@@ -892,12 +897,12 @@ cmd_stop() {
   local pid
   pid="$(cat "${PID_FILE}")"
   log "stopping teleport (pid ${pid})"
-  "${SUDO_PREFIX[@]}" kill "${pid}" 2>/dev/null || true
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} kill "${pid}" 2>/dev/null || true
   for _ in 1 2 3 4 5; do
     kill -0 "${pid}" 2>/dev/null || break
     sleep 1
   done
-  kill -0 "${pid}" 2>/dev/null && "${SUDO_PREFIX[@]}" kill -9 "${pid}" 2>/dev/null || true
+  kill -0 "${pid}" 2>/dev/null && ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} kill -9 "${pid}" 2>/dev/null || true
   rm -f "${PID_FILE}"
 }
 
