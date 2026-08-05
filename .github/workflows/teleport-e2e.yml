@@ -236,7 +236,12 @@ jobs:
         uses: ./.github/actions/prepare-xcode-build
         with:
           deriveddata-key-prefix: xcode27-deriveddata
-          deriveddata-restore-keys: xcode27-deriveddata-VVTerm PR CI-
+          # Restore the last Teleport-E2E build first (re-dispatches on the
+          # same branch then only recompile changed files instead of a full
+          # ~10 min rebuild), falling back to the PR CI cache.
+          deriveddata-restore-keys: |
+            xcode27-deriveddata-Teleport E2E-
+            xcode27-deriveddata-VVTerm PR CI-
 
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
@@ -283,7 +288,6 @@ jobs:
               -configuration Debug \
               -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
               -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-              -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
               -only-testing:VVTermTests/TeleportServerIntegrationTests \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 120 \
@@ -330,7 +334,6 @@ jobs:
         with:
           name: teleport-e2e-${{ matrix.second-factor }}-test-results
           path: |
-            ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
             ${{ runner.temp }}/sim-vvterm.log
           if-no-files-found: ignore
