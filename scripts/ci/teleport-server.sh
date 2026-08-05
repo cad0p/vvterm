@@ -512,6 +512,12 @@ cmd_bootstrap() {
     ls -la "${FIXTURES_DIR}" >&2
     exit 1
   fi
+
+  # tctl runs as root on macOS runners (passwordless sudo), so its output
+  # files land root-owned 0600. Hand the fixtures to the runner user or
+  # every read below fails with EACCES (Linux/no-sudo: no-op).
+  "${SUDO_PREFIX[@]}" chown -R "$(id -un):$(id -gn)" "${FIXTURES_DIR}"
+
   log "cert: $(head -c 40 "${cert_file}")…"
 
   # 4. Export the cluster TLS CA (PEM bundle) — the SSH path uses these as
@@ -545,6 +551,9 @@ cmd_bootstrap() {
         exit 1
       fi
     done
+    # tctl runs as root on macOS runners (passwordless sudo) — hand the
+    # fixtures to the runner user before reading them (Linux/no-sudo: no-op).
+    "${SUDO_PREFIX[@]}" chown -R "$(id -un):$(id -gn)" "${FIXTURES_DIR}"
     APP_IDENTITY_CRT="$(cat "${FIXTURES_DIR}/app-identity.crt")"
     APP_IDENTITY_KEY="$(cat "${FIXTURES_DIR}/app-identity.key")"
     APP_IDENTITY_CAS="$(cat "${FIXTURES_DIR}/app-identity.cas")"
