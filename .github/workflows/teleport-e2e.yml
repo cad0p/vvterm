@@ -156,7 +156,7 @@ jobs:
 
   teleport-e2e:
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:

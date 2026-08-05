@@ -488,6 +488,7 @@ extension SSHProxySubsystemTransport {
         // pin it forever. The token is a small Sendable class that the
         // transport flips via cancelPumpSync().
         let cancelToken = PumpCancelToken()
+        let transportLog = Logger.forCategory("SSH-Proxy-Subsystem-Pump")
         let transport = SSHProxySubsystemTransport(
             channelRead: { buf, maxLen in
                 // Retry on EAGAIN until data arrives, EOF, a hard error, or
@@ -496,14 +497,22 @@ extension SSHProxySubsystemTransport {
                 // outer-session mutex (see class doc) — the EAGAIN sleep is
                 // outside the lock so a backpressured channel doesn't stall
                 // keepalives or the FD->channel loop.
+                var eagainSpins = 0
                 while true {
                     if cancelToken.isCancelled { return 0 }  // EOF
                     let n = outerSessionMutex.withLock {
                         libssh2_channel_read_ex(channel, 0, buf, maxLen)
                     }
                     if n == LIBSSH2_ERROR_EAGAIN {
+                        eagainSpins += 1
+                        if eagainSpins == 1_000 {
+                            transportLog.info("proxy_subsystem_channel_read_eagain_spin spins=\(eagainSpins)")
+                        }
                         usleep(1_000)  // 1ms — non-blocking retry
                         continue
+                    }
+                    if n > 0 {
+                        transportLog.info("proxy_subsystem_channel_read_first_bytes count=\(n) spins=\(eagainSpins)")
                     }
                     // n > 0: bytes read. n == 0: EOF. n < 0 (other): hard error
                     // (map to EOF so the pump closes the pumpFD and the inner
@@ -512,14 +521,22 @@ extension SSHProxySubsystemTransport {
                 }
             },
             channelWrite: { buf, len in
+                var eagainSpins = 0
                 while true {
                     if cancelToken.isCancelled { return 0 }
                     let n = outerSessionMutex.withLock {
                         libssh2_channel_write_ex(channel, 0, buf, len)
                     }
                     if n == LIBSSH2_ERROR_EAGAIN {
+                        eagainSpins += 1
+                        if eagainSpins == 1_000 {
+                            transportLog.info("proxy_subsystem_channel_write_eagain_spin spins=\(eagainSpins)")
+                        }
                         usleep(1_000)  // 1ms — non-blocking retry
                         continue
+                    }
+                    if n > 0 {
+                        transportLog.info("proxy_subsystem_channel_write_first_bytes count=\(n) spins=\(eagainSpins)")
                     }
                     return n < 0 ? 0 : n
                 }

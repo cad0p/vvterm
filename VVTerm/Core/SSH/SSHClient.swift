@@ -3032,6 +3032,9 @@ actor SSHSession {
         //    preferences. The target node presents a host cert (same HostCA
         //    as the proxy), so the cert hostkey variants are required here
         //    too — same fork as the outer session.
+        logger.info(
+            "teleport_inner_handshake_begin fd=\(innerFD) target=\(nodeName, privacy: .private(mask: .hash))"
+        )
         guard let innerSession = libssh2_session_init_ex(nil, nil, nil, nil) else {
             shouldInvalidateTransport = true
             throw SSHError.unknown("Failed to create inner libssh2 session")
