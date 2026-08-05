@@ -3078,16 +3078,18 @@ actor SSHSession {
         // prefs because it's on a real TCP connection; inner session on
         // socketpair fd behaves differently.
         d("using libssh2 defaults for inner session")
-        d("creating watchdog")
-        let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
-            d("watchdog sleeping")
-            do { try await Task.sleep(nanoseconds: 35_000_000_000) } catch { d("watchdog cancelled"); return }
-            d("watchdog firing")
-            innerAtomicSocket.interrupt("inner-handshake-watchdog")
+        // Run the blocking inner handshake on a dedicated thread so it
+        // doesn't starve the cooperative pool (which runs the pump tasks).
+        // The handshake can take many seconds; if it blocks a pool thread,
+        // the pumpFDToChannel task never gets a thread and the banner
+        // exchange deadlocks.
+        d("inner_handshake_call_start (detached)")
+        let handshakeResult = await withCheckedContinuation { continuation in
+            Task.detached { [innerSession, innerFD] in
+                let result = libssh2_session_handshake(innerSession, innerFD)
+                continuation.resume(returning: result)
+            }
         }
-        defer { d("defer cancelling watchdog"); innerHandshakeWatchdog.cancel() }
-        d("inner_handshake_call_start")
-        let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
         d("handshake returned \(handshakeResult)")
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
