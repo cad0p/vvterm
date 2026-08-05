@@ -194,6 +194,12 @@ version: v3
 teleport:
   nodename: ${TELEPORT_NODE}
   data_dir: ${DATA_DIR}
+  # The default 'lite' (SQLite) backend serializes writes behind a single
+  # lock; on CI runners its periodic pruning/rotation transactions stall
+  # every other operation for seconds (observed: 37s cert auth + audit
+  # events never flushing). 'dir' (bbolt) has no such contention.
+  storage:
+    type: dir
   log:
     output: stderr
     severity: INFO

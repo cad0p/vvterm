@@ -80,7 +80,7 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
         urlReq.httpMethod = "POST"
         urlReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlReq.httpBody = beginBody
-        let (data, response) = try await URLSession.shared.data(for: urlReq)
+        let (data, response) = try await TeleportTrustSession.session.data(for: urlReq)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? "<binary>"
@@ -114,7 +114,7 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
         urlReq.httpMethod = "POST"
         urlReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlReq.httpBody = finishBody
-        let (data, response) = try await URLSession.shared.data(for: urlReq)
+        let (data, response) = try await TeleportTrustSession.session.data(for: urlReq)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? "<binary>"
