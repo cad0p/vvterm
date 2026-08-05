@@ -106,6 +106,7 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
         let finishReq = LoginFinishReq(
             webauthnChallengeResponse: assertion,
             sshPubKey: Data(sshPubKeyString.utf8),
+            pubKey: Data(sshPubKeyString.utf8),
             ttl: ttl
         )
         let finishBody = try JSONEncoder().encode(finishReq)
