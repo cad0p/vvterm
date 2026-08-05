@@ -3096,25 +3096,17 @@ actor SSHSession {
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
         d("after inner_hostkey")
 
-        // Explicit blocking mode + timeout for inner session (safe now with
-        // detached thread — no more stall at set_blocking).
+        // Explicit blocking mode + timeout for inner session.
         libssh2_session_set_blocking(innerSession, 1)
         d("after set_blocking")
         libssh2_session_set_timeout(innerSession, 60_000)
         d("after set_timeout")
 
-        // Run the blocking inner handshake on a dedicated thread so it
-        // doesn't starve the cooperative pool (which runs the pump tasks).
-        // The handshake can take many seconds; if it blocks a pool thread,
-        // the pumpFDToChannel task never gets a thread and the banner
-        // exchange deadlocks.
-        d("inner_handshake_call_start (detached)")
-        let handshakeResult = await withCheckedContinuation { continuation in
-            Task.detached { [innerSession, innerFD] in
-                let result = libssh2_session_handshake(innerSession, innerFD)
-                continuation.resume(returning: result)
-            }
-        }
+        // Run the inner handshake on the current executor (not detached)
+        // to avoid racing with the pump for the socketpair. The watchdog
+        // (fixed with catch { return }) will interrupt if it stalls.
+        d("inner_handshake_call_start")
+        let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
         d("handshake returned \(handshakeResult)")
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
