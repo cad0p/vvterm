@@ -3068,10 +3068,8 @@ actor SSHSession {
         // Sync file-marker diagnostics (bypasses os_log) so we can trace
         // progress even if the sim's os_log pipeline wedges.
         let diagPath = "/tmp/vvterm-diag-\(getpid()).txt"
-        func diag(_ s: String) { _ = s.withCString { write(3, $0, strlen($0)) } }
-        // Open fd 3 once (append). We leak it intentionally; process dies soon.
         let diagFd = open(diagPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-        func d(_ s: String) { s.withCString { write(diagFd, $0, strlen($0)) }; write(diagFd, "\n", 1) }
+        func d(_ s: String) { s.withCString { Darwin.write(diagFd, $0, strlen($0)) }; Darwin.write(diagFd, "\n", 1) }
         d("after inner_mac_sc")
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
         d("after inner_kex")
