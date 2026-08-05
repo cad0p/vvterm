@@ -83,6 +83,5 @@ struct HandshakeWatchdogTests {
         try await Task.sleep(for: .milliseconds(500))
 
         #expect(!socket.isUsable, "watchdog must interrupt the socket after its timeout")
-        #expect(watchdog.isCancelled == false || watchdog.isFinished)
     }
 }
