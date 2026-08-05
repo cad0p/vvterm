@@ -579,6 +579,8 @@ cmd_bootstrap() {
   local identity_file="${WORK_DIR}/smoke-identity"
   rm -f "${identity_file}"
   "${tctl[@]}" auth sign --user="${TELEPORT_USER}" --out="${identity_file}" >/dev/null
+  # Same root-owned handover as step 4 (macOS runners).
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} chown "$(id -un):$(id -gn)" "${identity_file}"
   local tsh_home="${WORK_DIR}/tsh-home"
   mkdir -p "${tsh_home}"
   local smoke
