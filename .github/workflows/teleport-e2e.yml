@@ -108,12 +108,14 @@ jobs:
         # WebAuthn lib) powers the software credential used by the webauthn
         # leg. Homebrew python is first on arm64 runner PATHs, so pip3
         # targets the same interpreter the script's `python3` resolves to.
+        # --break-system-packages: Homebrew python is PEP 668
+        # externally-managed (observed on the xcode-27 runners).
         run: |
           set -euo pipefail
           for mod in cv2 fido2; do
             if ! python3 -c "import $mod" 2>/dev/null; then
-              python3 -m pip install --user --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)" \
-                || pip3 install --user --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)"
+              python3 -m pip install --user --break-system-packages --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)" \
+                || pip3 install --user --break-system-packages --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)"
             fi
           done
           python3 -c 'import cv2, fido2; print("cv2", cv2.__version__, "| fido2", fido2.__version__)'
@@ -188,12 +190,14 @@ jobs:
         # Required only for the webauthn leg (the harness provisions the
         # server-side MFA credential + runs the headless/passwordless
         # smokes with the Python software authenticator).
+        # --break-system-packages: Homebrew python is PEP 668
+        # externally-managed (observed on the xcode-27 runners).
         if: matrix.second-factor == 'webauthn'
         run: |
           set -euo pipefail
           if ! python3 -c 'import fido2' 2>/dev/null; then
-            python3 -m pip install --user --quiet fido2 \
-              || pip3 install --user --quiet fido2
+            python3 -m pip install --user --break-system-packages --quiet fido2 \
+              || pip3 install --user --break-system-packages --quiet fido2
           fi
           python3 -c 'import fido2; print("fido2", fido2.__version__)'
 
