@@ -253,6 +253,15 @@ jobs:
           # shellcheck disable=SC1091
           source "$RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env"
           set +a
+          # Plain env vars do NOT reach the simulator test process — xcodebuild
+          # forwards only TEST_RUNNER_-prefixed vars to the test runner
+          # (prefix stripped; the PR CI UI shards use the xctestrun plist
+          # route instead, which needs build-for-testing). Re-export every
+          # fixture var with the prefix so the .enabled(if:) gates evaluate
+          # true in the runner.
+          for var in $(compgen -v | grep '^VVTERM_TELEPORT_' || true); do
+            export "TEST_RUNNER_${var}=${!var}"
+          done
           echo "fixtures: host=$VVTERM_TELEPORT_HOST port=$VVTERM_TELEPORT_PORT node=$VVTERM_TELEPORT_NODE cluster=$VVTERM_TELEPORT_CLUSTER_NAME cert=$(printf '%s' "$VVTERM_TELEPORT_CERT" | head -c 30)…"
 
           # CODE_SIGNING_ALLOWED=NO (PR CI) leaves the sim app UNSIGNED —
