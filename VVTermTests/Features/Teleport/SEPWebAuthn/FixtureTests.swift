@@ -309,22 +309,25 @@ final class FixtureTests: XCTestCase {
         let missing = try signer.loadKey(credentialID: Data((0..<32).map { _ in UInt8.random(in: 0...255) }))
         XCTAssertNil(missing)
 
-        // sign(digest:with:) — pre-hashed digest, DER ECDSA signature that
-        // verifies against the public key with CryptoKit (the server does
-        // the same single-hash verification).
+        // sign(digest:with:) — pre-hashed digest, DER ECDSA signature. Verify
+        // with the symmetric SecKeyVerifySignature + the SAME Digest
+        // algorithm (CryptoKit's isValidSignature(_:for:) re-hashes its
+        // argument, which would double-hash the pre-hashed digest). The
+        // server does the same single-hash verification.
         let digest = Data(SHA256.hash(data: Data("teleport-m4-ceremony-message".utf8)))
         let signature = try signer.sign(digest: digest, with: secKey)
         guard let publicKey = SecKeyCopyPublicKey(secKey) else {
             return XCTFail("SecKeyCopyPublicKey failed")
         }
-        var repError: Unmanaged<CFError>?
-        guard let rawPub = SecKeyCopyExternalRepresentation(publicKey, &repError) else {
-            return XCTFail("SecKeyCopyExternalRepresentation failed")
-        }
-        let p256Key = try P256.Signing.PublicKey(x963Representation: rawPub as Data)
-        let derSig = try P256.Signing.ECDSASignature(derRepresentation: signature)
+        var verifyError: Unmanaged<CFError>?
         XCTAssertTrue(
-            p256Key.isValidSignature(derSig, for: digest),
+            SecKeyVerifySignature(
+                publicKey,
+                .ecdsaSignatureDigestX962SHA256,
+                digest as CFData,
+                signature as CFData,
+                &verifyError
+            ),
             "SEPKeySigning signature failed to verify against the public key"
         )
     }
