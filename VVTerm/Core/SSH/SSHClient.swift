@@ -1744,6 +1744,14 @@ actor SSHSession {
         // real error instead of hanging the session forever (Teleport's mux
         // waits for client bytes; a wedged pump would otherwise stall us).
         libssh2_session_set_timeout(session, 30_000)
+        // Watchdog: libssh2's own timeout can fail to fire (e.g. when the
+        // transport never EAGAINs); interrupt the socket so the C call
+        // returns instead of wedging the caller's thread indefinitely.
+        let handshakeWatchdog = Task.detached { [atomicSocket] in
+            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            atomicSocket.interrupt()
+        }
+        defer { handshakeWatchdog.cancel() }
         let handshakeResult = libssh2_session_handshake(session, socket)
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
@@ -3054,6 +3062,13 @@ actor SSHSession {
         libssh2_session_set_blocking(innerSession, 1)
         // Bound the inner handshake the same way (see outer handshake).
         libssh2_session_set_timeout(innerSession, 30_000)
+        // Watchdog: interrupt the inner socket if the handshake stalls so
+        // the blocking C call returns (see outer handshake watchdog).
+        let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
+            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            innerAtomicSocket.interrupt()
+        }
+        defer { innerHandshakeWatchdog.cancel() }
 
         // 5. Second handshake to the target node over the bridge FD.
         let handshakeResult = libssh2_session_handshake(innerSession, innerFD)

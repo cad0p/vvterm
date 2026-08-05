@@ -271,18 +271,34 @@ jobs:
           # sockets like the connector tests are not gated). Ad-hoc sign so
           # com.apple.security.network.client from VVTerm.entitlements is
           # embedded (sim needs no provisioning profile).
-          xcodebuild test \
-            -scheme VVTermUnitTests \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            -only-testing:VVTermTests/TeleportServerIntegrationTests \
-            -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 120 \
-            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
-            IgnoreFileSystemDeviceInodeChanges=YES \
-            | tee "$RUNNER_TEMP/test.log"
+          #
+          # Hard step timeout: the integration tests can wedge the app's
+          # main thread in a blocking C call that no Swift timeout can
+          # preempt — without this the whole job hangs to its timeout-minutes.
+          # With job control (set -m) the pipeline runs in its own process
+          # group, so kill -9 -$! reaps xcodebuild AND tee.
+          set -m
+          ( xcodebuild test \
+              -scheme VVTermUnitTests \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+              -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+              -only-testing:VVTermTests/TeleportServerIntegrationTests \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 120 \
+              CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
+              IgnoreFileSystemDeviceInodeChanges=YES \
+              | tee "$RUNNER_TEMP/test.log" ) &
+          XPID=$!
+          ( sleep 1500 && echo "::error::xcodebuild test exceeded 25m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
+          WPID=$!
+          set +e
+          wait "$XPID"
+          RC=$?
+          set -e
+          kill "$WPID" 2>/dev/null || true
+          exit "$RC"
 
       - name: Capture simulator logs (diagnostics)
         # os_log from the app under test — NWConnection state, TLS transport
