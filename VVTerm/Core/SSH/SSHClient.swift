@@ -1,5 +1,6 @@
 import Foundation
 import os.log
+import Darwin
 import MoshCore
 import MoshBootstrap
 
@@ -3064,32 +3065,33 @@ actor SSHSession {
         let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "inner_mac_cs")
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "inner_mac_sc")
+        // Sync file-marker diagnostics (bypasses os_log) so we can trace
+        // progress even if the sim's os_log pipeline wedges.
+        let diagPath = "/tmp/vvterm-diag-\(getpid()).txt"
+        func diag(_ s: String) { _ = s.withCString { write(3, $0, strlen($0)) } }
+        // Open fd 3 once (append). We leak it intentionally; process dies soon.
+        let diagFd = open(diagPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        func d(_ s: String) { s.withCString { write(diagFd, $0, strlen($0)) }; write(diagFd, "\n", 1) }
+        d("after inner_mac_sc")
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
+        d("after inner_kex")
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
-
-        // Blocking mode for the handshake, then non-blocking for I/O.
+        d("after inner_hostkey")
         libssh2_session_set_blocking(innerSession, 1)
-        // Bound the inner handshake the same way (see outer handshake).
+        d("after set_blocking")
         libssh2_session_set_timeout(innerSession, 30_000)
-        // Watchdog: interrupt the inner socket if the handshake stalls so
-        // the blocking C call returns (see outer handshake watchdog).
+        d("after set_timeout")
+        d("creating watchdog")
         let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
-            // Same disarming semantics as the outer handshake watchdog:
-            // cancellation (the `defer` below) must NOT fall through to
-            // interrupt() — the inner session is live once the handshake
-            // returns.
-            do {
-                try await Task.sleep(nanoseconds: 35_000_000_000)
-            } catch {
-                return  // cancelled — handshake completed; disarm
-            }
+            d("watchdog sleeping")
+            do { try await Task.sleep(nanoseconds: 35_000_000_000) } catch { d("watchdog cancelled"); return }
+            d("watchdog firing")
             innerAtomicSocket.interrupt("inner-handshake-watchdog")
         }
-        defer { innerHandshakeWatchdog.cancel() }
-
-        // 5. Second handshake to the target node over the bridge FD.
-        logger.info("inner_handshake_call_start fd=\(innerFD)")
+        defer { d("defer cancelling watchdog"); innerHandshakeWatchdog.cancel() }
+        d("inner_handshake_call_start")
         let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
+        d("handshake returned \(handshakeResult)")
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
             var errmsgLen: Int32 = 0
