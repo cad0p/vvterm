@@ -255,6 +255,13 @@ jobs:
           set +a
           echo "fixtures: host=$VVTERM_TELEPORT_HOST port=$VVTERM_TELEPORT_PORT node=$VVTERM_TELEPORT_NODE cluster=$VVTERM_TELEPORT_CLUSTER_NAME cert=$(printf '%s' "$VVTERM_TELEPORT_CERT" | head -c 30)…"
 
+          # CODE_SIGNING_ALLOWED=NO (PR CI) leaves the sim app UNSIGNED —
+          # no entitlements — and the iOS sim sandbox parks Network.framework
+          # connections of unentitled apps in .waiting(.waitingForNetwork)
+          # forever (the Teleport TLS path is NWConnection-based; raw POSIX
+          # sockets like the connector tests are not gated). Ad-hoc sign so
+          # com.apple.security.network.client from VVTerm.entitlements is
+          # embedded (sim needs no provisioning profile).
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \
@@ -262,9 +269,23 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:VVTermTests/TeleportServerIntegrationTests \
-            CODE_SIGNING_ALLOWED=NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/test.log"
+
+      - name: Capture simulator logs (diagnostics)
+        # os_log from the app under test — NWConnection state, TLS transport
+        # logs, sandbox denials. Needed to diagnose runner-side hangs.
+        if: always()
+        run: |
+          set +e
+          UDID=$(xcrun simctl list devices booted -j 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print([dev["udid"] for devs in d["devices"].values() for dev in devs if dev["state"]=="Booted"][0])')
+          xcrun simctl spawn "$UDID" log show --last 45m \
+            --predicate 'processImagePath CONTAINS "VVTerm"' \
+            > "$RUNNER_TEMP/sim-vvterm.log" 2>&1 || true
+          echo "captured $(wc -l < "$RUNNER_TEMP/sim-vvterm.log") lines"
 
       - name: Upload teleport logs (always)
         if: always()
@@ -285,6 +306,7 @@ jobs:
           path: |
             ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
+            ${{ runner.temp }}/sim-vvterm.log
           if-no-files-found: ignore
 
       - name: Stop Teleport (always)
