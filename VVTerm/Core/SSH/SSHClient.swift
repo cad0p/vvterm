@@ -1748,7 +1748,16 @@ actor SSHSession {
         // transport never EAGAINs); interrupt the socket so the C call
         // returns instead of wedging the caller's thread indefinitely.
         let handshakeWatchdog = Task.detached { [atomicSocket] in
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            // Cancellation (the `defer` below, when the handshake completes)
+            // must DISARM the watchdog. A `try?` would swallow the
+            // CancellationError and fall through to interrupt() — killing
+            // the just-established connection (dispatch 9: pump EOF + .notConnected
+            // 0.8ms after "Connected to").
+            do {
+                try await Task.sleep(nanoseconds: 35_000_000_000)
+            } catch {
+                return  // cancelled — handshake completed; disarm
+            }
             atomicSocket.interrupt()
         }
         defer { handshakeWatchdog.cancel() }
@@ -3065,7 +3074,15 @@ actor SSHSession {
         // Watchdog: interrupt the inner socket if the handshake stalls so
         // the blocking C call returns (see outer handshake watchdog).
         let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            // Same disarming semantics as the outer handshake watchdog:
+            // cancellation (the `defer` below) must NOT fall through to
+            // interrupt() — the inner session is live once the handshake
+            // returns.
+            do {
+                try await Task.sleep(nanoseconds: 35_000_000_000)
+            } catch {
+                return  // cancelled — handshake completed; disarm
+            }
             innerAtomicSocket.interrupt()
         }
         defer { innerHandshakeWatchdog.cancel() }
