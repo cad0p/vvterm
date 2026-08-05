@@ -414,6 +414,7 @@ actor SSHProxySubsystemTransport {
     /// `channelWrite` closure). Loops until read returns EOF or the task is
     /// cancelled.
     nonisolated private func pumpFDToChannel(pair: SocketPair, log: Logger) async {
+        log.info("pump_fd_to_channel_start pumpFD=\(pair.pumpFD)")
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         var fdToChannelBytes: Int = 0
@@ -423,6 +424,9 @@ actor SSHProxySubsystemTransport {
                 // EOF or error — stop sending.
                 log.diagInfo("SSH-Proxy-Subsystem-Pump", "pump_fd_to_channel_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToChannelBytes)")
                 return
+            }
+            if fdToChannelBytes == 0 {
+                log.info("pump_fd_to_channel_read_first bytes=\(n)")
             }
             fdToChannelBytes += n
             // Write all bytes to the channel (the closure handles

@@ -295,13 +295,28 @@ jobs:
               IgnoreFileSystemDeviceInodeChanges=YES \
               | tee "$RUNNER_TEMP/test.log" ) &
           XPID=$!
-          ( sleep 1500 && echo "::error::xcodebuild test exceeded 25m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
+          # Sampler: while xcodebuild runs, capture the app's thread stacks
+          # every 30s so a wedge (blocked C call, starved pool, wedged
+          # os_log) can be diagnosed post-mortem from the artifact.
+          (
+            mkdir -p "$RUNNER_TEMP/samples"
+            for i in $(seq 1 40); do
+              PID=$(pgrep -x VVTerm | head -1 || true)
+              if [ -n "${PID:-}" ]; then
+                sample "$PID" 2 -file "$RUNNER_TEMP/samples/sample-$i.txt" >/dev/null 2>&1 || true
+              fi
+              sleep 30
+            done
+          ) &
+          SPID=$!
+          ( sleep 600 && echo "::error::xcodebuild test exceeded 10m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
           WPID=$!
           set +e
           wait "$XPID"
           RC=$?
           set -e
           kill "$WPID" 2>/dev/null || true
+          kill "$SPID" 2>/dev/null || true
           exit "$RC"
 
       - name: Capture simulator logs (diagnostics)
@@ -336,6 +351,7 @@ jobs:
           path: |
             ${{ runner.temp }}/test.log
             ${{ runner.temp }}/sim-vvterm.log
+            ${{ runner.temp }}/samples
           if-no-files-found: ignore
 
       - name: Stop Teleport (always)

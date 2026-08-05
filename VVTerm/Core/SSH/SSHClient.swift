@@ -1630,7 +1630,7 @@ actor SSHSession {
 
     /// Interrupt socket I/O from any thread; actor-owned cleanup performs the final close.
     nonisolated func abort() {
-        atomicSocket.interrupt()
+        atomicSocket.interrupt("abort")
     }
 
     #if DEBUG
@@ -1758,7 +1758,7 @@ actor SSHSession {
             } catch {
                 return  // cancelled — handshake completed; disarm
             }
-            atomicSocket.interrupt()
+            atomicSocket.interrupt("handshake-watchdog")
         }
         defer { handshakeWatchdog.cancel() }
         let handshakeResult = libssh2_session_handshake(session, socket)
@@ -2122,8 +2122,8 @@ actor SSHSession {
         ioTask = nil
         stopInnerIOLoop()
         failAllExecRequests(error: SSHError.notConnected)
-        atomicSocket.interrupt()
-        innerAtomicSocket.interrupt()
+        atomicSocket.interrupt("disconnect-outer")
+        innerAtomicSocket.interrupt("disconnect-inner")
         // Synchronously stop the bridge transport's pump so it stops
         // reading/writing the outer proxy-subsystem channel (the outer
         // session is freed next by cleanupLibssh2). The full actor-isolated
@@ -2233,7 +2233,7 @@ actor SSHSession {
         // cleanupLibssh2 because its lifecycle mirrors the outer socket's,
         // which is owned by AtomicSocket).
         if let transport = tlsTransport {
-            atomicSocket.interrupt()  // shutdown(libssh2FD) unblocks libssh2 I/O
+            atomicSocket.interrupt("cleanup-libssh2")  // shutdown(libssh2FD) unblocks libssh2 I/O
             // Detach the transport close so `cleanup()` stays synchronous.
             // The Task captures `transport` strongly, so it lives until close()
             // completes even though `tlsTransport` is nilled below. This is
@@ -2243,7 +2243,7 @@ actor SSHSession {
             socket = -1
         } else {
             // Close socket first to abort any blocking I/O.
-            atomicSocket.interrupt()
+            atomicSocket.interrupt("cleanup-libssh2-2")
             socket = -1
         }
         connectedPeerAddress = nil
@@ -3083,11 +3083,12 @@ actor SSHSession {
             } catch {
                 return  // cancelled — handshake completed; disarm
             }
-            innerAtomicSocket.interrupt()
+            innerAtomicSocket.interrupt("inner-handshake-watchdog")
         }
         defer { innerHandshakeWatchdog.cancel() }
 
         // 5. Second handshake to the target node over the bridge FD.
+        logger.info("inner_handshake_call_start fd=\(innerFD)")
         let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
@@ -5390,11 +5391,20 @@ final class AtomicSocket: @unchecked Sendable {
 
     /// Wake blocking socket I/O without releasing the descriptor. This avoids
     /// descriptor reuse while libssh2 may still be returning from a native call.
-    nonisolated func interrupt() {
+    nonisolated func interrupt(_ label: String = "") {
+        let logger = Logger.forCategory("SSHSession")
         lock.withLock {
-            guard case .open(let socket) = state else { return }
+            guard case .open(let socket) = state else {
+                if !label.isEmpty {
+                    logger.info("atomic_socket_interrupt_skipped label=\(label, privacy: .public) socket=not_open")
+                }
+                return
+            }
             Darwin.shutdown(socket, SHUT_RDWR)
             state = .interrupted(socket)
+            if !label.isEmpty {
+                logger.info("atomic_socket_interrupt label=\(label, privacy: .public) socket=\(socket)")
+            }
         }
     }
 
