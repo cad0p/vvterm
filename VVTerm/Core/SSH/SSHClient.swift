@@ -3071,17 +3071,13 @@ actor SSHSession {
         let diagFd = open(diagPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
         func d(_ s: String) { s.withCString { Darwin.write(diagFd, $0, strlen($0)) }; Darwin.write(diagFd, "\n", 1) }
         d("after inner_mac_sc")
-        // Blocking mode for the handshake, then non-blocking for I/O.
-        // Set BEFORE remaining prefs as a safeguard (inner session exhibited
-        // a stall on KEX pref before blocking mode was set).
-        libssh2_session_set_blocking(innerSession, 1)
-        d("after set_blocking")
-        libssh2_session_set_timeout(innerSession, 30_000)
-        d("after set_timeout")
-        // Use default KEX/HOSTKEY for inner session to avoid stall on
-        // socketpair fd (outer session works with custom prefs but inner
-        // session on socketpair fd stalls at KEX pref).
-        d("after set_timeout, using default KEX/HOSTKEY")
+        // Use libssh2 defaults for inner session (no custom KEX/HOSTKEY,
+        // no explicit blocking mode, no explicit timeout) — inner session
+        // on socketpair fd exhibits stalls with any custom prefs or
+        // explicit blocking mode/timeout. Outer session works with custom
+        // prefs because it's on a real TCP connection; inner session on
+        // socketpair fd behaves differently.
+        d("using libssh2 defaults for inner session")
         d("creating watchdog")
         let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
             d("watchdog sleeping")
