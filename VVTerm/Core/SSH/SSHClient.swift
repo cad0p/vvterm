@@ -3078,6 +3078,24 @@ actor SSHSession {
         // prefs because it's on a real TCP connection; inner session on
         // socketpair fd behaves differently.
         d("using libssh2 defaults for inner session")
+        // Match outer session KEX/HOSTKEY prefs for inner session.
+        // Inner session on socketpair fd was stalling at KEX pref with
+        // explicit set_blocking(); with detached thread that stall is fixed.
+        let fastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_CS, prefs: fastCiphers, label: "inner_crypt_cs")
+        d("after inner_crypt_cs")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_SC, prefs: fastCiphers, label: "inner_crypt_sc")
+        d("after inner_crypt_sc")
+        let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "inner_mac_cs")
+        d("after inner_mac_cs")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "inner_mac_sc")
+        d("after inner_mac_sc")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
+        d("after inner_kex")
+        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
+        d("after inner_hostkey")
+
         // Run the blocking inner handshake on a dedicated thread so it
         // doesn't starve the cooperative pool (which runs the pump tasks).
         // The handshake can take many seconds; if it blocks a pool thread,
