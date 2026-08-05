@@ -186,7 +186,7 @@ auth_service:
     second_factor: ${TELEPORT_SECOND_FACTOR}
     local_auth: "yes"
 EOF
-  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ] || [ "${TELEPORT_SECOND_FACTOR}" = "optional" ]; then
+  if [ "${TELEPORT_SECOND_FACTOR}" = "webauthn" ]; then
     cat >> "${CONF_FILE}" <<EOF2
     webauthn:
       # Software-signer ceremony origin is https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT};
