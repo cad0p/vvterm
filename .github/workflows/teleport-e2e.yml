@@ -118,7 +118,7 @@ jobs:
                 || pip3 install --user --break-system-packages --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)"
             fi
           done
-          python3 -c 'import cv2, fido2; print("cv2", cv2.__version__, "| fido2", fido2.__version__)'
+          python3 -c 'import cv2; import importlib.metadata as m; print("cv2", cv2.__version__, "| fido2", m.version("fido2"))'
 
       - name: Start Teleport cluster (second_factor=${{ matrix.second-factor }})
         run: |
@@ -199,7 +199,7 @@ jobs:
             python3 -m pip install --user --break-system-packages --quiet fido2 \
               || pip3 install --user --break-system-packages --quiet fido2
           fi
-          python3 -c 'import fido2; print("fido2", fido2.__version__)'
+          python3 -c 'import importlib.metadata as m; print("fido2", m.version("fido2"))'
 
       - name: Start Teleport cluster (TLS routing on :443, ${{ matrix.second-factor }})
         run: |
