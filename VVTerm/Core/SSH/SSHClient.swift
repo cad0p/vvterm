@@ -3096,6 +3096,13 @@ actor SSHSession {
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
         d("after inner_hostkey")
 
+        // Explicit blocking mode + timeout for inner session (safe now with
+        // detached thread — no more stall at set_blocking).
+        libssh2_session_set_blocking(innerSession, 1)
+        d("after set_blocking")
+        libssh2_session_set_timeout(innerSession, 60_000)
+        d("after set_timeout")
+
         // Run the blocking inner handshake on a dedicated thread so it
         // doesn't starve the cooperative pool (which runs the pump tasks).
         // The handshake can take many seconds; if it blocks a pool thread,
