@@ -228,20 +228,28 @@ jobs:
       - name: Confirm server health
         run: bash scripts/ci/teleport-server.sh status
 
+      - name: Restore e2e DerivedData cache (explicit)
+        # The irgaly/xcode-cache restore has missed on every e2e run (both
+        # its own namespace and the PR CI fallback: "DerivedData cache not
+        # found" in 0.057s even with matching entries), forcing a full
+        # ~9 min rebuild each dispatch. Restore explicitly with a simple
+        # space-free key; the save step below persists even when the job
+        # fails (irgaly skips saving on failed jobs, so the e2e namespace
+        # never accumulated entries).
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/DerivedData
+          key: e2e-deriveddata-${{ github.sha }}
+          restore-keys: |
+            e2e-deriveddata-
+
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
-        # Shares the xcode27-deriveddata cache namespace with PR CI, so a
-        # fresh scheduled run restores the last PR CI build products and
-        # skips most recompilation. Restore keys fall back to the PR CI
-        # workflow's cache entries.
         uses: ./.github/actions/prepare-xcode-build
         with:
           deriveddata-key-prefix: xcode27-deriveddata
-          # Restore the last Teleport-E2E build first (re-dispatches on the
-          # same branch then only recompile changed files instead of a full
-          # ~10 min rebuild), falling back to the PR CI cache.
-          deriveddata-restore-keys: |
-            xcode27-deriveddata-Teleport E2E-
-            xcode27-deriveddata-VVTerm PR CI-
+          # PR CI fallback only — the e2e namespace is handled by the
+          # explicit restore/save steps above.
+          deriveddata-restore-keys: xcode27-deriveddata-VVTerm PR CI-
 
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
@@ -318,6 +326,17 @@ jobs:
           kill "$WPID" 2>/dev/null || true
           kill "$SPID" 2>/dev/null || true
           exit "$RC"
+
+      - name: Save e2e DerivedData cache (even on failure)
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/DerivedData
+          key: e2e-deriveddata-${{ github.sha }}
+          # save-always: persist the build products even though the e2e
+          # jobs fail while the M1 bug is open — the next dispatch then
+          # recompiles only the changed files.
+          save-always: true
 
       - name: Capture simulator logs (diagnostics)
         # os_log from the app under test — NWConnection state, TLS transport
