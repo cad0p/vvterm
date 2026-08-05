@@ -36,6 +36,7 @@
 import XCTest
 @testable import VVTerm
 import CryptoKit
+import Security
 
 final class FixtureTests: XCTestCase {
 
@@ -283,5 +284,58 @@ final class FixtureTests: XCTestCase {
         // equal the original credential ID bytes.
         let decoded = Data(base64URLEncoded: credIDString)
         XCTAssertEqual(decoded, credID, "credential ID base64url decode failed")
+    }
+
+    // MARK: - TeleportSEPSigning conformance (issue #83 M4)
+
+    func testSoftwareSigner_sepKeySigningLifecycleRoundTrip() throws {
+        // The CI integration test injects a `SoftwareSigner` as `any
+        // TeleportSEPSigning` into the registration + login coordinators
+        // (the app's Phase-2/Phase-3 ceremonies). This test locks in the
+        // `SEPKeySigning` lifecycle the coordinators rely on: createKey
+        // (SecKey) -> loadKey returns the same key -> sign(digest:with:)
+        // produces a signature that verifies against the public key.
+        let signer = SoftwareSigner()
+        let credentialID = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+
+        // createKey(credentialID:) -> loadKey(credentialID:) round-trip.
+        let secKey = try signer.createKey(credentialID: credentialID)
+        let loaded = try signer.loadKey(credentialID: credentialID)
+        XCTAssertNotNil(loaded, "loadKey must return the key created by createKey")
+        XCTAssertEqual(loaded, secKey)
+
+        // A never-created credential ID returns nil (mirrors the real
+        // signer's errSecItemNotFound -> nil), not an error.
+        let missing = try signer.loadKey(credentialID: Data((0..<32).map { _ in UInt8.random(in: 0...255) }))
+        XCTAssertNil(missing)
+
+        // sign(digest:with:) — pre-hashed digest, DER ECDSA signature. Verify
+        // with the symmetric SecKeyVerifySignature + the SAME Digest
+        // algorithm (CryptoKit's isValidSignature(_:for:) re-hashes its
+        // argument, which would double-hash the pre-hashed digest). The
+        // server does the same single-hash verification.
+        let digest = Data(SHA256.hash(data: Data("teleport-m4-ceremony-message".utf8)))
+        let signature = try signer.sign(digest: digest, with: secKey)
+        guard let publicKey = SecKeyCopyPublicKey(secKey) else {
+            return XCTFail("SecKeyCopyPublicKey failed")
+        }
+        var verifyError: Unmanaged<CFError>?
+        XCTAssertTrue(
+            SecKeyVerifySignature(
+                publicKey,
+                .ecdsaSignatureDigestX962SHA256,
+                digest as CFData,
+                signature as CFData,
+                &verifyError
+            ),
+            "SEPKeySigning signature failed to verify against the public key"
+        )
+    }
+
+    func testSoftwareSigner_satisfiesTeleportSEPSigning() {
+        // Compile-time + type-level lock: the coordinators take `any
+        // TeleportSEPSigning`, so the software signer must conform.
+        let signer: any TeleportSEPSigning = SoftwareSigner()
+        XCTAssertEqual(signer.label, "software")
     }
 }

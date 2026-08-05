@@ -1,0 +1,288 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Teleport E2E — real Teleport server + real SSH stack integration tests
+# (issue #83: milestone M1 = SSH path, M2 = TOTP server capability).
+#
+# What this verifies that PR CI cannot:
+#   - a REAL Teleport cluster (auth + proxy + node, TLS Routing on :443)
+#     running on the same macOS runner as the tests
+#   - the app's real SSH path end-to-end: SSHTLSTransport (TLS + ALPN
+#     teleport-proxy-ssh), the `proxy:<node>:0` subsystem, outer + inner
+#     libssh2 handshakes, and exec through the target node — using a
+#     server-minted cert (tctl auth sign), the same cert shape the app's
+#     Phase-1 bootstrap produces
+#   - the TOTP provisioning + login chain on an `otp` cluster and the
+#     WebAuthn chains on a `webauthn` cluster (server-smoke matrix job):
+#     registerchallenge → QR decode (opencv-python-headless) → password PUT
+#     with second_factor_token → sessions/web login; plus the software-key
+#     registration, password+WebAuthn login, headless approval, and
+#     passwordless login (scripts/ci/teleport-webauthn.py + fido2)
+#
+# Why dispatch/schedule and not PR CI:
+#   - PR CI is capped at 5 concurrent macOS jobs (build + unit-tests + 4
+#     UI shards) with a ~20m wall-clock budget (AGENTS.md). A per-PR
+#     teleport job would queue and add wall-clock to every PR.
+#   - The tests themselves ARE part of VVTermTests (env-gated: they `skip`
+#     when VVTERM_TELEPORT_CERT is absent), so they cost ~0s in PR CI and
+#     only execute here, where the env fixtures are present.
+#   - schedule keeps the real-server path exercised against main without
+#     manual action; workflow_dispatch allows ad-hoc runs on any branch.
+#
+# Topology constraint: GitHub Actions jobs on different runners cannot
+# reach each other, and the iOS simulator shares the host loopback — so
+# Teleport MUST run on the same macOS runner as the tests (it cannot be
+# hosted on an Ubuntu runner). Teleport publishes darwin-arm64 binaries
+# (pinned v16.4.0 — v17 does not publish darwin). GH macOS runners have
+# passwordless sudo, which the server script uses to bind :443.
+#
+# Server lifecycle: scripts/ci/teleport-server.sh
+#   install   — download + extract teleport/tsh/tctl (cached by version)
+#   start     — write all-in-one config, launch `teleport start` in the
+#               background (sudo for the <1024 web port)
+#   bootstrap — create ci-user, complete the invite over the webapi
+#               (non-interactive password set), mint the SSH cert with
+#               `tctl auth sign --format=openssh`, export the cluster TLS
+#               CA, run a tsh ssh smoke test through the TLS-routing proxy
+#               → writes $RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env
+#
+# The test step sources that env file (PEM fixtures + server coordinates)
+# into the xcodebuild process; env vars propagate to the simulator test
+# process (precedent: VVTERM_UNREACHABLE_TEST_HOST in the PR CI
+# unit-tests job).
+#
+# See: https://github.com/cad0p/vvterm/issues/83
+
+name: Teleport E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly Sunday 02:00 UTC — exercise the real-server path against main.
+    - cron: '0 2 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teleport-e2e
+  cancel-in-progress: true
+
+jobs:
+  # Server-only smoke matrix: boots a cluster and completes the full
+  # bootstrap for each MFA mode (M1: off, M2: otp, M3: webauthn) WITHOUT
+  # building the app (~4-6 min/job vs ~15 min for the xcodebuild path). The
+  # otp leg exercises the TOTP provisioning chain (registerchallenge → QR
+  # decode → password PUT with second_factor_token → sessions/web login);
+  # the webauthn leg exercises software-key registration → password+WebAuthn
+  # login → headless approval → passwordless login — the same webapi
+  # machinery the app's login flows use. Runs on a high web port (no sudo
+  # needed — nothing binds :443 here).
+  server-smoke:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        second-factor: ['off', 'otp', 'webauthn']
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Cache Teleport binaries
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/vvterm-teleport/bin
+          key: teleport-v16.4.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Teleport binaries
+        run: bash scripts/ci/teleport-server.sh install
+
+      - name: Install Python deps (QR decoder + fido2 WebAuthn signer)
+        # opencv-python-headless is required only for the otp leg (Teleport
+        # returns the TOTP secret as a QR); fido2 (Yubico's pure-Python
+        # WebAuthn lib) powers the software credential used by the webauthn
+        # leg. Homebrew python is first on arm64 runner PATHs, so pip3
+        # targets the same interpreter the script's `python3` resolves to.
+        run: |
+          set -euo pipefail
+          for mod in cv2 fido2; do
+            if ! python3 -c "import $mod" 2>/dev/null; then
+              python3 -m pip install --user --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)" \
+                || pip3 install --user --quiet "$([ $mod = cv2 ] && echo opencv-python-headless || echo fido2)"
+            fi
+          done
+          python3 -c 'import cv2, fido2; print("cv2", cv2.__version__, "| fido2", fido2.__version__)'
+
+      - name: Start Teleport cluster (second_factor=${{ matrix.second-factor }})
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          bash scripts/ci/teleport-server.sh start
+
+      - name: Bootstrap (webapi invite + MFA provisioning + cert + smokes)
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          bash scripts/ci/teleport-server.sh bootstrap
+
+      - name: Confirm server health
+        run: bash scripts/ci/teleport-server.sh status
+
+      - name: Upload teleport logs (always)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: teleport-server-smoke-${{ matrix.second-factor }}-logs
+          path: |
+            ${{ runner.temp }}/vvterm-teleport/teleport.log
+            ${{ runner.temp }}/vvterm-teleport/teleport.yaml
+            ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
+          if-no-files-found: ignore
+
+      - name: Stop Teleport (always)
+        if: always()
+        run: TELEPORT_WEB_PORT=8443 bash scripts/ci/teleport-server.sh stop || true
+
+  teleport-e2e:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # off — M1: the app's SSH path against a no-MFA cluster.
+        # webauthn — M4: additionally drives the app's real Phase-2
+        # registration + Phase-3 passwordless ceremonies (env-gated tests
+        # self-skip on the leg they don't belong to).
+        second-factor: ['off', 'webauthn']
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Cache Teleport binaries
+        # The tarball is ~100MB; the script skips the download when
+        # $BIN_DIR/teleport exists, so cache the extracted binaries keyed
+        # on the pinned version + runner arch.
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/vvterm-teleport/bin
+          key: teleport-v16.4.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Teleport binaries
+        run: bash scripts/ci/teleport-server.sh install
+
+      - name: Install Python deps (fido2 WebAuthn signer)
+        # Required only for the webauthn leg (the harness provisions the
+        # server-side MFA credential + runs the headless/passwordless
+        # smokes with the Python software authenticator).
+        if: matrix.second-factor == 'webauthn'
+        run: |
+          set -euo pipefail
+          if ! python3 -c 'import fido2' 2>/dev/null; then
+            python3 -m pip install --user --quiet fido2 \
+              || pip3 install --user --quiet fido2
+          fi
+          python3 -c 'import fido2; print("fido2", fido2.__version__)'
+
+      - name: Start Teleport cluster (TLS routing on :443, ${{ matrix.second-factor }})
+        run: |
+          set -euo pipefail
+          # sudo -n (passwordless on GH runners) is handled inside the
+          # script when the web port needs root. All knobs are pinned
+          # explicitly — the script's TELEPORT_* knobs can collide with
+          # ambient teleport env on dev machines, so never inherit them.
+          # off — the M1 app SSH path. webauthn — the M3 smokes + the M4
+          # app ceremony (Phase-2 registration + Phase-3 passwordless).
+          TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_PASSWORD=VmTestPassw0rd! \
+          bash scripts/ci/teleport-server.sh start
+
+      - name: Bootstrap user + cert fixtures (webapi invite, MFA provisioning, smokes)
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_PASSWORD=VmTestPassw0rd! \
+          bash scripts/ci/teleport-server.sh bootstrap
+
+      - name: Confirm server health
+        run: bash scripts/ci/teleport-server.sh status
+
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        # Shares the xcode27-deriveddata cache namespace with PR CI, so a
+        # fresh scheduled run restores the last PR CI build products and
+        # skips most recompilation. Restore keys fall back to the PR CI
+        # workflow's cache entries.
+        uses: ./.github/actions/prepare-xcode-build
+        with:
+          deriveddata-key-prefix: xcode27-deriveddata
+          deriveddata-restore-keys: xcode27-deriveddata-VVTerm PR CI-
+
+      - name: Run Teleport integration tests
+        # Source the env file (PEM fixtures + server coordinates) into the
+        # xcodebuild process. VVTERM_TELEPORT_* propagate to the test
+        # process (same mechanism as VVTERM_UNREACHABLE_TEST_HOST in PR CI).
+        #
+        # `xcodebuild test` (not test-without-building): mirrors the PR CI
+        # unit-tests job, including the Xcode 27 workaround — the regular
+        # `test` command avoids the SwiftProtobuf duplicate-symbol crash
+        # that test-without-building hits on Xcode 27.
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          source "$RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env"
+          set +a
+          echo "fixtures: host=$VVTERM_TELEPORT_HOST port=$VVTERM_TELEPORT_PORT node=$VVTERM_TELEPORT_NODE cluster=$VVTERM_TELEPORT_CLUSTER_NAME cert=$(printf '%s' "$VVTERM_TELEPORT_CERT" | head -c 30)…"
+
+          xcodebuild test \
+            -scheme VVTermUnitTests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -only-testing:VVTermTests/TeleportServerIntegrationTests \
+            CODE_SIGNING_ALLOWED=NO \
+            IgnoreFileSystemDeviceInodeChanges=YES \
+            | tee "$RUNNER_TEMP/test.log"
+
+      - name: Upload teleport logs (always)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: teleport-e2e-${{ matrix.second-factor }}-logs
+          path: |
+            ${{ runner.temp }}/vvterm-teleport/teleport.log
+            ${{ runner.temp }}/vvterm-teleport/teleport.yaml
+            ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
+          if-no-files-found: ignore
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: teleport-e2e-${{ matrix.second-factor }}-test-results
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
+            ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+
+      - name: Stop Teleport (always)
+        if: always()
+        run: TELEPORT_WEB_PORT=443 bash scripts/ci/teleport-server.sh stop || true
