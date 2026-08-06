@@ -5510,7 +5510,7 @@ final class AtomicSocket: @unchecked Sendable {
 /// teleport-e2e workflow uploads the newest file as an artifact.
 ///
 /// CI-only instrumentation: a few writes per connection.
-private struct SyncDiag {
+private final class SyncDiag {
     private let fd: Int32
 
     init() {
