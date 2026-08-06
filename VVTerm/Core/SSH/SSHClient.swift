@@ -3078,23 +3078,13 @@ actor SSHSession {
         // prefs because it's on a real TCP connection; inner session on
         // socketpair fd behaves differently.
         d("using libssh2 defaults for inner session")
-        // Match outer session KEX/HOSTKEY prefs for inner session.
-        // Inner session on socketpair fd was stalling at KEX pref with
-        // explicit set_blocking(); with detached thread that stall is fixed.
-        let innerFastCiphers = "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr"
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_CS, prefs: innerFastCiphers, label: "inner_crypt_cs")
-        d("after inner_crypt_cs")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_CRYPT_SC, prefs: innerFastCiphers, label: "inner_crypt_sc")
-        d("after inner_crypt_sc")
-        let innerFastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: innerFastMACs, label: "inner_mac_cs")
-        d("after inner_mac_cs")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: innerFastMACs, label: "inner_mac_sc")
+        // Inner session on socketpair fd STALLS at the KEX/HOSTKEY pref
+        // calls (libssh2_session_method_pref for LIBSSH2_METHOD_KEX).
+        // Skip KEX/HOSTKEY prefs entirely — use libssh2 defaults for the
+        // inner session. The outer session works with custom prefs because
+        // it's on a real TCP connection; the inner session on socketpair
+        // fd behaves differently.
         d("after inner_mac_sc")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
-        d("after inner_kex")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
-        d("after inner_hostkey")
 
         // Explicit blocking mode + timeout for inner session.
         libssh2_session_set_blocking(innerSession, 1)
