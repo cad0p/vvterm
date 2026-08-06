@@ -96,6 +96,10 @@ struct TeleportServerIntegrationTests {
         defer { keyRing.clear(for: clusterId) }
 
         let client = SSHClient()
+        // The 30s default connect budget is tight for a contended CI runner
+        // (the off leg's outer handshake has stalled 18-30s+ there); give
+        // the E2E path headroom. The app default is unchanged.
+        await client.connectTimeout = .seconds(90)
         do {
             let session = try await client.connect(
                 to: server,

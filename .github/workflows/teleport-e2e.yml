@@ -251,6 +251,19 @@ jobs:
           # explicit restore/save steps above.
           deriveddata-restore-keys: xcode27-deriveddata-VVTerm PR CI-
 
+      - name: Probe server health via tsh (test-time)
+        # The bootstrap smoke runs minutes before the app tests; the off-leg
+        # outer-handshake stalls happen in that gap. A tsh exec probe at test
+        # time attributes the next failure decisively: probe FAILS = server
+        # can't complete SSH at test time (server-side), probe passes = the
+        # app side stalled (app-side).
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          bash scripts/ci/teleport-server.sh probe
+
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
         # xcodebuild process. VVTERM_TELEPORT_* propagate to the test

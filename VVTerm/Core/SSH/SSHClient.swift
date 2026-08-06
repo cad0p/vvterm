@@ -145,7 +145,11 @@ actor SSHClient {
     private var disconnectOperation: DisconnectOperation?
     private let cloudflareTransportManager = CloudflareTransportManager()
     private let moshStartupTimeout: Duration = .seconds(8)
-    private let connectTimeout: Duration = .seconds(30)
+    /// Budget for the whole `connect(to:)` operation (transport dial +
+    /// handshake + auth). Settable so the Teleport integration tests can
+    /// give a contended CI cluster more headroom; the app default (30s) is
+    /// unchanged.
+    var connectTimeout: Duration = .seconds(30)
     private let disconnectTimeout: Duration = .seconds(4)
     private let execTimeout: Duration = .seconds(20)
     private let downloadTimeout: Duration = .seconds(120)
@@ -1752,6 +1756,8 @@ actor SSHSession {
             // (the socketpair-KEX stall in the teleport-e2e runs). The
             // loop suspends between attempts, releasing the thread to the
             // pumps.
+            let diag = SyncDiag()
+            diag.mark("outer_handshake_begin fd=\(fd) dial=\(dialHost):\(dialPort)")
             do {
                 handshakeResult = try await performNonBlockingHandshake(
                     session: session,
@@ -1759,12 +1765,14 @@ actor SSHSession {
                     deadline: ContinuousClock.now + .seconds(35)
                 )
             } catch {
+                diag.mark("outer_handshake_cancelled")
                 if let handshakeToken {
                     startupTrace?.end(handshakeToken, outcome: "failed", detail: "cancelled")
                 }
                 cleanup()
                 throw error
             }
+            diag.mark("outer_handshake_returned \(handshakeResult)")
             // Host-key verification + auth run in blocking mode (as before).
             libssh2_session_set_blocking(session, 1)
         } else {
@@ -3137,10 +3145,8 @@ actor SSHSession {
         // custom prefs on the real TCP path).
         // Sync file-marker diagnostics (bypasses os_log) so we can trace
         // progress even if the sim's os_log pipeline wedges.
-        let diagPath = "/tmp/vvterm-diag-\(getpid()).txt"
-        let diagFd = open(diagPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-        func d(_ s: String) { s.withCString { Darwin.write(diagFd, $0, strlen($0)) }; Darwin.write(diagFd, "\n", 1) }
-        d("after inner_mac_sc")
+        let diag = SyncDiag()
+        diag.mark("after inner_mac_sc")
 
         // Non-blocking EAGAIN-loop handshake (see performNonBlockingHandshake):
         // the inner session sits on a socketpair whose pumps are pool tasks —
@@ -3148,7 +3154,7 @@ actor SSHSession {
         // starve the pumps (the socketpair-KEX stall). The loop yields between
         // attempts; host-key verification + cert auth below run in blocking
         // mode (restored after the loop), matching the pre-stall behavior.
-        d("inner_handshake_call_start")
+        diag.mark("inner_handshake_call_start")
         let handshakeResult: Int32
         do {
             handshakeResult = try await performNonBlockingHandshake(
@@ -3157,11 +3163,11 @@ actor SSHSession {
                 deadline: ContinuousClock.now + .seconds(60)
             )
         } catch {
-            d("inner_handshake_cancelled")
+            diag.mark("inner_handshake_cancelled")
             shouldInvalidateTransport = true
             throw error
         }
-        d("handshake returned \(handshakeResult)")
+        diag.mark("handshake returned \(handshakeResult)")
         // Host-key verification + cert auth run in blocking mode (as before).
         libssh2_session_set_blocking(innerSession, 1)
         guard handshakeResult == 0 else {
@@ -5495,5 +5501,30 @@ final class AtomicSocket: @unchecked Sendable {
                 state = .closed
             }
         }
+    }
+}
+
+/// Sync file-marker diagnostics for the Teleport handshake paths (bypasses
+/// os_log — the simulator's os_log pipeline can wedge on CI, hiding where a
+/// stall happens). Append-only markers in `/tmp/vvterm-diag-<pid>.txt`; the
+/// teleport-e2e workflow uploads the newest file as an artifact.
+///
+/// CI-only instrumentation: a few writes per connection.
+private struct SyncDiag {
+    private let fd: Int32
+
+    init() {
+        let path = "/tmp/vvterm-diag-\(getpid()).txt"
+        fd = Darwin.open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    }
+
+    func mark(_ s: String) {
+        guard fd >= 0 else { return }
+        s.withCString { Darwin.write(fd, $0, strlen($0)) }
+        _ = Darwin.write(fd, "\n", 1)
+    }
+
+    deinit {
+        if fd >= 0 { Darwin.close(fd) }
     }
 }

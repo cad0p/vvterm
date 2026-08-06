@@ -920,6 +920,38 @@ cmd_clean() {
   log "data dir removed — next start creates a fresh cluster"
 }
 
+cmd_probe() {
+  # Test-time server health probe: a tsh exec through the proxy + node,
+  # run minutes AFTER the bootstrap smoke. The off-leg outer-handshake
+  # stalls happen between bootstrap and the app tests (backend contention
+  # window) — this probe attributes them decisively: a failing probe means
+  # the server can't complete an SSH exec at test time (server-side), a
+  # passing probe means the app side stalled (app-side).
+  local identity_file="${WORK_DIR}/smoke-identity"
+  if [ ! -s "${identity_file}" ]; then
+    echo "error: probe needs bootstrap first (smoke-identity missing)" >&2
+    exit 1
+  fi
+  local tsh_home="${WORK_DIR}/tsh-home"
+  mkdir -p "${tsh_home}"
+  local out
+  out="$(
+    HOME="${tsh_home}" timeout 60 "${BIN_DIR}/tsh" --insecure \
+      -i "${identity_file}" --proxy="${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" ssh \
+      -o StrictHostKeyChecking=no "${TELEPORT_LOGIN}@${TELEPORT_NODE}" 'echo TELEPORT_PROBE_OK'
+  )" || {
+    echo "error: test-time tsh probe FAILED (server-side stall?) — output:" >&2
+    printf '%s\n' "${out}" >&2
+    exit 1
+  }
+  if ! printf '%s' "${out}" | grep -q 'TELEPORT_PROBE_OK'; then
+    echo "error: probe output missing TELEPORT_PROBE_OK — output:" >&2
+    printf '%s\n' "${out}" >&2
+    exit 1
+  fi
+  log "probe passed: $(printf '%s' "${out}" | tail -1)"
+}
+
 # ---------------------------------------------------------------------------
 cmd="${1:-help}"
 shift || true
@@ -931,10 +963,11 @@ case "${cmd}" in
   status)   cmd_status ;;
   stop)     cmd_stop ;;
   clean)    cmd_clean ;;
+  probe)    cmd_probe ;;
   help|-h|--help)
     sed -n '2,40p' "$0" | grep -E '^#   ' | sed 's/^#   //' ;;
   *)
     echo "error: unknown command ${cmd}" >&2
-    echo "commands: install start bootstrap env-export status stop clean" >&2
+    echo "commands: install start bootstrap env-export status stop clean probe" >&2
     exit 1 ;;
 esac
