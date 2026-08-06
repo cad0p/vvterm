@@ -49,7 +49,7 @@ struct TeleportServerIntegrationTests {
     /// Full E2E: TLS+ALPN dial of the proxy, `proxy:<node>:0` subsystem,
     /// outer + inner libssh2 handshakes, cert auth, and exec routed to the
     /// target node.
-    @Test(.enabled(if: teleportEnvPresent)) @MainActor
+    @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
     func teleportSSHConnectsThroughTLSRoutingAndExecutes() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let cert = environment["VVTERM_TELEPORT_CERT"] else {
@@ -96,6 +96,10 @@ struct TeleportServerIntegrationTests {
         defer { keyRing.clear(for: clusterId) }
 
         let client = SSHClient()
+        // The 30s default connect budget is tight for a contended CI runner
+        // (the off leg's outer handshake has stalled 18-30s+ there); give
+        // the E2E path headroom. The app default is unchanged.
+        await client.setConnectTimeout(.seconds(90))
         do {
             let session = try await client.connect(
                 to: server,
@@ -155,7 +159,7 @@ struct TeleportServerIntegrationTests {
     /// This is the app-side counterpart of the Python harness's smokes:
     /// same server, same wire shapes, but through the app's own
     /// coordinators, WebAuthn builders, and HTTP/gRPC clients.
-    @Test(.enabled(if: webauthnCeremonyEnvPresent)) @MainActor
+    @Test(.enabled(if: webauthnCeremonyEnvPresent), .timeLimit(.minutes(4))) @MainActor
     func teleportPhase2RegistrationAndPhase3PasswordlessLoginCeremony() async throws {
         let environment = ProcessInfo.processInfo.environment
         let cert = environment["VVTERM_TELEPORT_CERT"] ?? ""

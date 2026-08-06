@@ -1,5 +1,6 @@
 import Foundation
 import os.log
+import Darwin
 import MoshCore
 import MoshBootstrap
 
@@ -144,7 +145,17 @@ actor SSHClient {
     private var disconnectOperation: DisconnectOperation?
     private let cloudflareTransportManager = CloudflareTransportManager()
     private let moshStartupTimeout: Duration = .seconds(8)
-    private let connectTimeout: Duration = .seconds(30)
+    /// Budget for the whole `connect(to:)` operation (transport dial +
+    /// handshake + auth). Settable so the Teleport integration tests can
+    /// give a contended CI cluster more headroom; the app default (30s) is
+    /// unchanged.
+    var connectTimeout: Duration = .seconds(30)
+    /// Set the connect budget (integration tests give a contended CI
+    /// cluster more headroom; the app default 30s is unchanged).
+    func setConnectTimeout(_ timeout: Duration) {
+        connectTimeout = timeout
+    }
+
     private let disconnectTimeout: Duration = .seconds(4)
     private let execTimeout: Duration = .seconds(20)
     private let downloadTimeout: Duration = .seconds(120)
@@ -1630,7 +1641,7 @@ actor SSHSession {
 
     /// Interrupt socket I/O from any thread; actor-owned cleanup performs the final close.
     nonisolated func abort() {
-        atomicSocket.interrupt()
+        atomicSocket.interrupt("abort")
     }
 
     #if DEBUG
@@ -1740,12 +1751,66 @@ actor SSHSession {
         logger.info(
             "ssh_handshake_begin fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
         )
-        let handshakeResult = libssh2_session_handshake(session, socket)
+        let handshakeResult: Int32
+        if config.authMethod == .faceIDTeleport {
+            // Teleport (TLS socketpair) path — non-blocking EAGAIN loop. A
+            // blocking `libssh2_session_handshake` C call pins a
+            // cooperative-pool thread for its whole duration; the TLS
+            // transport's pumps (also pool tasks) need those threads to
+            // forward the banner/KEX bytes. On small runners the pool
+            // exhausts, the pumps starve, and the handshake times out
+            // (the socketpair-KEX stall in the teleport-e2e runs). The
+            // loop suspends between attempts, releasing the thread to the
+            // pumps.
+            let diag = SyncDiag()
+            diag.mark("outer_handshake_begin fd=\(fd) dial=\(dialHost):\(dialPort)")
+            do {
+                handshakeResult = try await performNonBlockingHandshake(
+                    session: session,
+                    fd: socket,
+                    deadline: ContinuousClock.now + .seconds(35)
+                )
+            } catch {
+                diag.mark("outer_handshake_cancelled")
+                if let handshakeToken {
+                    startupTrace?.end(handshakeToken, outcome: "failed", detail: "cancelled")
+                }
+                cleanup()
+                throw error
+            }
+            diag.mark("outer_handshake_returned \(handshakeResult)")
+            // Host-key verification + auth run in blocking mode (as before).
+            libssh2_session_set_blocking(session, 1)
+        } else {
+            // Regular TCP path — blocking handshake (unchanged), bounded by
+            // libssh2's own timeout + a watchdog interrupt.
+            libssh2_session_set_timeout(session, 30_000)
+            // Watchdog: libssh2's own timeout can fail to fire (e.g. when the
+            // transport never EAGAINs); interrupt the socket so the C call
+            // returns instead of wedging the caller's thread indefinitely.
+            let handshakeWatchdog = Task.detached { [atomicSocket] in
+                // Cancellation (the `defer` below, when the handshake completes)
+                // must DISARM the watchdog. A `try?` would swallow the
+                // CancellationError and fall through to interrupt() — killing
+                // the just-established connection (dispatch 9: pump EOF + .notConnected
+                // 0.8ms after "Connected to").
+                do {
+                    try await Task.sleep(nanoseconds: 35_000_000_000)
+                } catch {
+                    return  // cancelled — handshake completed; disarm
+                }
+                atomicSocket.interrupt("handshake-watchdog")
+            }
+            defer { handshakeWatchdog.cancel() }
+            handshakeResult = libssh2_session_handshake(session, socket)
+        }
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
             var errmsgLen: Int32 = 0
             libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
-            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            let errorMsg = handshakeResult == LIBSSH2_ERROR_TIMEOUT
+                ? "handshake timed out (EAGAIN loop deadline)"
+                : (errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string")
             logger.error(
                 "ssh_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) fd=\(fd) peer=\(peer, privacy: .public) dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort)"
             )
@@ -2035,6 +2100,42 @@ actor SSHSession {
         logger.info("Authentication successful")
     }
 
+    /// Run `libssh2_session_handshake` in non-blocking mode with cooperative
+    /// yields between EAGAIN retries.
+    ///
+    /// A blocking handshake C call pins a cooperative-pool thread for its
+    /// whole duration. On the Teleport TLS paths the transport pumps are also
+    /// pool tasks — if the handshake holds the last free thread, the pumps
+    /// never run, no bytes flow, and the handshake times out (the
+    /// socketpair-KEX stall in the teleport-e2e runs). This loop suspends
+    /// (`Task.sleep`) between attempts, releasing the thread so the pumps can
+    /// forward the banner + KEX traffic.
+    ///
+    /// The session is switched to non-blocking mode here (callers restore
+    /// blocking mode when the handshake completes, so auth keeps its
+    /// pre-existing blocking semantics). The fd must be O_NONBLOCK (both
+    /// transports' socketpairs set it) so libssh2 returns
+    /// `LIBSSH2_ERROR_EAGAIN` instead of blocking in recv().
+    ///
+    /// - Returns: 0 on success, or the terminal libssh2 error code
+    ///   (`LIBSSH2_ERROR_TIMEOUT` when `deadline` passes).
+    /// - Throws: `CancellationError` when the task is cancelled.
+    private func performNonBlockingHandshake(
+        session: OpaquePointer,
+        fd: Int32,
+        deadline: ContinuousClock.Instant
+    ) async throws -> Int32 {
+        libssh2_session_set_blocking(session, 0)
+        while true {
+            try Task.checkCancellation()
+            let result = libssh2_session_handshake(session, fd)
+            if result == 0 { return 0 }
+            if result != LIBSSH2_ERROR_EAGAIN { return result }
+            if ContinuousClock.now >= deadline { return LIBSSH2_ERROR_TIMEOUT }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
     private func verifyHostKey() throws {
         guard let session = libssh2Session else {
             throw SSHError.notConnected
@@ -2101,8 +2202,8 @@ actor SSHSession {
         ioTask = nil
         stopInnerIOLoop()
         failAllExecRequests(error: SSHError.notConnected)
-        atomicSocket.interrupt()
-        innerAtomicSocket.interrupt()
+        atomicSocket.interrupt("disconnect-outer")
+        innerAtomicSocket.interrupt("disconnect-inner")
         // Synchronously stop the bridge transport's pump so it stops
         // reading/writing the outer proxy-subsystem channel (the outer
         // session is freed next by cleanupLibssh2). The full actor-isolated
@@ -2212,7 +2313,7 @@ actor SSHSession {
         // cleanupLibssh2 because its lifecycle mirrors the outer socket's,
         // which is owned by AtomicSocket).
         if let transport = tlsTransport {
-            atomicSocket.interrupt()  // shutdown(libssh2FD) unblocks libssh2 I/O
+            atomicSocket.interrupt("cleanup-libssh2")  // shutdown(libssh2FD) unblocks libssh2 I/O
             // Detach the transport close so `cleanup()` stays synchronous.
             // The Task captures `transport` strongly, so it lives until close()
             // completes even though `tlsTransport` is nilled below. This is
@@ -2222,7 +2323,7 @@ actor SSHSession {
             socket = -1
         } else {
             // Close socket first to abort any blocking I/O.
-            atomicSocket.interrupt()
+            atomicSocket.interrupt("cleanup-libssh2-2")
             socket = -1
         }
         connectedPeerAddress = nil
@@ -3028,6 +3129,9 @@ actor SSHSession {
         //    preferences. The target node presents a host cert (same HostCA
         //    as the proxy), so the cert hostkey variants are required here
         //    too — same fork as the outer session.
+        logger.info(
+            "teleport_inner_handshake_begin fd=\(innerFD) target=\(nodeName, privacy: .private(mask: .hash))"
+        )
         guard let innerSession = libssh2_session_init_ex(nil, nil, nil, nil) else {
             shouldInvalidateTransport = true
             throw SSHError.unknown("Failed to create inner libssh2 session")
@@ -3040,19 +3144,45 @@ actor SSHSession {
         let fastMACs = "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_CS, prefs: fastMACs, label: "inner_mac_cs")
         applyMethodPref(innerSession, method: LIBSSH2_METHOD_MAC_SC, prefs: fastMACs, label: "inner_mac_sc")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_KEX, prefs: SSHMethodPreferences.kex, label: "inner_kex")
-        applyMethodPref(innerSession, method: LIBSSH2_METHOD_HOSTKEY, prefs: SSHMethodPreferences.hostkey, label: "inner_hostkey")
+        // KEX/HOSTKEY prefs are intentionally NOT applied to the inner
+        // session: libssh2's defaults already cover the Teleport cert
+        // hostkey variants, and custom prefs on the socketpair session
+        // stalled in the teleport-e2e runs (the outer session keeps its
+        // custom prefs on the real TCP path).
+        // Sync file-marker diagnostics (bypasses os_log) so we can trace
+        // progress even if the sim's os_log pipeline wedges.
+        let diag = SyncDiag()
+        diag.mark("after inner_mac_sc")
 
-        // Blocking mode for the handshake, then non-blocking for I/O.
+        // Non-blocking EAGAIN-loop handshake (see performNonBlockingHandshake):
+        // the inner session sits on a socketpair whose pumps are pool tasks —
+        // a blocking handshake C call would pin the last free pool thread and
+        // starve the pumps (the socketpair-KEX stall). The loop yields between
+        // attempts; host-key verification + cert auth below run in blocking
+        // mode (restored after the loop), matching the pre-stall behavior.
+        diag.mark("inner_handshake_call_start")
+        let handshakeResult: Int32
+        do {
+            handshakeResult = try await performNonBlockingHandshake(
+                session: innerSession,
+                fd: innerFD,
+                deadline: ContinuousClock.now + .seconds(60)
+            )
+        } catch {
+            diag.mark("inner_handshake_cancelled")
+            shouldInvalidateTransport = true
+            throw error
+        }
+        diag.mark("handshake returned \(handshakeResult)")
+        // Host-key verification + cert auth run in blocking mode (as before).
         libssh2_session_set_blocking(innerSession, 1)
-
-        // 5. Second handshake to the target node over the bridge FD.
-        let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
         guard handshakeResult == 0 else {
             var errmsg: UnsafeMutablePointer<CChar>?
             var errmsgLen: Int32 = 0
             libssh2_session_last_error(innerSession, &errmsg, &errmsgLen, 0)
-            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
+            let errorMsg = handshakeResult == LIBSSH2_ERROR_TIMEOUT
+                ? "inner handshake timed out after 60s (EAGAIN loop deadline)"
+                : (errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string")
             logger.error(
                 "teleport_inner_handshake_failed code=\(handshakeResult) libssh2=\(errorMsg, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
             )
@@ -5349,11 +5479,20 @@ final class AtomicSocket: @unchecked Sendable {
 
     /// Wake blocking socket I/O without releasing the descriptor. This avoids
     /// descriptor reuse while libssh2 may still be returning from a native call.
-    nonisolated func interrupt() {
+    nonisolated func interrupt(_ label: String = "") {
+        let logger = Logger.forCategory("SSHSession")
         lock.withLock {
-            guard case .open(let socket) = state else { return }
+            guard case .open(let socket) = state else {
+                if !label.isEmpty {
+                    logger.info("atomic_socket_interrupt_skipped label=\(label, privacy: .public) socket=not_open")
+                }
+                return
+            }
             Darwin.shutdown(socket, SHUT_RDWR)
             state = .interrupted(socket)
+            if !label.isEmpty {
+                logger.info("atomic_socket_interrupt label=\(label, privacy: .public) socket=\(socket)")
+            }
         }
     }
 
@@ -5368,5 +5507,30 @@ final class AtomicSocket: @unchecked Sendable {
                 state = .closed
             }
         }
+    }
+}
+
+/// Sync file-marker diagnostics for the Teleport handshake paths (bypasses
+/// os_log — the simulator's os_log pipeline can wedge on CI, hiding where a
+/// stall happens). Append-only markers in `/tmp/vvterm-diag-<pid>.txt`; the
+/// teleport-e2e workflow uploads the newest file as an artifact.
+///
+/// CI-only instrumentation: a few writes per connection.
+private final class SyncDiag {
+    private let fd: Int32
+
+    init() {
+        let path = "/tmp/vvterm-diag-\(getpid()).txt"
+        fd = Darwin.open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    }
+
+    func mark(_ s: String) {
+        guard fd >= 0 else { return }
+        s.withCString { Darwin.write(fd, $0, strlen($0)) }
+        _ = Darwin.write(fd, "\n", 1)
+    }
+
+    deinit {
+        if fd >= 0 { Darwin.close(fd) }
     }
 }

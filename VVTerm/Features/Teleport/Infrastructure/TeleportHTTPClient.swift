@@ -53,7 +53,7 @@ struct TeleportHTTPClient {
     func ping() async throws -> Bool {
         var req = URLRequest(url: baseURL.appendingPathComponent("webapi/ping"))
         req.httpMethod = "GET"
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await TeleportTrustSession.session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw HeadlessError.transport("non-HTTP response")
         }
@@ -240,7 +240,7 @@ struct TeleportHTTPClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await TeleportTrustSession.session.data(for: req)
         return (data, (response as! HTTPURLResponse).statusCode)
     }
 }

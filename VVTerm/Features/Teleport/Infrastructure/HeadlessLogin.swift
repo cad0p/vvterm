@@ -124,8 +124,7 @@ enum HeadlessLogin {
         config.timeoutIntervalForResource = 200
         urlReq.httpBody = try JSONEncoder().encode(req)
 
-        let session = URLSession(configuration: config)
-        defer { session.finishTasksAndInvalidate() }
+        let session = TeleportTrustSession.session
 
         let (data, response): (Data, URLResponse)
         do {

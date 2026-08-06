@@ -156,7 +156,7 @@ jobs:
 
   teleport-e2e:
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -228,15 +228,41 @@ jobs:
       - name: Confirm server health
         run: bash scripts/ci/teleport-server.sh status
 
+      - name: Restore e2e DerivedData cache (explicit)
+        # The irgaly/xcode-cache restore has missed on every e2e run (both
+        # its own namespace and the PR CI fallback: "DerivedData cache not
+        # found" in 0.057s even with matching entries), forcing a full
+        # ~9 min rebuild each dispatch. Restore explicitly with a simple
+        # space-free key; the save step below persists even when the job
+        # fails (irgaly skips saving on failed jobs, so the e2e namespace
+        # never accumulated entries).
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/DerivedData
+          key: e2e-deriveddata-${{ github.sha }}
+          restore-keys: |
+            e2e-deriveddata-
+
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
-        # Shares the xcode27-deriveddata cache namespace with PR CI, so a
-        # fresh scheduled run restores the last PR CI build products and
-        # skips most recompilation. Restore keys fall back to the PR CI
-        # workflow's cache entries.
         uses: ./.github/actions/prepare-xcode-build
         with:
           deriveddata-key-prefix: xcode27-deriveddata
+          # PR CI fallback only — the e2e namespace is handled by the
+          # explicit restore/save steps above.
           deriveddata-restore-keys: xcode27-deriveddata-VVTerm PR CI-
+
+      - name: Probe server health via tsh (test-time)
+        # The bootstrap smoke runs minutes before the app tests; the off-leg
+        # outer-handshake stalls happen in that gap. A tsh exec probe at test
+        # time attributes the next failure decisively: probe FAILS = server
+        # can't complete SSH at test time (server-side), probe passes = the
+        # app side stalled (app-side).
+        run: |
+          set -euo pipefail
+          TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          bash scripts/ci/teleport-server.sh probe
 
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
@@ -253,18 +279,101 @@ jobs:
           # shellcheck disable=SC1091
           source "$RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env"
           set +a
+          # Plain env vars do NOT reach the simulator test process — xcodebuild
+          # forwards only TEST_RUNNER_-prefixed vars to the test runner
+          # (prefix stripped; the PR CI UI shards use the xctestrun plist
+          # route instead, which needs build-for-testing). Re-export every
+          # fixture var with the prefix so the .enabled(if:) gates evaluate
+          # true in the runner.
+          for var in $(compgen -v | grep '^VVTERM_TELEPORT_' || true); do
+            export "TEST_RUNNER_${var}=${!var}"
+          done
           echo "fixtures: host=$VVTERM_TELEPORT_HOST port=$VVTERM_TELEPORT_PORT node=$VVTERM_TELEPORT_NODE cluster=$VVTERM_TELEPORT_CLUSTER_NAME cert=$(printf '%s' "$VVTERM_TELEPORT_CERT" | head -c 30)…"
 
-          xcodebuild test \
-            -scheme VVTermUnitTests \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            -only-testing:VVTermTests/TeleportServerIntegrationTests \
-            CODE_SIGNING_ALLOWED=NO \
-            IgnoreFileSystemDeviceInodeChanges=YES \
-            | tee "$RUNNER_TEMP/test.log"
+          # CODE_SIGNING_ALLOWED=NO (PR CI) leaves the sim app UNSIGNED —
+          # no entitlements — and the iOS sim sandbox parks Network.framework
+          # connections of unentitled apps in .waiting(.waitingForNetwork)
+          # forever (the Teleport TLS path is NWConnection-based; raw POSIX
+          # sockets like the connector tests are not gated). Ad-hoc sign so
+          # com.apple.security.network.client from VVTerm.entitlements is
+          # embedded (sim needs no provisioning profile).
+          #
+          # Hard step timeout: the integration tests can wedge the app's
+          # main thread in a blocking C call that no Swift timeout can
+          # preempt — without this the whole job hangs to its timeout-minutes.
+          # With job control (set -m) the pipeline runs in its own process
+          # group, so kill -9 -$! reaps xcodebuild AND tee.
+          set -m
+          ( xcodebuild test \
+              -scheme VVTermUnitTests \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+              -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              -only-testing:VVTermTests/TeleportServerIntegrationTests \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 120 \
+              CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
+              IgnoreFileSystemDeviceInodeChanges=YES \
+              | tee "$RUNNER_TEMP/test.log" ) &
+          XPID=$!
+          # Sampler: while xcodebuild runs, capture the app's thread stacks
+          # every 30s so a wedge (blocked C call, starved pool, wedged
+          # os_log) can be diagnosed post-mortem from the artifact.
+          (
+            mkdir -p "$RUNNER_TEMP/samples"
+            for i in $(seq 1 40); do
+              PID=$(pgrep -x VVTerm | head -1 || true)
+              if [ -n "${PID:-}" ]; then
+                sample "$PID" 2 -file "$RUNNER_TEMP/samples/sample-$i.txt" >/dev/null 2>&1 || true
+              fi
+              sleep 30
+            done
+          ) &
+          SPID=$!
+          ( sleep 600 && echo "::error::xcodebuild test exceeded 10m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
+          WPID=$!
+          set +e
+          wait "$XPID"
+          RC=$?
+          set -e
+          kill "$WPID" 2>/dev/null || true
+          kill "$SPID" 2>/dev/null || true
+          exit "$RC"
+
+      - name: Save e2e DerivedData cache (even on failure)
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/DerivedData
+          key: e2e-deriveddata-${{ github.sha }}
+          # save-always: persist the build products even though the e2e
+          # jobs fail while the M1 bug is open — the next dispatch then
+          # recompiles only the changed files.
+          save-always: true
+
+      - name: Capture inner handshake diag file
+        if: always()
+        run: |
+          DIAG=$(ls -t /tmp/vvterm-diag-*.txt 2>/dev/null | head -1 || true)
+          if [ -n "$DIAG" ]; then
+            cp "$DIAG" "$RUNNER_TEMP/vvterm-diag.txt"
+            echo "diag file: $DIAG"
+            cat "$DIAG"
+          else
+            echo "no diag file found"
+          fi
+
+      - name: Capture simulator logs (diagnostics)
+        # os_log from the app under test — NWConnection state, TLS transport
+        # logs, sandbox denials. Needed to diagnose runner-side hangs.
+        if: always()
+        run: |
+          set +e
+          UDID=$(xcrun simctl list devices booted -j 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print([dev["udid"] for devs in d["devices"].values() for dev in devs if dev["state"]=="Booted"][0])')
+          xcrun simctl spawn "$UDID" log show --last 45m \
+            --predicate 'processImagePath CONTAINS "VVTerm"' \
+            > "$RUNNER_TEMP/sim-vvterm.log" 2>&1 || true
+          echo "captured $(wc -l < "$RUNNER_TEMP/sim-vvterm.log") lines"
 
       - name: Upload teleport logs (always)
         if: always()
@@ -275,6 +384,8 @@ jobs:
             ${{ runner.temp }}/vvterm-teleport/teleport.log
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
             ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
+            ${{ runner.temp }}/sim-vvterm.log
+            ${{ runner.temp }}/vvterm-diag.txt
           if-no-files-found: ignore
 
       - name: Upload test results on failure
@@ -283,8 +394,9 @@ jobs:
         with:
           name: teleport-e2e-${{ matrix.second-factor }}-test-results
           path: |
-            ${{ runner.temp }}/TestResults.xcresult
             ${{ runner.temp }}/test.log
+            ${{ runner.temp }}/sim-vvterm.log
+            ${{ runner.temp }}/samples
           if-no-files-found: ignore
 
       - name: Stop Teleport (always)
