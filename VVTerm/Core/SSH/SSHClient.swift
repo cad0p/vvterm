@@ -150,6 +150,12 @@ actor SSHClient {
     /// give a contended CI cluster more headroom; the app default (30s) is
     /// unchanged.
     var connectTimeout: Duration = .seconds(30)
+    /// Set the connect budget (integration tests give a contended CI
+    /// cluster more headroom; the app default 30s is unchanged).
+    func setConnectTimeout(_ timeout: Duration) {
+        connectTimeout = timeout
+    }
+
     private let disconnectTimeout: Duration = .seconds(4)
     private let execTimeout: Duration = .seconds(20)
     private let downloadTimeout: Duration = .seconds(120)
