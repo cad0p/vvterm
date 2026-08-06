@@ -1,6 +1,22 @@
+# VVTerm TestFlight Release.
+#
+# Two entry points:
+#   - workflow_dispatch: manual release (defaults: Internal Testers beta
+#     group, wait for ASC processing, force_pro=true for owner/fork builds).
+#   - push to main: automatic release on PR merge. Uses the non-dispatch
+#     defaults in "Resolve release inputs": Internal Testers, no processing
+#     wait, force_pro=false (real users go through StoreKit).
+#
+# Independent of the OTA chain: "VVTerm PR OTA" triggers on pull_request
+# and ios-adhoc-pr's workflow_run filter is pinned to that workflow's name,
+# so a push to main never starts an OTA build and this workflow never feeds
+# ios-adhoc-pr.
+
 name: iOS TestFlight Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       beta_group_names:
@@ -21,6 +37,16 @@ on:
 
 permissions:
   contents: write
+  actions: write   # gh run cancel for latest-wins backlog coalescing
+
+concurrency:
+  # Serialize releases: the build number is resolved as ASC latest + 1, so
+  # concurrent runs (e.g. a manual dispatch during a merge-triggered run)
+  # would race to the same CFBundleVersion and one upload would be rejected.
+  # Never cancel — an in-flight upload must complete. Backlog of queued runs
+  # is drained by the "Coalesce release backlog" step (latest-wins).
+  group: ios-testflight-release
+  cancel-in-progress: false
 
 jobs:
   build-and-upload:
@@ -30,6 +56,52 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
     steps:
+      - name: Coalesce release backlog (latest commit wins)
+        # Latest-wins queue management for rapid merges: if newer
+        # push-triggered runs of this workflow are queued when this run
+        # starts, cancel the whole stale backlog (this run included) so only
+        # the newest commit ships. The concurrency group serializes runs, so
+        # exactly one run is in_progress at a time — any other
+        # in_progress/queued run here is newer than this one. Manual
+        # dispatches are never touched (event filter).
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          WORKFLOW="${{ github.workflow }}"
+          newest_id="$(gh run list \
+            --repo "$REPO" \
+            --workflow "$WORKFLOW" \
+            --branch main \
+            --event push \
+            --status in_progress,queued \
+            --limit 20 \
+            --json databaseId,createdAt \
+            --jq 'sort_by(.createdAt) | .[-1].databaseId // empty')"
+          if [[ -n "$newest_id" && "$newest_id" -gt "$GITHUB_RUN_ID" ]]; then
+            echo "Newer release run $newest_id exists — cancelling stale backlog (this run included)"
+            queued_ids="$(gh run list \
+              --repo "$REPO" \
+              --workflow "$WORKFLOW" \
+              --branch main \
+              --event push \
+              --status queued \
+              --limit 50 \
+              --json databaseId \
+              --jq '.[].databaseId')"
+            for id in $queued_ids; do
+              if [[ "$id" -gt "$GITHUB_RUN_ID" && "$id" != "$newest_id" ]]; then
+                gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1 || true
+                echo "  cancelled stale run $id"
+              fi
+            done
+            gh run cancel "$GITHUB_RUN_ID" --repo "$REPO"
+            exit 1
+          fi
+          echo "Newest release run — proceeding"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
