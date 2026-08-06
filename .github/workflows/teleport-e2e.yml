@@ -141,6 +141,10 @@ jobs:
 
       - name: Upload teleport logs (always)
         if: always()
+        # continue-on-error: a transient artifact-upload flake must not fail
+        # an otherwise-green leg (observed: server-smoke (off) failed only
+        # on the upload step).
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: teleport-server-smoke-${{ matrix.second-factor }}-logs
@@ -398,6 +402,7 @@ jobs:
 
       - name: Upload teleport logs (always)
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: teleport-e2e-${{ matrix.second-factor }}-logs
@@ -411,6 +416,7 @@ jobs:
 
       - name: Upload test results on failure
         if: failure()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: teleport-e2e-${{ matrix.second-factor }}-test-results
