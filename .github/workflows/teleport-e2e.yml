@@ -264,6 +264,27 @@ jobs:
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           bash scripts/ci/teleport-server.sh probe
 
+      - name: Pre-resolve SPM dependencies (retry)
+        # The test step's xcodebuild resolution can fail transiently on
+        # shared runners ("Couldn't update repository submodules" — a
+        # dependency fetch flake). Resolve once up front with retries so
+        # the actual test run never hits a cold network fetch.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if xcodebuild -resolvePackageDependencies \
+                -scheme VVTermUnitTests \
+                -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+                >/dev/null 2>&1; then
+              echo "SPM resolved (attempt $attempt)"
+              exit 0
+            fi
+            echo "SPM resolution failed (attempt $attempt) — retrying"
+            sleep 15
+          done
+          echo "SPM resolution failed after 3 attempts" >&2
+          exit 1
+
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
         # xcodebuild process. VVTERM_TELEPORT_* propagate to the test

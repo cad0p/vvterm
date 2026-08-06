@@ -109,7 +109,16 @@ struct TeleportServerIntegrationTests {
             // Open the `proxy:<node>:0` subsystem channel + second libssh2
             // handshake so exec routes to the inner (node) session.
             try await client.prepareTeleportInnerSession()
-            let output = try await client.execute("echo VVTERM_TELEPORT_E2E_OK")
+            // The node's exec-session startup can stall behind the CI
+            // cluster's lite-backend write-lock pileups (observed: 1-4.5s
+            // transactions queueing the session.start audit write, "Child
+            // process never became ready" after ~20s). The default 20s
+            // exec budget is too tight for that — give it headroom; the
+            // assertion still verifies the output.
+            let output = try await client.execute(
+                "echo VVTERM_TELEPORT_E2E_OK",
+                timeout: .seconds(60)
+            )
             #expect(output.contains("VVTERM_TELEPORT_E2E_OK"))
             await client.disconnect()
         } catch {
