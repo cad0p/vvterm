@@ -210,6 +210,11 @@ auth_service:
   listen_addr: 0.0.0.0:${TELEPORT_AUTH_PORT}
   cluster_name: ${TELEPORT_CLUSTER}
   proxy_listener_mode: multiplex
+  # CI cluster: no session recording — the node-mode recording pipe sits
+  # on the exec-ready path and its audit writes queue behind the lite
+  # backend's write-lock stalls on shared runners ("Child process never
+  # became ready" after ~20s). The M1/M4 tests don't exercise recording.
+  session_recording: "off"
   authentication:
     # M1: no MFA (off). M2: TOTP (otp) — bootstrap registers a server-side
     # TOTP device and completes the invite with its code. M3 adds
