@@ -3102,9 +3102,23 @@ actor SSHSession {
         libssh2_session_set_timeout(innerSession, 60_000)
         d("after set_timeout")
 
-        // Run the inner handshake on the current executor (not detached)
-        // to avoid racing with the pump for the socketpair. The watchdog
-        // (fixed with catch { return }) will interrupt if it stalls.
+        // Run the blocking inner handshake on a dedicated thread so it
+        // doesn't starve the cooperative pool (which runs the pump tasks).
+        // The handshake can take many seconds; if it blocks a pool thread,
+        // the pumpFDToChannel task never gets a thread and the banner
+        // exchange deadlocks.
+        // Watchdog: interrupt the inner socket if the handshake stalls so
+        // the blocking C call returns (120s — longer than outer watchdog).
+        let innerHandshakeWatchdog = Task.detached { [innerAtomicSocket] in
+            do {
+                try await Task.sleep(nanoseconds: 120_000_000_000)
+            } catch {
+                return  // cancelled — handshake completed; disarm
+            }
+            innerAtomicSocket.interrupt("inner-handshake-watchdog")
+        }
+        defer { innerHandshakeWatchdog.cancel() }
+
         d("inner_handshake_call_start")
         let handshakeResult = libssh2_session_handshake(innerSession, innerFD)
         d("handshake returned \(handshakeResult)")
