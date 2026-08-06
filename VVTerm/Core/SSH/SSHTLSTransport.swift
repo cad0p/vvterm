@@ -173,6 +173,17 @@ actor SSHTLSTransport {
         guard result == 0, fds[0] >= 0, fds[1] >= 0 else {
             throw SSHError.connectionFailed("SSHTLSTransport: socketpair failed (errno \(errno))")
         }
+        // Non-blocking ends: the libssh2 session runs in non-blocking mode
+        // (EAGAIN-loop handshake + non-blocking I/O) and the pump loops
+        // handle EAGAIN with cooperative yields. A blocking fd would let
+        // recv()/write() pin a cooperative-pool thread (pool exhaustion
+        // stalls the pumps — the teleport-e2e socketpair-KEX stall).
+        for fd in fds {
+            let flags = Darwin.fcntl(fd, F_GETFL, 0)
+            if flags >= 0 {
+                _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+            }
+        }
         return SocketPair(libssh2FD: fds[0], pumpFD: fds[1])
     }
 
@@ -404,19 +415,14 @@ actor SSHTLSTransport {
                 // proxy response) — the handshake is progressing.
                 log.info("pump_nw_to_fd_first_bytes count=\(data.count) total=\(nwToFDBytes)")
             }
-            // Write all bytes to the pump FD (may need multiple writes).
-            var written = 0
-            data.withUnsafeBytes { rawBuffer in
-                guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-                while written < data.count {
-                    let n = Darwin.write(pumpFD, base.advanced(by: written), data.count - written)
-                    if n <= 0 {
-                        // Write error (EPIPE / EBADF) — pump FD is broken.
-                        log.error("pump_nw_to_fd_write_fail errno=\(Darwin.errno) written=\(written)/\(data.count)")
-                        return
-                    }
-                    written += n
-                }
+            // Write all bytes to the pump FD (may need multiple writes),
+            // yielding on EAGAIN so a full socketpair buffer never pins a
+            // cooperative-pool thread.
+            if !(await writeAllToPumpFD(fd: pumpFD, data: data)) {
+                // Write error (EPIPE / EBADF) — pump FD is broken.
+                log.error("pump_nw_to_fd_write_fail errno=\(Darwin.errno)")
+                Darwin.close(pumpFD)
+                return
             }
         }
         log.info("pump_nw_to_fd_cancelled bytes=\(nwToFDBytes)")
@@ -424,39 +430,74 @@ actor SSHTLSTransport {
 
     /// pumpFD -> NWConnection: read bytes from the pump FD (written by
     /// libssh2), send them via the NWConnection. Loops until read returns
-    /// EOF or the task is cancelled.
+    /// EOF or the task is cancelled. Reads never hard-block: the fd is
+    /// O_NONBLOCK and EAGAIN yields via `Task.sleep`, so the cooperative
+    /// pool thread stays available to the other pump loop + handshake loop.
     nonisolated private func pumpFDToNW(pumpFD: Int32, connection: NWConnection, log: Logger) async {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         var fdToNWBytes: Int = 0
         while !Task.isCancelled {
             let n = Darwin.read(pumpFD, buffer, 64 * 1024)
-            if n <= 0 {
-                // EOF or error — stop sending.
-                log.info("pump_fd_to_nw_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToNWBytes)")
+            if n > 0 {
+                let data = Data(bytes: buffer, count: n)
+                fdToNWBytes += n
+                if fdToNWBytes == n {
+                    // First bytes from libssh2 (its banner) — the handshake is
+                    // writing; the pump must forward them to the server.
+                    log.info("pump_fd_to_nw_first_bytes count=\(n) total=\(fdToNWBytes)")
+                }
+                // NWConnection.send has only a completion-handler form. Bridge to
+                // async + treat the completion error as a stop signal.
+                let sendError: NWError? = await withCheckedContinuation { (continuation: CheckedContinuation<NWError?, Never>) in
+                    connection.send(content: data, completion: .contentProcessed { error in
+                        continuation.resume(returning: error)
+                    })
+                }
+                if sendError != nil {
+                    // NWConnection send error — stop.
+                    log.error("pump_fd_to_nw_send_error bytes=\(fdToNWBytes) error=\(String(describing: sendError), privacy: .public)")
+                    return
+                }
+            } else if n == 0 {
+                // EOF — stop sending.
+                log.info("pump_fd_to_nw_eof_or_err ret=0 bytes=\(fdToNWBytes)")
                 return
-            }
-            let data = Data(bytes: buffer, count: n)
-            fdToNWBytes += n
-            if fdToNWBytes == n {
-                // First bytes from libssh2 (its banner) — the handshake is
-                // writing; the pump must forward them to the server.
-                log.info("pump_fd_to_nw_first_bytes count=\(n) total=\(fdToNWBytes)")
-            }
-            // NWConnection.send has only a completion-handler form. Bridge to
-            // async + treat the completion error as a stop signal.
-            let sendError: NWError? = await withCheckedContinuation { (continuation: CheckedContinuation<NWError?, Never>) in
-                connection.send(content: data, completion: .contentProcessed { error in
-                    continuation.resume(returning: error)
-                })
-            }
-            if sendError != nil {
-                // NWConnection send error — stop.
-                log.error("pump_fd_to_nw_send_error bytes=\(fdToNWBytes) error=\(String(describing: sendError), privacy: .public)")
+            } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                // No bytes yet — yield so the pool thread serves the other
+                // pump loop + the handshake loop.
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            } else {
+                // Hard error — stop sending.
+                log.info("pump_fd_to_nw_eof_or_err ret=\(n) errno=\(Darwin.errno) bytes=\(fdToNWBytes)")
                 return
             }
         }
         log.info("pump_fd_to_nw_cancelled bytes=\(fdToNWBytes)")
+    }
+
+    /// Write all bytes to `fd`, yielding on EAGAIN (O_NONBLOCK socketpair)
+    /// so a full buffer never pins a cooperative-pool thread.
+    /// Returns false on EOF/error.
+    nonisolated private func writeAllToPumpFD(fd: Int32, data: Data) async -> Bool {
+        var written = 0
+        while written < data.count {
+            let n = data.withUnsafeBytes { rawBuffer -> Int in
+                guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return -1 }
+                return Darwin.write(fd, base.advanced(by: written), data.count - written)
+            }
+            if n > 0 {
+                written += n
+                continue
+            }
+            if n == 0 { return false }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+                continue
+            }
+            return false
+        }
+        return true
     }
 
     // MARK: - PEM helpers
