@@ -1,6 +1,22 @@
+# VVTerm TestFlight Release.
+#
+# Two entry points:
+#   - workflow_dispatch: manual release (defaults: Internal Testers beta
+#     group, wait for ASC processing, force_pro=true for owner/fork builds).
+#   - push to main: automatic release on PR merge. Uses the non-dispatch
+#     defaults in "Resolve release inputs": Internal Testers, no processing
+#     wait, force_pro=false (real users go through StoreKit).
+#
+# Independent of the OTA chain: "VVTerm PR OTA" triggers on pull_request
+# and ios-adhoc-pr's workflow_run filter is pinned to that workflow's name,
+# so a push to main never starts an OTA build and this workflow never feeds
+# ios-adhoc-pr.
+
 name: iOS TestFlight Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       beta_group_names:
@@ -21,6 +37,14 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  # Serialize releases: the build number is resolved as ASC latest + 1, so
+  # concurrent runs (e.g. a manual dispatch during a merge-triggered run)
+  # would race to the same CFBundleVersion and one upload would be rejected.
+  # Never cancel — an in-flight upload must complete.
+  group: ios-testflight-release
+  cancel-in-progress: false
 
 jobs:
   build-and-upload:
