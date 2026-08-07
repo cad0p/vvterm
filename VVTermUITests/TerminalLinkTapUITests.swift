@@ -49,11 +49,16 @@ final class TerminalLinkTapUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        // The confirmation must show the exact URL that would open.
+        // The confirmation must show the exact URL that would open. The
+        // title is "Open Link"; the URL is the alert message, exposed as a
+        // static text child of the alert element.
         let alert = app.alerts.firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 8), diagnosticsText(in: app))
+        let urlInMessage = alert.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "https://example.com")
+        ).firstMatch
         XCTAssertTrue(
-            alert.label.contains("https://example.com"),
+            alert.label.contains("https://example.com") || urlInMessage.waitForExistence(timeout: 2),
             "Confirmation must show the exact URL; alert label was: \(alert.label)"
         )
         let cancel = alert.buttons["Cancel"]
@@ -88,11 +93,28 @@ final class TerminalLinkTapUITests: XCTestCase {
         // core's own double-click word selection runs on the plain word and
         // must surface as nativeSelection=true in the diagnostics.
         let terminalHeight = terminalHeight(in: app)
-        tapGridCell(row: 11, col: 0, cols: cols, rows: rows, terminalHeight: terminalHeight, in: app).doubleTap()
+        let wordCell = tapGridCell(
+            row: 11, col: 0, cols: cols, rows: rows,
+            terminalHeight: terminalHeight, in: app
+        )
+        // Two separate taps instead of doubleTap(): the synthesized
+        // double-tap's second touch never reaches the view in this harness
+        // (viewTouches stays 1). The ~0.25s gap stays inside the core's
+        // 500ms multi-click interval, so the second press still lands as a
+        // double-click word selection.
+        wordCell.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "tapFires=1",
+            timeout: 3,
+            diagnostics: diagnosticsText(in: app)
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        wordCell.tap()
         wait(
             for: diagnostics,
             labelContaining: "tapFires=2",
-            timeout: 3,
+            timeout: 5,
             diagnostics: diagnosticsText(in: app)
         )
 
