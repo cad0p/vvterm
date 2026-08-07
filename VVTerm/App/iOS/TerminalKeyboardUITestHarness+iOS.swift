@@ -22,11 +22,12 @@ struct TerminalKeyboardUITestHarness: View {
     private static let osc8LinkSequence = Data(
         // Clear + home first so the link lands at a deterministic grid
         // position regardless of the shell's first-prompt race. The link
-        // sits at row 10 (word at row 11) — comfortably inside the visible
-        // terminal area, away from the top screen edge (status bar /
-        // Dynamic Island region) where synthetic UI-test taps may not
-        // reach the app.
-        "\u{1B}[2J\u{1B}[H\n\n\n\n\n\n\n\n\n\n\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\nSOMEWORD\n".utf8
+        // sits at row 10 (word SOMEWORD at row 11) — comfortably inside
+        // the visible terminal area, away from the top screen edge (status
+        // bar / Dynamic Island region) where synthetic UI-test taps may
+        // not reach the app. A second word CENTERWORD sits at grid (26,27)
+        // as a position discriminator for the press path.
+        "\u{1B}[2J\u{1B}[H\n\n\n\n\n\n\n\n\n\n\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\nSOMEWORD\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u{1B}[27CENTERWORD\n".utf8
     )
 
     init() {
@@ -727,6 +728,28 @@ struct TerminalKeyboardUITestHarness: View {
                 "terminal-link",
                 "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) press1=\(press1) press2=\(press2)"
             )
+        }
+        // Position discriminator: a second double-click at the grid center
+        // (26,27) — if the press path fails there too, the failure is
+        // position-independent (pin/page lookup); if it succeeds, the
+        // (11,0) target is the problem.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak terminalView] in
+            guard let terminalView,
+                  let surface = terminalView.surface,
+                  let point = terminalView.keyboardUITestCellCenter(row: 26, col: 27)
+            else { return }
+            let center1 = sendClick(at: point, on: surface)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminalView] in
+                guard let terminalView,
+                      let surface = terminalView.surface,
+                      let point = terminalView.keyboardUITestCellCenter(row: 26, col: 27)
+                else { return }
+                let center2 = sendClick(at: point, on: surface)
+                Ghostty.logger.diagInfo(
+                    "terminal-link",
+                    "harness center double-click x=\(Int(point.x)) y=\(Int(point.y)) press1=\(center1) press2=\(center2)"
+                )
+            }
         }
     }
 
