@@ -4,9 +4,11 @@ import XCTest
 /// the confirmation alert (exact URL, Cancel dismisses), and double-tap
 /// word selection must keep working alongside the link-tap routing.
 ///
-/// The harness (`--vvterm-ui-test-terminal-keyboard-harness`) feeds the
-/// link line `VVTERM-LINK` (https://example.com) at grid (0,0) once the
-/// surface is ready, mirroring the mouseCaptureSequence timing pattern.
+/// The harness (`--vvterm-ui-test-terminal-keyboard-harness`) clears the
+/// screen, homes the cursor, and feeds the link line `VVTERM-LINK`
+/// (https://example.com) at grid (0,0) plus a plain word `SOMEWORD` on row
+/// 1 once the surface is ready, mirroring the mouseCaptureSequence timing
+/// pattern.
 final class TerminalLinkTapUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -59,10 +61,13 @@ final class TerminalLinkTapUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        // Double-tap the word at grid (0,0): a plain double-tap (no super
-        // modifier) must select the word, not activate the hyperlink.
+        // Double-tap the plain word SOMEWORD at grid (1,0) — NOT the OSC 8
+        // link on row 0: the link's first tap would open the confirmation
+        // alert (super+click activation) and swallow the second tap. The
+        // core's own double-click word selection runs on the plain word and
+        // must surface as nativeSelection=true in the diagnostics.
         let wordCell = terminal.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5 / cols, dy: 0.5 / rows)
+            withNormalizedOffset: CGVector(dx: 0.5 / cols, dy: 1.5 / rows)
         )
         wordCell.doubleTap()
 

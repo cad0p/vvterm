@@ -20,7 +20,10 @@ struct TerminalKeyboardUITestHarness: View {
         "\u{1B}[?1000h\u{1B}[?1006h".utf8
     )
     private static let osc8LinkSequence = Data(
-        "\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\n".utf8
+        // Clear + home first so the link lands at a deterministic grid
+        // (0,0) regardless of the shell's first-prompt race; a plain word
+        // follows on row 1 for the double-tap word-selection test.
+        "\u{1B}[2J\u{1B}[H\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\nSOMEWORD\n".utf8
     )
 
     init() {
@@ -653,7 +656,7 @@ struct TerminalKeyboardUITestHarness: View {
         let mouseScrollReports = mouseReportCount(buttonPattern: "6[45]", terminator: "M")
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
-        let nativeSelection = terminalView.surface?.unsafeCValue.map { ghostty_surface_has_selection($0) } == true
+        let nativeSelection = (terminalView.surface?.unsafeCValue).map { ghostty_surface_has_selection($0) } ?? false
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"

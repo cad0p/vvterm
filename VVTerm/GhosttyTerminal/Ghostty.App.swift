@@ -729,14 +729,16 @@ extension Ghostty {
         }
 
         #if os(macOS)
-        /// Window titles captured when a hover preview starts, keyed by
-        /// window so the original title can be restored when the pointer
-        /// leaves the link. Pruned against the live window set on each hover.
-        private static var hoverPreviewSavedTitles: [ObjectIdentifier: String] = [:]
+        /// Per-window hover state: the title captured when a hover preview
+        /// started and the URL currently shown. Restore is conditional —
+        /// the saved title is only written back while the title still shows
+        /// the hovered URL, so a session SET_TITLE during the hover wins.
+        /// Pruned against the live window set on each hover.
+        private static var hoverPreviewState: [ObjectIdentifier: (savedTitle: String, hoveredURL: String)] = [:]
 
-        private static func pruneHoverPreviewSavedTitles() {
+        private static func pruneHoverPreviewState() {
             let liveWindows = Set(NSApp.windows.map { ObjectIdentifier($0) })
-            hoverPreviewSavedTitles = hoverPreviewSavedTitles.filter { liveWindows.contains($0.key) }
+            hoverPreviewState = hoverPreviewState.filter { liveWindows.contains($0.key) }
         }
         #endif
 
@@ -924,11 +926,11 @@ extension Ghostty {
                     return true
                 }
                 let overLink = action.action.mouse_over_link
-                if let urlPtr = overLink.url, overLink.len > 0 {
+                let urlString: String? = if let urlPtr = overLink.url, overLink.len > 0 {
                     // C string is [CChar] (Int8); String(decoding:as:) needs
                     // UInt8 — rebind for the duration of the copy (same as
                     // the open_url path).
-                    let urlString = urlPtr.withMemoryRebound(
+                    urlPtr.withMemoryRebound(
                         to: UInt8.self,
                         capacity: Int(overLink.len)
                     ) { bytes in
@@ -937,16 +939,26 @@ extension Ghostty {
                             as: UTF8.self
                         )
                     }
-                    Self.pruneHoverPreviewSavedTitles()
+                } else {
+                    nil
+                }
+                // The action callback can run off-main; AppKit state must be
+                // touched on the main thread. Main-queue hops are FIFO, so
+                // the leave-restore is order-preserving after any pending
+                // hover sets.
+                DispatchQueue.main.async {
+                    Self.pruneHoverPreviewState()
                     let windowKey = ObjectIdentifier(window)
-                    if Self.hoverPreviewSavedTitles[windowKey] == nil {
-                        Self.hoverPreviewSavedTitles[windowKey] = window.title
+                    if let urlString, !urlString.isEmpty {
+                        if Self.hoverPreviewState[windowKey] == nil {
+                            Self.hoverPreviewState[windowKey] = (window.title, urlString)
+                        }
+                        window.title = urlString
+                    } else if let state = Self.hoverPreviewState.removeValue(forKey: windowKey) {
+                        if window.title == state.hoveredURL {
+                            window.title = state.savedTitle
+                        }
                     }
-                    window.title = urlString
-                } else if let savedTitle = Self.hoverPreviewSavedTitles.removeValue(
-                    forKey: ObjectIdentifier(window)
-                ) {
-                    window.title = savedTitle
                 }
                 return true
                 #endif
@@ -1104,7 +1116,11 @@ extension Ghostty.App {
         while let presented = presenter.presentedViewController {
             presenter = presented
         }
-        guard presenter.presentedViewController == nil else {
+        // Drop while an alert is already on screen: the top-most presenter
+        // IS the alert in that case (a UIAlertController presenting another
+        // alert is not supported). Without this, rapid link taps would
+        // stack alerts.
+        guard !(presenter is UIAlertController) else {
             Ghostty.logger.debug("open_url confirmation dropped: alert already presented")
             completion(false)
             return
