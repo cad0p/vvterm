@@ -18,7 +18,7 @@ struct GhosttyOpenURLHandlerTests {
     // MARK: - Direct handler tests
 
     @Test
-    func openURLHTTPActionIsHandledAndRouted() {
+    func openURLHTTPActionIsHandledAndRouted() async {
         let sink = URLSink()
         let original = Ghostty.App.externalURLHandler
         Ghostty.App.externalURLHandler = { sink.append($0) }
@@ -27,12 +27,12 @@ struct GhosttyOpenURLHandlerTests {
         let handled = callOpenURLHandler(urlString: "https://example.com/path?q=1#frag")
 
         #expect(handled)
-        pumpMainQueue()
+        await waitForSink(sink)
         #expect(sink.urls == [URL(string: "https://example.com/path?q=1#frag")])
     }
 
     @Test
-    func openURLHTTPSActionIsHandledAndRouted() {
+    func openURLHTTPSActionIsHandledAndRouted() async {
         let sink = URLSink()
         let original = Ghostty.App.externalURLHandler
         Ghostty.App.externalURLHandler = { sink.append($0) }
@@ -41,7 +41,7 @@ struct GhosttyOpenURLHandlerTests {
         let handled = callOpenURLHandler(urlString: "http://example.com")
 
         #expect(handled)
-        pumpMainQueue()
+        await waitForSink(sink)
         #expect(sink.urls == [URL(string: "http://example.com")])
     }
 
@@ -67,7 +67,7 @@ struct GhosttyOpenURLHandlerTests {
     /// link fed as terminal input, a synthetic left-click tap on the link's
     /// cell — the core must emit `open_url` and the apprt must route it.
     @Test
-    func tapOnOSC8LinkInRealSurfaceOpensURL() throws {
+    func tapOnOSC8LinkInRealSurfaceOpensURL() async throws {
         let app = Ghostty.App()
         let appHandle = try #require(app.app)
         let terminal = GhosttyTerminalView(
@@ -101,7 +101,7 @@ struct GhosttyOpenURLHandlerTests {
 
         // OSC 8 hyperlink: ESC ]8;;URL ESC \ label ESC ]8;; ESC \
         surface.feedText("\u{1B}]8;;https://example.com\u{1B}\\VVTERM-OSC8-LINK\u{1B}]8;;\u{1B}\\\n")
-        pumpMainQueue()
+        try await Task.sleep(for: .milliseconds(20))
 
         // Tap the center of the link's cell (0,0) using the core's own cell
         // metrics — the same numbers the core uses for pixel→cell conversion.
@@ -113,7 +113,7 @@ struct GhosttyOpenURLHandlerTests {
         surface.sendMousePos(.init(x: tap.x, y: tap.y, mods: []))
         _ = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
         _ = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
-        pumpMainQueue()
+        await waitForSink(sink)
 
         #expect(sink.urls == [URL(string: "https://example.com")])
     }
@@ -150,8 +150,16 @@ struct GhosttyOpenURLHandlerTests {
         }
     }
 
-    private func pumpMainQueue() {
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+    /// The handler routes through `DispatchQueue.main.async`, so the test
+    /// must yield the main actor for the block to run — a run-loop pump is
+    /// not enough on the swift-testing executor. Bounded wait on the sink.
+    private func waitForSink(_ sink: URLSink, count: Int = 1, timeout: Duration = .seconds(2)) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while sink.urls.count < count {
+            if clock.now >= deadline { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 }
 
