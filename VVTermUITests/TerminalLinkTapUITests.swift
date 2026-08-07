@@ -99,16 +99,12 @@ final class TerminalLinkTapUITests: XCTestCase {
         )
         // Two separate taps instead of doubleTap(): the synthesized
         // double-tap's second touch never reaches the view in this harness
-        // (viewTouches stays 1). The ~0.25s gap stays inside the core's
-        // 500ms multi-click interval, so the second press still lands as a
-        // double-click word selection.
+        // (viewTouches stays 1). No wait between the taps — the diagnostic
+        // label poll alone (~0.3-0.5s) plus the injected gap pushed press #2
+        // past the core's 500ms multi-click interval (evidence: viewTouches
+        // =2 tapFires=2 but no word selection). A fixed 0.25s gap keeps the
+        // presses ~0.3s apart, inside the interval.
         wordCell.tap()
-        wait(
-            for: diagnostics,
-            labelContaining: "tapFires=1",
-            timeout: 3,
-            diagnostics: diagnosticsText(in: app)
-        )
         RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         wordCell.tap()
         wait(
