@@ -94,6 +94,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
     @State private var linkFeedDelivered = false
+    @State private var osc8DoubleClickDelivered = false
     @State private var receivedInput = Data()
     @State private var returnInputCount = 0
     @State private var codexResponseCount = 0
@@ -124,6 +125,10 @@ struct TerminalKeyboardUITestHarness: View {
 
     private var feedsOSC8Link: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-osc8-link")
+    }
+
+    private var feedsOSC8DoubleClick: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-osc8-double-click")
     }
 
     private var testsAppShortcutInputs: Bool {
@@ -664,6 +669,9 @@ struct TerminalKeyboardUITestHarness: View {
         if feedsOSC8Link {
             deliverOSC8LinkFeedIfPossible()
         }
+        if feedsOSC8DoubleClick {
+            deliverOSC8DoubleClickIfPossible()
+        }
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
@@ -689,6 +697,37 @@ struct TerminalKeyboardUITestHarness: View {
             + " viewTouches=\(terminalView.keyboardUITestDirectTouchCount)"
             + " tapFires=\(terminalView.keyboardUITestDirectTapFires)"
             + " terminalLink=\(Self.terminalLinkRingTail())"
+    }
+
+    /// Drives a synthetic double-click (two press/release pairs 150ms apart)
+    /// at grid (11,0) once the link feed has landed. XCUITest tap injection
+    /// latency on loaded CI simulators can push a second synthetic tap past
+    /// the core's 500ms multi-click interval (press #2 then counts as a
+    /// fresh single click); driving the clicks in-process with a fixed gap
+    /// exercises the same send path the direct-tap recognizer uses, with
+    /// deterministic timing. Mirrors the super-modifier routing of a real
+    /// tap (the core only needs the mods for link activation, which this
+    /// non-link cell never triggers).
+    private func deliverOSC8DoubleClickIfPossible() {
+        guard !osc8DoubleClickDelivered, let terminalView,
+              linkFeedDelivered,
+              let surface = terminalView.surface,
+              let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
+        else { return }
+        osc8DoubleClickDelivered = true
+        let mods: Ghostty.Input.Mods = [.super]
+        surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
+        surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
+        surface.sendMouseButton(.init(action: .release, button: .left, mods: mods))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminalView] in
+            guard let terminalView,
+                  let surface = terminalView.surface,
+                  let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
+            else { return }
+            surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
+            surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
+            surface.sendMouseButton(.init(action: .release, button: .left, mods: mods))
+        }
     }
 
     /// Feeds the OSC 8 link line once the core surface exists. Retried from

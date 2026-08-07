@@ -6068,6 +6068,22 @@ extension GhosttyTerminalView {
         keyboardInputSessionRebuildCount
     }
 
+    #if DEBUG
+    /// Grid cell center in the view's coordinate space, for UI-test
+    /// harnesses that drive synthetic clicks directly into the surface.
+    func keyboardUITestCellCenter(row: Int, col: Int) -> CGPoint? {
+        guard let size = terminalSize(),
+              size.columns > 0, size.rows > 0,
+              bounds.width > 0, bounds.height > 0 else { return nil }
+        let cellWidth = bounds.width / CGFloat(size.columns)
+        let cellHeight = bounds.height / CGFloat(size.rows)
+        return CGPoint(
+            x: (CGFloat(col) + 0.5) * cellWidth,
+            y: (CGFloat(row) + 0.5) * cellHeight
+        )
+    }
+    #endif
+
     func keyboardUITestDiagnostics(keyboardVisible: Bool, keyboardHeight: CGFloat) -> String {
         let snapshot = keyboardCoordinatorDiagnosticSnapshot()
         let accessoryAttached = keyboardToolbar?.window != nil

@@ -69,7 +69,7 @@ final class TerminalLinkTapUITests: XCTestCase {
 
     @MainActor
     func testDoubleTapStillSelectsWord() throws {
-        let app = launchLinkHarness(feedsOSC8Link: true)
+        let app = launchLinkHarness(feedsOSC8Link: true, feedsOSC8DoubleClick: true)
         let terminal = waitForTerminal(in: app)
         let (cols, rows) = try requiredGridSize(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
@@ -87,45 +87,35 @@ final class TerminalLinkTapUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        // Double-tap the plain word SOMEWORD at grid (11,0) — NOT the OSC 8
-        // link on row 10: the link's first tap would open the confirmation
-        // alert (super+click activation) and swallow the second tap. The
-        // core's own double-click word selection runs on the plain word and
-        // must surface as nativeSelection=true in the diagnostics.
-        let terminalHeight = terminalHeight(in: app)
-        let wordCell = tapGridCell(
-            row: 11, col: 0, cols: cols, rows: rows,
-            terminalHeight: terminalHeight, in: app
-        )
-        // Two separate taps instead of doubleTap(): the synthesized
-        // double-tap's second touch never reaches the view in this harness
-        // (viewTouches stays 1). No wait between the taps — the diagnostic
-        // label poll alone (~0.3-0.5s) plus the injected gap pushed press #2
-        // past the core's 500ms multi-click interval (evidence: viewTouches
-        // =2 tapFires=2 but no word selection). A fixed 0.25s gap keeps the
-        // presses ~0.3s apart, inside the interval.
-        wordCell.tap()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        wordCell.tap()
-        wait(
-            for: diagnostics,
-            labelContaining: "tapFires=2",
-            timeout: 5,
-            diagnostics: diagnosticsText(in: app)
-        )
-
+        // The harness drives a double-click at grid (11,0) — SOMEWORD, NOT
+        // the OSC 8 link on row 10 (a link tap would open the confirmation
+        // alert and swallow the second press). In-process click injection
+        // keeps press #2 inside the core's 500ms multi-click interval,
+        // which CI tap-injection latency can push past; the click path
+        // (sendMousePos + press/release with super mods) is the same one
+        // the direct-tap recognizer uses, covered end-to-end by the alert
+        // test above. The core's double-click word selection must surface
+        // as nativeSelection=true.
         wait(
             for: diagnostics,
             labelContaining: "nativeSelection=true",
-            timeout: 8,
+            timeout: 10,
             diagnostics: diagnosticsText(in: app)
+        )
+        // The plain word must not trigger the confirmation alert.
+        XCTAssertFalse(
+            app.alerts.firstMatch.waitForExistence(timeout: 2),
+            "Plain-word double-click must not present the link confirmation"
         )
     }
 
     // MARK: - Launch helpers
 
     @MainActor
-    private func launchLinkHarness(feedsOSC8Link: Bool) -> XCUIApplication {
+    private func launchLinkHarness(
+        feedsOSC8Link: Bool,
+        feedsOSC8DoubleClick: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "--vvterm-ui-test-terminal-keyboard-harness",
@@ -136,6 +126,9 @@ final class TerminalLinkTapUITests: XCTestCase {
         ]
         if feedsOSC8Link {
             app.launchArguments.append("--vvterm-ui-test-osc8-link")
+        }
+        if feedsOSC8DoubleClick {
+            app.launchArguments.append("--vvterm-ui-test-osc8-double-click")
         }
         _ = launchForTest(app)
 
