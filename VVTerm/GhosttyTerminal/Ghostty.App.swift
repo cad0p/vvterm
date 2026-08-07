@@ -701,6 +701,16 @@ extension Ghostty {
             }
         }
 
+        /// Opens a URL in the platform's default handler. Swappable seam so
+        /// tests can observe link activations without launching Safari.
+        static var externalURLHandler: (URL) -> Void = { url in
+            #if os(macOS)
+            NSWorkspace.shared.open(url)
+            #else
+            UIApplication.shared.open(url)
+            #endif
+        }
+
         static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
             // Get the terminal view from surface userdata if target is a surface
             var titleTargetDescription = "target \(target.tag.rawValue)"
@@ -871,6 +881,31 @@ extension Ghostty {
                 Ghostty.logger.debug("Action received: \(action.tag.rawValue) on target: \(target.tag.rawValue)")
                 return false
                 #endif
+
+            case GHOSTTY_ACTION_OPEN_URL:
+                // OSC 8 hyperlink activated (or file/text link). The core's
+                // own fallback `internal_os.open` is `error.Unimplemented`
+                // on iOS, so an unhandled action means link clicks are
+                // silent no-ops. Only http(s) is routed to the platform
+                // opener: a remote host controls this string, and arbitrary
+                // schemes would let it drive `file://`, `itms-apps://`, …
+                // on the device. Non-http(s) falls through to the core's
+                // fallback (macOS `open` handles file://; iOS no-ops).
+                let openURL = action.action.open_url
+                let urlString = String(
+                    decoding: UnsafeBufferPointer(start: openURL.url, count: Int(openURL.len)),
+                    as: UTF8.self
+                )
+                guard let url = URL(string: urlString),
+                      let scheme = url.scheme?.lowercased(),
+                      scheme == "http" || scheme == "https"
+                else {
+                    return false
+                }
+                DispatchQueue.main.async {
+                    Ghostty.App.externalURLHandler(url)
+                }
+                return true
 
             default:
                 // Log unhandled actions
