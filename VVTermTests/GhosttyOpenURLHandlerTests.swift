@@ -22,8 +22,13 @@ struct GhosttyOpenURLHandlerTests {
     func openURLHTTPActionIsHandledAndRouted() async {
         let sink = URLSink()
         let original = Ghostty.App.externalURLHandler
+        let originalConfirmation = Ghostty.App.linkConfirmationHandler
         Ghostty.App.externalURLHandler = { sink.append($0) }
-        defer { Ghostty.App.externalURLHandler = original }
+        Ghostty.App.linkConfirmationHandler = { _, done in done(true) }
+        defer {
+            Ghostty.App.externalURLHandler = original
+            Ghostty.App.linkConfirmationHandler = originalConfirmation
+        }
 
         let handled = callOpenURLHandler(urlString: "https://example.com/path?q=1#frag")
 
@@ -36,8 +41,13 @@ struct GhosttyOpenURLHandlerTests {
     func openURLHTTPSActionIsHandledAndRouted() async {
         let sink = URLSink()
         let original = Ghostty.App.externalURLHandler
+        let originalConfirmation = Ghostty.App.linkConfirmationHandler
         Ghostty.App.externalURLHandler = { sink.append($0) }
-        defer { Ghostty.App.externalURLHandler = original }
+        Ghostty.App.linkConfirmationHandler = { _, done in done(true) }
+        defer {
+            Ghostty.App.externalURLHandler = original
+            Ghostty.App.linkConfirmationHandler = originalConfirmation
+        }
 
         let handled = callOpenURLHandler(urlString: "http://example.com")
 
@@ -93,8 +103,13 @@ struct GhosttyOpenURLHandlerTests {
 
         let sink = URLSink()
         let original = Ghostty.App.externalURLHandler
+        let originalConfirmation = Ghostty.App.linkConfirmationHandler
         Ghostty.App.externalURLHandler = { sink.append($0) }
-        defer { Ghostty.App.externalURLHandler = original }
+        Ghostty.App.linkConfirmationHandler = { _, done in done(true) }
+        defer {
+            Ghostty.App.externalURLHandler = original
+            Ghostty.App.linkConfirmationHandler = originalConfirmation
+        }
 
         // A real layout would set the size; do it explicitly so the grid and
         // cell metrics are well-defined regardless of renderer state.
@@ -129,6 +144,53 @@ struct GhosttyOpenURLHandlerTests {
         await waitForSink(sink)
 
         #expect(sink.urls == [URL(string: "https://example.com")])
+    }
+
+    // MARK: - Link confirmation
+
+    @Test
+    func openURLConfirmationCancelSuppressesOpen() async {
+        let sink = URLSink()
+        let original = Ghostty.App.externalURLHandler
+        let originalConfirmation = Ghostty.App.linkConfirmationHandler
+        Ghostty.App.externalURLHandler = { sink.append($0) }
+        Ghostty.App.linkConfirmationHandler = { _, done in done(false) }
+        defer {
+            Ghostty.App.externalURLHandler = original
+            Ghostty.App.linkConfirmationHandler = originalConfirmation
+        }
+
+        let handled = callOpenURLHandler(urlString: "https://example.com/path?q=1#frag")
+
+        #expect(handled)
+        // Let the async hops (open_url dispatch → confirmation → opener)
+        // settle; the opener must never run after a cancel.
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(sink.urls.isEmpty)
+    }
+
+    @Test
+    func openURLConfirmationReceivesExactURL() async {
+        let sink = URLSink()
+        let original = Ghostty.App.externalURLHandler
+        let originalConfirmation = Ghostty.App.linkConfirmationHandler
+        Ghostty.App.externalURLHandler = { sink.append($0) }
+        var confirmedURL: URL?
+        Ghostty.App.linkConfirmationHandler = { url, done in
+            confirmedURL = url
+            done(true)
+        }
+        defer {
+            Ghostty.App.externalURLHandler = original
+            Ghostty.App.linkConfirmationHandler = originalConfirmation
+        }
+
+        let handled = callOpenURLHandler(urlString: "https://example.com/path?q=1#frag")
+
+        #expect(handled)
+        await waitForSink(sink)
+        #expect(confirmedURL == URL(string: "https://example.com/path?q=1#frag"))
+        #expect(sink.urls == [URL(string: "https://example.com/path?q=1#frag")])
     }
 
     // MARK: - Helpers

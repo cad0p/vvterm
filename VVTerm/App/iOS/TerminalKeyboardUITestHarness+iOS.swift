@@ -19,6 +19,9 @@ struct TerminalKeyboardUITestHarness: View {
     private static let mouseCaptureSequence = Data(
         "\u{1B}[?1000h\u{1B}[?1006h".utf8
     )
+    private static let osc8LinkSequence = Data(
+        "\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\n".utf8
+    )
 
     init() {
         _ = Self.clearTerminalBackgroundCacheForUITest
@@ -110,6 +113,10 @@ struct TerminalKeyboardUITestHarness: View {
 
     private var simulatesTerminalMouseCapture: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-mouse-capture")
+    }
+
+    private var feedsOSC8Link: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-osc8-link")
     }
 
     private var testsAppShortcutInputs: Bool {
@@ -646,6 +653,7 @@ struct TerminalKeyboardUITestHarness: View {
         let mouseScrollReports = mouseReportCount(buttonPattern: "6[45]", terminator: "M")
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
+        let nativeSelection = terminalView.surface?.unsafeCValue.map { ghostty_surface_has_selection($0) } == true
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
@@ -666,6 +674,7 @@ struct TerminalKeyboardUITestHarness: View {
             + " paneFocusActions=\(paneFocusActionCount)"
             + " lastPaneCloseDialogAction=\(lastPaneCloseDialogAction)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
+            + " nativeSelection=\(nativeSelection)"
     }
 
     private func inputByteCount(_ byte: UInt8) -> Int {
@@ -722,6 +731,12 @@ struct TerminalKeyboardUITestHarness: View {
         manager.keyboardCoordinator.setViewActive(true)
         if simulatesTerminalMouseCapture {
             terminalView.feedData(Self.mouseCaptureSequence)
+        }
+        if feedsOSC8Link {
+            // OSC 8 hyperlink line: the label "VVTERM-LINK" renders at grid
+            // (0,0) and carries https://example.com. Fed after the surface is
+            // ready, mirroring the mouseCaptureSequence timing.
+            terminalView.feedData(Self.osc8LinkSequence)
         }
         lifecycleStatus = .connected
     }

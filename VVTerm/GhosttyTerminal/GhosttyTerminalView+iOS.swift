@@ -2780,10 +2780,9 @@ class GhosttyTerminalView: UIView {
         // in terminal mouse reports (shift/alt/ctrl only), so mouse-aware
         // apps (vim, tmux, htop) still see an unmodified click.
         let linkTapMods: Ghostty.Input.Mods = [.super]
-        Ghostty.logger.diagInfo(
-            "terminal-link-tap",
-            "direct tap sent pos=\(position.x),\(position.y) mods=super"
-        )
+        // Per-tap noise must not enter the 2MB diagnostics ring; the BLOCKED
+        // variant above stays in the ring (rare, high value).
+        Ghostty.logger.debug("direct tap sent pos=\(position.x),\(position.y) mods=super")
         surface.sendMousePos(.init(x: position.x, y: position.y, mods: linkTapMods))
         surface.sendMouseButton(.init(action: .press, button: .left, mods: linkTapMods))
         surface.sendMouseButton(.init(action: .release, button: .left, mods: linkTapMods))
