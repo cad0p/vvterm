@@ -57,6 +57,7 @@ struct TeleportServerIntegrationTests {
     /// The 30s default connect budget is tight for a contended CI runner
     /// (the off leg's outer handshake has stalled 18-30s+ there); give the
     /// E2E path headroom. The app default is unchanged.
+    @MainActor
     private static func makeTeleportClient() async throws -> (client: SSHClient, clusterId: UUID) {
         let environment = ProcessInfo.processInfo.environment
         guard let cert = environment["VVTERM_TELEPORT_CERT"] else {

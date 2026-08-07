@@ -128,15 +128,17 @@ struct GhosttyOpenURLHandlerTests {
         var target = ghostty_target_s()
         target.tag = GHOSTTY_TARGET_APP
 
-        let utf8 = Array(urlString.utf8)
-        return utf8.withUnsafeBufferPointer { buffer in
+        // The imported C struct has no memberwise init; fill fields directly.
+        // CChar(bitPattern:) preserves the UTF-8 bytes for the C string.
+        let cchars = urlString.utf8.map { CChar(bitPattern: $0) }
+        return cchars.withUnsafeBufferPointer { buffer in
             var action = ghostty_action_s()
             action.tag = GHOSTTY_ACTION_OPEN_URL
-            action.action.open_url = ghostty_action_open_url_s(
-                kind: GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN,
-                url: buffer.baseAddress,
-                len: UInt(utf8.count)
-            )
+            var openURL = ghostty_action_open_url_s()
+            openURL.kind = GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN
+            openURL.url = buffer.baseAddress
+            openURL.len = UInt(cchars.count)
+            action.action.open_url = openURL
             return Ghostty.App.action(nil, target, action)
         }
     }
