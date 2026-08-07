@@ -141,6 +141,12 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             EXPANDED_CODE_SIGN_IDENTITY="" \
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED \
+            # Xcode 27's build system records dev/inode of inputs; restored
+            # DerivedData files get new inodes and would otherwise invalidate
+            # every target (measured: full Cmlx + 50 Swift recompiles with
+            # zero source changes). Same flag unit-tests uses for its
+            # cache-restored DerivedData.
+            IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/ota-archive.log"
 
       - name: Package unsigned archive
