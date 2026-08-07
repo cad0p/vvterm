@@ -76,10 +76,9 @@ jobs:
             --workflow "$WORKFLOW" \
             --branch main \
             --event push \
-            --status in_progress,queued \
             --limit 20 \
-            --json databaseId,createdAt \
-            --jq 'sort_by(.createdAt) | .[-1].databaseId // empty')"
+            --json databaseId,createdAt,status \
+            --jq '[.[] | select(.status == "in_progress" or .status == "queued")] | sort_by(.createdAt) | .[-1].databaseId // empty')"
           if [[ -n "$newest_id" && "$newest_id" -gt "$GITHUB_RUN_ID" ]]; then
             echo "Newer release run $newest_id exists — cancelling stale backlog (this run included)"
             queued_ids="$(gh run list \
