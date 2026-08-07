@@ -706,9 +706,9 @@ struct TerminalKeyboardUITestHarness: View {
     /// the core's 500ms multi-click interval (press #2 then counts as a
     /// fresh single click); driving the clicks in-process with a fixed gap
     /// exercises the same send path the direct-tap recognizer uses, with
-    /// deterministic timing. Mirrors the super-modifier routing of a real
-    /// tap (the core only needs the mods for link activation, which this
-    /// non-link cell never triggers).
+    /// deterministic timing. No modifier keys: they only matter for OSC 8
+    /// link activation, which the alert test covers end-to-end — keeping
+    /// them out isolates the core's multi-click word-selection path.
     private func deliverOSC8DoubleClickIfPossible() {
         guard !osc8DoubleClickDelivered, let terminalView,
               linkFeedDelivered,
@@ -716,20 +716,26 @@ struct TerminalKeyboardUITestHarness: View {
               let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
         else { return }
         osc8DoubleClickDelivered = true
-        Ghostty.logger.diagInfo("terminal-link", "harness double-click injected at row=11 col=0")
-        let mods: Ghostty.Input.Mods = [.super]
-        surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
-        surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
-        surface.sendMouseButton(.init(action: .release, button: .left, mods: mods))
+        let press1 = sendClick(at: point, on: surface)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminalView] in
             guard let terminalView,
                   let surface = terminalView.surface,
                   let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
             else { return }
-            surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
-            surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
-            surface.sendMouseButton(.init(action: .release, button: .left, mods: mods))
+            let press2 = sendClick(at: point, on: surface)
+            Ghostty.logger.diagInfo(
+                "terminal-link",
+                "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) press1=\(press1) press2=\(press2)"
+            )
         }
+    }
+
+    private func sendClick(at point: CGPoint, on surface: Ghostty.Surface) -> Bool {
+        let mods: Ghostty.Input.Mods = []
+        surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
+        let press = surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
+        let release = surface.sendMouseButton(.init(action: .release, button: .left, mods: mods))
+        return press && release
     }
 
     /// Feeds the OSC 8 link line once the core surface exists. Retried from
