@@ -5,7 +5,8 @@
 #     group, wait for ASC processing, force_pro=true for owner/fork builds).
 #   - push to main: automatic release on PR merge. Uses the non-dispatch
 #     defaults in "Resolve release inputs": Internal Testers, no processing
-#     wait, force_pro=false (real users go through StoreKit).
+#     wait, force_pro=true (owner device-test builds — Pro forced on, no
+#     StoreKit, matching the OTA pipeline).
 #
 # Independent of the OTA chain: "VVTerm PR OTA" triggers on pull_request
 # and ios-adhoc-pr's workflow_run filter is pinned to that workflow's name,
@@ -227,7 +228,12 @@ jobs:
           else
             BETA_GROUP_NAMES="Internal Testers"
             WAIT_FOR_PROCESSING="0"
-            FORCE_PRO="0"
+            # Owner device-test builds: Pro forced on (no StoreKit), matching
+            # the OTA pipeline (FORCE_PRO_ENABLED) and the workflow_dispatch
+            # default. The group is Internal Testers = owner devices; if real
+            # users are ever added to a TestFlight group, ship them via
+            # workflow_dispatch with force_pro=false instead.
+            FORCE_PRO="1"
           fi
 
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
