@@ -153,21 +153,17 @@ struct TerminalPointerInputRoutingPolicyTests {
     }
 
     @Test
-    func routesDirectTouchClickToAvailableCapturedTerminal() {
+    func routesDirectTouchClickToAvailableTerminal() {
+        // Regression: the tap used to be gated on the foreground app having
+        // mouse reporting enabled — which silently killed OSC 8 link clicks
+        // in plain shells / zmx sessions (no mouse mode → tap dropped before
+        // the core ever saw it). The core receives taps in non-captured apps
+        // safely: a tap on a link activates it (and is swallowed); any other
+        // tap is a no-op (no mouse report is emitted when the app isn't
+        // capturing, and prompt-click is gated on OSC 9;9 semantic prompts +
+        // cursor_click_to_move).
         #expect(
             TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                terminalMouseCaptured: true,
-                terminalInputAvailable: true,
-                selectionInteractionActive: false
-            )
-        )
-    }
-
-    @Test
-    func doesNotRouteDirectTouchClickOutsideMouseCapture() {
-        #expect(
-            !TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                terminalMouseCaptured: false,
                 terminalInputAvailable: true,
                 selectionInteractionActive: false
             )
@@ -178,7 +174,6 @@ struct TerminalPointerInputRoutingPolicyTests {
     func excludesSelectionInteractionFromDirectTouchClick() {
         #expect(
             !TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                terminalMouseCaptured: true,
                 terminalInputAvailable: true,
                 selectionInteractionActive: true
             )
@@ -189,7 +184,6 @@ struct TerminalPointerInputRoutingPolicyTests {
     func excludesUnavailableTerminalInputFromDirectTouchClick() {
         #expect(
             !TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                terminalMouseCaptured: true,
                 terminalInputAvailable: false,
                 selectionInteractionActive: false
             )

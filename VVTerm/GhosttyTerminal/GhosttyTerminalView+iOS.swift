@@ -2757,7 +2757,6 @@ class GhosttyTerminalView: UIView {
         let inputAvailable = canRouteTerminalInput && !isPaused && !isShuttingDown
         let selectionActive = hasActiveSelectionInteraction(at: location)
         let shouldSend = TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-            terminalMouseCaptured: surface.mouseCaptured,
             terminalInputAvailable: inputAvailable,
             selectionInteractionActive: selectionActive
         )
@@ -5705,14 +5704,12 @@ extension GhosttyTerminalView: UIGestureRecognizerDelegate {
         if !usesAppOwnedTouchSelection,
            gestureRecognizer == directTouchLongPressExclusionRecognizer {
             return TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                terminalMouseCaptured: surface?.mouseCaptured == true,
                 terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
                 selectionInteractionActive: false
             )
         }
         if gestureRecognizer == directTouchTapRecognizer {
             return TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                terminalMouseCaptured: surface?.mouseCaptured == true,
                 terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
                 selectionInteractionActive: hasActiveSelectionInteraction(at: touch.location(in: self))
             )
