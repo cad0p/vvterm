@@ -2762,7 +2762,7 @@ class GhosttyTerminalView: UIView {
         )
         guard shouldSend else {
             let selectionDetail: String = if usesNativeTouchSelection {
-                "nativeRange=\(nativeSelectedRange != nil) interactionActive=\(nativeSelectionInteractionActive) prefersFR=\(prefersNativeSelectionFirstResponder) handle=\(isPointOnNativeSelectionHandleHitArea(at: location))"
+                "nativeRange=\(nativeSelectedRange != nil) interactionActive=\(nativeSelectionInteractionActive) prefersFR=\(prefersNativeSelectionFirstResponder) handle=\(isPointOnNativeSelectionHandleHitArea(location))"
             } else {
                 "touchSelection=\(touchSelection != nil) isSelecting=\(isSelecting)"
             }
