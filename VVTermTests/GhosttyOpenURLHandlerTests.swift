@@ -139,7 +139,14 @@ struct GhosttyOpenURLHandlerTests {
             openURL.url = buffer.baseAddress
             openURL.len = UInt(cchars.count)
             action.action.open_url = openURL
-            return Ghostty.App.action(nil, target, action)
+            // ghostty_app_t is a non-optional raw pointer; the handler only
+            // dereferences it for surface targets, so a dummy pointer is
+            // safe for the .app-target path exercised here.
+            return Ghostty.App.action(
+                UnsafeMutableRawPointer(bitPattern: 0x1)!,
+                target: target,
+                action: action
+            )
         }
     }
 
