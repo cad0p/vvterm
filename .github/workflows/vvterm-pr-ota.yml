@@ -26,6 +26,14 @@
 #
 # Cost: ~12 min on xcode-27 per push (self-contained Release archive;
 # SPM cache shared with PR CI via the xcode27-spm- key prefix).
+#
+# Queue semantics mirror ios-testflight.yml (latest-wins, never cancel an
+# in-flight build): the per-PR concurrency group serializes runs with
+# cancel-in-progress=false, and the "Coalesce OTA backlog" step cancels
+# superseded queued runs (and itself) when a newer push-triggered run is
+# waiting, so only the newest commit of a rapid-push burst builds. A
+# superseded run concludes "cancelled" — ios-adhoc-pr treats that as a
+# graceful no-op (no OTA build to publish).
 
 name: VVTerm PR OTA
 
@@ -36,10 +44,11 @@ on:
 
 permissions:
   contents: read
+  actions: write   # gh run cancel for backlog coalescing (same as ios-testflight)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false   # never kill an in-flight build; coalesce instead
 
 jobs:
   ota-archive:
@@ -49,6 +58,50 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
     steps:
+      - name: Coalesce OTA backlog (latest commit wins)
+        # Latest-wins queue management for rapid pushes, mirroring
+        # ios-testflight.yml. The per-PR concurrency group serializes runs,
+        # so exactly one run is in_progress per PR at a time — any other
+        # in_progress/queued run here is newer than this one. Manual
+        # dispatches (mode=renew) are never touched (event filter).
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          WORKFLOW="${{ github.workflow }}"
+          BRANCH="${{ github.head_ref }}"
+          newest_id="$(gh run list \
+            --repo "$REPO" \
+            --workflow "$WORKFLOW" \
+            --branch "$BRANCH" \
+            --event pull_request \
+            --limit 20 \
+            --json databaseId,createdAt,status \
+            --jq '[.[] | select(.status == "in_progress" or .status == "queued")] | sort_by(.createdAt) | .[-1].databaseId // empty')"
+          if [[ -n "$newest_id" && "$newest_id" -gt "$GITHUB_RUN_ID" ]]; then
+            echo "Newer OTA run $newest_id exists — cancelling stale backlog (this run included)"
+            queued_ids="$(gh run list \
+              --repo "$REPO" \
+              --workflow "$WORKFLOW" \
+              --branch "$BRANCH" \
+              --event pull_request \
+              --status queued \
+              --limit 50 \
+              --json databaseId \
+              --jq '.[].databaseId')"
+            for id in $queued_ids; do
+              if [[ "$id" -gt "$GITHUB_RUN_ID" && "$id" != "$newest_id" ]]; then
+                gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1 || true
+                echo "  cancelled stale run $id"
+              fi
+            done
+            gh run cancel "$GITHUB_RUN_ID" --repo "$REPO"
+            exit 1
+          fi
+          echo "Newest OTA run — proceeding"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
