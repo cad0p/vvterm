@@ -707,7 +707,12 @@ extension Ghostty {
             #if os(macOS)
             NSWorkspace.shared.open(url)
             #else
-            UIApplication.shared.open(url)
+            UIApplication.shared.open(url) { success in
+                Ghostty.logger.diagInfo(
+                    "terminal-link",
+                    "open result success=\(success)"
+                )
+            }
             #endif
         }
 
@@ -904,12 +909,25 @@ extension Ghostty {
                         as: UTF8.self
                     )
                 }
+                // Diagnostics (no raw host in the shareable report — scheme
+                // + length only; full URL stays in os_log as .private).
                 guard let url = URL(string: urlString),
                       let scheme = url.scheme?.lowercased(),
                       scheme == "http" || scheme == "https"
                 else {
+                    let scheme = URL(string: urlString)?.scheme ?? "none"
+                    Ghostty.logger.diagInfo(
+                        "terminal-link",
+                        "open_url action REJECTED scheme=\(scheme) length=\(urlString.count)"
+                    )
+                    Ghostty.logger.debug("open_url rejected url=\(urlString, privacy: .private)")
                     return false
                 }
+                Ghostty.logger.diagInfo(
+                    "terminal-link",
+                    "open_url action handled scheme=\(scheme) length=\(urlString.count)"
+                )
+                Ghostty.logger.debug("open_url url=\(urlString, privacy: .private)")
                 DispatchQueue.main.async {
                     Ghostty.App.externalURLHandler(url)
                 }
