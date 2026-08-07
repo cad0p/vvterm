@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import UIKit
 import Testing
 @testable import VVTerm
 
