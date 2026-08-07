@@ -33,7 +33,7 @@ struct ConnectionTerminalContainer: View {
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
     #if os(iOS)
-    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) var preservesTerminalSizeForKeyboard = true
+    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) var preservesTerminalSizeForKeyboard = TerminalDefaults.defaultPreserveTerminalSizeForKeyboard
     #endif
 
     /// Disconnect confirmation
