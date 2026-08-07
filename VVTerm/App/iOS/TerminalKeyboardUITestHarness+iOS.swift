@@ -90,6 +90,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var diagnostics = "notReady"
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
+    @State private var linkFeedDelivered = false
     @State private var receivedInput = Data()
     @State private var returnInputCount = 0
     @State private var codexResponseCount = 0
@@ -657,6 +658,9 @@ struct TerminalKeyboardUITestHarness: View {
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
         let nativeSelection = (terminalView.surface?.unsafeCValue).map { ghostty_surface_has_selection($0) } ?? false
+        if feedsOSC8Link {
+            deliverOSC8LinkFeedIfPossible()
+        }
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
@@ -678,6 +682,33 @@ struct TerminalKeyboardUITestHarness: View {
             + " lastPaneCloseDialogAction=\(lastPaneCloseDialogAction)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
             + " nativeSelection=\(nativeSelection)"
+            + " linkFeed=\(linkFeedDelivered ? "delivered" : "pending")"
+            + " terminalLink=\(Self.terminalLinkRingTail())"
+    }
+
+    /// Feeds the OSC 8 link line once the core surface exists. Retried from
+    /// the diagnostics tick (0.15s cadence) until delivered: at harness mount
+    /// the ghostty surface can still be initializing, and feedData drops the
+    /// bytes silently when the surface is nil — which left the link test
+    /// tapping an empty grid.
+    private func deliverOSC8LinkFeedIfPossible() {
+        guard !linkFeedDelivered, let terminalView else { return }
+        guard terminalView.surface != nil else { return }
+        terminalView.feedData(Self.osc8LinkSequence)
+        linkFeedDelivered = true
+    }
+
+    /// Tail of the on-device diagnostics ring for the terminal-link category
+    /// (tap sent/BLOCKED, open_url handled, open result). Exposed in the
+    /// harness diagnostics so UI-test failures show exactly where the link
+    /// tap chain broke. Ring entries are non-sensitive by policy (scheme +
+    /// length only; full URLs are os_log .private).
+    private static func terminalLinkRingTail() -> String {
+        let tail = DiagnosticsRecorder.shared.entries(since: Date().addingTimeInterval(-120))
+            .filter { $0.category == "terminal-link" }
+            .suffix(6)
+            .map { $0.message }
+        return tail.isEmpty ? "none" : tail.joined(separator: " | ")
     }
 
     private func inputByteCount(_ byte: UInt8) -> Int {
@@ -738,8 +769,12 @@ struct TerminalKeyboardUITestHarness: View {
         if feedsOSC8Link {
             // OSC 8 hyperlink line: the label "VVTERM-LINK" renders at grid
             // (0,0) and carries https://example.com. Fed after the surface is
-            // ready, mirroring the mouseCaptureSequence timing.
-            terminalView.feedData(Self.osc8LinkSequence)
+            // ready, mirroring the mouseCaptureSequence timing. The core
+            // surface may not exist yet at mount (feedData drops silently),
+            // so a pending flag retries the feed from the diagnostics tick
+            // until it lands (see refreshDiagnostics).
+            linkFeedDelivered = false
+            deliverOSC8LinkFeedIfPossible()
         }
         lifecycleStatus = .connected
     }

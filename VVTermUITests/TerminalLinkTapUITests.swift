@@ -27,6 +27,14 @@ final class TerminalLinkTapUITests: XCTestCase {
             timeout: 8,
             diagnostics: diagnosticsText(in: app)
         )
+        // The OSC 8 feed only lands once the core surface exists (feedData
+        // drops silently before that); tap only after delivery is confirmed.
+        wait(
+            for: diagnostics,
+            labelContaining: "linkFeed=delivered",
+            timeout: 8,
+            diagnostics: diagnosticsText(in: app)
+        )
 
         // The link starts at grid (0,0); a cell is ~(1/cols, 1/rows) of the
         // terminal, so its center sits at (0.5/cols, 0.5/rows).
@@ -57,6 +65,13 @@ final class TerminalLinkTapUITests: XCTestCase {
         wait(
             for: diagnostics,
             labelContaining: "nativeSelection=false",
+            timeout: 8,
+            diagnostics: diagnosticsText(in: app)
+        )
+        // Tap only after the feed is confirmed delivered (see above).
+        wait(
+            for: diagnostics,
+            labelContaining: "linkFeed=delivered",
             timeout: 8,
             diagnostics: diagnosticsText(in: app)
         )
