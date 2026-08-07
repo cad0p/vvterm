@@ -2751,18 +2751,24 @@ class GhosttyTerminalView: UIView {
 
     @objc private func handleDirectTouchTap(_ recognizer: UITapGestureRecognizer) {
         guard recognizer.state == .ended,
-              let surface,
-              TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
-                  terminalMouseCaptured: surface.mouseCaptured,
-                  terminalInputAvailable: canRouteTerminalInput && !isPaused && !isShuttingDown,
-                  selectionInteractionActive: hasActiveSelectionInteraction(
-                      at: recognizer.location(in: self)
-                  )
-              ) else {
+              let surface else { return }
+        let location = recognizer.location(in: self)
+        let position = ghosttyPoint(location)
+        let inputAvailable = canRouteTerminalInput && !isPaused && !isShuttingDown
+        let selectionActive = hasActiveSelectionInteraction(at: location)
+        let shouldSend = TerminalPointerInputRoutingPolicy.shouldSendDirectTouchClick(
+            terminalMouseCaptured: surface.mouseCaptured,
+            terminalInputAvailable: inputAvailable,
+            selectionInteractionActive: selectionActive
+        )
+        guard shouldSend else {
+            Ghostty.logger.diagInfo(
+                "terminal-link-tap",
+                "direct tap BLOCKED pos=\(position.x),\(position.y) mouseCaptured=\(surface.mouseCaptured) inputAvailable=\(inputAvailable) selectionActive=\(selectionActive)"
+            )
             return
         }
 
-        let position = ghosttyPoint(recognizer.location(in: self))
         stopMomentumScrolling()
         // Send the tap with the super (Cmd) modifier: the ghostty core only
         // classifies a click as an OSC 8 hyperlink activation when the mods
