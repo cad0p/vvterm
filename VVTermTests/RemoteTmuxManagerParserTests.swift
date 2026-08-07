@@ -403,7 +403,7 @@ struct RemoteTmuxManagerParserTests {
             #expect(command.contains("set-option -q -t '=vvterm_managed:' status off"))
             #expect(command.contains("set-option -q -t '=vvterm_managed:' history-limit 10000"))
             #expect(command.contains("set-option -q -t '=vvterm_managed:' mouse on"))
-            #expect(command.contains("set-environment -t '=vvterm_managed' TERM_PROGRAM 'vvterm'"))
+            #expect(command.contains("set-environment -t '=vvterm_managed' TERM_PROGRAM 'ghostty'"))
             #expect(command.contains("-F '#{window_id} #{window_linked}'"))
             #expect(command.contains("[ \"$vvtermLinked\" = 0 ] || continue"))
             #expect(command.contains("set-hook -t '=vvterm_managed:' 'after-new-window[1000]'"))
@@ -467,6 +467,11 @@ struct RemoteTmuxManagerParserTests {
             #expect(command.contains("set-environment -u -t '=vvterm_transport' SNACKS_SSH"))
             #expect(!command.contains("SNACKS_SSH '1'"))
             #expect(!command.contains("SSH_CONNECTION"))
+            if transport == .mosh {
+                #expect(command.contains("set-environment -u -t '=vvterm_transport' TERM_PROGRAM"))
+                #expect(command.contains("set-environment -u -t '=vvterm_transport' TERM_PROGRAM_VERSION"))
+                #expect(!command.contains("TERM_PROGRAM 'ghostty'"))
+            }
         }
     }
 

@@ -5,12 +5,24 @@ import UIKit
 
 struct TerminalKeyboardUITestHarness: View {
     private static let paneId = UUID(uuidString: "B54F29D8-7C3E-4DB8-B3D7-9D9F1604B755")!
+    private static let clearTerminalBackgroundCacheForUITest: Void = {
+        guard Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-clear-terminal-background-cache"
+        ) else {
+            return
+        }
+        UserDefaults.standard.removeObject(forKey: "terminalBackgroundColor")
+    }()
     private static let codexTUIResponse = Data(
         "\u{1B}[?1049h\u{1B}[?2004h\u{1B}[?1004h\u{1B}]0;Codex\u{07}\u{1B}[2J\u{1B}[HCodex response\r\n\u{1B}[?25h".utf8
     )
     private static let mouseCaptureSequence = Data(
         "\u{1B}[?1000h\u{1B}[?1006h".utf8
     )
+
+    init() {
+        _ = Self.clearTerminalBackgroundCacheForUITest
+    }
 
     private enum LifecycleStatus: String {
         case initial
@@ -67,6 +79,7 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var keyboardFrame: CGRect?
     @State private var keyboardShowTransitionCount = 0
     @State private var keyboardHideTransitionCount = 0
+    @State private var foreignKeyboardFrameInjectionCount = 0
     @State private var keyboardAccessoryPairingObservation = KeyboardAccessoryPairingObservation.idle
     @State private var diagnostics = "notReady"
     @State private var lifecycleStatus = LifecycleStatus.initial
@@ -97,6 +110,18 @@ struct TerminalKeyboardUITestHarness: View {
 
     private var simulatesTerminalMouseCapture: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-mouse-capture")
+    }
+
+    private var testsAppShortcutInputs: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-terminal-app-shortcut-inputs"
+        )
+    }
+
+    private var simulatesStaleLightAccessoryCacheOnResume: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-stale-light-accessory-cache-on-resume"
+        )
     }
 
     private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
@@ -275,6 +300,9 @@ struct TerminalKeyboardUITestHarness: View {
 
                     Button("HW On") {
                         terminalView?.keyboardUITestSetHardwareKeyboardAttached(true)
+                        if simulatesKeyboardFrames {
+                            applySimulatedKeyboardGeometry(.hidden)
+                        }
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.hardware.attach")
 
@@ -322,6 +350,58 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.hardwareRepeat.cancel")
                 }
 
+                if testsAppShortcutInputs {
+                    HStack(spacing: 8) {
+                        Button("Software Cmd-D") {
+                            terminalView?.keyboardUITestSendSoftwareShortcut(
+                                "d",
+                                modifiers: .init(command: true)
+                            )
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.shortcut.software.cmdD")
+
+                        Button("Software Cmd-Shift-D") {
+                            terminalView?.keyboardUITestSendSoftwareShortcut(
+                                "D",
+                                modifiers: .init(command: true)
+                            )
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.shortcut.software.cmdShiftD")
+
+                        Button("Software Cmd-W") {
+                            terminalView?.keyboardUITestSendSoftwareShortcut(
+                                "w",
+                                modifiers: .init(command: true)
+                            )
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.shortcut.software.cmdW")
+
+                        Button("Toolbar Cmd-Alt-Left") {
+                            terminalView?.keyboardUITestSendToolbarShortcut(
+                                .arrowLeft,
+                                modifiers: .init(alternate: true, command: true)
+                            )
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.shortcut.toolbar.cmdAltLeft")
+
+                        Button("Custom Cmd-Ctrl-Right") {
+                            terminalView?.keyboardUITestSendCustomShortcut(
+                                .arrowRight,
+                                modifiers: .init(control: true, command: true)
+                            )
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.shortcut.custom.cmdCtrlRight")
+
+                        Button("Custom Ctrl-X") {
+                            terminalView?.keyboardUITestSendCustomShortcut(
+                                .x,
+                                modifiers: .init(control: true)
+                            )
+                        }
+                        .accessibilityIdentifier("vvterm.keyboardTest.shortcut.custom.ctrlX")
+                    }
+                }
+
                 Button("Cursor Bottom") {
                     terminalView?.keyboardUITestMoveCursorToBottom()
                 }
@@ -360,6 +440,11 @@ struct TerminalKeyboardUITestHarness: View {
                         applySimulatedKeyboardGeometry(.hidden)
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.geometry.hidden")
+
+                    Button("Foreign KB") {
+                        simulateSameScreenForeignKeyboardFrame()
+                    }
+                    .accessibilityIdentifier("vvterm.keyboardTest.geometry.foreignDocked")
                 }
 
                 HStack(spacing: 8) {
@@ -388,9 +473,25 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.privacy.shield")
 
                     Button("Resume") {
+                        if simulatesStaleLightAccessoryCacheOnResume {
+                            UserDefaults.standard.set(
+                                "#ffffff",
+                                forKey: "terminalBackgroundColor"
+                            )
+                        }
                         simulatesPrivacyShield = false
-                        lifecycleStatus = .connected
-                        applyRouteActivation(.foregroundActive)
+                        lifecycleStatus = .inactive
+                        applyRouteActivation(.foregroundInactive)
+                        // Face ID removes the lock gate before UIKit finishes
+                        // returning the terminal scene to foreground-active.
+                        // Reproduce that ordering before the final recovery.
+                        DispatchQueue.main.async {
+                            lifecycleStatus = .connected
+                            applyRouteActivation(.foregroundActive)
+                            terminalView?.resumeRendering()
+                            TerminalTabManager.shared.keyboardCoordinator
+                                .activeTerminalContentDidBecomeVisible(for: Self.paneId)
+                        }
                     }
                     .accessibilityIdentifier("vvterm.keyboardTest.privacy.resume")
                 }
@@ -546,8 +647,11 @@ struct TerminalKeyboardUITestHarness: View {
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+            + " keyboardPresentation=\(keyboardPresentationDescription)"
+            + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
             + " userHidden=\(keyboardCoordinator.isUserHidden)"
             + " keyboardShows=\(keyboardShowTransitionCount) keyboardHides=\(keyboardHideTransitionCount)"
+            + " foreignKeyboardFrames=\(foreignKeyboardFrameInjectionCount)"
             + " accessoryPairingObservation=\(keyboardAccessoryPairingObservation.status)"
             + " orphanAccessoryObserved=\(keyboardAccessoryPairingObservation.observedAccessoryOnly)"
             + " reconnect=\(lifecycleStatus.rawValue) inputHex=\(receivedInputHex)"
@@ -665,9 +769,9 @@ struct TerminalKeyboardUITestHarness: View {
         case .activate:
             manager.keyboardCoordinator.setActivePane(Self.paneId)
             manager.keyboardCoordinator.setViewActive(true)
-        case .preserve:
+            manager.keyboardCoordinator.activeTerminalSceneDidActivate(for: Self.paneId)
+        case .suspend:
             manager.keyboardCoordinator.activeTerminalSceneWillDeactivate(for: Self.paneId)
-            break
         case .deactivate:
             if contentObscured {
                 manager.keyboardCoordinator.deactivateInputImmediately()
@@ -721,6 +825,21 @@ struct TerminalKeyboardUITestHarness: View {
         refreshDiagnostics()
     }
 
+    private func simulateSameScreenForeignKeyboardFrame() {
+        guard let screenBounds = terminalView?.window?.screen.bounds else { return }
+        let height = min(360, screenBounds.height * 0.38)
+        let frame = CGRect(
+            x: screenBounds.minX,
+            y: screenBounds.maxY - height,
+            width: screenBounds.width,
+            height: height
+        )
+        TerminalTabManager.shared.keyboardCoordinator
+            .keyboardUITestReceiveKeyboardEndFrame(frame, isLocal: false)
+        foreignKeyboardFrameInjectionCount += 1
+        refreshDiagnostics()
+    }
+
     private func handleSceneWillDeactivate(_ notification: Notification) {
         if let notifyingScene = notification.object as? UIScene,
            let terminalScene = terminalView?.window?.windowScene,
@@ -764,6 +883,7 @@ struct TerminalKeyboardUITestHarness: View {
         }
 
         let terminalFrame = terminal.convert(terminal.bounds, to: window)
+        let visibleTerminalFrame = terminalFrame.intersection(window.bounds)
         let cursorFrame = terminal.convert(terminal.keyboardAvoidanceCursorRect(), to: window)
         let keyboardTop = keyboardFrame.map {
             window.convert($0, from: window.screen.coordinateSpace).minY
@@ -771,9 +891,22 @@ struct TerminalKeyboardUITestHarness: View {
         return [
             "preserveSize=\(preservesTerminalSize)",
             "terminalTop=\(metricText(terminalFrame.minY))",
+            "terminalHeight=\(metricText(terminalFrame.height))",
+            "visibleTerminalHeight=\(metricText(visibleTerminalFrame.isNull ? 0 : visibleTerminalFrame.height))",
             "cursorBottom=\(metricText(cursorFrame.maxY))",
             "keyboardTop=\(keyboardTop.map(metricText) ?? "none")"
         ].joined(separator: " ")
+    }
+
+    private var keyboardPresentationDescription: String {
+        switch keyboardCoordinator.softwareKeyboardPresentation {
+        case .hidden:
+            return "hidden"
+        case .docked:
+            return "docked"
+        case .floating:
+            return "floating"
+        }
     }
 
     private func metricText(_ value: CGFloat) -> String {
@@ -781,12 +914,237 @@ struct TerminalKeyboardUITestHarness: View {
     }
 }
 
-private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
+struct TerminalSplitKeyboardUITestHarness: View {
+    private static let firstPaneId = UUID(uuidString: "98B81AB0-ACF4-4555-A94D-399AE384C61E")!
+    private static let secondPaneId = UUID(uuidString: "4405E542-FE33-4D06-9F8A-ABF93A0CFA8F")!
+
+    @EnvironmentObject private var ghosttyApp: Ghostty.App
+    @ObservedObject private var keyboardCoordinator = TerminalTabManager.shared.keyboardCoordinator
+    @State private var firstTerminal: GhosttyTerminalView?
+    @State private var secondTerminal: GhosttyTerminalView?
+    @State private var firstReady = false
+    @State private var secondReady = false
+    @State private var focusedPaneId = Self.firstPaneId
+    @State private var keyboardVisible = false
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var paneShortcutActionCount = 0
+    @State private var lastPaneShortcutAction = "none"
+    @State private var diagnostics = "notReady"
+
+    private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
+
+    private var isReady: Bool {
+        firstReady && secondReady
+    }
+
+    private var focusedTerminal: GhosttyTerminalView? {
+        focusedPaneId == Self.firstPaneId ? firstTerminal : secondTerminal
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 1) {
+                terminalSurface(
+                    terminal: $firstTerminal,
+                    ready: $firstReady,
+                    paneId: Self.firstPaneId,
+                    identifier: "vvterm.keyboardTest.terminalSurface.first",
+                    label: "First Terminal Pane"
+                )
+                terminalSurface(
+                    terminal: $secondTerminal,
+                    ready: $secondReady,
+                    paneId: Self.secondPaneId,
+                    identifier: "vvterm.keyboardTest.terminalSurface.second",
+                    label: "Second Terminal Pane"
+                )
+            }
+            .background(.black)
+            .terminalKeyboardAvoidance(
+                focusedPaneId: focusedPaneId,
+                paneIds: [Self.firstPaneId, Self.secondPaneId],
+                terminalRegistryVersion: isReady ? 2 : 0,
+                terminalProvider: terminal(for:),
+                enabledOverride: false
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(isReady ? "ready=true" : "ready=false")
+                    .accessibilityIdentifier("vvterm.keyboardTest.ready")
+                Text(diagnostics)
+                    .accessibilityIdentifier("vvterm.keyboardTest.diagnostics")
+                    .lineLimit(4)
+            }
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(8)
+            .background(.black.opacity(0.72))
+            .allowsHitTesting(false)
+
+            HStack {
+                Spacer()
+                Button("Pane A") {
+                    focus(Self.firstPaneId)
+                }
+                .accessibilityIdentifier("vvterm.keyboardTest.focus.first")
+                Button("Pane B") {
+                    focus(Self.secondPaneId)
+                }
+                .accessibilityIdentifier("vvterm.keyboardTest.focus.second")
+                Button("Keyboard") {
+                    TerminalTabManager.shared.keyboardCoordinator.userRequestedShow()
+                }
+                .accessibilityIdentifier("vvterm.keyboardTest.showKeyboard")
+                Button("HW On") {
+                    firstTerminal?.keyboardUITestSetHardwareKeyboardAttached(true)
+                    secondTerminal?.keyboardUITestSetHardwareKeyboardAttached(true)
+                }
+                .accessibilityIdentifier("vvterm.keyboardTest.hardware.attach")
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(8)
+        }
+        .task {
+            ghosttyApp.startIfNeeded()
+        }
+        .onChange(of: firstReady) { _ in
+            configureIfReady()
+        }
+        .onChange(of: secondReady) { _ in
+            configureIfReady()
+        }
+        .onReceive(diagnosticTimer) { _ in
+            refreshDiagnostics()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) {
+            noteKeyboardFrame($0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
+            noteKeyboardFrame($0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            noteKeyboardHidden()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+            noteKeyboardHidden()
+        }
+    }
+
+    private func terminalSurface(
+        terminal: Binding<GhosttyTerminalView?>,
+        ready: Binding<Bool>,
+        paneId: UUID,
+        identifier: String,
+        label: String
+    ) -> some View {
+        TerminalKeyboardHarnessRepresentable(
+            terminalView: terminal,
+            terminalReady: ready,
+            focusRequestID: 0,
+            paneId: paneId,
+            surfaceIdentifier: identifier,
+            surfaceLabel: label,
+            onInput: { _ in },
+            onZoomAction: { _ in },
+            onPaneKeyboardShortcut: { action in
+                paneShortcutActionCount += 1
+                lastPaneShortcutAction = String(describing: action)
+            },
+            onPaneFocus: {
+                focus(paneId)
+            }
+        )
+    }
+
+    private func configureIfReady() {
+        guard isReady, let firstTerminal, let secondTerminal else { return }
+        let manager = TerminalTabManager.shared
+        for (paneId, terminal) in [
+            (Self.firstPaneId, firstTerminal),
+            (Self.secondPaneId, secondTerminal),
+        ] {
+            if manager.paneStates[paneId] == nil {
+                let tab = TerminalTab(serverId: UUID(), title: "Split keyboard test")
+                manager.paneStates[paneId] = TerminalPaneState(
+                    paneId: paneId,
+                    tabId: tab.id,
+                    serverId: tab.serverId
+                )
+            }
+            manager.registerTerminal(terminal, for: paneId)
+            manager.updatePaneState(paneId, connectionState: .connected)
+        }
+        focus(Self.firstPaneId)
+        manager.keyboardCoordinator.setViewActive(true)
+    }
+
+    private func focus(_ paneId: UUID) {
+        guard let firstTerminal, let secondTerminal else { return }
+        focusedPaneId = paneId
+        firstTerminal.acceptsTerminalInput = paneId == Self.firstPaneId
+        secondTerminal.acceptsTerminalInput = paneId == Self.secondPaneId
+        TerminalTabManager.shared.keyboardCoordinator.setActivePane(paneId)
+    }
+
+    private func terminal(for paneId: UUID) -> GhosttyTerminalView? {
+        paneId == Self.firstPaneId ? firstTerminal : secondTerminal
+    }
+
+    private func noteKeyboardFrame(_ note: Notification) {
+        guard let terminal = focusedTerminal,
+              let window = terminal.window,
+              (note.object as? UIScreen).map({ $0 === window.screen }) != false,
+              let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?
+                .cgRectValue else {
+            return
+        }
+        let overlap = window.screen.bounds.intersection(frame)
+        keyboardHeight = overlap.isNull ? 0 : overlap.height
+        keyboardVisible = keyboardHeight >= 100
+    }
+
+    private func noteKeyboardHidden() {
+        keyboardVisible = false
+        keyboardHeight = 0
+    }
+
+    private func refreshDiagnostics() {
+        guard let focusedTerminal else {
+            diagnostics = "notReady"
+            return
+        }
+        let totalReloads = (firstTerminal?.keyboardUITestInputViewReloadCount ?? 0)
+            + (secondTerminal?.keyboardUITestInputViewReloadCount ?? 0)
+        let totalRebuilds = (firstTerminal?.keyboardUITestInputSessionRebuildCount ?? 0)
+            + (secondTerminal?.keyboardUITestInputSessionRebuildCount ?? 0)
+        let layoutBottomGap: CGFloat
+        if let window = focusedTerminal.window {
+            let terminalFrame = focusedTerminal.convert(focusedTerminal.bounds, to: window)
+            layoutBottomGap = max(0, window.bounds.maxY - terminalFrame.maxY)
+        } else {
+            layoutBottomGap = -1
+        }
+        diagnostics = focusedTerminal.keyboardUITestDiagnostics(
+            keyboardVisible: keyboardVisible,
+            keyboardHeight: keyboardHeight
+        ) + " focusedPane=\(focusedPaneId == Self.firstPaneId ? "first" : "second")"
+            + " totalInputReloads=\(totalReloads)"
+            + " totalInputRebuilds=\(totalRebuilds)"
+            + " coordinatorKeyboardVisible=\(keyboardCoordinator.isSoftwareKeyboardVisible)"
+            + " layoutBottomGap=\(layoutBottomGap)"
+            + " paneShortcutActions=\(paneShortcutActionCount)"
+            + " lastPaneShortcutAction=\(lastPaneShortcutAction)"
+    }
+}
+
+struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     @EnvironmentObject private var ghosttyApp: Ghostty.App
     @Binding var terminalView: GhosttyTerminalView?
     @Binding var terminalReady: Bool
     let focusRequestID: Int
     let paneId: UUID
+    var surfaceIdentifier = "vvterm.keyboardTest.terminalSurface"
+    var surfaceLabel = "Terminal Keyboard Test Surface"
     let onInput: (Data) -> Void
     let onZoomAction: (TerminalZoomAction) -> Void
     let onPaneKeyboardShortcut: (TerminalSplitCommand) -> Void
@@ -802,6 +1160,8 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
         uiView.onZoomAction = onZoomAction
         uiView.onPaneKeyboardShortcut = onPaneKeyboardShortcut
         uiView.onPaneFocus = onPaneFocus
+        uiView.surfaceIdentifier = surfaceIdentifier
+        uiView.surfaceLabel = surfaceLabel
         uiView.installTerminalIfNeeded(app: ghosttyApp.app, appWrapper: ghosttyApp)
         uiView.requestKeyboardFocusIfNeeded(focusRequestID: focusRequestID)
 
@@ -822,13 +1182,15 @@ private struct TerminalKeyboardHarnessRepresentable: UIViewRepresentable {
     }
 }
 
-private final class TerminalKeyboardHarnessContainerView: UIView {
+final class TerminalKeyboardHarnessContainerView: UIView {
     private(set) weak var terminalView: GhosttyTerminalView?
     var paneId: UUID?
     var onInput: ((Data) -> Void)?
     var onZoomAction: ((TerminalZoomAction) -> Void)?
     var onPaneKeyboardShortcut: ((TerminalSplitCommand) -> Void)?
     var onPaneFocus: (() -> Void)?
+    var surfaceIdentifier = "vvterm.keyboardTest.terminalSurface"
+    var surfaceLabel = "Terminal Keyboard Test Surface"
     private var lastHandledFocusRequestID: Int?
     private var pendingFocusRequestID = 0
 
@@ -855,8 +1217,8 @@ private final class TerminalKeyboardHarnessContainerView: UIView {
             paneId: "keyboard-ui-test",
             useCustomIO: true
         )
-        terminal.accessibilityIdentifier = "vvterm.keyboardTest.terminalSurface"
-        terminal.accessibilityLabel = "Terminal Keyboard Test Surface"
+        terminal.accessibilityIdentifier = surfaceIdentifier
+        terminal.accessibilityLabel = surfaceLabel
         terminal.isAccessibilityElement = true
         terminal.acceptsTerminalInput = true
         terminal.keyboardUITestSetHardwareKeyboardAttached(false)

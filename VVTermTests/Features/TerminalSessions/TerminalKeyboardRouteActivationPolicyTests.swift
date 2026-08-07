@@ -23,12 +23,13 @@ struct TerminalKeyboardRouteActivationPolicyTests {
             ),
         ]
 
-        #expect(effects == [.activate, .preserve, .activate])
+        #expect(effects == [.activate, .suspend, .activate])
 
         let restoredInputs = TerminalKeyboardCoordinator.StateInputs(
             viewActive: true,
             activePaneInputEligible: true,
             activePaneWindowAttached: true,
+            allowsLocalInputOwnership: true,
             userHidKeyboard: userHidKeyboard,
             findNavigatorActive: false
         )
@@ -64,6 +65,7 @@ struct TerminalKeyboardRouteActivationPolicyTests {
             viewActive: true,
             activePaneInputEligible: true,
             activePaneWindowAttached: true,
+            allowsLocalInputOwnership: true,
             userHidKeyboard: userHidKeyboard,
             findNavigatorActive: false
         )
@@ -75,14 +77,14 @@ struct TerminalKeyboardRouteActivationPolicyTests {
     }
 
     @Test
-    func realBackgroundPreservesNativeInputOwnership() {
+    func realBackgroundSuspendsNativeInputOwnership() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: true,
             sceneActivation: .background
         )
 
-        #expect(effect == .preserve)
+        #expect(effect == .suspend)
     }
 
     @Test
@@ -109,7 +111,7 @@ struct TerminalKeyboardRouteActivationPolicyTests {
     }
 
     @Test
-    func crossAppFocusTransferPreservesNativeInputOwnership() {
+    func crossAppFocusTransferSuspendsNativeInputOwnership() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: true,
@@ -117,11 +119,11 @@ struct TerminalKeyboardRouteActivationPolicyTests {
             windowOwnership: .notKey
         )
 
-        #expect(effect == .preserve)
+        #expect(effect == .suspend)
     }
 
     @Test
-    func temporarySystemOverlayPreservesInputWhileTerminalWindowRemainsKey() {
+    func temporarySystemOverlaySuspendsResponderWhilePreservingIntent() {
         let effect = TerminalKeyboardRouteActivationPolicy.effect(
             routeVisible: true,
             terminalSelected: true,
@@ -129,7 +131,7 @@ struct TerminalKeyboardRouteActivationPolicyTests {
             windowOwnership: .key
         )
 
-        #expect(effect == .preserve)
+        #expect(effect == .suspend)
     }
 
     @Test
@@ -142,6 +144,29 @@ struct TerminalKeyboardRouteActivationPolicyTests {
         )
 
         #expect(effect == .deactivate)
+    }
+
+    @Test
+    func biometricUnlockTransitionsFromPreservedToActiveRoute() {
+        let unlockWhileFaceIDIsDismissing = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: true,
+            sceneActivation: .foregroundInactive,
+            windowOwnership: .key,
+            contentObscured: false
+        )
+
+        #expect(unlockWhileFaceIDIsDismissing == .suspend)
+
+        let fullyActive = TerminalKeyboardRouteActivationPolicy.effect(
+            routeVisible: true,
+            terminalSelected: true,
+            sceneActivation: .foregroundActive,
+            windowOwnership: .key,
+            contentObscured: false
+        )
+
+        #expect(fullyActive == .activate)
     }
 }
 #endif

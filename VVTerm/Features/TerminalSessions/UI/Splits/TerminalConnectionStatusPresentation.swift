@@ -80,11 +80,15 @@ enum TerminalConnectionStatusDismissalPolicy {
         for presentation: TerminalConnectionStatusPresentation,
         connectionAttemptID: UUID
     ) -> TerminalConnectionStatusPresentationIdentity? {
-        guard presentation != .hidden else { return nil }
-        return TerminalConnectionStatusPresentationIdentity(
-            presentation: presentation,
-            connectionAttemptID: connectionAttemptID
-        )
+        switch presentation {
+        case .hidden, .connecting:
+            return nil
+        case .disconnected, .failed:
+            return TerminalConnectionStatusPresentationIdentity(
+                presentation: presentation,
+                connectionAttemptID: connectionAttemptID
+            )
+        }
     }
 
     static func shouldPresent(
@@ -100,17 +104,6 @@ enum TerminalConnectionStatusDismissalPolicy {
         dismissedIdentity: TerminalConnectionStatusPresentationIdentity?
     ) -> TerminalConnectionStatusPresentationIdentity? {
         currentIdentity == dismissedIdentity ? dismissedIdentity : nil
-    }
-}
-
-extension TerminalConnectionStatusPresentation {
-    var allowsInteractiveDismissal: Bool {
-        switch self {
-        case .disconnected, .failed:
-            return true
-        case .hidden, .connecting:
-            return false
-        }
     }
 }
 

@@ -296,7 +296,7 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
-    func initialConnectionUsesProgressSheet() {
+    func initialConnectionUsesProgressPresentation() {
         let presentation = resolve(
             connectionState: .connecting,
             terminalExists: false,
@@ -307,7 +307,7 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
-    func tmuxSelectionDismissesInitialConnectionSheet() {
+    func tmuxSelectionHidesInitialConnectionStatus() {
         let presentation = resolve(
             connectionState: .connecting,
             isAwaitingTmuxSelection: true,
@@ -481,18 +481,28 @@ struct TerminalConnectionStatusPresentationTests {
     }
 
     @Test
-    func onlyRecoverableStatusSheetsSupportSwipeDismissal() {
-        #expect(!TerminalConnectionStatusPresentation.hidden.allowsInteractiveDismissal)
-        #expect(!TerminalConnectionStatusPresentation.connecting(
-            serverName: "Production"
-        ).allowsInteractiveDismissal)
-        #expect(TerminalConnectionStatusPresentation.disconnected(
-            message: nil
-        ).allowsInteractiveDismissal)
-        #expect(TerminalConnectionStatusPresentation.failed(
-            message: "Authentication failed",
-            allowsHostKeyReplacement: false
-        ).allowsInteractiveDismissal)
+    func onlyRecoveryStatusesCreateSheetIdentities() {
+        let attemptID = UUID()
+
+        #expect(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .hidden,
+            connectionAttemptID: attemptID
+        ) == nil)
+        #expect(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .connecting(serverName: "Production"),
+            connectionAttemptID: attemptID
+        ) == nil)
+        #expect(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .disconnected(message: nil),
+            connectionAttemptID: attemptID
+        ) != nil)
+        #expect(TerminalConnectionStatusDismissalPolicy.identity(
+            for: .failed(
+                message: "Authentication failed",
+                allowsHostKeyReplacement: false
+            ),
+            connectionAttemptID: attemptID
+        ) != nil)
     }
 
     private func resolve(

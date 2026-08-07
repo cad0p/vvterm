@@ -168,6 +168,7 @@ struct RemoteMoshManagerTests {
 
         #expect(script.contains("VVTERM_UTF8_LOCALE"))
         #expect(script.contains("TERM='xterm-ghostty'"))
+        #expect(!script.contains("TERM_PROGRAM"))
         #expect(script.contains("echo hi"))
     }
 

@@ -673,6 +673,11 @@ actor RemoteTmuxManager {
                 "\(tmux) set-environment -u -t \(sessionEnvironmentTarget) \(RemoteKittyGraphicsPolicy.compatibilityEnvironmentName)"
             )
         }
+        if !RemoteKittyGraphicsPolicy(transport: transport).supportsKittyGraphics {
+            commands.append(contentsOf: RemoteTerminalBootstrap.terminalProgramEnvironment().map { variable in
+                "\(tmux) set-environment -u -t \(sessionEnvironmentTarget) \(variable.name)"
+            })
+        }
         return commands.joined(separator: " && ")
     }
 

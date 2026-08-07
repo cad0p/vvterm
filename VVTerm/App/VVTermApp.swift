@@ -88,6 +88,12 @@ struct VVTermApp: App {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-keyboard-harness")
     }
 
+    private var usesTerminalSplitKeyboardUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-terminal-split-keyboard-harness"
+        )
+    }
+
     private var usesTerminalReconnectUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-reconnect-harness")
     }
@@ -165,6 +171,7 @@ struct VVTermApp: App {
                 .modifier(AppearanceModifier())
         } else if usesTerminalZenModeUITestHarness {
             TerminalZenModeUITestHarness()
+                .environmentObject(ghosttyApp)
                 .modifier(AppearanceModifier())
         } else if usesStatsStorageUITestHarness {
             StatsStorageUITestHarness()
@@ -174,6 +181,12 @@ struct VVTermApp: App {
                 .modifier(AppearanceModifier())
         } else if usesTerminalReconnectUITestHarness {
             TerminalReconnectUITestHarness()
+                .environmentObject(ghosttyApp)
+                .environmentObject(terminalThemeManager)
+                .environmentObject(terminalAccessoryPreferencesManager)
+                .modifier(AppearanceModifier())
+        } else if usesTerminalSplitKeyboardUITestHarness {
+            TerminalSplitKeyboardUITestHarness()
                 .environmentObject(ghosttyApp)
                 .environmentObject(terminalThemeManager)
                 .environmentObject(terminalAccessoryPreferencesManager)

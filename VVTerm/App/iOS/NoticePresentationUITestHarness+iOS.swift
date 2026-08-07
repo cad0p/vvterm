@@ -33,12 +33,12 @@ struct NoticePresentationUITestHarness: View {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-diagnostics")
     }
 
-    private var showsConnectionSheetHandoffScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-connection-sheet-handoff")
+    private var showsConnectionBannerHandoffScenario: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-connection-banner-handoff")
     }
 
-    private var showsInactiveConnectionSheetScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-inactive-connection-sheet")
+    private var showsInactiveConnectionBannerScenario: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-inactive-connection-banner")
     }
 
     @ViewBuilder
@@ -53,10 +53,10 @@ struct NoticePresentationUITestHarness: View {
             NoticeReconnectBannerHarness()
         } else if showsOperationStackScenario {
             NoticeOperationStackHarness()
-        } else if showsConnectionSheetHandoffScenario {
-            ConnectionSheetHandoffHarness()
-        } else if showsInactiveConnectionSheetScenario {
-            InactiveConnectionSheetHarness()
+        } else if showsConnectionBannerHandoffScenario {
+            ConnectionBannerHandoffHarness()
+        } else if showsInactiveConnectionBannerScenario {
+            InactiveConnectionBannerHarness()
         } else {
             NoticeConnectionStatusHarness(scenario: connectionStatusScenario)
         }
@@ -89,7 +89,7 @@ private struct NoticeDiagnosticDetailHarness: View {
     }
 }
 
-private struct InactiveConnectionSheetHarness: View {
+private struct InactiveConnectionBannerHarness: View {
     private let connectionAttemptID = UUID()
 
     var body: some View {
@@ -114,12 +114,12 @@ private struct InactiveConnectionSheetHarness: View {
                 )
             }
         }
-        .accessibilityIdentifier("vvterm.noticeTest.inactiveConnectionSheet")
+        .accessibilityIdentifier("vvterm.noticeTest.inactiveConnectionBanner")
         .preferredColorScheme(.dark)
     }
 }
 
-private struct ConnectionSheetHandoffHarness: View {
+private struct ConnectionBannerHandoffHarness: View {
     @State private var tmuxPrompt: TmuxAttachPrompt?
 
     private let paneId = UUID()

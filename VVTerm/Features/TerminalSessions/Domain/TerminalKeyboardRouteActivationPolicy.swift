@@ -8,7 +8,9 @@ enum TerminalKeyboardRouteActivationPolicy {
 
     enum Effect: Equatable {
         case activate
-        case preserve
+        /// Preserve the user's typing intent while relinquishing UIKit's
+        /// first-responder ownership until this scene becomes locally active.
+        case suspend
         case deactivate
     }
 
@@ -41,10 +43,7 @@ enum TerminalKeyboardRouteActivationPolicy {
         case .foregroundActive:
             return windowOwnership == .notKey ? .deactivate : .activate
         case .foregroundInactive, .background:
-            // UIKit preserves a native text field's first-responder ownership
-            // while its app is inactive or backgrounded. Keep the terminal's
-            // input session equally stable and let the system move InputUI.
-            return .preserve
+            return .suspend
         }
     }
 }

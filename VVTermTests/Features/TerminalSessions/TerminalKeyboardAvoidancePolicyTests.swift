@@ -55,7 +55,7 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 
     @Test
-    func liftNeverExceedsTerminalHeight() {
+    func liftAlwaysLeavesAVisibleTerminalViewport() {
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
             cursorFrame: CGRect(x: 8, y: 1_390, width: 8, height: 18),
@@ -63,7 +63,8 @@ struct TerminalKeyboardAvoidancePolicyTests {
             cursorClearance: 40
         )
 
-        #expect(offset == -800)
+        #expect(offset == -799)
+        #expect(terminalFrame.height + offset >= TerminalKeyboardAvoidancePolicy.minimumVisibleHeight)
     }
 
     @Test
@@ -132,6 +133,38 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 
     @Test
+    func floatingKeyboardInsetsOnlyTheBottomDockedAccessory() {
+        let layout = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: false,
+            geometry: .floating(frame: CGRect(x: 160, y: 480, width: 210, height: 220)),
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 700, width: 8, height: 18),
+            accessoryFrame: CGRect(x: 0, y: 752, width: 390, height: 48)
+        )
+
+        #expect(
+            layout == .init(
+                bottomInset: 48,
+                verticalOffset: 0,
+                preservesTerminalSurfaceSize: false
+            )
+        )
+    }
+
+    @Test
+    func accessoryAttachedToFloatingKeyboardDoesNotCreateBottomInset() {
+        let layout = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: false,
+            geometry: .floating(frame: CGRect(x: 160, y: 480, width: 210, height: 220)),
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 700, width: 8, height: 18),
+            accessoryFrame: CGRect(x: 160, y: 432, width: 210, height: 48)
+        )
+
+        #expect(layout == .unobstructed)
+    }
+
+    @Test
     func preservedLayoutMovesWithoutLeavingDockedInsetBehind() {
         let docked = TerminalKeyboardAvoidancePolicy.layout(
             preservesTerminalSize: true,
@@ -151,7 +184,7 @@ struct TerminalKeyboardAvoidancePolicyTests {
         #expect(docked.preservesTerminalSurfaceSize)
         #expect(floating.bottomInset == 0)
         #expect(floating.verticalOffset == -160)
-        #expect(!floating.preservesTerminalSurfaceSize)
+        #expect(floating.preservesTerminalSurfaceSize)
     }
 
     @Test

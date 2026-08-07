@@ -35,6 +35,10 @@ enum RemoteKittyGraphicsPolicy: Equatable, Sendable {
             [RemoteTerminalEnvironmentVariable(name: Self.compatibilityEnvironmentName, value: "1")]
         }
     }
+
+    nonisolated var supportsKittyGraphics: Bool {
+        self != .unsupported
+    }
 }
 
 enum RemoteTerminalType: String, Hashable, Sendable {
@@ -49,7 +53,7 @@ enum RemoteShellLaunchPlan: Hashable, Sendable {
 
 enum RemoteTerminalBootstrap {
     nonisolated static let defaultTerminalType: RemoteTerminalType = .xterm256Color
-    nonisolated static let termProgram = "vvterm"
+    nonisolated static let termProgram = "ghostty"
 
     nonisolated static func appVersion(bundle: Bundle = .main) -> String {
         (bundle.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
@@ -95,11 +99,24 @@ enum RemoteTerminalBootstrap {
         bundle: Bundle = .main,
         transport: ShellTransport = .ssh
     ) -> [RemoteTerminalEnvironmentVariable] {
+        let graphicsPolicy = RemoteKittyGraphicsPolicy(transport: transport)
+        var environment = [
+            RemoteTerminalEnvironmentVariable(name: "COLORTERM", value: "truecolor")
+        ]
+        if graphicsPolicy.supportsKittyGraphics {
+            environment.append(contentsOf: terminalProgramEnvironment(bundle: bundle))
+        }
+        environment.append(contentsOf: graphicsPolicy.environment)
+        return environment
+    }
+
+    nonisolated static func terminalProgramEnvironment(
+        bundle: Bundle = .main
+    ) -> [RemoteTerminalEnvironmentVariable] {
         [
-            RemoteTerminalEnvironmentVariable(name: "COLORTERM", value: "truecolor"),
             RemoteTerminalEnvironmentVariable(name: "TERM_PROGRAM", value: termProgram),
             RemoteTerminalEnvironmentVariable(name: "TERM_PROGRAM_VERSION", value: appVersion(bundle: bundle))
-        ] + RemoteKittyGraphicsPolicy(transport: transport).environment
+        ]
     }
 
     nonisolated static func terminalEnvironmentNames(bundle: Bundle = .main) -> [String] {
@@ -121,9 +138,10 @@ enum RemoteTerminalBootstrap {
 
     nonisolated static func environmentExportScript(
         bundle: Bundle = .main,
-        terminalType: RemoteTerminalType? = nil
+        terminalType: RemoteTerminalType? = nil,
+        transport: ShellTransport = .ssh
     ) -> String {
-        var assignments = terminalEnvironment(bundle: bundle)
+        var assignments = terminalEnvironment(bundle: bundle, transport: transport)
             .map { "\($0.name)=\(shellQuoted($0.value))" }
         if let terminalType {
             assignments.insert("TERM=\(shellQuoted(terminalType.rawValue))", at: 0)
@@ -157,7 +175,12 @@ enum RemoteTerminalBootstrap {
         let command = trimmedStartupCommand(startCommand)
             .flatMap { unwrapPOSIXShellInvocationIfNeeded($0) ?? $0 }
             ?? defaultLoginShellCommand()
-        return prefixedPOSIXScript(for: command, bundle: bundle, terminalType: terminalType)
+        return prefixedPOSIXScript(
+            for: command,
+            bundle: bundle,
+            terminalType: terminalType,
+            transport: .mosh
+        )
     }
 
     nonisolated static func wrapPOSIXShellCommand(_ script: String) -> String {
@@ -243,9 +266,10 @@ enum RemoteTerminalBootstrap {
     nonisolated static func prefixedPOSIXScript(
         for command: String,
         bundle: Bundle = .main,
-        terminalType: RemoteTerminalType? = nil
+        terminalType: RemoteTerminalType? = nil,
+        transport: ShellTransport = .ssh
     ) -> String {
-        "\(environmentExportScript(bundle: bundle, terminalType: terminalType)) \(command)"
+        "\(environmentExportScript(bundle: bundle, terminalType: terminalType, transport: transport)) \(command)"
     }
 
     nonisolated static func prefixedPowerShellScript(for command: String, bundle: Bundle = .main) -> String {

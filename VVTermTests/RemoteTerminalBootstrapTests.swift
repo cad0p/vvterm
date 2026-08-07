@@ -147,7 +147,7 @@ struct RemoteTerminalBootstrapTests {
 
         #expect(environment["TERM"] == "xterm-ghostty")
         #expect(environment["COLORTERM"] == "truecolor")
-        #expect(environment["TERM_PROGRAM"] == "vvterm")
+        #expect(environment["TERM_PROGRAM"] == "ghostty")
         #expect(environment["TERM_PROGRAM_VERSION"] == RemoteTerminalBootstrap.appVersion())
         #expect(environment.count == 4)
     }
@@ -189,6 +189,11 @@ struct RemoteTerminalBootstrapTests {
         #expect(fallback["SNACKS_SSH"] == nil)
         #expect(mosh["SNACKS_SSH"] == nil)
         #expect(eternalTerminal["SNACKS_SSH"] == "1")
+        for environment in [ssh, fallback, eternalTerminal] {
+            #expect(environment["TERM_PROGRAM"] == "ghostty")
+        }
+        #expect(mosh["TERM_PROGRAM"] == nil)
+        #expect(mosh["TERM_PROGRAM_VERSION"] == nil)
         for environment in [ssh, fallback, eternalTerminal, mosh] {
             #expect(environment["SSH_CONNECTION"] == nil)
             #expect(environment["SSH_CLIENT"] == nil)
