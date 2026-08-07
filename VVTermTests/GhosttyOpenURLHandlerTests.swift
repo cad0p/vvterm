@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import UIKit
 import Testing
 @testable import VVTerm
 
@@ -103,16 +104,28 @@ struct GhosttyOpenURLHandlerTests {
         surface.feedText("\u{1B}]8;;https://example.com\u{1B}\\VVTERM-OSC8-LINK\u{1B}]8;;\u{1B}\\\n")
         try await Task.sleep(for: .milliseconds(20))
 
-        // Tap the center of the link's cell (0,0) using the core's own cell
-        // metrics — the same numbers the core uses for pixel→cell conversion.
+        // Tap the center of the link's cell (0,0). The core's mouse events
+        // are in POINTS (the app sends recognizer points), but
+        // ghostty_surface_size reports cell metrics in PIXELS — convert via
+        // the view's content scale (3x in the simulator). Sending the pixel
+        // value directly overshoots by the scale factor and lands on a
+        // different row, missing the link.
+        //
+        // The core only activates OSC 8 hyperlinks when the click mods equal
+        // ctrlOrSuper(.{}) (super on Darwin) — a plain tap is never a link
+        // click. Super is not encoded in terminal mouse reports.
         let metrics = ghostty_surface_size(surfaceC)
         #expect(metrics.cell_width_px > 0, "core must report a real cell width (font metrics loaded)")
         #expect(metrics.cell_height_px > 0, "core must report a real cell height (font metrics loaded)")
-
-        let tap = CGPoint(x: Double(metrics.cell_width_px) / 2, y: Double(metrics.cell_height_px) / 2)
-        surface.sendMousePos(.init(x: tap.x, y: tap.y, mods: []))
-        _ = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
-        _ = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        let scale = max(terminal.contentScaleFactor, 1)
+        let tap = CGPoint(
+            x: Double(metrics.cell_width_px) / scale / 2,
+            y: Double(metrics.cell_height_px) / scale / 2
+        )
+        let linkTapMods: Ghostty.Input.Mods = [.super]
+        surface.sendMousePos(.init(x: tap.x, y: tap.y, mods: linkTapMods))
+        _ = surface.sendMouseButton(.init(action: .press, button: .left, mods: linkTapMods))
+        _ = surface.sendMouseButton(.init(action: .release, button: .left, mods: linkTapMods))
         await waitForSink(sink)
 
         #expect(sink.urls == [URL(string: "https://example.com")])
