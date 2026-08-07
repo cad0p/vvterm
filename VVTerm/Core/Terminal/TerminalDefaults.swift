@@ -197,6 +197,7 @@ enum TerminalDefaults {
     static let defaultCursorStyle: TerminalCursorStyle = .block
     static let defaultCursorBlink = true
     static let defaultKeepScreenAwake = true
+    static let defaultPreserveTerminalSizeForKeyboard = true
     #if os(macOS)
     static let defaultPrimaryFontName = "Menlo"
     static let macOSFallbackFontFamilies = [
