@@ -111,7 +111,16 @@ jobs:
         uses: ./.github/actions/prepare-xcode-build
         with:
           deriveddata-key-prefix: xcode27-ota-deriveddata
-          deriveddata-restore-keys: ""
+          # Prefix-restore the OTA workflow's OWN previous Release/device
+          # derived data (full key = <prefix>-VVTerm PR OTA-<sha>): the build
+          # job's Debug/simulator caches live under xcode27-deriveddata- and
+          # never match. Measured: archive 8m58s → 6m26s warm. Full
+          # incremental reuse is not achieved yet — mlx-swift/SwiftProtobuf/
+          # app targets still recompile on workflow-only commits (likely
+          # cache-mtime handling for SPM checkouts inside DerivedData);
+          # restoring a stale-but-valid cache is still cheaper than a full
+          # rebuild, and restore races degrade to a full rebuild.
+          deriveddata-restore-keys: xcode27-ota-deriveddata-
 
       - name: Archive unsigned Release build (iOS device)
         run: |

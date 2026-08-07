@@ -319,6 +319,17 @@ jobs:
           fi
           echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
 
+      - name: Stamp build commit into CFBundleVersion
+        # Device diagnostics reports (Support → Share diagnostics) print
+        # CFBundleVersion; stamp the short SHA so a shared report can be
+        # matched to the exact commit that produced the build.
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -name '*.app' -maxdepth 1 | head -1)"
+          SHORT_SHA="$(printf '%s' "$HEAD_SHA" | cut -c1-7)"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1.$SHORT_SHA" "$APP_PATH/Info.plist"
+          echo "stamped CFBundleVersion=1.$SHORT_SHA on $APP_PATH"
+
       - name: Install signing certificate and ad-hoc profiles
         # Same keychain dance as the TestFlight workflow, with the ad-hoc
         # profiles. The Apple Distribution cert is shared with TestFlight;

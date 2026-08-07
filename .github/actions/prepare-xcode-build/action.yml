@@ -24,9 +24,10 @@ inputs:
   deriveddata-restore-keys:
     description: >-
       Restore keys for the DerivedData cache (newline-separated). Pass ''
-      for exact-key-only: ota-archive must NOT fall back to the build job's
-      Debug/simulator cache — restoring it would waste minutes downloading
-      intermediates that are unusable for a Release/device archive.
+      for exact-key-only. ota-archive passes 'xcode27-ota-deriveddata-' so it
+      reuses its OWN previous Release/device derived data across pushes
+      (incremental archives); the build job's Debug/simulator caches live
+      under 'xcode27-deriveddata-' and never match.
     required: false
     default: ''
 runs:

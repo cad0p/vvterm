@@ -7,12 +7,22 @@ enum TerminalPointerButton: Equatable {
 }
 
 enum TerminalPointerInputRoutingPolicy {
+    /// Direct-touch taps are routed to the terminal whenever input is
+    /// available and no selection interaction is active — REGARDLESS of
+    /// whether the foreground app has mouse reporting enabled.
+    ///
+    /// Mouse capture used to gate this, which silently killed OSC 8 link
+    /// clicks in plain shells / zmx sessions (no mouse mode → tap dropped
+    /// before the core ever saw it). The core itself is safe to receive
+    /// taps in non-captured apps: a tap on a link activates it (and is
+    /// swallowed), any other tap is a no-op (no mouse report is emitted
+    /// when the app isn't capturing; prompt-click is gated on OSC 9;9
+    /// semantic prompts + cursor_click_to_move).
     static func shouldSendDirectTouchClick(
-        terminalMouseCaptured: Bool,
         terminalInputAvailable: Bool,
         selectionInteractionActive: Bool
     ) -> Bool {
-        terminalMouseCaptured && terminalInputAvailable && !selectionInteractionActive
+        terminalInputAvailable && !selectionInteractionActive
     }
 
     static func pointerButton(

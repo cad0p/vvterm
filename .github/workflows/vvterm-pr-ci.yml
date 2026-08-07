@@ -122,6 +122,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # wait-for-ota-publish polls OTA/publish runs via the Actions API
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -200,10 +201,95 @@ jobs:
           path: ${{ runner.temp }}/build.log
           if-no-files-found: ignore
 
+  wait-for-ota-publish:
+    # OTA publish gate (unit-tests only). ios-adhoc-pr's sign-and-publish job
+    # is created by workflow_run when the OTA archive completes (~9-13m after
+    # push), while the 5 test jobs are created at push time — GitHub's FIFO
+    # runner queue therefore always placed the publish behind the whole test
+    # phase (measured 4-15m queue). Unit-tests (shortest job, off the wall-clock
+    # critical path) waits for sign-and-publish to grab the slot the OTA
+    # archive freed, so the installable OTA build + comment land ~1m after the
+    # archive instead of after the test phase.
+    #
+    # Graceful degradation: a missing/failed/timed-out OTA or publish run
+    # releases unit-tests immediately — tests never hang on the OTA pipeline.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for the OTA publish to start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+
+          # 1. This push's OTA archive run (vvterm-pr-ota.yml, pull_request event).
+          ota_run="$(gh run list --repo "$REPO" --workflow vvterm-pr-ota.yml \
+            --event pull_request --commit "$HEAD_SHA" \
+            --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "$ota_run" ]]; then
+            echo "::notice::No VVTerm PR OTA run for $HEAD_SHA — publish gate skipped."
+            exit 0
+          fi
+          echo "OTA archive run: $ota_run"
+
+          # 2. Wait for the archive to reach a terminal state.
+          for _ in $(seq 1 240); do
+            status="$(gh api "repos/$REPO/actions/runs/$ota_run" --jq '.status' 2>/dev/null || true)"
+            [[ "$status" == "completed" ]] && break
+            sleep 10
+          done
+          status="$(gh api "repos/$REPO/actions/runs/$ota_run" --jq '.status' 2>/dev/null || true)"
+          if [[ "$status" != "completed" ]]; then
+            echo "::warning::OTA archive run $ota_run did not complete within 40m — releasing unit-tests."
+            exit 0
+          fi
+          ota_end="$(gh api "repos/$REPO/actions/runs/$ota_run" --jq '.updated_at')"
+          echo "OTA archive completed at $ota_end"
+
+          # 3. Find the ios-adhoc-pr run this completion spawned. workflow_run
+          #    runs execute on main and carry no PR link (head_sha = main tip,
+          #    pull_requests = []), so match by creation window instead.
+          publish_run=""
+          for _ in $(seq 1 30); do
+            publish_run="$(gh run list --repo "$REPO" --workflow ios-adhoc-pr.yml \
+              --event workflow_run --limit 100 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$ota_end\")] | sort_by(.createdAt) | .[0].databaseId // empty")"
+            [[ -n "$publish_run" ]] && break
+            sleep 10
+          done
+          if [[ -z "$publish_run" ]]; then
+            echo "::notice::No ios-adhoc-pr run appeared within 5m of OTA completion — releasing unit-tests."
+            exit 0
+          fi
+          echo "Publish run: $publish_run"
+
+          # 4. Release unit-tests once sign-and-publish has STARTED (it holds
+          #    the slot the OTA archive freed; with unit-tests gated it is first
+          #    in the runner queue). If the run concludes without starting
+          #    (cancelled/failed OTA), release immediately.
+          for _ in $(seq 1 90); do
+            started="$(gh api "repos/$REPO/actions/runs/$publish_run/jobs" \
+              --jq '.jobs[] | select(.name == "sign-and-publish") | .started_at // empty' 2>/dev/null || true)"
+            if [[ -n "$started" ]]; then
+              echo "sign-and-publish started at $started — releasing unit-tests."
+              exit 0
+            fi
+            conclusion="$(gh api "repos/$REPO/actions/runs/$publish_run" --jq '.conclusion // empty' 2>/dev/null || true)"
+            if [[ -n "$conclusion" ]]; then
+              echo "::notice::ios-adhoc-pr concluded '${conclusion}' before publishing — releasing unit-tests."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Timed out waiting for sign-and-publish to start — releasing unit-tests."
+
   unit-tests:
     runs-on: xcode-27
     timeout-minutes: 20
-    needs: build
+    needs: [build, wait-for-ota-publish]
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
