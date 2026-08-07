@@ -216,7 +216,7 @@ private struct TerminalKeyboardAvoidanceModifier: ViewModifier {
     let terminalProvider: (UUID) -> GhosttyTerminalView?
     let enabledOverride: Bool?
 
-    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var storedEnabled = false
+    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var storedEnabled = true
     @ObservedObject private var keyboardCoordinator: TerminalKeyboardCoordinator
     @StateObject private var model = TerminalKeyboardAvoidanceViewModel()
 

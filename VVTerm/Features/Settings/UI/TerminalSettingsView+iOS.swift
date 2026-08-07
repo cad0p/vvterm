@@ -42,7 +42,7 @@ private struct TerminalKeyboardSettingsSection: View {
     @Binding var optionAsAltMode: TerminalOptionAsAltMode
     let accessoryCustomizationEnabled: Bool
     @Binding var keyboardDismissButtonEnabled: Bool
-    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var preserveTerminalSizeForKeyboard = false
+    @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) private var preserveTerminalSizeForKeyboard = true
 
     var body: some View {
         Section {
