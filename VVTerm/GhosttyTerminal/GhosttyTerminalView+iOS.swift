@@ -2761,9 +2761,14 @@ class GhosttyTerminalView: UIView {
             selectionInteractionActive: selectionActive
         )
         guard shouldSend else {
+            let selectionDetail: String = if usesNativeTouchSelection {
+                "nativeRange=\(nativeSelectedRange != nil) interactionActive=\(nativeSelectionInteractionActive) prefersFR=\(prefersNativeSelectionFirstResponder) handle=\(isPointOnNativeSelectionHandleHitArea(at: location))"
+            } else {
+                "touchSelection=\(touchSelection != nil) isSelecting=\(isSelecting)"
+            }
             Ghostty.logger.diagInfo(
                 "terminal-link-tap",
-                "direct tap BLOCKED pos=\(position.x),\(position.y) mouseCaptured=\(surface.mouseCaptured) inputAvailable=\(inputAvailable) selectionActive=\(selectionActive)"
+                "direct tap BLOCKED pos=\(position.x),\(position.y) mouseCaptured=\(surface.mouseCaptured) inputAvailable=\(inputAvailable) \(selectionDetail)"
             )
             return
         }
@@ -5782,14 +5787,23 @@ private extension GhosttyTerminalView {
 
     func hasActiveSelectionInteraction(at point: CGPoint) -> Bool {
         if usesNativeTouchSelection {
-            return nativeSelectionInteractionActive
-                || nativeSelectedRange != nil
-                || prefersNativeSelectionFirstResponder
+            // Only a REAL selection (or its handles) blocks taps. The
+            // transient interaction flags (nativeSelectionInteractionActive,
+            // prefersNativeSelectionFirstResponder) are true for EVERY touch
+            // on iPhone — UITextInteraction starts on touch-down whenever
+            // the terminal has any text — and made every direct tap get
+            // dropped before the core saw it (diagnostics:
+            // selectionActive=true on all taps). A clean tap can't fire
+            // mid-drag anyway (movement fails the tap recognizer), so the
+            // transient flags add nothing but false positives.
+            return nativeSelectedRange != nil
                 || isPointOnNativeSelectionHandleHitArea(point)
         }
         if usesAppOwnedTouchSelection {
-            return isSelecting
-                || touchSelection != nil
+            // Same reasoning: a real selection (or its handles) blocks
+            // taps; isSelecting is only true during an active drag, which
+            // fails the tap recognizer regardless.
+            return touchSelection != nil
                 || isPointOnTouchSelectionHandle(point)
         }
         return false
