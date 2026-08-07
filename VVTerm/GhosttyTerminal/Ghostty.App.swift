@@ -892,10 +892,18 @@ extension Ghostty {
                 // on the device. Non-http(s) falls through to the core's
                 // fallback (macOS `open` handles file://; iOS no-ops).
                 let openURL = action.action.open_url
-                let urlString = String(
-                    decoding: UnsafeBufferPointer(start: openURL.url, count: Int(openURL.len)),
-                    as: UTF8.self
-                )
+                guard let urlPtr = openURL.url else { return false }
+                // C string is [CChar] (Int8); String(decoding:as:) needs
+                // UInt8 — rebind for the duration of the copy.
+                let urlString = urlPtr.withMemoryRebound(
+                    to: UInt8.self,
+                    capacity: Int(openURL.len)
+                ) { bytes in
+                    String(
+                        decoding: UnsafeBufferPointer(start: bytes, count: Int(openURL.len)),
+                        as: UTF8.self
+                    )
+                }
                 guard let url = URL(string: urlString),
                       let scheme = url.scheme?.lowercased(),
                       scheme == "http" || scheme == "https"
