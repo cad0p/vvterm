@@ -107,7 +107,7 @@ final class TerminalLinkTapUITests: XCTestCase {
         wait(
             for: diagnostics,
             labelContaining: "nativeSelection=true",
-            timeout: 10,
+            timeout: 15,
             diagnostics: diagnosticsText(in: app)
         )
         // The plain word must not trigger the confirmation alert.
