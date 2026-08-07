@@ -21,9 +21,12 @@ struct TerminalKeyboardUITestHarness: View {
     )
     private static let osc8LinkSequence = Data(
         // Clear + home first so the link lands at a deterministic grid
-        // (0,0) regardless of the shell's first-prompt race; a plain word
-        // follows on row 1 for the double-tap word-selection test.
-        "\u{1B}[2J\u{1B}[H\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\nSOMEWORD\n".utf8
+        // position regardless of the shell's first-prompt race. The link
+        // sits at row 10 (word at row 11) — comfortably inside the visible
+        // terminal area, away from the top screen edge (status bar /
+        // Dynamic Island region) where synthetic UI-test taps may not
+        // reach the app.
+        "\u{1B}[2J\u{1B}[H\n\n\n\n\n\n\n\n\n\n\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\nSOMEWORD\n".utf8
     )
 
     init() {
@@ -683,6 +686,8 @@ struct TerminalKeyboardUITestHarness: View {
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
             + " nativeSelection=\(nativeSelection)"
             + " linkFeed=\(linkFeedDelivered ? "delivered" : "pending")"
+            + " viewTouches=\(terminalView.keyboardUITestDirectTouchCount)"
+            + " tapFires=\(terminalView.keyboardUITestDirectTapFires)"
             + " terminalLink=\(Self.terminalLinkRingTail())"
     }
 

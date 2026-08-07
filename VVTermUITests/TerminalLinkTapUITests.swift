@@ -6,9 +6,10 @@ import XCTest
 ///
 /// The harness (`--vvterm-ui-test-terminal-keyboard-harness`) clears the
 /// screen, homes the cursor, and feeds the link line `VVTERM-LINK`
-/// (https://example.com) at grid (0,0) plus a plain word `SOMEWORD` on row
-/// 1 once the surface is ready, mirroring the mouseCaptureSequence timing
-/// pattern.
+/// (https://example.com) at grid (10,0) plus a plain word `SOMEWORD` on
+/// row 11 once the surface is ready — comfortably inside the visible
+/// terminal area, away from the top screen edge (status bar / Dynamic
+/// Island region) where synthetic UI-test taps may not reach the app.
 final class TerminalLinkTapUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -36,12 +37,17 @@ final class TerminalLinkTapUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        // The link starts at grid (0,0); a cell is ~(1/cols, 1/rows) of the
-        // terminal, so its center sits at (0.5/cols, 0.5/rows).
-        let linkCell = terminal.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5 / cols, dy: 0.5 / rows)
+        // The link sits at grid (10,0); tap its center via window-relative
+        // coordinates (element-relative AX frames can be stale/offset, and
+        // the top screen edge is unreliable for synthetic taps).
+        let terminalHeight = terminalHeight(in: app)
+        tapGridCell(row: 10, col: 0, cols: cols, rows: rows, terminalHeight: terminalHeight, in: app).tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "tapFires=1",
+            timeout: 3,
+            diagnostics: diagnosticsText(in: app)
         )
-        linkCell.tap()
 
         // The confirmation must show the exact URL that would open.
         let alert = app.alerts.firstMatch
@@ -76,15 +82,19 @@ final class TerminalLinkTapUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        // Double-tap the plain word SOMEWORD at grid (1,0) — NOT the OSC 8
-        // link on row 0: the link's first tap would open the confirmation
+        // Double-tap the plain word SOMEWORD at grid (11,0) — NOT the OSC 8
+        // link on row 10: the link's first tap would open the confirmation
         // alert (super+click activation) and swallow the second tap. The
         // core's own double-click word selection runs on the plain word and
         // must surface as nativeSelection=true in the diagnostics.
-        let wordCell = terminal.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5 / cols, dy: 1.5 / rows)
+        let terminalHeight = terminalHeight(in: app)
+        tapGridCell(row: 11, col: 0, cols: cols, rows: rows, terminalHeight: terminalHeight, in: app).doubleTap()
+        wait(
+            for: diagnostics,
+            labelContaining: "tapFires=2",
+            timeout: 3,
+            diagnostics: diagnosticsText(in: app)
         )
-        wordCell.doubleTap()
 
         wait(
             for: diagnostics,
@@ -150,6 +160,34 @@ final class TerminalLinkTapUITests: XCTestCase {
             throw DiagnosticMetricError.missing("gridCols/gridRows")
         }
         return (cols, rows)
+    }
+
+    // MARK: - Grid tap helpers
+
+    /// Grid cell center as a window-relative coordinate. The terminal view
+    /// spans the full window width and `terminalHeight` points (parsed from
+    /// the harness diagnostics); cells are (width/cols) x (height/rows).
+    private func tapGridCell(
+        row: Double,
+        col: Double,
+        cols: Double,
+        rows: Double,
+        terminalHeight: Double,
+        in app: XCUIApplication
+    ) -> XCUICoordinate {
+        let window = app.windows.firstMatch
+        let frame = window.frame
+        let cellWidth = frame.width / cols
+        let cellHeight = terminalHeight / rows
+        let x = (col + 0.5) * cellWidth
+        let y = (row + 0.5) * cellHeight
+        return app.coordinate(
+            withNormalizedOffset: CGVector(dx: x / frame.width, dy: y / frame.height)
+        )
+    }
+
+    private func terminalHeight(in app: XCUIApplication) -> Double {
+        diagnosticMetrics(in: app)["terminalHeight"] ?? 0
     }
 
     // MARK: - Diagnostics helpers

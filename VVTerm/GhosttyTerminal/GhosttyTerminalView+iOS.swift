@@ -2698,7 +2698,20 @@ class GhosttyTerminalView: UIView {
 
     // MARK: - Touch Input
 
+    #if DEBUG
+    /// UI-test instrumentation: count of direct (finger) touches that
+    /// reached the view, and tap recognizer fires. Exposed in the keyboard
+    /// harness diagnostics so synthetic-tap delivery failures are visible.
+    private(set) var keyboardUITestDirectTouchCount = 0
+    private(set) var keyboardUITestDirectTapFires = 0
+    #endif
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        #if DEBUG
+        if touches.contains(where: { $0.type == .direct }) {
+            keyboardUITestDirectTouchCount += 1
+        }
+        #endif
         super.touchesBegan(touches, with: event)
         if handleIndirectPointerTouchesBegan(touches, event: event) {
             return
@@ -2750,6 +2763,9 @@ class GhosttyTerminalView: UIView {
     }
 
     @objc private func handleDirectTouchTap(_ recognizer: UITapGestureRecognizer) {
+        #if DEBUG
+        keyboardUITestDirectTapFires += 1
+        #endif
         guard recognizer.state == .ended,
               let surface else { return }
         let location = recognizer.location(in: self)
