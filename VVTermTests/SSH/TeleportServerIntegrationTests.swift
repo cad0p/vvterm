@@ -46,11 +46,18 @@ struct TeleportServerIntegrationTests {
             && env["VVTERM_TELEPORT_APP_TLS_CERT"] != nil
     }
 
-    /// Full E2E: TLS+ALPN dial of the proxy, `proxy:<node>:0` subsystem,
-    /// outer + inner libssh2 handshakes, cert auth, and exec routed to the
-    /// target node.
-    @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
-    func teleportSSHConnectsThroughTLSRoutingAndExecutes() async throws {
+    /// Full E2E connection helper shared by the transport tests: reads the
+    /// VVTERM_TELEPORT_* fixtures, seeds the keyring, connects through the
+    /// TLS-routing proxy (`proxy:<node>:0` subsystem, outer + inner libssh2
+    /// handshakes, cert auth), and prepares the inner (node) session so exec
+    /// routes to the target node. Callers own the client lifecycle
+    /// (`disconnect()` on every path) and the keyring cleanup
+    /// (`TeleportKeyRing.shared.clear(for: clusterId)`).
+    ///
+    /// The 30s default connect budget is tight for a contended CI runner
+    /// (the off leg's outer handshake has stalled 18-30s+ there); give the
+    /// E2E path headroom. The app default is unchanged.
+    private static func makeTeleportClient() async throws -> (client: SSHClient, clusterId: UUID) {
         let environment = ProcessInfo.processInfo.environment
         guard let cert = environment["VVTERM_TELEPORT_CERT"] else {
             throw SSHError.connectionFailed(
@@ -93,12 +100,8 @@ struct TeleportServerIntegrationTests {
         keyRing.storeBootstrapCert(cert, validBefore: validBefore, for: clusterId)
         keyRing.storeLoginCert(cert, validBefore: validBefore, for: clusterId)
         try keyRing.storeEd25519PrivateKey(Data(key.utf8), for: clusterId)
-        defer { keyRing.clear(for: clusterId) }
 
         let client = SSHClient()
-        // The 30s default connect budget is tight for a contended CI runner
-        // (the off leg's outer handshake has stalled 18-30s+ there); give
-        // the E2E path headroom. The app default is unchanged.
         await client.setConnectTimeout(.seconds(90))
         do {
             let session = try await client.connect(
@@ -109,6 +112,21 @@ struct TeleportServerIntegrationTests {
             // Open the `proxy:<node>:0` subsystem channel + second libssh2
             // handshake so exec routes to the inner (node) session.
             try await client.prepareTeleportInnerSession()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+        return (client, clusterId)
+    }
+
+    /// Full E2E: TLS+ALPN dial of the proxy, `proxy:<node>:0` subsystem,
+    /// outer + inner libssh2 handshakes, cert auth, and exec routed to the
+    /// target node.
+    @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
+    func teleportSSHConnectsThroughTLSRoutingAndExecutes() async throws {
+        let (client, clusterId) = try await Self.makeTeleportClient()
+        defer { TeleportKeyRing.shared.clear(for: clusterId) }
+        do {
             // The node's exec-session startup can stall behind the CI
             // cluster's lite-backend write-lock pileups (observed: 1-4.5s
             // transactions queueing the session.start audit write, "Child
@@ -120,6 +138,34 @@ struct TeleportServerIntegrationTests {
                 timeout: .seconds(60)
             )
             #expect(output.contains("VVTERM_TELEPORT_E2E_OK"))
+            await client.disconnect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+    }
+
+    /// OSC 8 transport reproduction (issue #93 link-click debug): the full
+    /// real-SSH path (Teleport proxy + node, app's own SSHClient) must carry
+    /// an OSC 8 hyperlink sequence from the remote shell to the client
+    /// unmodified — the click pipeline is app-side (GhosttyOpenURLHandlerTests)
+    /// and depends on these bytes arriving intact.
+    @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
+    func teleportOSC8HyperlinkBytesSurviveRealSSHSession() async throws {
+        let (client, clusterId) = try await Self.makeTeleportClient()
+        defer { TeleportKeyRing.shared.clear(for: clusterId) }
+        do {
+            // printf (not echo): keeps the escape bytes literal. The remote
+            // sh -c wrapper passes the single-quoted string through.
+            let output = try await client.execute(
+                "printf '\\033]8;;https://example.com\\033\\\\VVTERM-OSC8-LINK\\033]8;;\\033\\\\\\n'",
+                timeout: .seconds(60)
+            )
+            #expect(output.contains("VVTERM-OSC8-LINK"))
+            // Open sequence: ESC ] 8 ; ; <url> ESC \
+            #expect(output.contains("\u{1B}]8;;https://example.com\u{1B}\\VVTERM-OSC8-LINK"))
+            // Close sequence: ESC ] 8 ; ; ESC \
+            #expect(output.contains("VVTERM-OSC8-LINK\u{1B}]8;;\u{1B}\\"))
             await client.disconnect()
         } catch {
             await client.disconnect()
