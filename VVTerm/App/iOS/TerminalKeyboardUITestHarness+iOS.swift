@@ -694,6 +694,7 @@ struct TerminalKeyboardUITestHarness: View {
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
             + " nativeSelection=\(nativeSelection)"
             + " linkFeed=\(linkFeedDelivered ? "delivered" : "pending")"
+            + " osc8DoubleClick=\(osc8DoubleClickDelivered ? "delivered" : "pending")"
             + " viewTouches=\(terminalView.keyboardUITestDirectTouchCount)"
             + " tapFires=\(terminalView.keyboardUITestDirectTapFires)"
             + " terminalLink=\(Self.terminalLinkRingTail())"
@@ -715,6 +716,7 @@ struct TerminalKeyboardUITestHarness: View {
               let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
         else { return }
         osc8DoubleClickDelivered = true
+        Ghostty.logger.diagInfo("terminal-link", "harness double-click injected at row=11 col=0")
         let mods: Ghostty.Input.Mods = [.super]
         surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
         surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
