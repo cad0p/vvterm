@@ -78,7 +78,7 @@ on:
 
 permissions:
   contents: read
-  actions: read          # cross-run artifact download (run-id)
+  actions: write        # cross-run artifact download (read) + gh run cancel (no-op on superseded OTA runs)
   id-token: write        # Teleport github join + Vault OIDC audience JWT
   pull-requests: write   # sticky PR comment
 
@@ -276,8 +276,10 @@ jobs:
 
       - name: Check source run produced the unsigned archive
         # Only the ota-archive job matters — test shard conclusions must not
-        # block a device smoke build. Missing/expired artifact → skip quietly
-        # (e.g. runs that predate the ota-archive job).
+        # block a device smoke build. Missing/expired artifact → cancel this
+        # run (conclusion=cancelled, no failure noise): e.g. runs that
+        # predate the ota-archive job, or runs cancelled by the OTA backlog
+        # coalescing (latest-wins — a newer push superseded them).
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -286,13 +288,15 @@ jobs:
             --jq '.jobs[] | select(.name == "ota-archive") | .conclusion')"
           if [[ "$conclusion" != "success" ]]; then
             echo "::notice::ota-archive conclusion in run ${SOURCE_RUN_ID} is '${conclusion:-missing}' — no OTA build to publish."
-            exit 0
+            gh run cancel "$GITHUB_RUN_ID" --repo "${{ github.repository }}" || true
+            exit 1
           fi
           artifact_id="$(gh api "repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
             --jq '.artifacts[] | select(.name == "ota-unsigned-archive" and (.expired | not)) | .id' | head -1)"
           if [[ -z "$artifact_id" ]]; then
             echo "::notice::No live ota-unsigned-archive artifact in run ${SOURCE_RUN_ID} — nothing to do."
-            exit 0
+            gh run cancel "$GITHUB_RUN_ID" --repo "${{ github.repository }}" || true
+            exit 1
           fi
 
       - name: Download unsigned archive artifact
@@ -826,7 +830,7 @@ jobs:
 
           **[Install on a registered device](${INSTALL_URL})** (open in Safari on the device)
 
-          - Commit: \`${HEAD_SHA}\`
+          - Commit: [\`${HEAD_SHA:0:7}\`](${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}/commits/${HEAD_SHA})
           - Version: ${BUILD_VERSION}
           - Manifest: [manifest.plist](${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist)
           - Expires: ${EXPIRES_AT} (R2 lifecycle \`vvterm/ios/pr-*\`)
