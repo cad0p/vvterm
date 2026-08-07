@@ -830,7 +830,7 @@ jobs:
 
           **[Install on a registered device](${INSTALL_URL})** (open in Safari on the device)
 
-          - Commit: [\`${HEAD_SHA:0:7}\`](${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}/commits/${HEAD_SHA})
+          - Commit: [\`${HEAD_SHA:0:7}\`](${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}/changes/${HEAD_SHA})
           - Version: ${BUILD_VERSION}
           - Manifest: [manifest.plist](${OTA_BASE_URL}/vvterm/ios/pr-${PR_NUMBER}/manifest.plist)
           - Expires: ${EXPIRES_AT} (R2 lifecycle \`vvterm/ios/pr-*\`)
