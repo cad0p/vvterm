@@ -18,7 +18,9 @@ final class TerminalLinkTapUITests: XCTestCase {
 
     @MainActor
     func testOSC8LinkTapPresentsConfirmationAlert() throws {
-        let app = launchLinkHarness(feedsOSC8Link: true)
+        // Disable keyboard avoidance so the link at row 10 stays at a
+        // predictable grid position (no keyboard-avoidance resize).
+        let app = launchLinkHarness(feedsOSC8Link: true, preserveTerminalSize: true)
         let terminal = waitForTerminal(in: app)
         let (cols, rows) = try requiredGridSize(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
@@ -69,7 +71,13 @@ final class TerminalLinkTapUITests: XCTestCase {
 
     @MainActor
     func testDoubleTapStillSelectsWord() throws {
-        let app = launchLinkHarness(feedsOSC8Link: true, feedsOSC8DoubleClick: true)
+        // Disable keyboard avoidance so the grid stays at 52 rows and the
+        // core's getTopLeft(.active) pin lookup finds a full page.
+        let app = launchLinkHarness(
+            feedsOSC8Link: true,
+            feedsOSC8DoubleClick: true,
+            preserveTerminalSize: true
+        )
         let terminal = waitForTerminal(in: app)
         let (cols, rows) = try requiredGridSize(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
@@ -114,7 +122,8 @@ final class TerminalLinkTapUITests: XCTestCase {
     @MainActor
     private func launchLinkHarness(
         feedsOSC8Link: Bool,
-        feedsOSC8DoubleClick: Bool = false
+        feedsOSC8DoubleClick: Bool = false,
+        preserveTerminalSize: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -129,6 +138,9 @@ final class TerminalLinkTapUITests: XCTestCase {
         }
         if feedsOSC8DoubleClick {
             app.launchArguments.append("--vvterm-ui-test-osc8-double-click")
+        }
+        if preserveTerminalSize {
+            app.launchArguments.append("--vvterm-ui-test-preserve-terminal-size")
         }
         _ = launchForTest(app)
 
