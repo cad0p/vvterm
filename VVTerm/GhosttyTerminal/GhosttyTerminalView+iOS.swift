@@ -2764,9 +2764,15 @@ class GhosttyTerminalView: UIView {
 
         let position = ghosttyPoint(recognizer.location(in: self))
         stopMomentumScrolling()
-        surface.sendMousePos(.init(x: position.x, y: position.y, mods: []))
-        surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
-        surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        // Send the tap with the super (Cmd) modifier: the ghostty core only
+        // classifies a click as an OSC 8 hyperlink activation when the mods
+        // equal ctrlOrSuper(.{}) (super on Darwin). Super is never encoded
+        // in terminal mouse reports (shift/alt/ctrl only), so mouse-aware
+        // apps (vim, tmux, htop) still see an unmodified click.
+        let linkTapMods: Ghostty.Input.Mods = [.super]
+        surface.sendMousePos(.init(x: position.x, y: position.y, mods: linkTapMods))
+        surface.sendMouseButton(.init(action: .press, button: .left, mods: linkTapMods))
+        surface.sendMouseButton(.init(action: .release, button: .left, mods: linkTapMods))
         requestRender()
     }
 

@@ -110,6 +110,10 @@ struct GhosttyOpenURLHandlerTests {
         // the view's content scale (3x in the simulator). Sending the pixel
         // value directly overshoots by the scale factor and lands on a
         // different row, missing the link.
+        //
+        // The core only activates OSC 8 hyperlinks when the click mods equal
+        // ctrlOrSuper(.{}) (super on Darwin) — a plain tap is never a link
+        // click. Super is not encoded in terminal mouse reports.
         let metrics = ghostty_surface_size(surfaceC)
         #expect(metrics.cell_width_px > 0, "core must report a real cell width (font metrics loaded)")
         #expect(metrics.cell_height_px > 0, "core must report a real cell height (font metrics loaded)")
@@ -118,9 +122,10 @@ struct GhosttyOpenURLHandlerTests {
             x: Double(metrics.cell_width_px) / scale / 2,
             y: Double(metrics.cell_height_px) / scale / 2
         )
-        surface.sendMousePos(.init(x: tap.x, y: tap.y, mods: []))
-        _ = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
-        _ = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        let linkTapMods: Ghostty.Input.Mods = [.super]
+        surface.sendMousePos(.init(x: tap.x, y: tap.y, mods: linkTapMods))
+        _ = surface.sendMouseButton(.init(action: .press, button: .left, mods: linkTapMods))
+        _ = surface.sendMouseButton(.init(action: .release, button: .left, mods: linkTapMods))
         await waitForSink(sink)
 
         #expect(sink.urls == [URL(string: "https://example.com")])
