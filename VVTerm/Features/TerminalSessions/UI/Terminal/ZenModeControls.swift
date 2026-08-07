@@ -10,9 +10,11 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
     #if os(macOS)
     private let chromeTopPadding: CGFloat = 6
     private let chromeTrailingPadding: CGFloat = 8
+    private let panelMaximumWidth: CGFloat = 360
     #else
     private let chromeTopPadding: CGFloat = 12
     private let chromeTrailingPadding: CGFloat = 12
+    private let panelMaximumWidth: CGFloat = 400
     #endif
 
     #if os(iOS)
@@ -32,7 +34,7 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let panelWidth = max(250, min(proxy.size.width - 24, 360))
+            let panelWidth = max(250, min(proxy.size.width - 24, panelMaximumWidth))
 
             ZStack(alignment: .topTrailing) {
                 if isPanelPresented {
@@ -84,16 +86,11 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 15, weight: .semibold))
-                .frame(width: launcherSize, height: launcherSize)
+                .frame(width: 24, height: 24)
                 .foregroundStyle(.primary)
-                .zenModeLauncherGlass()
-                .overlay(
-                    Circle()
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                )
-                .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .zenModeLauncherButtonStyle(hitTargetSize: launcherSize)
+        .contentShape(Circle())
         .accessibilityLabel(String(localized: "Zen controls"))
         .accessibilityValue(isPanelPresented ? String(localized: "Expanded") : String(localized: "Collapsed"))
         .accessibilityIdentifier("vvterm.zen.controls")
@@ -108,11 +105,22 @@ struct ZenModeFloatingOverlay<Panel: View>: View {
 
 private extension View {
     @ViewBuilder
-    func zenModeLauncherGlass() -> some View {
+    func zenModeLauncherButtonStyle(hitTargetSize: CGFloat) -> some View {
         if #available(iOS 26, macOS 26, *) {
-            self.glassEffect(.regular.interactive(), in: Circle())
+            self
+                .buttonStyle(SwiftUI.GlassButtonStyle())
+                .buttonBorderShape(.circle)
+                .frame(width: hitTargetSize, height: hitTargetSize)
+                .contentShape(Rectangle())
         } else {
-            self.background(.ultraThinMaterial, in: Circle())
+            self
+                .buttonStyle(.plain)
+                .frame(width: hitTargetSize, height: hitTargetSize)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                )
         }
     }
 }

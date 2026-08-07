@@ -53,12 +53,19 @@ extension View {
 
 @MainActor
 private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
+    private struct BaseGeometry {
+        let windowIdentifier: ObjectIdentifier
+        let boundsFrame: CGRect
+        let terminalFrame: CGRect
+    }
+
     @Published private(set) var layout = TerminalKeyboardAvoidancePolicy.Layout.unobstructed
 
     private weak var terminal: GhosttyTerminalView?
     private var keyboardFrame: CGRect?
     private var cursorRect: CGRect = .zero
     private var preservesTerminalSize = false
+    private var baseGeometry: BaseGeometry?
 
     func update(
         preservesTerminalSize: Bool,
@@ -83,6 +90,12 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
                 self.cursorRect = cursorRect
                 self.recalculate(animation: .easeOut(duration: 0.12))
             }
+            newTerminal.onKeyboardAvoidanceAccessoryFrameChange = { [weak self, weak newTerminal] in
+                DispatchQueue.main.async {
+                    guard let self, let newTerminal, self.terminal === newTerminal else { return }
+                    self.recalculate(animation: .easeOut(duration: 0.12))
+                }
+            }
         }
 
         cursorRect = newTerminal.keyboardAvoidanceCursorRect()
@@ -97,8 +110,10 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
     private func detachTerminal() {
         terminal?.disableKeyboardAvoidanceSizePreservation()
         terminal?.onKeyboardAvoidanceCursorRectChange = nil
+        terminal?.onKeyboardAvoidanceAccessoryFrameChange = nil
         terminal = nil
         cursorRect = .zero
+        baseGeometry = nil
     }
 
     private func recalculate(animation: Animation?) {
@@ -108,16 +123,44 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
         }
 
         let currentBoundsFrame = terminal.convert(terminal.bounds, to: window)
-        var baseBoundsFrame = currentBoundsFrame.offsetBy(
+        var resolvedBaseBoundsFrame = currentBoundsFrame.offsetBy(
             dx: 0,
             dy: -layout.verticalOffset
         )
-        // Default docked-keyboard mode now owns its inset instead of relying on
-        // SwiftUI's keyboard safe area. Reconstruct the unobstructed frame from
-        // the previously applied inset so docked -> floating transitions cannot
-        // oscillate between stale and current geometry.
-        baseBoundsFrame.size.height += layout.bottomInset
+        resolvedBaseBoundsFrame.size.height += layout.bottomInset
+        let currentTerminalFrame = terminal.convert(
+            terminal.keyboardAvoidanceTerminalRect(),
+            to: window
+        )
+        var resolvedBaseTerminalFrame = currentTerminalFrame.offsetBy(
+            dx: 0,
+            dy: -layout.verticalOffset
+        )
+        resolvedBaseTerminalFrame.size.height += layout.bottomInset
+
+        let windowIdentifier = ObjectIdentifier(window)
+        let windowChanged = baseGeometry?.windowIdentifier != windowIdentifier
+        let sizeChanged = baseGeometry.map {
+            abs($0.boundsFrame.width - resolvedBaseBoundsFrame.width) >= 0.5
+                || abs($0.boundsFrame.height - resolvedBaseBoundsFrame.height) >= 0.5
+        } ?? true
+        let unobstructed = keyboardFrame == nil && layout == .unobstructed
+        if windowChanged
+            || sizeChanged
+            || unobstructed
+            || baseGeometry == nil {
+            baseGeometry = BaseGeometry(
+                windowIdentifier: windowIdentifier,
+                boundsFrame: resolvedBaseBoundsFrame,
+                terminalFrame: resolvedBaseTerminalFrame
+            )
+        }
+        guard let baseGeometry else { return }
+
         let keyboardFrameInWindow = keyboardFrame.map {
+            window.convert($0, from: window.screen.coordinateSpace)
+        }
+        let accessoryFrameInWindow = terminal.keyboardAvoidanceAccessoryFrame().map {
             window.convert($0, from: window.screen.coordinateSpace)
         }
         let screenFrameInWindow = window.convert(
@@ -126,16 +169,10 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
         )
         let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
             screenFrame: screenFrameInWindow,
-            terminalFrame: baseBoundsFrame,
+            terminalFrame: baseGeometry.boundsFrame,
             keyboardFrame: keyboardFrameInWindow
         )
-        let currentTerminalFrame = terminal.convert(terminal.keyboardAvoidanceTerminalRect(), to: window)
         let currentCursorFrame = terminal.convert(cursorRect, to: window)
-        var baseTerminalFrame = currentTerminalFrame.offsetBy(
-            dx: 0,
-            dy: -layout.verticalOffset
-        )
-        baseTerminalFrame.size.height += layout.bottomInset
         let baseCursorFrame = currentCursorFrame.offsetBy(
             dx: 0,
             dy: -layout.verticalOffset
@@ -143,8 +180,9 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
         let newLayout = TerminalKeyboardAvoidancePolicy.layout(
             preservesTerminalSize: preservesTerminalSize,
             geometry: geometry,
-            terminalFrame: baseTerminalFrame,
-            cursorFrame: baseCursorFrame
+            terminalFrame: baseGeometry.terminalFrame,
+            cursorFrame: baseCursorFrame,
+            accessoryFrame: accessoryFrameInWindow
         )
         terminal.setKeyboardAvoidanceSizePreservationEnabled(
             newLayout.preservesTerminalSurfaceSize
@@ -215,6 +253,7 @@ private struct TerminalKeyboardAvoidanceModifier: ViewModifier {
             .onDisappear {
                 for paneId in paneIds {
                     terminalProvider(paneId)?.onKeyboardAvoidanceCursorRectChange = nil
+                    terminalProvider(paneId)?.onKeyboardAvoidanceAccessoryFrameChange = nil
                 }
                 model.detach()
             }

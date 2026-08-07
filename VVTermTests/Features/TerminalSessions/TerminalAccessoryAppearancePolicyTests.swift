@@ -4,6 +4,32 @@ import Testing
 
 struct TerminalAccessoryAppearancePolicyTests {
     @Test
+    func ownerAppearanceOverridesDetachedInputHostAppearance() {
+        #expect(
+            TerminalAccessoryAppearancePolicy.resolvedInterfaceStyle(
+                owner: .dark,
+                host: .light
+            ) == .dark
+        )
+        #expect(
+            TerminalAccessoryAppearancePolicy.resolvedInterfaceStyle(
+                owner: .light,
+                host: .dark
+            ) == .light
+        )
+    }
+
+    @Test
+    func hostAppearanceIsFallbackWhenOwnerIsUnspecified() {
+        #expect(
+            TerminalAccessoryAppearancePolicy.resolvedInterfaceStyle(
+                owner: .unspecified,
+                host: .dark
+            ) == .dark
+        )
+    }
+
+    @Test
     func classifiesThemeBackgroundLuminance() {
         #expect(TerminalAccessoryAppearancePolicy.isDarkBackground(
             red: 0.04,

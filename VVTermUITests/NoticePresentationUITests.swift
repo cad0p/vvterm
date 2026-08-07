@@ -3,13 +3,6 @@ import XCTest
 final class NoticePresentationUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
-        // #43: the launchNoticeHarness path reproducibly wedges at launch/AX
-        // layer on CI runners (5 of 8 tests in this class have hit it across
-        // #75/#79 — launch hang, slow-startup sheet misses, and
-        // "does not have a process ID"; zero non-notice tests affected).
-        // Quarantine the whole class until the harness startup stall is
-        // root-caused and fixed in #43.
-        throw XCTSkip("#43: notice-harness startup wedge on CI — class quarantined")
     }
 
     @MainActor
@@ -109,23 +102,26 @@ final class NoticePresentationUITests: XCTestCase {
     }
 
     @MainActor
-    func testInitialConnectionUsesBottomSheet() throws {
+    func testInitialConnectionUsesNonBlockingTopBanner() throws {
         let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-connecting"])
         let title = app.staticTexts["Connecting to production..."]
         let close = app.buttons["vvterm.connectionStatus.close"]
+        let terminal = app.staticTexts["$ ssh production"]
+        let banner = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.banner")
+            .firstMatch
 
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        XCTAssertTrue(close.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(title.frame.minY, app.frame.midY)
-        close.tap()
-        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(title.exists)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        XCTAssertFalse(close.waitForExistence(timeout: 1))
+        XCTAssertLessThan(banner.frame.maxY, app.frame.midY)
     }
 
     @MainActor
-    func testInitialConnectionSheetYieldsToTmuxSelectionSheet() throws {
+    func testInitialConnectionBannerYieldsToTmuxSelectionSheet() throws {
         let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-connection-sheet-handoff"]
+            additionalArguments: ["--vvterm-ui-test-connection-banner-handoff"]
         )
         let connecting = app.staticTexts["Connecting to production..."]
         let tmuxTitle = app.navigationBars["Choose tmux session"]
@@ -136,9 +132,9 @@ final class NoticePresentationUITests: XCTestCase {
     }
 
     @MainActor
-    func testInactiveSplitPaneCannotPresentConnectionSheet() throws {
+    func testInactiveSplitPaneCannotPresentConnectionBanner() throws {
         let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-inactive-connection-sheet"]
+            additionalArguments: ["--vvterm-ui-test-inactive-connection-banner"]
         )
         let terminal = app.staticTexts["$ ssh production"]
         let inactiveConnecting = app.staticTexts["Connecting to inactive split..."]

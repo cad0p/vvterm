@@ -2,6 +2,40 @@ import XCTest
 
 final class TerminalZenModeUITests: XCTestCase {
     @MainActor
+    func testRealTerminalLauncherOpensZenPanel() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--vvterm-ui-test-terminal-zen-mode-harness",
+            "-AppleLanguages",
+            "(en)",
+            "-AppleLocale",
+            "en_US"
+        ]
+        _ = launchForTest(app)
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["vvterm.zenTest.terminalSurface"]
+                .waitForExistence(timeout: 15)
+        )
+        app.buttons["vvterm.terminal.moreMenu"].tap()
+        let enterZenMode = app.buttons["vvterm.terminal.enterZenMode"]
+        XCTAssertTrue(enterZenMode.waitForExistence(timeout: 5))
+        enterZenMode.tap()
+
+        let launcher = app.buttons["vvterm.zen.controls"]
+        XCTAssertTrue(launcher.waitForExistence(timeout: 5))
+        XCTAssertTrue(launcher.isHittable)
+        XCTAssertEqual(launcher.frame.width, launcher.frame.height, accuracy: 1)
+        XCTAssertLessThanOrEqual(launcher.frame.width, 48)
+        launcher.tap()
+
+        XCTAssertTrue(
+            app.buttons["vvterm.terminal.zen.view.terminal"].waitForExistence(timeout: 5),
+            "Zen launcher remained visible but did not open the control panel"
+        )
+    }
+
+    @MainActor
     func testMenuEntryHidesChromeAndFloatingControlRestoresIt() {
         let app = XCUIApplication()
         app.launchArguments = [

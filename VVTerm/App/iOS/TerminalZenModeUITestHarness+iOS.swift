@@ -2,20 +2,33 @@
 import SwiftUI
 
 struct TerminalZenModeUITestHarness: View {
+    private static let paneId = UUID(uuidString: "5E798DA7-3488-4D78-BEE0-7E01E241A31E")!
+
+    @EnvironmentObject private var ghosttyApp: Ghostty.App
     @State private var isZenModeEnabled = false
     @State private var showingZenPanel = false
     @State private var selectedView = ConnectionViewTab.terminal.id
     @State private var selectedTerminalTabId: UUID?
     @State private var selectedFileTabId: UUID?
+    @State private var terminalView: GhosttyTerminalView?
+    @State private var terminalReady = false
     @State private var diagnosticsTapped = false
 
     var body: some View {
         NavigationStack {
-            Color.black
-                .overlay {
-                    Text("Terminal")
-                        .foregroundStyle(.white)
-                }
+            TerminalKeyboardHarnessRepresentable(
+                terminalView: $terminalView,
+                terminalReady: $terminalReady,
+                focusRequestID: 0,
+                paneId: Self.paneId,
+                surfaceIdentifier: "vvterm.zenTest.terminalSurface",
+                surfaceLabel: "Zen Mode Terminal Test Surface",
+                onInput: { _ in },
+                onZoomAction: { _ in },
+                onPaneKeyboardShortcut: { _ in },
+                onPaneFocus: { }
+            )
+                .background(.black)
                 .overlay(alignment: .bottom) {
                     if diagnosticsTapped {
                         Text("diagnostics-tapped")
@@ -79,6 +92,9 @@ struct TerminalZenModeUITestHarness: View {
                     }
                 }
                 .toolbar(isZenModeEnabled ? .hidden : .visible, for: .navigationBar)
+        }
+        .task {
+            ghosttyApp.startIfNeeded()
         }
     }
 

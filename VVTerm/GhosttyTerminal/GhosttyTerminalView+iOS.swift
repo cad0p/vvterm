@@ -52,6 +52,8 @@ struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
     var isSoftwareInputActive: Bool
     var keyboardLayoutFrame: CGRect? = nil
     var screenFrame: CGRect? = nil
+    var screenIdentifier: ObjectIdentifier? = nil
+    var isSoftwareKeyboardSuppressed = false
 
     var lifecycleDescription: String {
         [
@@ -60,8 +62,35 @@ struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
             "scene=\(sceneActivationState)",
             "firstResponder=\(isFirstResponder)",
             "softwareInput=\(isSoftwareInputActive)",
+            "softwareSuppressed=\(isSoftwareKeyboardSuppressed)",
             "keyboardLayoutFrame=\(keyboardLayoutFrame?.debugDescription ?? "nil")",
         ].joined(separator: " ")
+    }
+}
+
+/// Replaces the software keyboard while the terminal keeps first-responder
+/// ownership for hardware input. Let UIKit negotiate the host height through
+/// UIInputView's self-sizing contract instead of installing a required
+/// zero-height constraint that conflicts with InputUI's own inputHeight
+/// constraint during iPad responder handoffs.
+final class TerminalSuppressedKeyboardInputView: UIInputView {
+    init() {
+        super.init(frame: .zero, inputViewStyle: .keyboard)
+        allowsSelfSizing = true
+        isUserInteractionEnabled = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: CGSize {
+        .zero
+    }
+
+    override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
+        .zero
     }
 }
 
@@ -190,6 +219,47 @@ private extension UIKeyModifierFlags {
     }
 }
 
+private extension Ghostty.Input.Mods {
+    var terminalSplitShortcutModifiers: TerminalSplitShortcutModifiers {
+        var result: TerminalSplitShortcutModifiers = []
+        if contains(.super) { result.insert(.command) }
+        if contains(.shift) { result.insert(.shift) }
+        if contains(.ctrl) { result.insert(.control) }
+        if contains(.alt) { result.insert(.alternate) }
+        return result
+    }
+}
+
+private extension TerminalAccessoryShortcutModifiers {
+    var terminalSplitShortcutModifiers: TerminalSplitShortcutModifiers {
+        var result: TerminalSplitShortcutModifiers = []
+        if command { result.insert(.command) }
+        if shift { result.insert(.shift) }
+        if control { result.insert(.control) }
+        if alternate { result.insert(.alternate) }
+        return result
+    }
+}
+
+private extension TerminalAccessoryShortcutKey {
+    var terminalSplitShortcutKey: TerminalSplitShortcutKey? {
+        switch self {
+        case .enter:
+            return .character("\r")
+        case .arrowUp:
+            return .upArrow
+        case .arrowDown:
+            return .downArrow
+        case .arrowLeft:
+            return .leftArrow
+        case .arrowRight:
+            return .rightArrow
+        default:
+            return unshiftedText.map(TerminalSplitShortcutKey.character)
+        }
+    }
+}
+
 @MainActor
 private final class TerminalIMEProxyTextView: UIView, UITextInput {
     weak var terminalOwner: GhosttyTerminalView?
@@ -298,7 +368,7 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
     }
 
     override var canResignFirstResponder: Bool {
-        terminalOwner?.imeProxyCanResignFirstResponder ?? true
+        true
     }
 
     override var inputAccessoryView: UIView? {
@@ -390,11 +460,6 @@ private final class TerminalIMEProxyTextView: UIView, UITextInput {
 
     override func resignFirstResponder() -> Bool {
         terminalOwner?.logKeyboardLifecycle("imeProxy.resign.begin")
-        guard canResignFirstResponder else {
-            terminalOwner?.imeProxyFocusDidChange(isFocused: isFirstResponder)
-            terminalOwner?.logKeyboardLifecycle("imeProxy.resign.blocked", result: false)
-            return false
-        }
         let result = super.resignFirstResponder()
         terminalOwner?.imeProxyFocusDidChange(isFocused: isFirstResponder)
         terminalOwner?.logKeyboardLifecycle("imeProxy.resign.end", result: result)
@@ -1036,6 +1101,11 @@ class GhosttyTerminalView: UIView {
     /// Optional UI-layer observer used by the opt-in keyboard viewport policy.
     /// It is called only when the rendered cursor rect changes.
     var onKeyboardAvoidanceCursorRectChange: ((CGRect) -> Void)?
+    /// Reports input-accessory host movement independently of software-keyboard
+    /// geometry. Floating iPad keyboards can leave this view docked at the
+    /// bottom of the screen.
+    var onKeyboardAvoidanceAccessoryFrameChange: (() -> Void)?
+    private var lastKeyboardAvoidanceAccessoryFrame: CGRect?
     private var keyboardAvoidancePreservedSurfaceSize: CGSize?
     private var keyboardAvoidanceReferenceSurfaceSize: CGSize?
     private var tracksKeyboardAvoidanceReferenceSize = false
@@ -1043,7 +1113,7 @@ class GhosttyTerminalView: UIView {
     /// Callback invoked when a pinch gesture requests terminal pane zoom.
     var onZoomAction: ((TerminalZoomAction) -> TerminalZoomResult?)?
 
-    /// App-owned pane actions invoked by iPad hardware-keyboard shortcuts.
+    /// App-owned pane actions invoked by local iPad keyboard shortcuts.
     var onPaneKeyboardShortcut: ((TerminalSplitCommand) -> Void)?
 
     /// Per-surface presentation overrides used to preserve pane zoom across global config reloads.
@@ -1277,8 +1347,6 @@ class GhosttyTerminalView: UIView {
     private var inputModeObserver: NSObjectProtocol?
     private var hardwareKeyboardObservers: [NSObjectProtocol] = []
     private var hasHardwareKeyboardAttached = false
-    private var allowIMEProxyProgrammaticResign = false
-    private var suppressUnexpectedIMEProxyResignUntil = 0.0
 
     // MARK: - Text Input (for spacebar cursor control)
     private var textInputModel = TerminalTextInputModel()
@@ -1836,13 +1904,6 @@ class GhosttyTerminalView: UIView {
         isTextInputSessionEligible && !isFindNavigatorActive
     }
 
-    fileprivate var imeProxyCanResignFirstResponder: Bool {
-        if allowIMEProxyProgrammaticResign || !isTextInputSessionEligible {
-            return true
-        }
-        return !shouldSuppressUnexpectedIMEProxyResign
-    }
-
     fileprivate var currentTextInputContextIdentifier: String? {
         guard isTextInputSessionEligible, !isFindNavigatorActive else { return nil }
         return Self.textInputContextID
@@ -1922,20 +1983,15 @@ class GhosttyTerminalView: UIView {
     fileprivate func imeProxyFocusDidChange(isFocused: Bool) {
         setSurfaceFocus(isFocused)
         if isFocused {
-            updateHardwareKeyboardState(reloadInputViewsIfNeeded: true)
+            // UIKit has just resolved this responder's input views. Refresh
+            // hardware state, but do not immediately invalidate the new
+            // InputUI session unless that state changes its configuration.
+            updateHardwareKeyboardState(reloadInputViewsIfNeeded: false)
         } else {
             imeProxyTextView.endDictationSession(commit: true)
             invalidateLocalTextInputSession()
             cancelTrackedHardwareInput()
         }
-    }
-
-    private func suppressUnexpectedIMEProxyResign() {
-        suppressUnexpectedIMEProxyResignUntil = Date.timeIntervalSinceReferenceDate + 0.35
-    }
-
-    private var shouldSuppressUnexpectedIMEProxyResign: Bool {
-        Date.timeIntervalSinceReferenceDate < suppressUnexpectedIMEProxyResignUntil
     }
 
     fileprivate func imeProxyCaretRect(for position: UITextPosition) -> CGRect {
@@ -2022,6 +2078,30 @@ class GhosttyTerminalView: UIView {
         textInputCaretRect(for: textInputModel.cursorIndex)
     }
 
+    func keyboardAvoidanceAccessoryFrame() -> CGRect? {
+        guard let keyboardToolbar,
+              let accessoryWindow = keyboardToolbar.window,
+              let terminalWindow = window,
+              accessoryWindow.screen === terminalWindow.screen else {
+            return nil
+        }
+        let frameInAccessoryWindow = keyboardToolbar.convert(
+            keyboardToolbar.bounds,
+            to: accessoryWindow
+        )
+        return accessoryWindow.convert(
+            frameInAccessoryWindow,
+            to: accessoryWindow.screen.coordinateSpace
+        )
+    }
+
+    fileprivate func notifyKeyboardAvoidanceAccessoryFrameChange() {
+        let frame = keyboardAvoidanceAccessoryFrame()
+        guard frame != lastKeyboardAvoidanceAccessoryFrame else { return }
+        lastKeyboardAvoidanceAccessoryFrame = frame
+        onKeyboardAvoidanceAccessoryFrameChange?()
+    }
+
     func setKeyboardAvoidanceSizePreservationEnabled(_ isEnabled: Bool) {
         if isEnabled {
             guard keyboardAvoidancePreservedSurfaceSize == nil else { return }
@@ -2034,7 +2114,6 @@ class GhosttyTerminalView: UIView {
         } else {
             tracksKeyboardAvoidanceReferenceSize = true
             keyboardAvoidancePreservedSurfaceSize = nil
-            sizeDidChange(bounds.size)
         }
     }
 
@@ -2103,12 +2182,7 @@ class GhosttyTerminalView: UIView {
     private var keyboardFocusPolicy = TerminalKeyboardFocusPolicy()
     private var suppressDirectTouchKeyboardFocusUntil = Date.distantPast
     private var suppressAccessoryForMissingSoftwareKeyboard = false
-    private let hiddenKeyboardInputView: UIView = {
-        let view = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 0))
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.heightAnchor.constraint(equalToConstant: 0).isActive = true
-        return view
-    }()
+    private let hiddenKeyboardInputView = TerminalSuppressedKeyboardInputView()
     #if DEBUG
     private enum KeyboardUITestSoftwareKeyboardFailure: Equatable {
         case none
@@ -2117,6 +2191,7 @@ class GhosttyTerminalView: UIView {
 
     private var keyboardHideRequestCount = 0
     private var keyboardInputSessionRebuildCount = 0
+    private var keyboardInputViewReloadCount = 0
     private var keyboardUITestHardwareKeyboardOverride: Bool?
     private var keyboardUITestSoftwareKeyboardFailure = KeyboardUITestSoftwareKeyboardFailure.none
     #endif
@@ -2170,7 +2245,9 @@ class GhosttyTerminalView: UIView {
             isFirstResponder: isFirstResponder,
             isSoftwareInputActive: isKeyboardTextInputActive,
             keyboardLayoutFrame: keyboardLayoutFrame,
-            screenFrame: screenFrame
+            screenFrame: screenFrame,
+            screenIdentifier: window.map { ObjectIdentifier($0.screen) },
+            isSoftwareKeyboardSuppressed: shouldSuppressSoftwareKeyboard
         )
     }
 
@@ -2234,6 +2311,11 @@ class GhosttyTerminalView: UIView {
     }
 
     private func reloadTerminalInputViewsIfActive() {
+        #if DEBUG
+        if super.isFirstResponder || imeProxyTextView.isFirstResponder {
+            keyboardInputViewReloadCount += 1
+        }
+        #endif
         if super.isFirstResponder {
             reloadInputViews()
         }
@@ -2260,7 +2342,6 @@ class GhosttyTerminalView: UIView {
             logKeyboardLifecycle("focus.request.rejected", result: false, detail: "reason=\(reasonDescription)")
             return false
         }
-        notifyKeyboardBrowseModeChange()
         let result = becomeFirstResponder()
         logKeyboardLifecycle("focus.request.end", result: result, detail: "reason=\(reasonDescription)")
         return result
@@ -2271,21 +2352,26 @@ class GhosttyTerminalView: UIView {
         if reason != .hardwareKeyboard {
             refreshHardwareKeyboardAttachmentFromSystem()
         }
+        let previousInputConfiguration = terminalInputConfiguration
         guard keyboardFocusPolicy.requestFocus(for: reason) else { return false }
         clearNativeSelectionStateForTerminalInput()
+        notifyKeyboardBrowseModeChange(
+            previousInputConfiguration: previousInputConfiguration
+        )
         return true
     }
 
     func dismissKeyboardForUser(suppressDirectTouchRefocus: Bool = false) {
+        let previousInputConfiguration = terminalInputConfiguration
         keyboardFocusPolicy.dismissForUser()
-        notifyKeyboardBrowseModeChange()
+        notifyKeyboardBrowseModeChange(
+            previousInputConfiguration: previousInputConfiguration
+        )
         if suppressDirectTouchRefocus {
             suppressDirectTouchKeyboardFocusUntil = Date().addingTimeInterval(0.35)
         }
         if !isTerminalTextInputActive {
             _ = focusTerminalInputWithoutShowingSoftwareKeyboard()
-        } else {
-            reloadTerminalInputViewsIfActive()
         }
     }
 
@@ -2294,7 +2380,6 @@ class GhosttyTerminalView: UIView {
         guard !isFindNavigatorActive else { return false }
         refreshHardwareKeyboardAttachmentFromSystem()
         clearNativeSelectionStateForTerminalInput()
-        notifyKeyboardBrowseModeChange()
         return becomeFirstResponder()
     }
 
@@ -2327,15 +2412,6 @@ class GhosttyTerminalView: UIView {
     }
 
     func releaseTerminalInput() {
-        // A forced leave must always end the input session; an active
-        // unexpected-resign suppression window would otherwise refuse it and
-        // keep the accessory bar alive across navigation.
-        suppressUnexpectedIMEProxyResignUntil = 0
-
-        let previous = allowIMEProxyProgrammaticResign
-        allowIMEProxyProgrammaticResign = true
-        defer { allowIMEProxyProgrammaticResign = previous }
-
         _ = resignFirstResponder()
     }
 
@@ -2359,14 +2435,21 @@ class GhosttyTerminalView: UIView {
 
     func setTerminalInputAccessorySuppressed(_ suppressed: Bool) {
         guard suppressAccessoryForMissingSoftwareKeyboard != suppressed else { return }
+        let previousInputConfiguration = terminalInputConfiguration
         suppressAccessoryForMissingSoftwareKeyboard = suppressed
-        reloadTerminalInputViewsIfActive()
+        if previousInputConfiguration != terminalInputConfiguration {
+            reloadTerminalInputViewsIfActive()
+        }
         logKeyboardLifecycle("accessory.suppression.changed", detail: "suppressed=\(suppressed)")
     }
 
-    private func notifyKeyboardBrowseModeChange() {
+    private func notifyKeyboardBrowseModeChange(
+        previousInputConfiguration: TerminalInputConfiguration
+    ) {
         onKeyboardBrowseModeChange?(keyboardFocusPolicy.isBrowsing)
-        reloadTerminalInputViewsIfActive()
+        if previousInputConfiguration != terminalInputConfiguration {
+            reloadTerminalInputViewsIfActive()
+        }
     }
 
     /// Tears the input session down and rebuilds it across runloop turns.
@@ -2424,17 +2507,8 @@ class GhosttyTerminalView: UIView {
 
     override func resignFirstResponder() -> Bool {
         guard imeProxyTextView.isFirstResponder || super.isFirstResponder else { return true }
-        if imeProxyTextView.isFirstResponder,
-           isTextInputSessionEligible,
-           shouldSuppressUnexpectedIMEProxyResign {
-            imeProxyFocusDidChange(isFocused: true)
-            return false
-        }
         let proxyResult: Bool
         if imeProxyTextView.isFirstResponder {
-            let previous = allowIMEProxyProgrammaticResign
-            allowIMEProxyProgrammaticResign = true
-            defer { allowIMEProxyProgrammaticResign = previous }
             proxyResult = imeProxyTextView.resignFirstResponder()
         } else {
             proxyResult = true
@@ -2539,11 +2613,17 @@ class GhosttyTerminalView: UIView {
 
     private func refreshHardwareKeyboardAttachmentFromSystem() {
         let hasHardwareKeyboard = detectedHardwareKeyboardAttached
-        _ = setHardwareKeyboardAttached(hasHardwareKeyboard)
+        let previousInputConfiguration = terminalInputConfiguration
+        if setHardwareKeyboardAttached(hasHardwareKeyboard) {
+            notifyKeyboardBrowseModeChange(
+                previousInputConfiguration: previousInputConfiguration
+            )
+        }
     }
 
     private func updateHardwareKeyboardState(reloadInputViewsIfNeeded: Bool) {
         let hasHardwareKeyboard = detectedHardwareKeyboardAttached
+        let previousInputConfiguration = terminalInputConfiguration
         let didChange = setHardwareKeyboardAttached(hasHardwareKeyboard)
         if didChange {
             logKeyboardLifecycle(
@@ -2552,18 +2632,21 @@ class GhosttyTerminalView: UIView {
             )
         }
         if didChange {
-            notifyKeyboardBrowseModeChange()
+            notifyKeyboardBrowseModeChange(
+                previousInputConfiguration: previousInputConfiguration
+            )
         }
         if hasHardwareKeyboard {
             focusForHardwareKeyboardIfNeeded()
         } else if didChange {
             if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
                 _ = requestKeyboardFocus(for: .initialActivation)
-            } else {
-                reloadTerminalInputViewsIfActive()
             }
         }
-        if reloadInputViewsIfNeeded, isTerminalTextInputActive, isTextInputSessionEligible {
+        if reloadInputViewsIfNeeded,
+           previousInputConfiguration == terminalInputConfiguration,
+           isTerminalTextInputActive,
+           isTextInputSessionEligible {
             reloadTerminalInputViewsIfActive()
         }
     }
@@ -2583,15 +2666,21 @@ class GhosttyTerminalView: UIView {
         if keyboardUITestHardwareKeyboardOverride == false { return }
         #endif
         guard !hasHardwareKeyboardAttached else { return }
+        let previousInputConfiguration = terminalInputConfiguration
         hasHardwareKeyboardAttached = true
+        notifyKeyboardBrowseModeChange(
+            previousInputConfiguration: previousInputConfiguration
+        )
         focusForHardwareKeyboardIfNeeded()
-        if isTerminalTextInputActive, isTextInputSessionEligible {
-            reloadTerminalInputViewsIfActive()
-        }
     }
 
     private func focusForHardwareKeyboardIfNeeded() {
-        guard hasHardwareKeyboardAttached, isTextInputSessionEligible, !isFindNavigatorActive else { return }
+        guard hasHardwareKeyboardAttached,
+              canRouteTerminalInput,
+              isTextInputSessionEligible,
+              !isFindNavigatorActive else {
+            return
+        }
         guard keyboardFocusPolicy.isBrowsing || !isTerminalTextInputActive else {
             return
         }
@@ -4183,9 +4272,6 @@ class GhosttyTerminalView: UIView {
         guard canRouteTerminalInput else { return }
         guard let input = command.input,
               let key = terminalKey(forKeyCommandInput: input) else { return }
-        if case .escape = key {
-            suppressUnexpectedIMEProxyResign()
-        }
         let mods = Ghostty.Input.Mods(uiKeyModifiers: command.modifierFlags)
         sendToolbarKey(key, accumulatedMods: mods)
     }
@@ -4210,14 +4296,13 @@ class GhosttyTerminalView: UIView {
     @objc
     fileprivate func handleTerminalSplitCommand(_ command: UIKeyCommand) {
         guard canRouteTerminalInput,
-              let input = command.input,
-              let action = terminalSplitCommand(
-                  input: input,
-                  modifiers: command.modifierFlags
-              ) else {
+              let input = command.input else {
             return
         }
-        onPaneKeyboardShortcut?(action)
+        _ = performTerminalSplitShortcut(
+            input: input,
+            modifiers: command.modifierFlags.terminalSplitShortcutModifiers
+        )
     }
 
     private func handlePasteShortcut(_ key: UIKey) -> Bool {
@@ -4260,8 +4345,7 @@ class GhosttyTerminalView: UIView {
 
     private func handleCommandShortcut(_ key: UIKey) -> Bool {
         guard key.modifierFlags.contains(.command) else { return false }
-        if let action = terminalSplitCommand(for: key) {
-            onPaneKeyboardShortcut?(action)
+        if performTerminalSplitCommand(terminalSplitCommand(for: key)) {
             return true
         }
         if let action = terminalZoomShortcutAction(for: key) {
@@ -4325,6 +4409,33 @@ class GhosttyTerminalView: UIView {
             for: input,
             modifiers: modifiers.terminalSplitShortcutModifiers
         )
+    }
+
+    @discardableResult
+    private func performTerminalSplitShortcut(
+        input: String,
+        modifiers: TerminalSplitShortcutModifiers
+    ) -> Bool {
+        performTerminalSplitCommand(
+            TerminalSplitShortcutRouting.command(for: input, modifiers: modifiers)
+        )
+    }
+
+    @discardableResult
+    private func performTerminalSplitShortcut(
+        key: TerminalSplitShortcutKey,
+        modifiers: TerminalSplitShortcutModifiers
+    ) -> Bool {
+        performTerminalSplitCommand(
+            TerminalSplitShortcutRouting.command(for: key, modifiers: modifiers)
+        )
+    }
+
+    @discardableResult
+    private func performTerminalSplitCommand(_ command: TerminalSplitCommand?) -> Bool {
+        guard let command else { return false }
+        onPaneKeyboardShortcut?(command)
+        return true
     }
 
     private func performTerminalZoomAction(_ action: TerminalZoomAction) {
@@ -5046,9 +5157,6 @@ class GhosttyTerminalView: UIView {
         let normalized = text.precomposedStringWithCanonicalMapping
         guard !normalized.isEmpty else { return true }
         if let key = terminalKey(forKeyCommandInput: normalized) {
-            if case .escape = key {
-                suppressUnexpectedIMEProxyResign()
-            }
             sendToolbarKey(key)
             return true
         }
@@ -5067,6 +5175,19 @@ class GhosttyTerminalView: UIView {
         }
 
         let mods = keyboardToolbar?.consumeModifiers() ?? (ctrl: false, alt: false, command: false, shift: false)
+        if mods.command {
+            var splitModifiers: TerminalSplitShortcutModifiers = [.command]
+            if mods.ctrl { splitModifiers.insert(.control) }
+            if mods.alt { splitModifiers.insert(.alternate) }
+            if mods.shift { splitModifiers.insert(.shift) }
+            if let firstCharacter = normalized.first,
+               ghosttyKeyMapping(for: firstCharacter)?.requiresShift == true {
+                splitModifiers.insert(.shift)
+            }
+            if performTerminalSplitShortcut(input: normalized, modifiers: splitModifiers) {
+                return true
+            }
+        }
         if mods.ctrl, normalized.compare("v", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame,
            interceptRichPasteIfNeeded() {
             invalidateLocalTextInputSession()
@@ -5800,6 +5921,25 @@ indirect enum TerminalKey {
     }
 }
 
+private extension TerminalKey {
+    var terminalSplitShortcutKey: TerminalSplitShortcutKey? {
+        switch self {
+        case .enter:
+            return .character("\r")
+        case .arrowUp:
+            return .upArrow
+        case .arrowDown:
+            return .downArrow
+        case .arrowLeft:
+            return .leftArrow
+        case .arrowRight:
+            return .rightArrow
+        default:
+            return nil
+        }
+    }
+}
+
 // MARK: - Keyboard Accessory View
 
 extension GhosttyTerminalView {
@@ -5814,6 +5954,22 @@ extension GhosttyTerminalView {
         keyboardFocusPolicy.shouldSuppressSoftwareKeyboard(
             hasHardwareKeyboardAttached: hasHardwareKeyboardAttached
         )
+    }
+
+    private enum TerminalInputConfiguration: Equatable {
+        case systemWithAccessory
+        case systemWithoutAccessory
+        case suppressed
+    }
+
+    private var terminalInputConfiguration: TerminalInputConfiguration {
+        if shouldSuppressSoftwareKeyboard {
+            return .suppressed
+        }
+        if isFindNavigatorActive || suppressAccessoryForMissingSoftwareKeyboard {
+            return .systemWithoutAccessory
+        }
+        return .systemWithAccessory
     }
 
     private var shouldHideKeyboardAccessoryBar: Bool {
@@ -5835,7 +5991,7 @@ extension GhosttyTerminalView {
             return nil
         }
         if keyboardToolbar == nil {
-            let toolbar = TerminalInputAccessoryView(onKey: { [weak self] key in
+            let toolbar = TerminalInputAccessoryView(terminalOwner: self, onKey: { [weak self] key in
                 self?.handleToolbarKey(key)
             }, onCustomAction: { [weak self] action in
                 self?.handleToolbarCustomAction(action)
@@ -5862,11 +6018,30 @@ extension GhosttyTerminalView {
     }
 
     #if DEBUG
+    var keyboardUITestInputViewReloadCount: Int {
+        keyboardInputViewReloadCount
+    }
+
+    var keyboardUITestInputSessionRebuildCount: Int {
+        keyboardInputSessionRebuildCount
+    }
+
     func keyboardUITestDiagnostics(keyboardVisible: Bool, keyboardHeight: CGFloat) -> String {
         let snapshot = keyboardCoordinatorDiagnosticSnapshot()
         let accessoryAttached = keyboardToolbar?.window != nil
         let accessoryAppearance = keyboardToolbar?.diagnosticBackgroundAppearance ?? "missing"
+        let accessoryOwnerStyle = keyboardToolbar?.diagnosticOwnerInterfaceStyle ?? "missing"
+        let accessoryHostStyle = keyboardToolbar?.diagnosticHostInterfaceStyle ?? "missing"
+        let accessoryResolvedStyle = keyboardToolbar?.diagnosticResolvedInterfaceStyle ?? "missing"
+        let accessoryHeight = keyboardToolbar?.diagnosticHeight ?? 0
+        let accessoryFittingHeight = keyboardToolbar?.diagnosticFittingHeight ?? 0
+        let accessorySelfSizing = keyboardToolbar?.allowsSelfSizing == true
         let keyboardHeightText = String(format: "%.1f", Double(keyboardHeight))
+        let accessoryHeightText = String(format: "%.1f", Double(accessoryHeight))
+        let accessoryFittingHeightText = String(
+            format: "%.1f",
+            Double(accessoryFittingHeight)
+        )
         let size = terminalSize()
         let inputViewMode = keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild
             ? "testUnexpectedHidden"
@@ -5892,6 +6067,12 @@ extension GhosttyTerminalView {
             "sizePreserved=\(keyboardAvoidancePreservedSurfaceSize != nil)",
             "accessoryAttached=\(accessoryAttached)",
             "accessoryAppearance=\(accessoryAppearance)",
+            "accessoryOwnerStyle=\(accessoryOwnerStyle)",
+            "accessoryHostStyle=\(accessoryHostStyle)",
+            "accessoryResolvedStyle=\(accessoryResolvedStyle)",
+            "accessoryHeight=\(accessoryHeightText)",
+            "accessoryFittingHeight=\(accessoryFittingHeightText)",
+            "accessorySelfSizing=\(accessorySelfSizing)",
             "accessorySuppressed=\(suppressAccessoryForMissingSoftwareKeyboard)",
             "accessoryHidden=\(shouldHideKeyboardAccessoryBar)",
             "hardware=\(hasHardwareKeyboardAttached)",
@@ -5908,7 +6089,8 @@ extension GhosttyTerminalView {
             "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
             "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
             "hideRequests=\(keyboardHideRequestCount)",
-            "inputRebuilds=\(keyboardInputSessionRebuildCount)"
+            "inputRebuilds=\(keyboardInputSessionRebuildCount)",
+            "inputReloads=\(keyboardInputViewReloadCount)"
         ].joined(separator: " ")
     }
 
@@ -5919,6 +6101,7 @@ extension GhosttyTerminalView {
     /// teardown (tab switch / zen mode).
     func keyboardUITestMakeAccessoryView() -> UIView {
         TerminalInputAccessoryView(
+            terminalOwner: self,
             onKey: { _ in },
             onCustomAction: { _ in },
             onVoice: nil,
@@ -6010,21 +6193,56 @@ extension GhosttyTerminalView {
         imeProxyTextView.unmarkText()
     }
 
+    func keyboardUITestSendSoftwareShortcut(
+        _ text: String,
+        modifiers: TerminalAccessoryShortcutModifiers
+    ) {
+        _ = resolvedInputAccessoryView()
+        keyboardToolbar?.keyboardUITestSetModifiers(modifiers)
+        _ = handleIMEProxyInsertText(text)
+    }
+
+    func keyboardUITestSendToolbarShortcut(
+        _ key: TerminalKey,
+        modifiers: TerminalAccessoryShortcutModifiers
+    ) {
+        sendToolbarKey(.modified(key, mods: modifiers.ghosttyModifiers))
+    }
+
+    func keyboardUITestSendCustomShortcut(
+        _ key: TerminalAccessoryShortcutKey,
+        modifiers: TerminalAccessoryShortcutModifiers
+    ) {
+        handleToolbarCustomAction(
+            TerminalAccessoryCustomAction(
+                title: "Keyboard shortcut routing test",
+                kind: .shortcut,
+                shortcutKey: key,
+                shortcutModifiers: modifiers
+            )
+        )
+    }
+
     func keyboardUITestRequestHardwareKeyboardFocus() {
         _ = requestKeyboardFocus(for: .hardwareKeyboard)
     }
 
     func keyboardUITestSetHardwareKeyboardAttached(_ attached: Bool) {
         keyboardUITestHardwareKeyboardOverride = attached
-        _ = setHardwareKeyboardAttached(attached)
+        let previousInputConfiguration = terminalInputConfiguration
+        if setHardwareKeyboardAttached(attached) {
+            notifyKeyboardBrowseModeChange(
+                previousInputConfiguration: previousInputConfiguration
+            )
+        }
         if attached {
             focusForHardwareKeyboardIfNeeded()
         } else if isTerminalTextInputActive, isTextInputSessionEligible, !isFindNavigatorActive {
             _ = requestKeyboardFocus(for: .initialActivation)
-        } else {
-            notifyKeyboardBrowseModeChange()
         }
-        reloadTerminalInputViewsIfActive()
+        if previousInputConfiguration == terminalInputConfiguration {
+            reloadTerminalInputViewsIfActive()
+        }
     }
 
     func keyboardUITestBeginUnexpectedSoftwareKeyboardLoss() {
@@ -6055,9 +6273,22 @@ extension GhosttyTerminalView {
     }
 
     private func sendToolbarKey(_ key: TerminalKey, accumulatedMods: Ghostty.Input.Mods = []) {
-        switch key {
-        case .modified(let baseKey, let mods):
+        if case .modified(let baseKey, let mods) = key {
             sendToolbarKey(baseKey, accumulatedMods: accumulatedMods.union(mods))
+            return
+        }
+        if accumulatedMods.contains(.super),
+           let splitKey = key.terminalSplitShortcutKey,
+           performTerminalSplitShortcut(
+               key: splitKey,
+               modifiers: accumulatedMods.terminalSplitShortcutModifiers
+           ) {
+            return
+        }
+
+        switch key {
+        case .modified:
+            return
         case .escape:
             if accumulatedMods.isEmpty, hasLocalTextInputSession {
                 invalidateLocalTextInputSession()
@@ -6174,6 +6405,14 @@ extension GhosttyTerminalView {
                 sendKeyPress(.enter)
             }
         case .shortcut:
+            if action.shortcutModifiers.command,
+               let splitKey = action.shortcutKey.terminalSplitShortcutKey,
+               performTerminalSplitShortcut(
+                   key: splitKey,
+                   modifiers: action.shortcutModifiers.terminalSplitShortcutModifiers
+               ) {
+                return
+            }
             guard let key = Ghostty.Input.Key(rawValue: action.shortcutKey.rawValue) else { return }
             let mods = action.shortcutModifiers.ghosttyModifiers
             let text: String?
@@ -6233,6 +6472,9 @@ private extension TerminalAccessoryShortcutModifiers {
 // MARK: - Native UIKit Input Accessory View with Glass Effect
 
 private class TerminalInputAccessoryView: UIInputView {
+    private static let preferredHeight: CGFloat = 48
+
+    private weak var terminalOwner: GhosttyTerminalView?
     private let onKey: (TerminalKey) -> Void
     private let onCustomAction: (TerminalAccessoryCustomAction) -> Void
     private let onDismissKeyboard: () -> Void
@@ -6268,30 +6510,50 @@ private class TerminalInputAccessoryView: UIInputView {
         let resolved = color.resolvedColor(with: traitCollection)
         return isDarkBackgroundColor(resolved) == true ? "dark" : "light"
     }
+
+    var diagnosticOwnerInterfaceStyle: String {
+        interfaceStyleDescription(terminalOwner?.traitCollection.userInterfaceStyle ?? .unspecified)
+    }
+
+    var diagnosticHostInterfaceStyle: String {
+        interfaceStyleDescription(hostInterfaceStyle)
+    }
+
+    var diagnosticResolvedInterfaceStyle: String {
+        interfaceStyleDescription(resolvedInterfaceStyle)
+    }
+
+    var diagnosticHeight: CGFloat {
+        bounds.height
+    }
+
+    var diagnosticFittingHeight: CGFloat {
+        systemLayoutSizeFitting(
+            CGSize(width: max(bounds.width, 1), height: 0)
+        ).height
+    }
     #endif
 
     init(
+        terminalOwner: GhosttyTerminalView,
         onKey: @escaping (TerminalKey) -> Void,
         onCustomAction: @escaping (TerminalAccessoryCustomAction) -> Void,
         onVoice: (() -> Void)? = nil,
         onDismissKeyboard: @escaping () -> Void
     ) {
+        self.terminalOwner = terminalOwner
         self.onKey = onKey
         self.onCustomAction = onCustomAction
         self.onVoice = onVoice
         self.onDismissKeyboard = onDismissKeyboard
         // The system sizes UIInputView to the active keyboard width; the
         // initial width is only a placeholder.
-        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 48), inputViewStyle: .keyboard)
+        super.init(
+            frame: CGRect(x: 0, y: 0, width: 320, height: Self.preferredHeight),
+            inputViewStyle: .keyboard
+        )
+        allowsSelfSizing = true
         accessibilityIdentifier = "vvterm.keyboard.accessory"
-        // Opt into self-sizing so UIKit derives the height from
-        // `intrinsicContentSize` instead of imposing a competing internal
-        // `inputHeight` constraint (available iOS 17+). On iOS 16 the
-        // `intrinsicContentSize` override below still wins because the view
-        // uses Auto Layout for its subviews.
-        if #available(iOS 17.0, *) {
-            allowsSelfSizing = true
-        }
         setupView()
         observeThemeChanges()
         observeAccessoryProfileChanges()
@@ -6299,6 +6561,45 @@ private class TerminalInputAccessoryView: UIInputView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) not supported")
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: Self.preferredHeight)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        terminalOwner?.notifyKeyboardAvoidanceAccessoryFrameChange()
+    }
+
+    override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
+        systemLayoutSizeFitting(
+            targetSize,
+            withHorizontalFittingPriority: .fittingSizeLevel,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+    }
+
+    // UIKit's constraint engine measures self-sizing views through the
+    // two-argument variant; the one-argument wrapper delegates here so both
+    // paths report the same stable size. A divergent measurement (constraint
+    // fallback vs. intrinsic size) lets the keyboard host reserve a slot
+    // that disagrees with the accessory's frame, which after a floating-to-
+    // docked re-attach leaves the accessory's bottom edge below the key top.
+    override func systemLayoutSizeFitting(
+        _ targetSize: CGSize,
+        withHorizontalFittingPriority _: UILayoutPriority,
+        verticalFittingPriority _: UILayoutPriority
+    ) -> CGSize {
+        let currentWidth = bounds.width.isFinite && bounds.width > 0
+            ? bounds.width
+            : 1
+        let width = targetSize.width.isFinite
+            && targetSize.width > 0
+            && targetSize.width < UIView.layoutFittingExpandedSize.width
+            ? targetSize.width
+            : currentWidth
+        return CGSize(width: width, height: Self.preferredHeight)
     }
 
     deinit {
@@ -6310,24 +6611,6 @@ private class TerminalInputAccessoryView: UIInputView {
         }
         stopKeyRepeat()
     }
-
-    /// Self-sizes the accessory so UIKit does not impose a competing internal
-    /// `inputHeight` constraint. Without this, tearing the input session down
-    /// (tab switch, zen mode entry, `reloadInputViews()`) momentarily
-    /// installs a `height == 0` constraint on this view while UIKit's internal
-    /// `inputHeight` (the last keyboard-paired height, e.g. 233) is still
-    /// active, producing "Unable to simultaneously satisfy constraints".
-    /// Returning a concrete height (rather than `UIView.noIntrinsicMetric`)
-    /// marks the view as self-sizing; UIKit then derives the height from this
-    /// value instead of adding its own required constraint. See Apple DTS
-    /// guidance on `UIInputView` height conflicts.
-    override var intrinsicContentSize: CGSize {
-        let height = max(Self.contentHeight, 0)
-        return CGSize(width: UIView.noIntrinsicMetric, height: height)
-    }
-
-    /// Natural content height: 32pt buttons + 8pt top/bottom content margins.
-    private static let contentHeight: CGFloat = 48
 
     private func setupView() {
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -6463,12 +6746,16 @@ private class TerminalInputAccessoryView: UIInputView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         updateBackgroundEffect()
+        terminalOwner?.notifyKeyboardAvoidanceAccessoryFrameChange()
     }
 
     private func updateBackgroundEffect() {
         guard let backgroundEffectView else { return }
-        let backgroundColor = resolveThemeBackgroundColor()
+        let interfaceStyle = resolvedInterfaceStyle
+        let backgroundColor = resolveThemeBackgroundColor(for: interfaceStyle)
+            .resolvedColor(with: appearanceTraits(for: interfaceStyle))
         updateInterfaceStyle(for: backgroundColor)
+        self.backgroundColor = backgroundColor
         backgroundEffectView.effect = nil
         backgroundEffectView.backgroundColor = backgroundColor
     }
@@ -6650,19 +6937,80 @@ private class TerminalInputAccessoryView: UIInputView {
         }
     }
 
-    private func resolveThemeBackgroundColor() -> UIColor {
-        let defaults = UserDefaults.standard
-
-        if let cachedHex = defaults.string(forKey: "terminalBackgroundColor") {
-            return UIColor(Color.fromHex(cachedHex))
+    private var resolvedInterfaceStyle: UIUserInterfaceStyle {
+        let ownerStyle = terminalOwner?.traitCollection.userInterfaceStyle ?? .unspecified
+        let resolved = TerminalAccessoryAppearancePolicy.resolvedInterfaceStyle(
+            owner: policyInterfaceStyle(ownerStyle),
+            host: policyInterfaceStyle(hostInterfaceStyle)
+        )
+        switch resolved {
+        case .unspecified:
+            return .unspecified
+        case .light:
+            return .light
+        case .dark:
+            return .dark
         }
+    }
+
+    private var hostInterfaceStyle: UIUserInterfaceStyle {
+        #if DEBUG
+        if Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-detached-light-accessory-host"
+        ) {
+            return .light
+        }
+        #endif
+        return traitCollection.userInterfaceStyle
+    }
+
+    private func policyInterfaceStyle(
+        _ style: UIUserInterfaceStyle
+    ) -> TerminalAccessoryAppearancePolicy.InterfaceStyle {
+        switch style {
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        default:
+            return .unspecified
+        }
+    }
+
+    #if DEBUG
+    private func interfaceStyleDescription(_ style: UIUserInterfaceStyle) -> String {
+        switch style {
+        case .light:
+            return "light"
+        case .dark:
+            return "dark"
+        default:
+            return "unspecified"
+        }
+    }
+    #endif
+
+    private func appearanceTraits(
+        for interfaceStyle: UIUserInterfaceStyle
+    ) -> UITraitCollection {
+        guard interfaceStyle != .unspecified else { return traitCollection }
+        return UITraitCollection(traitsFrom: [
+            traitCollection,
+            UITraitCollection(userInterfaceStyle: interfaceStyle)
+        ])
+    }
+
+    private func resolveThemeBackgroundColor(
+        for interfaceStyle: UIUserInterfaceStyle
+    ) -> UIColor {
+        let defaults = UserDefaults.standard
 
         let usePerAppearance = defaults.object(forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) as? Bool ?? true
         let darkTheme = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "Aizen Dark"
         let lightTheme = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameLightKey) ?? "Aizen Light"
         let themeName: String
         if usePerAppearance {
-            themeName = traitCollection.userInterfaceStyle == .dark ? darkTheme : lightTheme
+            themeName = interfaceStyle == .dark ? darkTheme : lightTheme
         } else {
             themeName = darkTheme
         }
@@ -6938,6 +7286,16 @@ private class TerminalInputAccessoryView: UIInputView {
         }
         return (ctrl, alt, command, shift)
     }
+
+    #if DEBUG
+    func keyboardUITestSetModifiers(_ modifiers: TerminalAccessoryShortcutModifiers) {
+        ctrlActive = modifiers.control
+        altActive = modifiers.alternate
+        commandActive = modifiers.command
+        shiftActive = modifiers.shift
+        updateModifierState()
+    }
+    #endif
 
     private func updateModifierState() {
         UIView.animate(withDuration: 0.2) {
