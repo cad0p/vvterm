@@ -2698,7 +2698,20 @@ class GhosttyTerminalView: UIView {
 
     // MARK: - Touch Input
 
+    #if DEBUG
+    /// UI-test instrumentation: count of direct (finger) touches that
+    /// reached the view, and tap recognizer fires. Exposed in the keyboard
+    /// harness diagnostics so synthetic-tap delivery failures are visible.
+    private(set) var keyboardUITestDirectTouchCount = 0
+    private(set) var keyboardUITestDirectTapFires = 0
+    #endif
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        #if DEBUG
+        if touches.contains(where: { $0.type == .direct }) {
+            keyboardUITestDirectTouchCount += 1
+        }
+        #endif
         super.touchesBegan(touches, with: event)
         if handleIndirectPointerTouchesBegan(touches, event: event) {
             return
@@ -2750,6 +2763,9 @@ class GhosttyTerminalView: UIView {
     }
 
     @objc private func handleDirectTouchTap(_ recognizer: UITapGestureRecognizer) {
+        #if DEBUG
+        keyboardUITestDirectTapFires += 1
+        #endif
         guard recognizer.state == .ended,
               let surface else { return }
         let location = recognizer.location(in: self)
@@ -2780,10 +2796,9 @@ class GhosttyTerminalView: UIView {
         // in terminal mouse reports (shift/alt/ctrl only), so mouse-aware
         // apps (vim, tmux, htop) still see an unmodified click.
         let linkTapMods: Ghostty.Input.Mods = [.super]
-        Ghostty.logger.diagInfo(
-            "terminal-link-tap",
-            "direct tap sent pos=\(position.x),\(position.y) mods=super"
-        )
+        // Per-tap noise must not enter the 2MB diagnostics ring; the BLOCKED
+        // variant above stays in the ring (rare, high value).
+        Ghostty.logger.debug("direct tap sent pos=\(position.x),\(position.y) mods=super")
         surface.sendMousePos(.init(x: position.x, y: position.y, mods: linkTapMods))
         surface.sendMouseButton(.init(action: .press, button: .left, mods: linkTapMods))
         surface.sendMouseButton(.init(action: .release, button: .left, mods: linkTapMods))
@@ -6052,6 +6067,22 @@ extension GhosttyTerminalView {
     var keyboardUITestInputSessionRebuildCount: Int {
         keyboardInputSessionRebuildCount
     }
+
+    #if DEBUG
+    /// Grid cell center in the view's coordinate space, for UI-test
+    /// harnesses that drive synthetic clicks directly into the surface.
+    func keyboardUITestCellCenter(row: Int, col: Int) -> CGPoint? {
+        guard let size = terminalSize(),
+              size.columns > 0, size.rows > 0,
+              bounds.width > 0, bounds.height > 0 else { return nil }
+        let cellWidth = bounds.width / CGFloat(size.columns)
+        let cellHeight = bounds.height / CGFloat(size.rows)
+        return CGPoint(
+            x: (CGFloat(col) + 0.5) * cellWidth,
+            y: (CGFloat(row) + 0.5) * cellHeight
+        )
+    }
+    #endif
 
     func keyboardUITestDiagnostics(keyboardVisible: Bool, keyboardHeight: CGFloat) -> String {
         let snapshot = keyboardCoordinatorDiagnosticSnapshot()

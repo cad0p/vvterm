@@ -19,6 +19,20 @@ struct TerminalKeyboardUITestHarness: View {
     private static let mouseCaptureSequence = Data(
         "\u{1B}[?1000h\u{1B}[?1006h".utf8
     )
+    private static let osc8LinkSequence = Data(
+        // Clear + home first so the link lands at a deterministic grid
+        // position regardless of the shell's first-prompt race. The link
+        // sits at row 10 (word SOMEWORD at row 11) — comfortably inside
+        // the visible terminal area, away from the top screen edge (status
+        // bar / Dynamic Island region) where synthetic UI-test taps may
+        // not reach the app. The trailing newlines fill the active page to
+        // the full 52-row grid: the core's getTopLeft(.active) pin lookup
+        // walks pages backward with rem = grid rows, and with only ~14
+        // content rows the walk exhausts the page list, the pin lookup
+        // falls through, and ghostty_surface_mouse_button rejects every
+        // press (observed: press1=false press2=false at every position).
+        "\u{1B}[2J\u{1B}[H\n\n\n\n\n\n\n\n\n\n\u{1B}]8;;https://example.com\u{1B}\\VVTERM-LINK\u{1B}]8;;\u{1B}\\\nSOMEWORD\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n".utf8
+    )
 
     init() {
         _ = Self.clearTerminalBackgroundCacheForUITest
@@ -84,6 +98,8 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var diagnostics = "notReady"
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
+    @State private var linkFeedDelivered = false
+    @State private var osc8DoubleClickDelivered = false
     @State private var receivedInput = Data()
     @State private var returnInputCount = 0
     @State private var codexResponseCount = 0
@@ -110,6 +126,14 @@ struct TerminalKeyboardUITestHarness: View {
 
     private var simulatesTerminalMouseCapture: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-terminal-mouse-capture")
+    }
+
+    private var feedsOSC8Link: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-osc8-link")
+    }
+
+    private var feedsOSC8DoubleClick: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-osc8-double-click")
     }
 
     private var testsAppShortcutInputs: Bool {
@@ -631,6 +655,20 @@ struct TerminalKeyboardUITestHarness: View {
         refreshDiagnostics()
     }
 
+    private func nativeSelectionText() -> String {
+        guard let cSurface = terminalView?.surface?.unsafeCValue else { return "none" }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(cSurface, &text) else { return "none" }
+        defer { ghostty_surface_free_text(cSurface, &text) }
+        guard let ptr = text.text, text.text_len > 0 else { return "empty" }
+        let data = String(
+            decoding: UnsafeRawBufferPointer(start: ptr, count: Int(text.text_len)),
+            as: UTF8.self
+        )
+        let trimmed = data.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "empty" : String(trimmed.prefix(24))
+    }
+
     private func refreshDiagnostics() {
         guard let terminalView else {
             diagnostics = "notReady ghostty=\(ghosttyApp.readiness.rawValue)"
@@ -646,6 +684,14 @@ struct TerminalKeyboardUITestHarness: View {
         let mouseScrollReports = mouseReportCount(buttonPattern: "6[45]", terminator: "M")
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
+        let nativeSelection = (terminalView.surface?.unsafeCValue).map { ghostty_surface_has_selection($0) } ?? false
+        let selText = nativeSelectionText()
+        if feedsOSC8Link {
+            deliverOSC8LinkFeedIfPossible()
+        }
+        if feedsOSC8DoubleClick {
+            deliverOSC8DoubleClickIfPossible()
+        }
         diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
@@ -666,6 +712,66 @@ struct TerminalKeyboardUITestHarness: View {
             + " paneFocusActions=\(paneFocusActionCount)"
             + " lastPaneCloseDialogAction=\(lastPaneCloseDialogAction)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
+            + " nativeSelection=\(nativeSelection) selText=\(selText)"
+            + " linkFeed=\(linkFeedDelivered ? "delivered" : "pending")"
+            + " osc8DoubleClick=\(osc8DoubleClickDelivered ? "delivered" : "pending")"
+            + " viewTouches=\(terminalView.keyboardUITestDirectTouchCount)"
+            + " tapFires=\(terminalView.keyboardUITestDirectTapFires)"
+            + " terminalLink=\(Self.terminalLinkRingTail())"
+    }
+
+    /// Drives a synthetic double-click (two press/release pairs, no gap) at
+    /// grid (11,0) once the link feed has landed — an exact mirror of the
+    /// app's own handleDoubleTap (plain mods, one pos event, two immediate
+    /// pairs). The core never surfaces a selection from injected presses in
+    /// the simulator (#114), and on iPhone word selection is the native
+    /// UITextInteraction path the harness cannot drive — so the regression
+    /// this drives is the #111 routing property: a plain-word double-click
+    /// must never present the link confirmation alert.
+    private func deliverOSC8DoubleClickIfPossible() {
+        guard !osc8DoubleClickDelivered, let terminalView,
+              linkFeedDelivered,
+              let surface = terminalView.surface,
+              let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
+        else { return }
+        osc8DoubleClickDelivered = true
+        surface.sendMousePos(.init(x: point.x, y: point.y, mods: []))
+        let p1a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        let p1b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        let p2a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        let p2b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        Ghostty.logger.diagInfo(
+            "terminal-link",
+            "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) pair1=\(p1a && p1b) pair2=\(p2a && p2b)"
+        )
+        // No link probe here: it would open the confirmation alert and
+        // defeat this test's no-alert assertion. Link activation is covered
+        // end-to-end by testOSC8LinkTapPresentsConfirmationAlert.
+    }
+
+    /// Feeds the OSC 8 link line once the core surface exists. Retried from
+    /// the diagnostics tick (0.15s cadence) until delivered: at harness mount
+    /// the ghostty surface can still be initializing, and feedData drops the
+    /// bytes silently when the surface is nil — which left the link test
+    /// tapping an empty grid.
+    private func deliverOSC8LinkFeedIfPossible() {
+        guard !linkFeedDelivered, let terminalView else { return }
+        guard terminalView.surface != nil else { return }
+        terminalView.feedData(Self.osc8LinkSequence)
+        linkFeedDelivered = true
+    }
+
+    /// Tail of the on-device diagnostics ring for the terminal-link category
+    /// (tap sent/BLOCKED, open_url handled, open result). Exposed in the
+    /// harness diagnostics so UI-test failures show exactly where the link
+    /// tap chain broke. Ring entries are non-sensitive by policy (scheme +
+    /// length only; full URLs are os_log .private).
+    private static func terminalLinkRingTail() -> String {
+        let tail = DiagnosticsRecorder.shared.entries(since: Date().addingTimeInterval(-120))
+            .filter { $0.category == "terminal-link" }
+            .suffix(6)
+            .map { $0.message }
+        return tail.isEmpty ? "none" : tail.joined(separator: " | ")
     }
 
     private func inputByteCount(_ byte: UInt8) -> Int {
@@ -722,6 +828,16 @@ struct TerminalKeyboardUITestHarness: View {
         manager.keyboardCoordinator.setViewActive(true)
         if simulatesTerminalMouseCapture {
             terminalView.feedData(Self.mouseCaptureSequence)
+        }
+        if feedsOSC8Link {
+            // OSC 8 hyperlink line: the label "VVTERM-LINK" renders at grid
+            // (0,0) and carries https://example.com. Fed after the surface is
+            // ready, mirroring the mouseCaptureSequence timing. The core
+            // surface may not exist yet at mount (feedData drops silently),
+            // so a pending flag retries the feed from the diagnostics tick
+            // until it lands (see refreshDiagnostics).
+            linkFeedDelivered = false
+            deliverOSC8LinkFeedIfPossible()
         }
         lifecycleStatus = .connected
     }

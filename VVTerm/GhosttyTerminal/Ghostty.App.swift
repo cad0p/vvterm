@@ -716,6 +716,32 @@ extension Ghostty {
             #endif
         }
 
+        /// Presents a link-activation confirmation and calls back with the
+        /// user's decision. Swappable so tests can auto-confirm/auto-cancel.
+        /// macOS has hover preview (the safe affordance) → direct open, no
+        /// dialog.
+        static var linkConfirmationHandler: (URL, @escaping (Bool) -> Void) -> Void = { url, completion in
+            #if os(macOS)
+            completion(true)
+            #else
+            Ghostty.App.presentLinkConfirmation(for: url, completion: completion)
+            #endif
+        }
+
+        #if os(macOS)
+        /// Per-window hover state: the title captured when a hover preview
+        /// started and the URL currently shown. Restore is conditional —
+        /// the saved title is only written back while the title still shows
+        /// the hovered URL, so a session SET_TITLE during the hover wins.
+        /// Pruned against the live window set on each hover.
+        private static var hoverPreviewState: [ObjectIdentifier: (savedTitle: String, hoveredURL: String)] = [:]
+
+        private static func pruneHoverPreviewState() {
+            let liveWindows = Set(NSApp.windows.map { ObjectIdentifier($0) })
+            hoverPreviewState = hoverPreviewState.filter { liveWindows.contains($0.key) }
+        }
+        #endif
+
         static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
             // Get the terminal view from surface userdata if target is a surface
             var titleTargetDescription = "target \(target.tag.rawValue)"
@@ -878,13 +904,63 @@ extension Ghostty {
                 return true
 
             case GHOSTTY_ACTION_MOUSE_SHAPE,
-                 GHOSTTY_ACTION_MOUSE_VISIBILITY,
-                 GHOSTTY_ACTION_MOUSE_OVER_LINK:
+                 GHOSTTY_ACTION_MOUSE_VISIBILITY:
                 #if os(iOS)
                 return true
                 #else
                 Ghostty.logger.debug("Action received: \(action.tag.rawValue) on target: \(target.tag.rawValue)")
                 return false
+                #endif
+
+            case GHOSTTY_ACTION_MOUSE_OVER_LINK:
+                // Hover preview (macOS): while the pointer is over an OSC 8
+                // hyperlink, surface the URL in the window title — the safe
+                // affordance that shows where a link goes before clicking.
+                // An empty URL means the pointer left the link: restore the
+                // pre-hover title. iOS swallows the action; link activation
+                // goes through the confirmation dialog instead.
+                #if os(iOS)
+                return true
+                #else
+                guard let terminalView, let window = terminalView.window else {
+                    return true
+                }
+                let overLink = action.action.mouse_over_link
+                let urlString: String? = if let urlPtr = overLink.url, overLink.len > 0 {
+                    // C string is [CChar] (Int8); String(decoding:as:) needs
+                    // UInt8 — rebind for the duration of the copy (same as
+                    // the open_url path).
+                    urlPtr.withMemoryRebound(
+                        to: UInt8.self,
+                        capacity: Int(overLink.len)
+                    ) { bytes in
+                        String(
+                            decoding: UnsafeBufferPointer(start: bytes, count: Int(overLink.len)),
+                            as: UTF8.self
+                        )
+                    }
+                } else {
+                    nil
+                }
+                // The action callback can run off-main; AppKit state must be
+                // touched on the main thread. Main-queue hops are FIFO, so
+                // the leave-restore is order-preserving after any pending
+                // hover sets.
+                DispatchQueue.main.async {
+                    Self.pruneHoverPreviewState()
+                    let windowKey = ObjectIdentifier(window)
+                    if let urlString, !urlString.isEmpty {
+                        if Self.hoverPreviewState[windowKey] == nil {
+                            Self.hoverPreviewState[windowKey] = (window.title, urlString)
+                        }
+                        window.title = urlString
+                    } else if let state = Self.hoverPreviewState.removeValue(forKey: windowKey) {
+                        if window.title == state.hoveredURL {
+                            window.title = state.savedTitle
+                        }
+                    }
+                }
+                return true
                 #endif
 
             case GHOSTTY_ACTION_OPEN_URL:
@@ -929,7 +1005,9 @@ extension Ghostty {
                 )
                 Ghostty.logger.debug("open_url url=\(urlString, privacy: .private)")
                 DispatchQueue.main.async {
-                    Ghostty.App.externalURLHandler(url)
+                    Ghostty.App.linkConfirmationHandler(url) { confirmed in
+                        if confirmed { Ghostty.App.externalURLHandler(url) }
+                    }
                 }
                 return true
 
@@ -1014,3 +1092,51 @@ extension Ghostty {
         }
     }
 }
+
+#if os(iOS)
+extension Ghostty.App {
+    /// Default iOS link-activation confirmation: an alert showing the exact
+    /// URL that would open. Fail-safe: without a presentation context, or
+    /// while another alert is already presented, the request is dropped
+    /// (logged, never opened). Runs on the main actor — callers dispatch to
+    /// main before invoking the confirmation seam.
+    private static func presentLinkConfirmation(for url: URL, completion: @escaping (Bool) -> Void) {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }),
+            let rootViewController = window.rootViewController
+        else {
+            Ghostty.logger.debug("open_url confirmation dropped: no key window")
+            completion(false)
+            return
+        }
+        // Walk the presented-view-controller chain to the top-most presenter.
+        var presenter = rootViewController
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        // Drop while an alert is already on screen: the top-most presenter
+        // IS the alert in that case (a UIAlertController presenting another
+        // alert is not supported). Without this, rapid link taps would
+        // stack alerts.
+        guard !(presenter is UIAlertController) else {
+            Ghostty.logger.debug("open_url confirmation dropped: alert already presented")
+            completion(false)
+            return
+        }
+        let alert = UIAlertController(
+            title: "Open Link",
+            message: url.absoluteString,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+            completion(false)
+        })
+        alert.addAction(UIAlertAction(title: "Open", style: .default) { _ in
+            completion(true)
+        })
+        presenter.present(alert, animated: true)
+    }
+}
+#endif
