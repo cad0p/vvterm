@@ -659,14 +659,12 @@ struct TerminalKeyboardUITestHarness: View {
         guard let cSurface = terminalView?.surface?.unsafeCValue else { return "none" }
         var text = ghostty_text_s()
         guard ghostty_surface_read_selection(cSurface, &text) else { return "none" }
-        defer { ghostty_surface_free_text(cSurface, text) }
+        defer { ghostty_surface_free_text(cSurface, &text) }
         guard let ptr = text.text, text.text_len > 0 else { return "empty" }
-        guard let data = String(
-            bytesNoCopy: ptr,
-            length: Int(text.text_len),
-            encoding: .utf8,
-            freeWhenDone: false
-        ) else { return "unreadable" }
+        let data = String(
+            decoding: UnsafeRawBufferPointer(start: ptr, count: Int(text.text_len)),
+            as: UTF8.self
+        )
         let trimmed = data.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "empty" : String(trimmed.prefix(24))
     }
