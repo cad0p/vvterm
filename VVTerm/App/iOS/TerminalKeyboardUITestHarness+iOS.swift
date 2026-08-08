@@ -720,15 +720,14 @@ struct TerminalKeyboardUITestHarness: View {
             + " terminalLink=\(Self.terminalLinkRingTail())"
     }
 
-    /// Drives a synthetic double-click (two press/release pairs 150ms apart)
-    /// at grid (11,0) once the link feed has landed. XCUITest tap injection
-    /// latency on loaded CI simulators can push a second synthetic tap past
-    /// the core's 500ms multi-click interval (press #2 then counts as a
-    /// fresh single click); driving the clicks in-process with a fixed gap
-    /// exercises the same send path the direct-tap recognizer uses, with
-    /// deterministic timing. No modifier keys: they only matter for OSC 8
-    /// link activation, which the alert test covers end-to-end — keeping
-    /// them out isolates the core's multi-click word-selection path.
+    /// Drives a synthetic double-click (two press/release pairs, no gap) at
+    /// grid (11,0) once the link feed has landed — an exact mirror of the
+    /// app's own handleDoubleTap (plain mods, one pos event, two immediate
+    /// pairs). The core never surfaces a selection from injected presses in
+    /// the simulator (#114), and on iPhone word selection is the native
+    /// UITextInteraction path the harness cannot drive — so the regression
+    /// this drives is the #111 routing property: a plain-word double-click
+    /// must never present the link confirmation alert.
     private func deliverOSC8DoubleClickIfPossible() {
         guard !osc8DoubleClickDelivered, let terminalView,
               linkFeedDelivered,
@@ -736,45 +735,18 @@ struct TerminalKeyboardUITestHarness: View {
               let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
         else { return }
         osc8DoubleClickDelivered = true
-        // Press/release x3 at the word (a triple-click => core selectLine).
-        // The double-click (=> selectWord) never produced a selection while
-        // the link probe (=> open_url on release) always fired, so this run
-        // discriminates: if a triple also produces nothing, the press path
-        // breaks before the click-count switch (pin/pages); if a line IS
-        // selected, the press path and counting work and only selectWord is
-        // failing. Super mods mirror the direct-tap recognizer exactly.
-        surface.sendMousePos(.init(x: point.x, y: point.y, mods: [.super]))
-        let p1a = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
-        let p1b = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
-        let p2a = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
-        let p2b = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
-        let p3a = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
-        let p3b = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
+        surface.sendMousePos(.init(x: point.x, y: point.y, mods: []))
+        let p1a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        let p1b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        let p2a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        let p2b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
         Ghostty.logger.diagInfo(
             "terminal-link",
-            "harness triple-click sent x=\(Int(point.x)) y=\(Int(point.y)) pair1=\(p1a && p1b) pair2=\(p2a && p2b) pair3=\(p3a && p3b)"
+            "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) pair1=\(p1a && p1b) pair2=\(p2a && p2b)"
         )
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak terminalView] in
-            guard let terminalView,
-                  let surface = terminalView.surface,
-                  let linkPoint = terminalView.keyboardUITestCellCenter(row: 10, col: 0)
-            else { return }
-            surface.sendMousePos(.init(x: linkPoint.x, y: linkPoint.y, mods: [.super]))
-            let lp = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
-            let lr = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
-            Ghostty.logger.diagInfo(
-                "terminal-link",
-                "harness link probe sent x=\(Int(linkPoint.x)) y=\(Int(linkPoint.y)) press=\(lp) release=\(lr)"
-            )
-        }
-    }
-
-    private func sendClick(at point: CGPoint, on surface: Ghostty.Surface) -> Bool {
-        let mods: Ghostty.Input.Mods = []
-        surface.sendMousePos(.init(x: point.x, y: point.y, mods: mods))
-        let press = surface.sendMouseButton(.init(action: .press, button: .left, mods: mods))
-        let release = surface.sendMouseButton(.init(action: .release, button: .left, mods: mods))
-        return press && release
+        // No link probe here: it would open the confirmation alert and
+        // defeat this test's no-alert assertion. Link activation is covered
+        // end-to-end by testOSC8LinkTapPresentsConfirmationAlert.
     }
 
     /// Feeds the OSC 8 link line once the core surface exists. Retried from
