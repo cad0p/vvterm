@@ -721,17 +721,17 @@ struct TerminalKeyboardUITestHarness: View {
               let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
         else { return }
         osc8DoubleClickDelivered = true
-        // Mirror the app's own handleDoubleTap pattern exactly: one pos
-        // event, then two immediate press/release pairs (the working
-        // app-owned double-tap on iPad). Then, 0.4s later, a single click
-        // on the link cell (row 10) as a probe: if the ring shows the
-        // open_url action, clicks reach the core and only the word-selection
-        // path fails; if not, the send path itself is broken.
-        surface.sendMousePos(.init(x: point.x, y: point.y, mods: []))
-        let p1a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
-        let p1b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
-        let p2a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
-        let p2b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        // Mirror the direct-tap recognizer's exact click (super mods) for
+        // both pairs: the recognizer path is the one proven to reach the
+        // core and trigger core behavior (the alert test). The link probe
+        // below also uses super — plain mods were the only remaining
+        // difference between the working probe and the non-working
+        // double-click.
+        surface.sendMousePos(.init(x: point.x, y: point.y, mods: [.super]))
+        let p1a = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
+        let p1b = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
+        let p2a = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
+        let p2b = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
         Ghostty.logger.diagInfo(
             "terminal-link",
             "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) pair1=\(p1a && p1b) pair2=\(p2a && p2b)"
