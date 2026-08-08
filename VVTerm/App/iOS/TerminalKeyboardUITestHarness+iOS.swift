@@ -721,17 +721,29 @@ struct TerminalKeyboardUITestHarness: View {
               let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
         else { return }
         osc8DoubleClickDelivered = true
-        let press1 = sendClick(at: point, on: surface)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminalView] in
+        // Allow a brief settle for the feed's 40 newlines to fully render
+        // and the active page to stabilize before sending clicks. The feed's
+        // 40 newlines can trigger async rendering/paging that briefly leaves
+        // the active page list in a transitional state, causing pin lookup
+        // failures (press1=false press2=false). 0.5s covers the observed
+        // gridResizes settling time in CI.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak terminalView] in
             guard let terminalView,
                   let surface = terminalView.surface,
                   let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
             else { return }
-            let press2 = sendClick(at: point, on: surface)
-            Ghostty.logger.diagInfo(
-                "terminal-link",
-                "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) press1=\(press1) press2=\(press2)"
-            )
+            let press1 = sendClick(at: point, on: surface)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminalView] in
+                guard let terminalView,
+                      let surface = terminalView.surface,
+                      let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
+                else { return }
+                let press2 = sendClick(at: point, on: surface)
+                Ghostty.logger.diagInfo(
+                    "terminal-link",
+                    "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) press1=\(press1) press2=\(press2)"
+                )
+            }
         }
     }
 
