@@ -95,22 +95,24 @@ final class TerminalLinkTapUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        // The harness drives a double-click at grid (11,0) — SOMEWORD, NOT
+        // The harness drives a triple-click at grid (11,0) — SOMEWORD, NOT
         // the OSC 8 link on row 10 (a link tap would open the confirmation
-        // alert and swallow the second press). In-process click injection
-        // keeps press #2 inside the core's 500ms multi-click interval,
+        // alert and swallow the later presses). In-process click injection
+        // keeps presses inside the core's 500ms multi-click interval,
         // which CI tap-injection latency can push past; the click path
         // (sendMousePos + press/release with super mods) is the same one
         // the direct-tap recognizer uses, covered end-to-end by the alert
-        // test above. The core's double-click word selection must surface
-        // as nativeSelection=true.
+        // test above. A triple-click must surface a core line selection
+        // (nativeSelection=true); a double-click word selection was never
+        // observed, so this press-count discriminator decides whether the
+        // press path reaches the click-count switch at all.
         wait(
             for: diagnostics,
             labelContaining: "nativeSelection=true",
             timeout: 15,
             diagnostics: diagnosticsText(in: app)
         )
-        // The plain word must not trigger the confirmation alert.
+        // Plain-word clicks must not trigger the confirmation alert.
         XCTAssertFalse(
             app.alerts.firstMatch.waitForExistence(timeout: 2),
             "Plain-word double-click must not present the link confirmation"
