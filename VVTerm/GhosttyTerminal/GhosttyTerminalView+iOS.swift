@@ -1603,6 +1603,17 @@ class GhosttyTerminalView: UIView {
         }
         surfaceReference = nil
 
+        // Detach the renderer's layer and settle pending layout before the
+        // surface free joins the renderer thread (issue #116): at thread
+        // exit CA commits the renderer's pending transaction, and its
+        // layout phase reaching this view's Auto Layout constraints aborts
+        // the process on the renderer thread
+        // (_AssertAutoLayoutOnAllowedThreadsOnly).
+        Ghostty.LayerTeardown.prepare(
+            hostLayer: layer,
+            isRendererLayer: { isGhosttySurfaceLayer($0) }
+        )
+
         // CRITICAL: Explicitly free the surface to release Metal resources
         // Do not rely on deinit - Task.detached may never run
         surface?.free()
