@@ -97,6 +97,13 @@ final class TeleportReadinessUITests: XCTestCase {
         app.descendants(matching: .any)["vvterm.serverRow.00000000-0000-0000-0000-000000000001"]
     }
 
+    /// Taps the server row once it is hittable (issue #47 — the row can
+    /// exist in the AX tree before it finishes mounting; a tap that lands
+    /// early misses it and no sheet appears). See tapWhenHittable.
+    private func tapServerRow(in app: XCUIApplication) {
+        tapWhenHittable(serverRow(app))
+    }
+
     // MARK: - Tests (mockup B — 5 readiness scenarios)
 
     // 1. needsBootstrap — empty keychain → amber "Setup" pill → tap → bootstrap sheet
@@ -121,9 +128,9 @@ final class TeleportReadinessUITests: XCTestCase {
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for needsBootstrap")
 
         // Tap the row → the bootstrap sheet should appear.
-        serverRow(app).tap()
+        tapServerRow(in: app)
         let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
-        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5), "bootstrap sheet header should appear after tapping a needsBootstrap row")
+        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 10), "bootstrap sheet header should appear after tapping a needsBootstrap row")
         XCTAssertEqual(bootstrapHeader.label, "Approve in Safari")
         attachScreenshot(app, named: "readiness-needsBootstrap-bootstrap-sheet")
     }
@@ -145,13 +152,13 @@ final class TeleportReadinessUITests: XCTestCase {
         let setupPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"]
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for needsRegistration")
 
-        serverRow(app).tap()
+        tapServerRow(in: app)
         // The harness seeds needsRegistration with NO in-memory BootstrapResult
         // (simulating a fresh needsRegistration state, e.g. cert present but SEP
         // key absent on first tap). Production's fallback re-bootstraps to
         // regenerate the TLS keypair. Assert the ACTUAL behavior.
         let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
-        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5), "needsRegistration with no in-memory result routes to bootstrap (production fallback)")
+        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 10), "needsRegistration with no in-memory result routes to bootstrap (production fallback)")
         XCTAssertEqual(bootstrapHeader.label, "Approve in Safari")
 
         // And the registration sheet should NOT appear (no BootstrapResult to
@@ -169,9 +176,9 @@ final class TeleportReadinessUITests: XCTestCase {
         let signInPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.signIn"]
         XCTAssertTrue(signInPill.waitForExistence(timeout: 5), "blue 'Sign in' pill should be visible for needsLogin")
 
-        serverRow(app).tap()
+        tapServerRow(in: app)
         let loginHeader = app.staticTexts["vvterm.teleport.login.header"]
-        XCTAssertTrue(loginHeader.waitForExistence(timeout: 5), "login sheet header should appear after tapping a needsLogin row")
+        XCTAssertTrue(loginHeader.waitForExistence(timeout: 10), "login sheet header should appear after tapping a needsLogin row")
         XCTAssertEqual(loginHeader.label, "Sign in with Face ID")
         attachScreenshot(app, named: "readiness-needsLogin-login-sheet")
     }
@@ -187,9 +194,9 @@ final class TeleportReadinessUITests: XCTestCase {
 
         // Tap the row → the connect marker should appear (the harness wires
         // onConnect/onSelect to a visible "Connected" marker).
-        serverRow(app).tap()
+        tapServerRow(in: app)
         let connected = app.staticTexts["vvterm.teleport.serverlistHarness.connected"]
-        XCTAssertTrue(connected.waitForExistence(timeout: 5), "ready server should connect directly (no Teleport sheet)")
+        XCTAssertTrue(connected.waitForExistence(timeout: 10), "ready server should connect directly (no Teleport sheet)")
 
         // And NO Teleport sheet header should appear.
         XCTAssertFalse(app.staticTexts["vvterm.teleport.bootstrap.header"].exists, "no bootstrap sheet for ready server")
@@ -209,9 +216,9 @@ final class TeleportReadinessUITests: XCTestCase {
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for crossDevice (empty keychain → needsBootstrap)")
 
         // Tapping should offer setup (bootstrap sheet).
-        serverRow(app).tap()
+        tapServerRow(in: app)
         let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
-        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5), "bootstrap sheet should appear after tapping a crossDevice (needsBootstrap) row")
+        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 10), "bootstrap sheet should appear after tapping a crossDevice (needsBootstrap) row")
         XCTAssertEqual(bootstrapHeader.label, "Approve in Safari")
         attachScreenshot(app, named: "readiness-crossDevice-needsBootstrap")
     }

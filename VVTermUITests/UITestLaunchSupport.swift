@@ -33,4 +33,27 @@ extension XCTestCase {
         )
         return app
     }
+
+    /// Taps `element` once it is hittable. The element can exist in the AX
+    /// tree before it finishes mounting; a tap that lands early misses it
+    /// and the follow-up assertion fails (issue #47). Waits for hittability
+    /// so the tap reliably lands. Falls back to the raw tap on timeout so
+    /// the follow-up assertion reports the real state.
+    @MainActor
+    func tapWhenHittable(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 10,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.isHittable {
+                element.tap()
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        element.tap()
+    }
 }

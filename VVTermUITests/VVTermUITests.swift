@@ -24,6 +24,14 @@ final class VVTermUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
+        // #45: template test — it only launches the app (launchForTest's own
+        // XCTFail is a launch-wedge canary, not a functional assertion) and
+        // provides no regression value, while failing whenever the simulator
+        // launch wedges on CI (observed 5× on shard-3). Skip in CI like
+        // VVTermUITestsLaunchTests; keep it for local template parity.
+        if ProcessInfo.processInfo.environment["CI"] != nil {
+            throw XCTSkip("Template test with no assertions — skipped in CI (#45)")
+        }
         // UI tests must launch the application that they test.
         let app = XCUIApplication()
         _ = launchForTest(app)

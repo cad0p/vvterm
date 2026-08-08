@@ -17,9 +17,11 @@ inputs:
   deriveddata-key-prefix:
     description: >-
       DerivedData cache key prefix. The full key is
-      '<prefix>-<workflow name>-<sha>'. Test jobs pass 'xcode27-deriveddata'
-      (Debug/simulator); ota-archive passes 'xcode27-ota-deriveddata'
-      (Release/device).
+      '<prefix>-<workflow name>-<sha>'. Test jobs pass
+      'xcode27-deriveddata-ct' (Debug/simulator; the -ct suffix tracks the
+      commit-time mtime fix and invalidates caches whose sidecars were
+      recorded with the old author-time logic); ota-archive passes
+      'xcode27-ota-deriveddata' (Release/device).
     required: true
   deriveddata-restore-keys:
     description: >-
@@ -27,7 +29,7 @@ inputs:
       for exact-key-only. ota-archive passes 'xcode27-ota-deriveddata-' so it
       reuses its OWN previous Release/device derived data across pushes
       (incremental archives); the build job's Debug/simulator caches live
-      under 'xcode27-deriveddata-' and never match.
+      under 'xcode27-deriveddata-ct-' and never match.
     required: false
     default: ''
 runs:
@@ -40,7 +42,18 @@ runs:
       # appear newer than cached DerivedData artifacts → full recompile.
       # This sets each file's mtime to its last-commit time, making them
       # consistent across runs. Requires fetch-depth: 0 on checkout.
+      #
+      # --commit-time is REQUIRED: the default restores AUTHOR time, and an
+      # amended/squashed commit keeps its original author date (observed
+      # 18:23:30 for a commit made at 21:23:09). A changed file whose author
+      # date predates the cached .o then looks older than its object file,
+      # so xcodebuild's incremental build SKIPS recompiling it and the test
+      # binary silently runs stale code (PR #118 run 5: a quarantine XCTSkip
+      # never made it into the binary — the test ran and failed at the old
+      # line number while the same-run testExample skip proved CI env worked).
       uses: chetan/git-restore-mtime-action@v2
+      with:
+        args: --commit-time
 
     - name: Cache DerivedData + SPM SourcePackages (mtime-aware)
       # irgaly/xcode-cache is purpose-built for Xcode DerivedData caching.
