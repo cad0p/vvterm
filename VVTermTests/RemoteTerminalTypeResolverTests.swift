@@ -62,6 +62,24 @@ struct RemoteTerminalTypeResolverTests {
         }
     }
 
+    /// Thread-safe accumulator for the @Sendable exec-error callback.
+    private final class ErrorBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [String] = []
+
+        func append(_ value: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            storage.append(value)
+        }
+
+        var values: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
     @Test
     func resolveFallsBackForNonPOSIXRemotesWithoutExecutingCommands() async {
         let executor = FakeExecutor(outputs: [])
@@ -138,6 +156,44 @@ struct RemoteTerminalTypeResolverTests {
         let terminalType = await resolve(environment: posixEnvironment, executor: executor)
 
         #expect(terminalType == .xterm256Color)
+    }
+
+    @Test
+    func reportsInstallExecFailuresThroughCallback() async {
+        let executor = FakeExecutor(outputs: [.failure(TestError.commandFailed)])
+        let recorded = ErrorBox()
+
+        let terminalType = await resolve(
+            environment: posixEnvironment,
+            executor: executor,
+            onExecError: { error in
+                recorded.append(String(describing: error))
+            }
+        )
+
+        #expect(terminalType == .xterm256Color)
+        #expect(recorded.values == ["commandFailed"])
+    }
+
+    @Test
+    func reportsProbeExecFailuresThroughCallbackWhenSourceMissing() async {
+        let executor = FakeExecutor(outputs: [.failure(TestError.commandFailed)])
+        let recorded = ErrorBox()
+
+        let terminalType = await RemoteTerminalTypeResolver.resolve(
+            environment: posixEnvironment,
+            execute: { command, timeout in
+                try await executor.run(command: command, timeout: timeout)
+            },
+            onExecError: { error in
+                recorded.append(String(describing: error))
+            },
+            bundle: Bundle(for: EmptyBundleToken.self),
+            terminfoSource: nil
+        )
+
+        #expect(terminalType == .xterm256Color)
+        #expect(recorded.values == ["commandFailed"])
     }
 
     @Test
@@ -257,13 +313,15 @@ struct RemoteTerminalTypeResolverTests {
 
     private func resolve(
         environment: RemoteEnvironment,
-        executor: FakeExecutor
+        executor: FakeExecutor,
+        onExecError: RemoteTerminalTypeResolver.ExecErrorHandler? = nil
     ) async -> RemoteTerminalType {
         await RemoteTerminalTypeResolver.resolve(
             environment: environment,
             execute: { command, timeout in
                 try await executor.run(command: command, timeout: timeout)
             },
+            onExecError: onExecError,
             terminfoSource: terminfoSource
         )
     }

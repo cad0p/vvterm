@@ -27,6 +27,17 @@ extension Logger {
         info("\(text, privacy: .public)")
         DiagnosticsRecorder.shared.record(level: .info, category: category, message: text)
     }
+
+    /// Error-level lifecycle event mirrored into the on-device diagnostics
+    /// ring buffer, like `diagInfo` but at error severity. Use for failure
+    /// narrative (attempts, exec/channel failures). The message must already
+    /// be sanitized (see `SSHError.diagnosticsMessage`) — never credentials,
+    /// raw hosts, or terminal content.
+    func diagError(_ category: String, _ message: @autoclosure () -> String) {
+        let text = message()
+        error("\(text, privacy: .public)")
+        DiagnosticsRecorder.shared.record(level: .error, category: category, message: text)
+    }
 }
 
 enum DebugLogConfiguration {
