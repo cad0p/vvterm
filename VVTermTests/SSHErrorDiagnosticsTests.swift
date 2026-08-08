@@ -24,7 +24,7 @@ struct SSHErrorDiagnosticsTests {
             redacting: makeServer()
         )
 
-        #expect(message == #"connectionFailed("Connection failed: Failed to connect to <host>:<port>")"#)
+        #expect(message == #"connectionFailed("Failed to connect to <host>:<port>")"#)
     }
 
     @Test
@@ -85,7 +85,7 @@ struct SSHErrorDiagnosticsTests {
             redacting: makeServer()
         )
 
-        #expect(message == "CancellationError")
+        #expect(message == "CancellationError()")
     }
 
     @Test
