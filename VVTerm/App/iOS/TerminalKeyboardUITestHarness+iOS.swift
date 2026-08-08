@@ -721,20 +721,32 @@ struct TerminalKeyboardUITestHarness: View {
               let point = terminalView.keyboardUITestCellCenter(row: 11, col: 0)
         else { return }
         osc8DoubleClickDelivered = true
-        // Send the double-click immediately after the feed, reusing the
-        // point computed at delivery time. Evidence: immediate clicks
-        // (same tick) produced the selection (nativeSelection=true at
-        // failure in the non-settled run), while deferring by 0.5s did not
-        // — the recomputed cell center drifted (y=185 vs y=181) with the
-        // transient grid during keyboard/avoidance settling.
-        let press1 = sendClick(at: point, on: surface)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak terminalView] in
+        // Mirror the app's own handleDoubleTap pattern exactly: one pos
+        // event, then two immediate press/release pairs (the working
+        // app-owned double-tap on iPad). Then, 0.4s later, a single click
+        // on the link cell (row 10) as a probe: if the ring shows the
+        // open_url action, clicks reach the core and only the word-selection
+        // path fails; if not, the send path itself is broken.
+        surface.sendMousePos(.init(x: point.x, y: point.y, mods: []))
+        let p1a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        let p1b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        let p2a = surface.sendMouseButton(.init(action: .press, button: .left, mods: []))
+        let p2b = surface.sendMouseButton(.init(action: .release, button: .left, mods: []))
+        Ghostty.logger.diagInfo(
+            "terminal-link",
+            "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) pair1=\(p1a && p1b) pair2=\(p2a && p2b)"
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak terminalView] in
             guard let terminalView,
-                  let surface = terminalView.surface else { return }
-            let press2 = sendClick(at: point, on: surface)
+                  let surface = terminalView.surface,
+                  let linkPoint = terminalView.keyboardUITestCellCenter(row: 10, col: 0)
+            else { return }
+            surface.sendMousePos(.init(x: linkPoint.x, y: linkPoint.y, mods: [.super]))
+            let lp = surface.sendMouseButton(.init(action: .press, button: .left, mods: [.super]))
+            let lr = surface.sendMouseButton(.init(action: .release, button: .left, mods: [.super]))
             Ghostty.logger.diagInfo(
                 "terminal-link",
-                "harness double-click sent x=\(Int(point.x)) y=\(Int(point.y)) press1=\(press1) press2=\(press2)"
+                "harness link probe sent x=\(Int(linkPoint.x)) y=\(Int(linkPoint.y)) press=\(lp) release=\(lr)"
             )
         }
     }
