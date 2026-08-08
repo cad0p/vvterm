@@ -125,21 +125,23 @@ enum SSHConnectionRunner {
                     markerEvent: lastLifecycleEvent,
                     sessionExists: sessionExists
                 )
-                logger.info("SSH shell ended: \(String(describing: endReason), privacy: .public)")
+                logger.diagInfo("SSHPane", "SSH shell ended: \(String(describing: endReason))")
                 onProcessExit(shell.id, endReason)
                 return
             } catch {
                 guard !Task.isCancelled else { return }
                 guard shouldContinueConnection() else { return }
                 lastError = error
-                logger.error("SSH connection failed (attempt \(attempt)): \(error.localizedDescription)")
+                let failureMessage = "SSH connection failed (attempt \(attempt)): "
+                    + SSHError.diagnosticsMessage(for: error, redacting: server)
+                logger.diagError("SSHPane", failureMessage)
 
                 if attempt < maxAttempts, let sshError = error as? SSHError {
                     let shouldReset = await shouldResetClient(sshError)
                     guard !Task.isCancelled else { return }
                     guard shouldContinueConnection() else { return }
                     if shouldReset {
-                        logger.warning("Resetting SSH client before retrying connection")
+                        logger.diagInfo("SSHPane", "Resetting SSH client before retrying connection")
                         await sshClient.disconnect()
                         guard !Task.isCancelled else { return }
                         guard shouldContinueConnection() else { return }

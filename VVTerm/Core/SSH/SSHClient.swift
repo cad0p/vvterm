@@ -457,11 +457,16 @@ actor SSHClient {
 
         let environment = await remoteEnvironment(forceRefresh: forceRefresh)
         let token = startupTrace?.begin(.terminalType)
+        let redactionServer = connectedServer
         let terminalType = await RemoteTerminalTypeResolver.resolve(
             environment: environment,
             execute: { [weak self] command, timeout in
                 guard let self else { throw SSHError.notConnected }
                 return try await self.execute(command, timeout: timeout)
+            },
+            onExecError: { error in
+                let message = SSHError.diagnosticsMessage(for: error, redacting: redactionServer)
+                Logger.forCategory("SSH").diagError("SSH", "terminalType exec failed: \(message)")
             }
         )
         if let token {

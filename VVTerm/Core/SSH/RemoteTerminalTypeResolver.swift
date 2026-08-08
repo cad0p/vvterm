@@ -3,6 +3,9 @@ import os
 
 enum RemoteTerminalTypeResolver {
     typealias CommandExecutor = @Sendable (_ command: String, _ timeout: Duration?) async throws -> String
+    /// Invoked when a probe/install exec throws, so callers can surface the
+    /// failure in diagnostics even though resolution falls back gracefully.
+    typealias ExecErrorHandler = @Sendable (_ error: Error) -> Void
 
     private static let logger = Logger.forCategory("RemoteTerminalTypeResolver")
     private static let probeTimeout: Duration = .seconds(5)
@@ -23,6 +26,7 @@ enum RemoteTerminalTypeResolver {
     static func resolve(
         environment: RemoteEnvironment,
         execute: CommandExecutor,
+        onExecError: ExecErrorHandler? = nil,
         bundle: Bundle = .main,
         terminfoSource: String? = nil
     ) async -> RemoteTerminalType {
@@ -32,14 +36,18 @@ enum RemoteTerminalTypeResolver {
 
         let resolvedTerminfoSource = terminfoSource ?? RemoteTerminalBootstrap.ghosttyTerminfoSource(bundle: bundle)
         guard let resolvedTerminfoSource else {
-            if await remoteHasGhosttyTerminfo(execute: execute) {
+            if await remoteHasGhosttyTerminfo(execute: execute, onExecError: onExecError) {
                 return .xtermGhostty
             }
             logger.warning("Ghostty terminfo source not found in bundle; falling back to \(RemoteTerminalBootstrap.defaultTerminalType.rawValue, privacy: .public)")
             return RemoteTerminalBootstrap.defaultTerminalType
         }
 
-        switch await installGhosttyTerminfo(source: resolvedTerminfoSource, execute: execute) {
+        switch await installGhosttyTerminfo(
+            source: resolvedTerminfoSource,
+            execute: execute,
+            onExecError: onExecError
+        ) {
         case .installed:
             return .xtermGhostty
         case .missingTic:
@@ -101,11 +109,15 @@ enum RemoteTerminalTypeResolver {
         return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
-    private static func remoteHasGhosttyTerminfo(execute: CommandExecutor) async -> Bool {
+    private static func remoteHasGhosttyTerminfo(
+        execute: CommandExecutor,
+        onExecError: ExecErrorHandler?
+    ) async -> Bool {
         do {
             let output = try await execute(probeCommand(), probeTimeout)
             return output.contains(probeMarker)
         } catch {
+            onExecError?(error)
             logger.debug("Ghostty terminfo probe failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
@@ -113,7 +125,8 @@ enum RemoteTerminalTypeResolver {
 
     private static func installGhosttyTerminfo(
         source: String,
-        execute: CommandExecutor
+        execute: CommandExecutor,
+        onExecError: ExecErrorHandler?
     ) async -> InstallResult {
         do {
             let output = try await execute(installCommand(terminfoSource: source), installTimeout)
@@ -125,6 +138,7 @@ enum RemoteTerminalTypeResolver {
             }
             return .failed
         } catch {
+            onExecError?(error)
             logger.debug("Ghostty terminfo installation command failed: \(error.localizedDescription, privacy: .public)")
             return .failed
         }
