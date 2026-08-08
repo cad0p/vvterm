@@ -655,6 +655,22 @@ struct TerminalKeyboardUITestHarness: View {
         refreshDiagnostics()
     }
 
+    private func nativeSelectionText() -> String {
+        guard let cSurface = terminalView?.surface?.unsafeCValue else { return "none" }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(cSurface, &text) else { return "none" }
+        defer { ghostty_surface_free_text(cSurface, text) }
+        guard let ptr = text.text, text.text_len > 0 else { return "empty" }
+        guard let data = String(
+            bytesNoCopy: ptr,
+            length: Int(text.text_len),
+            encoding: .utf8,
+            freeWhenDone: false
+        ) else { return "unreadable" }
+        let trimmed = data.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "empty" : String(trimmed.prefix(24))
+    }
+
     private func refreshDiagnostics() {
         guard let terminalView else {
             diagnostics = "notReady ghostty=\(ghosttyApp.readiness.rawValue)"
@@ -671,6 +687,7 @@ struct TerminalKeyboardUITestHarness: View {
         let lowercaseHInputs = inputByteCount(0x68)
         let uppercaseHInputs = inputByteCount(0x48)
         let nativeSelection = (terminalView.surface?.unsafeCValue).map { ghostty_surface_has_selection($0) } ?? false
+        let selText = nativeSelectionText()
         if feedsOSC8Link {
             deliverOSC8LinkFeedIfPossible()
         }
@@ -697,7 +714,7 @@ struct TerminalKeyboardUITestHarness: View {
             + " paneFocusActions=\(paneFocusActionCount)"
             + " lastPaneCloseDialogAction=\(lastPaneCloseDialogAction)"
             + " lowercaseHInputs=\(lowercaseHInputs) uppercaseHInputs=\(uppercaseHInputs)"
-            + " nativeSelection=\(nativeSelection)"
+            + " nativeSelection=\(nativeSelection) selText=\(selText)"
             + " linkFeed=\(linkFeedDelivered ? "delivered" : "pending")"
             + " osc8DoubleClick=\(osc8DoubleClickDelivered ? "delivered" : "pending")"
             + " viewTouches=\(terminalView.keyboardUITestDirectTouchCount)"
