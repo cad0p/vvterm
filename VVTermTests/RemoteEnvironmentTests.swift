@@ -91,6 +91,20 @@ struct RemoteEnvironmentTests {
     }
 
     @Test
+    func posixEnvironmentProbeRunsInNonLoginShell() {
+        let command = RemoteEnvironmentResolver.posixEnvironmentProbeCommand()
+
+        // Login hooks must not fire inside the connect-time environment probe.
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("sh -lc"))
+        #expect(!command.contains("/bin/sh -lc"))
+        // The body still exports PATH and reports platform + shell markers.
+        #expect(command.contains("export PATH="))
+        #expect(command.contains("__VVTERM_PLATFORM__="))
+        #expect(command.contains("__VVTERM_SHELL__="))
+    }
+
+    @Test
     func posixEnvironmentUsesOneCombinedProbe() async {
         let executor = FakeExecutor(outputs: [
             .success("__VVTERM_PLATFORM__=Linux\n__VVTERM_SHELL__=zsh")

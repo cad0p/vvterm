@@ -107,6 +107,22 @@ struct RemoteTerminalTypeResolverTests {
     }
 
     @Test
+    func probeAndInstallCommandsRunInNonLoginShell() {
+        let install = RemoteTerminalTypeResolver.installCommand(terminfoSource: terminfoSource)
+        let probe = RemoteTerminalTypeResolver.probeCommand()
+
+        for command in [install, probe] {
+            // Login hooks (e.g. zmx/tmux auto-attach) must never fire inside
+            // probe/install exec channels, so the wrapper must be `sh -c`.
+            #expect(command.hasPrefix("sh -c '"))
+            #expect(!command.contains("sh -lc"))
+            #expect(!command.contains("/bin/sh -lc"))
+            // The body still exports PATH before probing for tic/infocmp.
+            #expect(command.contains("export PATH="))
+        }
+    }
+
+    @Test
     func commandsRequireE3AndNeverTrustCompiledFileExistence() {
         let install = RemoteTerminalTypeResolver.installCommand(terminfoSource: terminfoSource)
         let probe = RemoteTerminalTypeResolver.probeCommand()
@@ -342,7 +358,7 @@ struct RemoteTerminalTypeResolverTests {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         let command = RemoteTerminalTypeResolver.installCommand(terminfoSource: terminfoSource)
-        let commandBody = try unwrappedLoginShellBody(command)
+        let commandBody = try unwrappedProbeShellBody(command)
         let toolAvailability = """
         command() {
           case "$2" in
@@ -391,8 +407,8 @@ struct RemoteTerminalTypeResolverTests {
         )
     }
 
-    private func unwrappedLoginShellBody(_ command: String) throws -> String {
-        let prefix = "sh -lc "
+    private func unwrappedProbeShellBody(_ command: String) throws -> String {
+        let prefix = "sh -c "
         guard command.hasPrefix(prefix) else { throw TestError.invalidWrappedCommand }
         let quoted = command.dropFirst(prefix.count)
         guard quoted.first == "'", quoted.last == "'" else {

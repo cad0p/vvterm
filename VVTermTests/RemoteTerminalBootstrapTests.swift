@@ -31,6 +31,21 @@ struct RemoteTerminalBootstrapTests {
     )
 
     @Test
+    func wrapPOSIXShellCommandKeepsLoginSemanticsForStartupCommands() {
+        // The interactive session wrapper must stay a login shell so the
+        // user's login profile applies to the real session.
+        #expect(RemoteTerminalBootstrap.wrapPOSIXShellCommand("echo hi").hasPrefix("/bin/sh -lc \""))
+    }
+
+    @Test
+    func wrapPOSIXProbeCommandUsesNonLoginShell() {
+        let command = RemoteTerminalBootstrap.wrapPOSIXProbeCommand("printf 'marker'")
+
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("sh -lc"))
+    }
+
+    @Test
     func launchPlanWithoutStartupCommandUsesPOSIXLoginShellBootstrap() {
         let plan = RemoteTerminalBootstrap.launchPlan(startupCommand: nil, environment: posixEnvironment)
 
