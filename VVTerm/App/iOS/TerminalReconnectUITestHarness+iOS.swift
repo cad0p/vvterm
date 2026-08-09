@@ -29,10 +29,22 @@ struct TerminalReconnectUITestHarness: View {
     private static let serverId = UUID(uuidString: "D3A03FD5-453E-43AC-8BB5-838E5D5D1990")!
     private static let workspaceId = UUID(uuidString: "B51203C0-15B5-47E3-9322-D4D7E8A51990")!
     private static let sshHost = "127.0.0.1"
-    private static let sshPort = 22_229
     private static let fixtureDefaults = UserDefaults(suiteName: "app.vivy.vvterm.dev199-ui-test")!
     private static let fixturePrivateKeyDefaultsKey = "sshPrivateKeyBase64"
     private static let fixtureUsernameDefaultsKey = "sshUsername"
+
+    /// Fixture port for the loopback SSH server. Defaults to 22229 (the
+    /// dev-seeded fixture port); the zmx repro rig overrides it via the
+    /// `VVTERM_REPRO_SSH_PORT` env var (set through `launchEnvironment` by
+    /// ZmxScrollbackReloadUITests) so the rig can re-point the harness at
+    /// its byte-counting proxy without a code change.
+    private static var sshPort: Int {
+        if let raw = ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PORT"],
+           let port = Int(raw), port > 0 {
+            return port
+        }
+        return 22_229
+    }
 
     @ObservedObject private var tabManager = TerminalTabManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
@@ -300,12 +312,21 @@ struct TerminalReconnectUITestHarness: View {
     }
 
     private func fixtureUsername() throws -> String {
+        if let username = ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_USERNAME"],
+           !username.isEmpty {
+            return username
+        }
         guard let username = Self.fixtureDefaults.string(forKey: Self.fixtureUsernameDefaultsKey),
               !username.isEmpty else { throw FixtureError.missingUsername }
         return username
     }
 
     private func fixturePrivateKey() throws -> Data {
+        if let encoded = ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PRIVATE_KEY"],
+           let data = Data(base64Encoded: encoded),
+           !data.isEmpty {
+            return data
+        }
         guard let encoded = Self.fixtureDefaults.string(forKey: Self.fixturePrivateKeyDefaultsKey),
               let data = Data(base64Encoded: encoded),
               !data.isEmpty else {

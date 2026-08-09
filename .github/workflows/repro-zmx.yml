@@ -1,0 +1,285 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Repro rig for two iOS bugs with zmx (tmux-compatible) sessions:
+#
+#   BUG A — with "Keep terminal size when keyboard opens" ENABLED (the
+#   default), toggling the software keyboard reloads the ENTIRE zmx scrollback
+#   over the network. zmx re-sends the full scrollback only on attach, so a
+#   full reload implies a re-attach = the SSH shell ended and the app
+#   auto-reconnected (attemptAutoReconnectIfNeeded) -> new SSH shell -> login
+#   shell auto-attach -> full replay. The bytemeter proxy attributes bytes and
+#   TCP connections per phase.
+#
+#   BUG B — opening the keyboard scrolls terminal content up too much,
+#   sometimes fully off-screen.
+#
+# Rig (all on THIS runner; the iOS simulator shares the runner loopback):
+#   - sshd on 127.0.0.1:22232 (pubkey auth; login shell /bin/zsh)
+#   - bytemeter TCP proxy 22229 -> 22232, HTTP state on 22233
+#   - zmx session `repro` pre-seeded with 8000 lines of scrollback + a
+#     login-shell fragment that execs `zmx attach repro` (guarded by a
+#     per-job arm flag and ZMX_NO_AUTOATTACH)
+#   - the app's TerminalReconnectUITestHarness pointed at the fixture via
+#     launchEnvironment (VVTERM_REPRO_SSH_*), injected into the xctestrun
+#     plist (the house route for UI tests — TEST_RUNNER_ prefix only works
+#     with `xcodebuild test`, which we avoid due to the Xcode 27
+#     test-without-building crash that the unit-tests scheme hits).
+#
+# Build/test split follows vvterm-pr-ci.yml: build-for-testing once, then
+# test-without-building against the injected xctestrun. The app is ad-hoc
+# SIGNED (CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-) because the sim
+# sandbox parks Network.framework connections of unentitled apps — the
+# connectivity monitor (NWPathMonitor) gates automatic reconnect, which the
+# repro depends on.
+#
+# All zmx interaction happens HERE (GitHub Actions macOS runners only). Never
+# run zmx on a dev box.
+#
+# See: https://github.com/cad0p/vvterm/issues (zmx scrollback reload repro)
+
+name: Repro zmx scrollback reload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repro-zmx
+  cancel-in-progress: true
+
+jobs:
+  repro-zmx:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      ZMX_NO_AUTOATTACH: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        uses: ./.github/actions/prepare-xcode-build
+        with:
+          deriveddata-key-prefix: xcode27-deriveddata
+          deriveddata-restore-keys: |
+            xcode27-deriveddata-
+
+      - name: Setup zmx (download, auto-attach fragment, scrollback injection)
+        run: bash scripts/ci/repro-zmx-setup.sh
+
+      - name: Setup loopback sshd (host/client keys, config, smoke)
+        run: bash scripts/ci/repro-sshd-setup.sh
+
+      - name: Start bytemeter proxy + mark-driven screenshotter
+        run: |
+          set -euo pipefail
+          REPRO_DIR="$RUNNER_TEMP/vvterm-repro"
+          mkdir -p "$REPRO_DIR" "$RUNNER_TEMP/screenshots"
+          python3 scripts/ci/repro-bytemeter.py > "$REPRO_DIR/bytemeter.log" 2>&1 &
+          echo $! > "$REPRO_DIR/bytemeter.pid"
+          bash scripts/ci/repro-screenshotter.sh 22233 "$RUNNER_TEMP/screenshots" \
+            > "$REPRO_DIR/screenshotter.log" 2>&1 &
+          echo $! > "$REPRO_DIR/screenshotter.pid"
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:22233/state >/dev/null 2>&1; then
+              echo "bytemeter state endpoint up (attempt $i)"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:22233/state
+          echo
+          echo "bytemeter + screenshotter running"
+
+      - name: Pre-resolve SPM dependencies (retry)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if xcodebuild -resolvePackageDependencies \
+                -scheme VVTerm \
+                -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+                >/dev/null 2>&1; then
+              echo "SPM resolved (attempt $attempt)"
+              exit 0
+            fi
+            echo "SPM resolution failed (attempt $attempt) — retrying"
+            sleep 15
+          done
+          echo "SPM resolution failed after 3 attempts" >&2
+          exit 1
+
+      - name: Build for iOS Simulator (build-for-testing, ad-hoc signed)
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -scheme VVTerm \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
+            IgnoreFileSystemDeviceInodeChanges=YES \
+            | tee "$RUNNER_TEMP/build.log"
+
+      - name: Run zmx scrollback reload UI tests
+        shell: bash
+        run: |
+          set +e  # disable -e; manage exit codes explicitly below
+          set -uo pipefail
+
+          REPRO_DIR="$RUNNER_TEMP/vvterm-repro"
+          # Belt and braces: TEST_RUNNER_ prefix for `xcodebuild test` paths,
+          # though the xctestrun injection below is the primary route.
+          set -a
+          # shellcheck disable=SC1091
+          source "$REPRO_DIR/vvterm-repro.env"
+          set +a
+          export TEST_RUNNER_VVTERM_REPRO_SSH_USERNAME="$VVTERM_REPRO_SSH_USERNAME"
+          export TEST_RUNNER_VVTERM_REPRO_SSH_PRIVATE_KEY="$VVTERM_REPRO_SSH_PRIVATE_KEY"
+          export TEST_RUNNER_VVTERM_REPRO_SSH_PORT=22229
+          export TEST_RUNNER_VVTERM_BYTEMETER_STATE_PORT=22233
+          export TEST_RUNNER_SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
+
+          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | head -1)
+          echo "Using xctestrun manifest: $XCRUN"
+
+          # Inject the fixture env into the xctestrun plist's per-test-target
+          # EnvironmentVariables dictionary (xctestrun v2 format:
+          # TestConfigurations[0].TestTargets[*].EnvironmentVariables), plus
+          # keepAlways attachment lifetimes so XCTAttachment screenshots
+          # survive into the xcresult even when tests pass.
+          python3 - "$XCRUN" <<'PY'
+          import plistlib, os, sys
+          path = sys.argv[1]
+          env = {
+              "VVTERM_REPRO_SSH_USERNAME": os.environ["VVTERM_REPRO_SSH_USERNAME"],
+              "VVTERM_REPRO_SSH_PRIVATE_KEY": os.environ["VVTERM_REPRO_SSH_PRIVATE_KEY"],
+              "VVTERM_REPRO_SSH_PORT": os.environ.get("VVTERM_REPRO_SSH_PORT", "22229"),
+              "VVTERM_BYTEMETER_STATE_PORT": os.environ.get("VVTERM_BYTEMETER_STATE_PORT", "22233"),
+              "SCREENSHOT_DIR": os.environ.get("TEST_RUNNER_SCREENSHOT_DIR", ""),
+          }
+          with open(path, "rb") as f:
+              data = plistlib.load(f)
+          injected = 0
+          for cfg in data.get("TestConfigurations", []):
+              for target in cfg.get("TestTargets", []):
+                  target_env = target.setdefault("EnvironmentVariables", {})
+                  target_env.update(env)
+                  target["UserAttachmentLifetime"] = "keepAlways"
+                  target["SystemAttachmentLifetime"] = "keepAlways"
+                  injected += 1
+          with open(path, "wb") as f:
+              plistlib.dump(data, f)
+          print(f"Injected repro env into {injected} test target(s)")
+          PY
+
+          XC_EXIT=0
+          for ATTEMPT in 1 2; do
+            rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+            xcodebuild test-without-building -collect-test-diagnostics never \
+              -xctestrun "$XCRUN" \
+              -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+              -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+              -only-testing:VVTermUITests/ZmxScrollbackReloadUITests \
+              -parallel-testing-enabled NO \
+              -test-timeouts-enabled \
+              -default-test-execution-time-allowance 180 \
+              -maximum-test-execution-time-allowance 180 \
+              | tee "$RUNNER_TEMP/test.log"
+            XC_EXIT=${PIPESTATUS[0]}
+            if [ "$XC_EXIT" -eq 0 ]; then
+              break
+            fi
+            if [ "$ATTEMPT" -lt 2 ] && ! grep -q "Test Case '-\[" "$RUNNER_TEMP/test.log"; then
+              echo "Runner failed before any test executed (infra wedge); retrying (attempt 2/2)."
+              continue
+            fi
+            break
+          done
+          exit $XC_EXIT
+
+      - name: Analyze screenshots (terminal region above keyboard)
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 -c 'import PIL' 2>/dev/null || \
+            python3 -m pip install --user --break-system-packages --quiet pillow || \
+            pip3 install --user --break-system-packages --quiet pillow
+          # Pull loose PNGs the test wrote inside the runner app's sandbox
+          # (fallback locations) into the screenshots dir.
+          set +e
+          find ~/Library/Developer/CoreSimulator/Devices -path '*screenshots*' -name '*.png' \
+            -exec cp -n {} "$RUNNER_TEMP/screenshots/" \; 2>/dev/null
+          set -e
+          python3 scripts/ci/repro-analyze-screenshots.py "$RUNNER_TEMP"/screenshots/*.png \
+            | tee "$RUNNER_TEMP/screenshots/analysis.txt"
+          echo "=== screenshots ==="
+          ls -la "$RUNNER_TEMP/screenshots/"
+
+      - name: Capture simulator logs (diagnostics)
+        if: always()
+        run: |
+          set +e
+          UDID=$(xcrun simctl list devices booted -j 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print([dev["udid"] for devs in d["devices"].values() for dev in devs if dev["state"]=="Booted"][0])')
+          xcrun simctl spawn "$UDID" log show --last 40m \
+            --predicate 'processImagePath CONTAINS "VVTerm"' \
+            > "$RUNNER_TEMP/sim-vvterm.log" 2>&1 || true
+          echo "captured $(wc -l < "$RUNNER_TEMP/sim-vvterm.log") lines"
+
+      - name: Upload repro artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: repro-zmx-artifacts
+          path: |
+            ${{ runner.temp }}/vvterm-repro/bytemeter.log
+            ${{ runner.temp }}/vvterm-repro/screenshotter.log
+            ${{ runner.temp }}/vvterm-repro/sshd.log
+            ${{ runner.temp }}/vvterm-repro/zmx-version.txt
+            ${{ runner.temp }}/vvterm-repro/zmx-help.txt
+            ${{ runner.temp }}/vvterm-repro/zmx-list.txt
+            ${{ runner.temp }}/vvterm-repro/vvterm-repro.env
+            ${{ runner.temp }}/screenshots
+            ${{ runner.temp }}/test.log
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/TestResults.xcresult
+            ${{ runner.temp }}/sim-vvterm.log
+          if-no-files-found: ignore
+
+      - name: Teardown (kill rig processes, restore dotfiles)
+        if: always()
+        run: |
+          set +e
+          REPRO_DIR="$RUNNER_TEMP/vvterm-repro"
+          if [ -f "$REPRO_DIR/screenshotter.pid" ]; then kill "$(cat "$REPRO_DIR/screenshotter.pid")" 2>/dev/null; fi
+          if [ -f "$REPRO_DIR/bytemeter.pid" ]; then kill "$(cat "$REPRO_DIR/bytemeter.pid")" 2>/dev/null; fi
+          if [ -f "$REPRO_DIR/sshd.pid" ]; then sudo kill "$(cat "$REPRO_DIR/sshd.pid")" 2>/dev/null; fi
+          rm -f "$REPRO_DIR/attach-armed"
+          for RC in "$HOME/.zprofile" "$HOME/.zshrc"; do
+            if [ -f "$RC" ] && grep -q "vvterm-repro-zmx" "$RC"; then
+              python3 - "$RC" <<'PY'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines(keepends=True)
+out, skip = [], False
+for line in lines:
+    if line.startswith("# >>> vvterm-repro-zmx"):
+        skip = True
+        continue
+    if line.startswith("# <<< vvterm-repro-zmx"):
+        skip = False
+        continue
+    if not skip:
+        out.append(line)
+open(path, "w").writelines(out)
+print(f"removed repro fragment from {path}")
+PY
+            fi
+          done
+          echo "teardown complete"
