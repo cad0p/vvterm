@@ -94,6 +94,100 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 
     @Test
+    func caretAtVisibleBottomEdgeLiftsByCappedOverlap() {
+        // After the reveal scroll the caret sits at the bottom edge of the
+        // visible grid (maxY == terminalFrame.maxY). The lift must bring it
+        // exactly above the keyboard, capped at the keyboard overlap.
+        let cursor = CGRect(x: 8, y: 782, width: 8, height: 18)
+        let keyboard = CGRect(x: 0, y: 500, width: 390, height: 300)
+        let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: terminalFrame,
+            cursorFrame: cursor,
+            keyboardFrame: keyboard
+        )
+
+        #expect(cursor.maxY == terminalFrame.maxY)
+        #expect(offset == -(terminalFrame.maxY - keyboard.minY))
+        #expect(cursor.maxY + offset == keyboard.minY)
+    }
+
+    @Test
+    func revealOffsetMovesBelowVisibleCaretToVisibleBottom() {
+        // Preserve mode: the grid (54 rows) is taller than the visible view
+        // (52 rows). A caret on the last grid row sits below the visible
+        // area; the reveal must shift the grid content up by exactly the
+        // overflow so the caret lands at the visible bottom edge.
+        let grid = CGRect(x: 0, y: 0, width: 390, height: 880)
+        let visible = CGRect(x: 0, y: 0, width: 390, height: 840)
+        let caret = CGRect(x: 8, y: 864, width: 8, height: 16)
+
+        let reveal = TerminalKeyboardAvoidancePolicy.revealOffset(
+            caretFrame: caret,
+            visibleFrame: visible,
+            gridFrame: grid
+        )
+
+        #expect(reveal == 40)
+        #expect(caret.maxY - reveal == visible.maxY)
+    }
+
+    @Test
+    func revealOffsetClampsAtGridOverflow() {
+        // A caret beyond the grid itself (truly stale, e.g. after a grid
+        // shrink) must not over-scroll: the reveal is capped at the grid's
+        // overflow below the visible area.
+        let grid = CGRect(x: 0, y: 0, width: 390, height: 880)
+        let visible = CGRect(x: 0, y: 0, width: 390, height: 840)
+        let staleCaret = CGRect(x: 8, y: 1_000, width: 8, height: 16)
+
+        let reveal = TerminalKeyboardAvoidancePolicy.revealOffset(
+            caretFrame: staleCaret,
+            visibleFrame: visible,
+            gridFrame: grid
+        )
+
+        #expect(reveal == grid.height - visible.height)
+        #expect(staleCaret.maxY - reveal > visible.maxY)
+    }
+
+    @Test
+    func revealOffsetIsZeroWhenCaretIsVisibleOrGridFits() {
+        // Caret inside the visible area: nothing to reveal.
+        let grid = CGRect(x: 0, y: 0, width: 390, height: 880)
+        let visible = CGRect(x: 0, y: 0, width: 390, height: 840)
+        let visibleCaret = CGRect(x: 8, y: 800, width: 8, height: 16)
+
+        #expect(
+            TerminalKeyboardAvoidancePolicy.revealOffset(
+                caretFrame: visibleCaret,
+                visibleFrame: visible,
+                gridFrame: grid
+            ) == 0
+        )
+
+        // Grid fits the visible view: the caret cannot be legitimately below
+        // the visible area, so a below-view caret is stale and must not
+        // scroll the grid.
+        let fittingGrid = CGRect(x: 0, y: 0, width: 390, height: 840)
+        #expect(
+            TerminalKeyboardAvoidancePolicy.revealOffset(
+                caretFrame: visibleCaret.offsetBy(dx: 0, dy: 32),
+                visibleFrame: visible,
+                gridFrame: fittingGrid
+            ) == 0
+        )
+
+        // Empty caret rects never reveal.
+        #expect(
+            TerminalKeyboardAvoidancePolicy.revealOffset(
+                caretFrame: .zero,
+                visibleFrame: visible,
+                gridFrame: grid
+            ) == 0
+        )
+    }
+
+    @Test
     func staleCaretAboveTerminalGridDoesNotLiftTerminal() {
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,

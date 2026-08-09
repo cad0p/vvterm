@@ -1184,6 +1184,13 @@ class GhosttyTerminalView: UIView {
         TerminalPixelSize(size: lastPixelSize)
     }
     private var lastKeyboardAvoidanceCursorRect: CGRect?
+    /// While preserve mode pins the surface at its pre-keyboard grid, the
+    /// visible view can be shorter than the grid. When the caret sits on a
+    /// row below the visible area this offset (in points) shifts the
+    /// rendered grid content up so the caret row is visible again, and
+    /// `keyboardAvoidanceCursorRect()` reports the re-derived (revealed)
+    /// caret rect so the avoidance policy sees an in-bounds caret.
+    private var keyboardAvoidanceRevealOffset: CGFloat = 0
     /// Cell size in points for row-to-pixel conversion
     var cellSize: CGSize = .zero
 
@@ -1583,6 +1590,7 @@ class GhosttyTerminalView: UIView {
         keyboardAvoidancePreservedSurfaceSize = nil
         keyboardAvoidanceReferenceSurfaceSize = nil
         tracksKeyboardAvoidanceReferenceSize = false
+        keyboardAvoidanceRevealOffset = 0
         onWindowAttachmentChange = nil
         onTerminalDirectTouch = nil
         onKeyboardAccessoryHideRequested = nil
@@ -2086,7 +2094,9 @@ class GhosttyTerminalView: UIView {
     }
 
     func keyboardAvoidanceCursorRect() -> CGRect {
-        textInputCaretRect(for: textInputModel.cursorIndex)
+        let raw = textInputCaretRect(for: textInputModel.cursorIndex)
+        guard keyboardAvoidanceRevealOffset > 0 else { return raw }
+        return raw.offsetBy(dx: 0, dy: -keyboardAvoidanceRevealOffset)
     }
 
     func keyboardAvoidanceAccessoryFrame() -> CGRect? {
@@ -2122,9 +2132,11 @@ class GhosttyTerminalView: UIView {
             if let preservedSize = keyboardAvoidancePreservedSurfaceSize {
                 sizeDidChange(preservedSize)
             }
+            updateKeyboardAvoidanceRevealOffsetIfNeeded()
         } else {
             tracksKeyboardAvoidanceReferenceSize = true
             keyboardAvoidancePreservedSurfaceSize = nil
+            updateKeyboardAvoidanceRevealOffsetIfNeeded()
         }
     }
 
@@ -2133,11 +2145,43 @@ class GhosttyTerminalView: UIView {
         keyboardAvoidanceReferenceSurfaceSize = nil
         guard keyboardAvoidancePreservedSurfaceSize != nil else { return }
         keyboardAvoidancePreservedSurfaceSize = nil
+        updateKeyboardAvoidanceRevealOffsetIfNeeded()
         sizeDidChange(bounds.size)
     }
 
     func keyboardAvoidanceTerminalRect() -> CGRect {
         CGRect(origin: .zero, size: keyboardAvoidancePreservedSurfaceSize ?? bounds.size)
+    }
+
+    /// Recomputes the caret-reveal offset against the current visible bounds
+    /// and applies it to the rendered grid layers. Only runs while size
+    /// preservation is active: without the keyboard the grid always fits the
+    /// view, so a caret below the visible area cannot be legitimate.
+    private func updateKeyboardAvoidanceRevealOffsetIfNeeded() {
+        let reveal = keyboardAvoidancePreservedSurfaceSize == nil
+            ? 0
+            : TerminalKeyboardAvoidancePolicy.revealOffset(
+                caretFrame: textInputCaretRect(for: textInputModel.cursorIndex),
+                visibleFrame: bounds,
+                gridFrame: keyboardAvoidanceTerminalRect()
+            )
+        guard abs(reveal - keyboardAvoidanceRevealOffset) >= 0.5 else { return }
+        keyboardAvoidanceRevealOffset = reveal
+        applyKeyboardAvoidanceRevealOffset()
+    }
+
+    /// Shifts every rendered grid layer up by the reveal offset so the caret
+    /// row lands at the bottom edge of the visible view.
+    private func applyKeyboardAvoidanceRevealOffset() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for sublayer in layer.sublayers ?? [] where isGhosttySurfaceLayer(sublayer) {
+            var frame = sublayer.frame
+            frame.origin.y = -keyboardAvoidanceRevealOffset
+            sublayer.frame = frame
+        }
+        CATransaction.commit()
+        notifyKeyboardAvoidanceCursorRectIfNeeded()
     }
 
     private var renderedSurfaceSize: CGSize {
@@ -2161,6 +2205,7 @@ class GhosttyTerminalView: UIView {
     }
 
     private func notifyKeyboardAvoidanceCursorRectIfNeeded() {
+        updateKeyboardAvoidanceRevealOffsetIfNeeded()
         guard let onKeyboardAvoidanceCursorRectChange else { return }
         let cursorRect = keyboardAvoidanceCursorRect()
         guard cursorRect != lastKeyboardAvoidanceCursorRect else { return }
@@ -2535,8 +2580,11 @@ class GhosttyTerminalView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imeProxyTextView.frame = bounds
-        nativeFindOverlay.frame = bounds
-        touchSelectionOverlay.frame = bounds
+        // The find/selection overlays draw rects in surface coordinates, so
+        // they must follow the caret-reveal grid translation to stay aligned.
+        let overlayFrame = bounds.offsetBy(dx: 0, dy: -keyboardAvoidanceRevealOffset)
+        nativeFindOverlay.frame = overlayFrame
+        touchSelectionOverlay.frame = overlayFrame
         bringSubviewToFront(nativeFindOverlay)
         bringSubviewToFront(touchSelectionOverlay)
         bringSubviewToFront(touchSelectionLoupe)
@@ -5526,7 +5574,12 @@ class GhosttyTerminalView: UIView {
         CATransaction.setDisableActions(true)
         for sublayer in sublayers {
             guard isGhosttySurfaceLayer(sublayer) else { continue }
-            sublayer.frame = targetBounds
+            sublayer.frame = CGRect(
+                x: 0,
+                y: -keyboardAvoidanceRevealOffset,
+                width: targetBounds.width,
+                height: targetBounds.height
+            )
             sublayer.contentsScale = scale
         }
         CATransaction.commit()

@@ -963,10 +963,26 @@ final class TerminalKeyboardUITests: XCTestCase {
             timeout: 5,
             diagnostics: diagnosticsText(in: app)
         )
+        // Settle the preserve capture with the first docked transition
+        // before snapshotting the stability baseline. The simulated frames
+        // only start driving the avoidance once the first frame is applied;
+        // until then the coordinator reports no keyboard frame, so the
+        // surface follows the real keyboard's layout and the preserved size
+        // re-captures on enable (one-way, bounded: the launch surface). The
+        // grid is guaranteed stable across the remaining geometry
+        // transitions, which is the invariant this test guards.
+        let settleButton = app.buttons["vvterm.keyboardTest.geometry.docked"]
+        XCTAssertTrue(settleButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        settleButton.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "sizePreserved=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
         let stableGridRows = try requiredDiagnosticMetric("gridRows", in: app)
         let stableGridResizes = try requiredDiagnosticMetric("gridResizes", in: app)
         for identifier in [
-            "vvterm.keyboardTest.geometry.docked",
             "vvterm.keyboardTest.geometry.floating",
             "vvterm.keyboardTest.geometry.docked",
             "vvterm.keyboardTest.geometry.floating",
