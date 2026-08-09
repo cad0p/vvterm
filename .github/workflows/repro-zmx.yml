@@ -224,6 +224,16 @@ jobs:
         if: always()
         run: |
           set +e
+          echo "=== sim-vvterm.log (SSH-relevant, tail 300) ==="
+          UDID=$(xcrun simctl list devices booted -j 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print([dev["udid"] for devs in d["devices"].values() for dev in devs if dev["state"]=="Booted"][0])' 2>/dev/null)
+          if [ -n "$UDID" ]; then
+            xcrun simctl spawn "$UDID" log show --last 35m \
+              --predicate 'processImagePath CONTAINS "VVTerm"' 2>/dev/null \
+              | grep -E "\\[it\\.pcad\\.vvterm:(SSH|SSHPane|TerminalTab|TerminalSession|Keyboard|Ghostty)" \
+              | grep -viE "CloudKit|theme" | tail -300
+          else
+            echo "(no booted simulator)"
+          fi
           echo "=== bytemeter.log (tail 200) ==="
           tail -200 "$RUNNER_TEMP/vvterm-repro/bytemeter.log" 2>/dev/null || echo "(missing)"
           echo "=== sshd.log (tail 80) ==="

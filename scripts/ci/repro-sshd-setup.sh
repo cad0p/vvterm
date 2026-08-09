@@ -66,11 +66,14 @@ EOF
 if pgrep -f "sshd -D -f $REPRO_DIR/sshd_config" >/dev/null; then
   echo "sshd already running for this rig"
 else
-  sudo "$SSHD" -D -E "$REPRO_DIR/sshd.log" -f "$REPRO_DIR/sshd_config" >/dev/null 2>&1 &
+  sudo "$SSHD" -D -ddd -E "$REPRO_DIR/sshd.log" -f "$REPRO_DIR/sshd_config" >/dev/null 2>&1 &
   SSHD_PID=$!
   echo "$SSHD_PID" > "$REPRO_DIR/sshd.pid"
   # Wait for the listener (macOS python3 socket probe).
   for i in $(seq 1 30); do
+    if [ -s "$REPRO_DIR/sshd.log" ]; then
+      echo "sshd debug log writing (attempt $i)"
+    fi
     if python3 - "$SSH_PORT" <<'PY' >/dev/null 2>&1
 import socket, sys
 s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1)
