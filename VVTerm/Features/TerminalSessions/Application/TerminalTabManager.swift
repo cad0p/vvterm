@@ -1642,6 +1642,10 @@ final class TerminalTabManager: ObservableObject {
         case .transportEnded:
             paneStates[paneId]?.disconnectReason = .transportEnded
             updatePaneState(paneId, connectionState: .disconnected)
+            logger.diagInfo(
+                "TerminalTabManager",
+                "ssh_diag shell_transport_ended pane=\(paneId.uuidString)"
+            )
         }
 
         Task { [weak self, ownership] in
