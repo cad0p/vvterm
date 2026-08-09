@@ -18,6 +18,29 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 
     @Test
+    func hiddenKeyboardWithAccessoryKeepsPreservedGridInKeepSizeMode() {
+        // Issue #120: on keyboard close the accessory detaches a moment
+        // after the keyboard frame leaves; in keep-size mode that transient
+        // must NOT resize the grid (a resize sends TIOCSWINSZ, the zmx
+        // daemon reflows, and the whole screen redraws).
+        let layout = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: true,
+            geometry: .hidden,
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 760, width: 8, height: 18),
+            accessoryFrame: CGRect(x: 0, y: 752, width: 390, height: 48)
+        )
+
+        #expect(
+            layout == .init(
+                bottomInset: 0,
+                verticalOffset: 0,
+                preservesTerminalSurfaceSize: true
+            )
+        )
+    }
+
+    @Test
     func cursorAboveKeyboardDoesNotMoveTerminal() {
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
@@ -95,9 +118,9 @@ struct TerminalKeyboardAvoidancePolicyTests {
 
     @Test
     func caretAtVisibleBottomEdgeLiftsByCappedOverlap() {
-        // After the reveal scroll the caret sits at the bottom edge of the
-        // visible grid (maxY == terminalFrame.maxY). The lift must bring it
-        // exactly above the keyboard, capped at the keyboard overlap.
+        // Caret at the bottom edge of the grid (maxY == terminalFrame.maxY,
+        // the grid frame — not the view). The lift must bring it exactly
+        // above the keyboard, capped at the keyboard overlap.
         let cursor = CGRect(x: 8, y: 782, width: 8, height: 18)
         let keyboard = CGRect(x: 0, y: 500, width: 390, height: 300)
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
@@ -111,84 +134,12 @@ struct TerminalKeyboardAvoidancePolicyTests {
         #expect(cursor.maxY + offset == keyboard.minY)
     }
 
-    @Test
-    func revealOffsetMovesBelowVisibleCaretToVisibleBottom() {
-        // Preserve mode: the grid (54 rows) is taller than the visible view
-        // (52 rows). A caret on the last grid row sits below the visible
-        // area; the reveal must shift the grid content up by exactly the
-        // overflow so the caret lands at the visible bottom edge.
-        let grid = CGRect(x: 0, y: 0, width: 390, height: 880)
-        let visible = CGRect(x: 0, y: 0, width: 390, height: 840)
-        let caret = CGRect(x: 8, y: 864, width: 8, height: 16)
-
-        let reveal = TerminalKeyboardAvoidancePolicy.revealOffset(
-            caretFrame: caret,
-            visibleFrame: visible,
-            gridFrame: grid
-        )
-
-        #expect(reveal == 40)
-        #expect(caret.maxY - reveal == visible.maxY)
-    }
-
-    @Test
-    func revealOffsetClampsAtGridOverflow() {
-        // A caret beyond the grid itself (truly stale, e.g. after a grid
-        // shrink) must not over-scroll: the reveal is capped at the grid's
-        // overflow below the visible area.
-        let grid = CGRect(x: 0, y: 0, width: 390, height: 880)
-        let visible = CGRect(x: 0, y: 0, width: 390, height: 840)
-        let staleCaret = CGRect(x: 8, y: 1_000, width: 8, height: 16)
-
-        let reveal = TerminalKeyboardAvoidancePolicy.revealOffset(
-            caretFrame: staleCaret,
-            visibleFrame: visible,
-            gridFrame: grid
-        )
-
-        #expect(reveal == grid.height - visible.height)
-        #expect(staleCaret.maxY - reveal > visible.maxY)
-    }
-
-    @Test
-    func revealOffsetIsZeroWhenCaretIsVisibleOrGridFits() {
-        // Caret inside the visible area: nothing to reveal.
-        let grid = CGRect(x: 0, y: 0, width: 390, height: 880)
-        let visible = CGRect(x: 0, y: 0, width: 390, height: 840)
-        let visibleCaret = CGRect(x: 8, y: 800, width: 8, height: 16)
-
-        #expect(
-            TerminalKeyboardAvoidancePolicy.revealOffset(
-                caretFrame: visibleCaret,
-                visibleFrame: visible,
-                gridFrame: grid
-            ) == 0
-        )
-
-        // Grid fits the visible view: the caret cannot be legitimately below
-        // the visible area, so a below-view caret is stale and must not
-        // scroll the grid.
-        let fittingGrid = CGRect(x: 0, y: 0, width: 390, height: 840)
-        #expect(
-            TerminalKeyboardAvoidancePolicy.revealOffset(
-                caretFrame: visibleCaret.offsetBy(dx: 0, dy: 32),
-                visibleFrame: visible,
-                gridFrame: fittingGrid
-            ) == 0
-        )
-
-        // Empty caret rects never reveal.
-        #expect(
-            TerminalKeyboardAvoidancePolicy.revealOffset(
-                caretFrame: .zero,
-                visibleFrame: visible,
-                gridFrame: grid
-            ) == 0
-        )
-    }
 
     @Test
     func staleCaretAboveTerminalGridDoesNotLiftTerminal() {
+        // Stale caret above the visible grid (mirror of the below-grid
+        // rejection): a caret rect that was never revalidated and lies
+        // above the terminal frame must not lift the terminal.
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
             cursorFrame: CGRect(x: 8, y: -10, width: 8, height: 18),
@@ -338,6 +289,80 @@ struct TerminalKeyboardAvoidancePolicyTests {
         )
 
         #expect(geometry == .hidden)
+    }
+
+    @Test
+    func fullWidthKeyboardSlidUpByFocusFollowIsSnappedToBottom() {
+        // iOS 26 focus-following: a docked keyboard slides up the screen
+        // when the terminal is lifted (lift → keyboard follows up → bigger
+        // overlap → bigger lift → runaway until the terminal is off-screen).
+        // A full-width keyboard is still docked geometry; snap it back to
+        // the bottom so the lift stays bounded.
+        let screenFrame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let terminalFrame = CGRect(x: 0, y: 101, width: 390, height: 709)
+        let slidUpKeyboard = CGRect(x: 0, y: 221, width: 390, height: 349)
+        let offTopKeyboard = CGRect(x: 0, y: -53, width: 390, height: 349)
+        let compactFloating = CGRect(x: 160, y: 480, width: 210, height: 220)
+
+        let slidUp = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrame,
+            terminalFrame: terminalFrame,
+            keyboardFrame: slidUpKeyboard
+        )
+        let offTop = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrame,
+            terminalFrame: terminalFrame,
+            keyboardFrame: offTopKeyboard
+        )
+        let floating = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrame,
+            terminalFrame: terminalFrame,
+            keyboardFrame: compactFloating
+        )
+
+        #expect(
+            slidUp == .docked(
+                frame: CGRect(x: 0, y: 495, width: 390, height: 349)
+            )
+        )
+        #expect(
+            offTop == .docked(
+                frame: CGRect(x: 0, y: 495, width: 390, height: 349)
+            )
+        )
+        #expect(floating == .floating(frame: compactFloating))
+    }
+
+    @Test
+    func fullWidthFollowKeyboardKeepsLiftBounded() {
+        // The runaway repro: the docked keyboard slides up to 221 while the
+        // terminal lifts; the lift must be computed against the snapped
+        // bottom-docked frame (495) and stay capped at the terminal
+        // overlap, never pushing the terminal off-screen.
+        let screenFrame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let terminalFrame = CGRect(x: 0, y: 101, width: 390, height: 709)
+        let slidUpKeyboard = CGRect(x: 0, y: 221, width: 390, height: 349)
+        let caret = CGRect(x: 11, y: 741, width: 7.33, height: 16)
+
+        let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrame,
+            terminalFrame: terminalFrame,
+            keyboardFrame: slidUpKeyboard
+        )
+        let resolvedKeyboardFrame: CGRect = switch geometry {
+        case .docked(let frame), .floating(let frame): frame
+        case .hidden: CGRect.zero
+        }
+        let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: terminalFrame,
+            cursorFrame: caret,
+            keyboardFrame: resolvedKeyboardFrame
+        )
+
+        // Caret maxY 757 vs snapped keyboard top 495: required lift 274,
+        // capped at the overlap (810 - 495 = 315).
+        #expect(offset == -274)
+        #expect(terminalFrame.maxY + offset >= 0)
     }
 
     @Test

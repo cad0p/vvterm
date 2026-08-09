@@ -1184,13 +1184,6 @@ class GhosttyTerminalView: UIView {
         TerminalPixelSize(size: lastPixelSize)
     }
     private var lastKeyboardAvoidanceCursorRect: CGRect?
-    /// While preserve mode pins the surface at its pre-keyboard grid, the
-    /// visible view can be shorter than the grid. When the caret sits on a
-    /// row below the visible area this offset (in points) shifts the
-    /// rendered grid content up so the caret row is visible again, and
-    /// `keyboardAvoidanceCursorRect()` reports the re-derived (revealed)
-    /// caret rect so the avoidance policy sees an in-bounds caret.
-    private var keyboardAvoidanceRevealOffset: CGFloat = 0
     /// Cell size in points for row-to-pixel conversion
     var cellSize: CGSize = .zero
 
@@ -1351,7 +1344,6 @@ class GhosttyTerminalView: UIView {
 
     /// Observer for config reload notifications
     private var configReloadObserver: NSObjectProtocol?
-    private var scrollbarObserver: NSObjectProtocol?
     private var inputModeObserver: NSObjectProtocol?
     private var hardwareKeyboardObservers: [NSObjectProtocol] = []
     private var hasHardwareKeyboardAttached = false
@@ -1531,7 +1523,6 @@ class GhosttyTerminalView: UIView {
 
         setupConfigReloadObservation()
         setupInputModeObservation()
-        setupScrollbarObservation()
         registerColorSchemeObserver()
         setupHardwareKeyboardObservation()
     }
@@ -1578,10 +1569,6 @@ class GhosttyTerminalView: UIView {
             NotificationCenter.default.removeObserver(observer)
             inputModeObserver = nil
         }
-        if let observer = scrollbarObserver {
-            NotificationCenter.default.removeObserver(observer)
-            scrollbarObserver = nil
-        }
         removeHardwareKeyboardObservers()
 
         // Clear all callbacks first to prevent any further interactions
@@ -1596,7 +1583,6 @@ class GhosttyTerminalView: UIView {
         keyboardAvoidancePreservedSurfaceSize = nil
         keyboardAvoidanceReferenceSurfaceSize = nil
         tracksKeyboardAvoidanceReferenceSize = false
-        keyboardAvoidanceRevealOffset = 0
         onWindowAttachmentChange = nil
         onTerminalDirectTouch = nil
         onKeyboardAccessoryHideRequested = nil
@@ -1738,25 +1724,6 @@ class GhosttyTerminalView: UIView {
         }
     }
 
-    /// Track ghostty scrollbar state (content rows) on iOS so the caret-
-    /// reveal cap can use the full scrollable content height — a caret at
-    /// the bottom of scrolled content sits below the visible frame but is
-    /// legitimate. macOS already consumes this notification in
-    /// TerminalScrollView; iOS only ever declared the property.
-    private func setupScrollbarObservation() {
-        scrollbarObserver = NotificationCenter.default.addObserver(
-            forName: .ghosttyDidUpdateScrollbar,
-            object: self,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self else { return }
-            if let scrollbar = notification.userInfo?[Notification.Name.ScrollbarKey]
-                as? Ghostty.Action.Scrollbar {
-                self.scrollbar = scrollbar
-            }
-            self.updateKeyboardAvoidanceRevealOffsetIfNeeded()
-        }
-    }
 
     private func handleCurrentInputModeDidChange() {
         guard !isShuttingDown else { return }
@@ -2124,9 +2091,7 @@ class GhosttyTerminalView: UIView {
     }
 
     func keyboardAvoidanceCursorRect() -> CGRect {
-        let raw = textInputCaretRect(for: textInputModel.cursorIndex)
-        guard keyboardAvoidanceRevealOffset > 0 else { return raw }
-        return raw.offsetBy(dx: 0, dy: -keyboardAvoidanceRevealOffset)
+        textInputCaretRect(for: textInputModel.cursorIndex)
     }
 
     func keyboardAvoidanceAccessoryFrame() -> CGRect? {
@@ -2154,6 +2119,15 @@ class GhosttyTerminalView: UIView {
     }
 
     func setKeyboardAvoidanceSizePreservationEnabled(_ isEnabled: Bool) {
+        // Idempotence guard: the TerminalView drives this from every layout
+        // pass; only act on actual transitions (also keeps the diagnostic
+        // ring free of the steady-state pin-off spam).
+        let isPinned = keyboardAvoidancePreservedSurfaceSize != nil
+        if isEnabled == isPinned { return }
+        Self.logger.diagInfo(
+            "GhosttyTerminal",
+            "avoidance_pin \(isEnabled ? "on" : "off") preserved=\(keyboardAvoidancePreservedSurfaceSize?.debugDescription ?? "nil") bounds=\(bounds.size) ref=\(keyboardAvoidanceReferenceSurfaceSize?.debugDescription ?? "nil") tracks=\(tracksKeyboardAvoidanceReferenceSize)"
+        )
         if isEnabled {
             guard keyboardAvoidancePreservedSurfaceSize == nil else { return }
             tracksKeyboardAvoidanceReferenceSize = false
@@ -2162,11 +2136,9 @@ class GhosttyTerminalView: UIView {
             if let preservedSize = keyboardAvoidancePreservedSurfaceSize {
                 sizeDidChange(preservedSize)
             }
-            updateKeyboardAvoidanceRevealOffsetIfNeeded()
         } else {
             tracksKeyboardAvoidanceReferenceSize = true
             keyboardAvoidancePreservedSurfaceSize = nil
-            updateKeyboardAvoidanceRevealOffsetIfNeeded()
         }
     }
 
@@ -2175,60 +2147,11 @@ class GhosttyTerminalView: UIView {
         keyboardAvoidanceReferenceSurfaceSize = nil
         guard keyboardAvoidancePreservedSurfaceSize != nil else { return }
         keyboardAvoidancePreservedSurfaceSize = nil
-        updateKeyboardAvoidanceRevealOffsetIfNeeded()
         sizeDidChange(bounds.size)
     }
 
     func keyboardAvoidanceTerminalRect() -> CGRect {
         CGRect(origin: .zero, size: keyboardAvoidancePreservedSurfaceSize ?? bounds.size)
-    }
-
-    /// Recomputes the caret-reveal offset against the current visible bounds
-    /// and applies it to the rendered grid layers. Only runs while size
-    /// preservation is active: without the keyboard the grid always fits the
-    /// view, so a caret below the visible area cannot be legitimate.
-    private func updateKeyboardAvoidanceRevealOffsetIfNeeded() {
-        let reveal = keyboardAvoidancePreservedSurfaceSize == nil
-            ? 0
-            : TerminalKeyboardAvoidancePolicy.revealOffset(
-                caretFrame: textInputCaretRect(for: textInputModel.cursorIndex),
-                visibleFrame: bounds,
-                gridFrame: keyboardAvoidanceContentRect()
-            )
-        guard abs(reveal - keyboardAvoidanceRevealOffset) >= 0.5 else { return }
-        keyboardAvoidanceRevealOffset = reveal
-        applyKeyboardAvoidanceRevealOffset()
-    }
-
-    /// The full scrollable content frame: the preserved grid plus any
-    /// scrollback (ghostty reports the caret in content coordinates — a
-    /// caret at the bottom of scrolled content sits below the visible
-    /// frame but is legitimate). Capping the reveal at the CONTENT overflow
-    /// (not the surface overflow) lets the caret be revealed wherever it is
-    /// in the scrollback, while still rejecting truly stale carets beyond
-    /// the content.
-    private func keyboardAvoidanceContentRect() -> CGRect {
-        if let scrollbar, scrollbar.total > 0 {
-            let totalRows = CGFloat(scrollbar.total)
-            let cellHeight = max(cellSize.height, 1)
-            let width = keyboardAvoidanceTerminalRect().width
-            return CGRect(x: 0, y: 0, width: width, height: totalRows * cellHeight)
-        }
-        return keyboardAvoidanceTerminalRect()
-    }
-
-    /// Shifts every rendered grid layer up by the reveal offset so the caret
-    /// row lands at the bottom edge of the visible view.
-    private func applyKeyboardAvoidanceRevealOffset() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for sublayer in layer.sublayers ?? [] where isGhosttySurfaceLayer(sublayer) {
-            var frame = sublayer.frame
-            frame.origin.y = -keyboardAvoidanceRevealOffset
-            sublayer.frame = frame
-        }
-        CATransaction.commit()
-        notifyKeyboardAvoidanceCursorRectIfNeeded()
     }
 
     private var renderedSurfaceSize: CGSize {
@@ -2252,7 +2175,6 @@ class GhosttyTerminalView: UIView {
     }
 
     private func notifyKeyboardAvoidanceCursorRectIfNeeded() {
-        updateKeyboardAvoidanceRevealOffsetIfNeeded()
         guard let onKeyboardAvoidanceCursorRectChange else { return }
         let cursorRect = keyboardAvoidanceCursorRect()
         guard cursorRect != lastKeyboardAvoidanceCursorRect else { return }
@@ -2627,11 +2549,8 @@ class GhosttyTerminalView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imeProxyTextView.frame = bounds
-        // The find/selection overlays draw rects in surface coordinates, so
-        // they must follow the caret-reveal grid translation to stay aligned.
-        let overlayFrame = bounds.offsetBy(dx: 0, dy: -keyboardAvoidanceRevealOffset)
-        nativeFindOverlay.frame = overlayFrame
-        touchSelectionOverlay.frame = overlayFrame
+        nativeFindOverlay.frame = bounds
+        touchSelectionOverlay.frame = bounds
         bringSubviewToFront(nativeFindOverlay)
         bringSubviewToFront(touchSelectionOverlay)
         bringSubviewToFront(touchSelectionLoupe)
@@ -5621,12 +5540,7 @@ class GhosttyTerminalView: UIView {
         CATransaction.setDisableActions(true)
         for sublayer in sublayers {
             guard isGhosttySurfaceLayer(sublayer) else { continue }
-            sublayer.frame = CGRect(
-                x: 0,
-                y: -keyboardAvoidanceRevealOffset,
-                width: targetBounds.width,
-                height: targetBounds.height
-            )
+            sublayer.frame = targetBounds
             sublayer.contentsScale = scale
         }
         CATransaction.commit()

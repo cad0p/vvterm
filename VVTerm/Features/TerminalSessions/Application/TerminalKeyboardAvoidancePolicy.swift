@@ -43,6 +43,23 @@ enum TerminalKeyboardAvoidancePolicy {
 
         let attachesToBottom = keyboardFrame.maxY >= screenFrame.maxY - 1
         let spansScreenWidth = keyboardFrame.width >= screenFrame.width * 0.8
+        // The system may slide a full-width keyboard up the screen to follow
+        // the focused input (iOS 26 focus-following keyboards, and the
+        // full-width undocked state). A full-width keyboard is still
+        // bottom-docked geometry: snapping it back to the bottom keeps the
+        // lift computation from chasing the keyboard (lift → keyboard
+        // follows up → bigger overlap → bigger lift → runaway until the
+        // terminal is off-screen). Compact floating keyboards (iPad) keep
+        // their frame.
+        if spansScreenWidth {
+            let snapped = CGRect(
+                x: keyboardFrame.minX,
+                y: screenFrame.maxY - keyboardFrame.height,
+                width: keyboardFrame.width,
+                height: keyboardFrame.height
+            )
+            return .docked(frame: snapped)
+        }
         return attachesToBottom && spansScreenWidth
             ? .docked(frame: keyboardFrame)
             : .floating(frame: keyboardFrame)
@@ -107,6 +124,20 @@ enum TerminalKeyboardAvoidancePolicy {
 
         switch geometry {
         case .hidden:
+            if preservesTerminalSize {
+                // Keep-size mode: transient chrome (the accessory still
+                // detaching after the keyboard hides) must never resize the
+                // grid — a resize sends TIOCSWINSZ to the remote, the zmx
+                // daemon reflows and the whole screen redraws (the user's
+                // 'scrollback reload' flash on every keyboard toggle). The
+                // accessory may briefly overlay the bottom rows; that beats
+                // a resize + reflow storm.
+                return Layout(
+                    bottomInset: 0,
+                    verticalOffset: 0,
+                    preservesTerminalSurfaceSize: true
+                )
+            }
             guard accessoryInset > 0 else { return .unobstructed }
             return Layout(
                 bottomInset: accessoryInset,
@@ -159,41 +190,6 @@ enum TerminalKeyboardAvoidancePolicy {
                 preservesTerminalSurfaceSize: true
             )
         }
-    }
-
-    /// Amount (in points) the preserved grid content must shift up so the
-    /// caret becomes visible again.
-    ///
-    /// In preserve mode the surface keeps its pre-keyboard grid while the
-    /// visible view is shorter: a caret on a row below the visible area is
-    /// legitimate (it is the cursor of the preserved grid, e.g. sitting on
-    /// the bottom row), not stale. Ghostty's viewport cannot scroll further
-    /// once it reaches the active area, so the app reveals the caret by
-    /// translating the rendered grid within the view. The reveal is capped
-    /// at the grid's overflow below the visible area: a caret beyond the
-    /// grid itself (truly stale, after a grid shrink or scrollback
-    /// navigation) yields zero and keeps the stale-caret rejection in
-    /// `verticalOffset` as the safety net.
-    nonisolated static func revealOffset(
-        caretFrame: CGRect,
-        visibleFrame: CGRect,
-        gridFrame: CGRect
-    ) -> CGFloat {
-        guard !caretFrame.isNull,
-              !caretFrame.isEmpty,
-              !caretFrame.isInfinite,
-              !visibleFrame.isNull,
-              !visibleFrame.isEmpty,
-              !visibleFrame.isInfinite,
-              !gridFrame.isNull,
-              !gridFrame.isEmpty,
-              !gridFrame.isInfinite else {
-            return 0
-        }
-        let overflow = caretFrame.maxY - visibleFrame.maxY
-        guard overflow > 0 else { return 0 }
-        let maxReveal = max(0, gridFrame.height - visibleFrame.height)
-        return min(overflow, maxReveal)
     }
 
     private nonisolated static func bottomAccessoryInset(
