@@ -128,7 +128,7 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
-        let attached = mark(phase: "attach-complete-sanity")
+        let attached = try mark(phase: "attach-complete-sanity")
 
         let attachBytes = attached.downBytes - baseline.downBytes
         let newConnections = connectionsOpened(between: baseline, and: attached)
@@ -235,7 +235,7 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
         // auto-reconnects within a second or two and the full scrollback
         // replay (huge down-burst on a NEW connection) shows up here.
         RunLoop.current.run(until: Date().addingTimeInterval(8))
-        let openDone = mark(phase: "keyboard-open-settled")
+        let openDone = try mark(phase: "keyboard-open-settled")
         let report = phaseReport(from: attached, to: openDone, label: "keyboard-open")
         assertNoReload(report, attachBytes: attached.downBytes - baseline.downBytes, app: app)
 
@@ -264,13 +264,13 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
         terminal.tap()
         waitForDiagnostics(diagnostics, containing: "keyboardVisible=true", timeout: 10, app: app)
         waitForDiagnostics(diagnostics, containing: "sizePreserved=true", timeout: 10, app: app)
-        let openMark = mark(phase: "keyboard-open-close")
+        let openMark = try mark(phase: "keyboard-open-close")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
 
         hideKeyboard(diagnostics: diagnostics, app: app)
         // Bug window: the close may also tear down the shell.
         RunLoop.current.run(until: Date().addingTimeInterval(8))
-        let closedMark = mark(phase: "keyboard-closed-settled")
+        let closedMark = try mark(phase: "keyboard-closed-settled")
         let report = phaseReport(from: attached, to: closedMark, label: "keyboard-toggle-close")
         assertNoReload(report, attachBytes: attached.downBytes - baseline.downBytes, app: app)
         _ = openMark
@@ -353,11 +353,11 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(3))
             if let first, let second = bytemeterState(),
                second.downBytes - first.downBytes < 1024 {
-                return mark(phase: phase)
+                return try mark(phase: phase)
             }
         }
         XCTFail("zmx scrollback replay did not stabilize within 20s. \(evidenceJSON())")
-        return mark(phase: phase)
+        return try mark(phase: phase)
     }
 
     // MARK: - Keyboard helpers
