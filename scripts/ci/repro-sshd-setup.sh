@@ -57,19 +57,20 @@ UsePAM no
 StrictModes no
 AuthorizedKeysFile $REPRO_DIR/authorized_keys
 AllowUsers $USERNAME
-LogLevel VERBOSE
+LogLevel DEBUG3
 PermitRootLogin no
 X11Forwarding no
 EOF
 
 # --- start ----------------------------------------------------------------
-if pgrep -f "sshd -D -f $REPRO_DIR/sshd_config" >/dev/null; then
+if pgrep -f "sshd.*$REPRO_DIR/sshd_config" >/dev/null; then
   echo "sshd already running for this rig"
 else
-  # -ddd: sshd debug to stderr, captured in sshd.log (ground truth for
-  # who closed/reset the connection at the tap-kill moment; the config's
-  # LogLevel VERBOSE only covers syslog, which CI cannot read).
-  sudo "$SSHD" -ddd -D -f "$REPRO_DIR/sshd_config" >>"$REPRO_DIR/sshd.log" 2>&1 &
+  # -E logfile: sshd debug (LogLevel DEBUG3) appended to sshd.log instead of
+  # syslog — ground truth for who closed/reset the connection at the tap-kill
+  # moment. (Plain -ddd re-exec broke the listener on macOS; sudo -E broke
+  # setup historically — do not reintroduce either.)
+  sudo "$SSHD" -E "$REPRO_DIR/sshd.log" -D -f "$REPRO_DIR/sshd_config" >/dev/null 2>&1 &
   SSHD_PID=$!
   echo "$SSHD_PID" > "$REPRO_DIR/sshd.pid"
   # Wait for the listener (macOS python3 socket probe).
