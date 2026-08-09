@@ -412,8 +412,25 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
     private func hideKeyboard(diagnostics: XCUIElement, app: XCUIApplication) {
         let hideButton = app.buttons["vvterm.keyboard.accessory.hide"]
         XCTAssertTrue(hideButton.waitForExistence(timeout: 8), diagnosticText(in: app))
-        hideButton.tap()
-        waitForDiagnostics(diagnostics, containing: "keyboardVisible=false", timeout: 10, app: app)
+        // Retry: the first tap can land while the accessory/keyboard is still
+        // settling (observed once in CI: hideRequests stayed 0 after a clean
+        // tap — the diagnostics never reported keyboardVisible=false).
+        for attempt in 1...3 {
+            hideButton.tap()
+            if waitForDiagnostics(
+                diagnostics,
+                containing: "keyboardVisible=false",
+                timeout: attempt == 3 ? 10 : 4,
+                app: app,
+                fail: false
+            ) {
+                break
+            }
+        }
+        XCTAssertTrue(
+            diagnostics.label.contains("keyboardVisible=false"),
+            diagnosticText(in: app)
+        )
         XCTAssertTrue(
             app.keyboards.firstMatch.waitForNonExistence(timeout: 8),
             diagnosticText(in: app)
@@ -465,16 +482,20 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
         _ element: XCUIElement,
         containing expected: String,
         timeout: TimeInterval,
-        app: XCUIApplication
-    ) {
+        app: XCUIApplication,
+        fail: Bool = true
+    ) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if element.exists, element.label.contains(expected) {
-                return
+                return true
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        XCTFail("Expected diagnostics to contain '\(expected)'. \(diagnosticText(in: app))")
+        if fail {
+            XCTFail("Expected diagnostics to contain '\(expected)'. \(diagnosticText(in: app))")
+        }
+        return false
     }
 
     @MainActor
