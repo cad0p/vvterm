@@ -264,22 +264,22 @@ jobs:
           for RC in "$HOME/.zprofile" "$HOME/.zshrc"; do
             if [ -f "$RC" ] && grep -q "vvterm-repro-zmx" "$RC"; then
               python3 - "$RC" <<'PY'
-import sys
-path = sys.argv[1]
-lines = open(path).read().splitlines(keepends=True)
-out, skip = [], False
-for line in lines:
-    if line.startswith("# >>> vvterm-repro-zmx"):
-        skip = True
-        continue
-    if line.startswith("# <<< vvterm-repro-zmx"):
-        skip = False
-        continue
-    if not skip:
-        out.append(line)
-open(path, "w").writelines(out)
-print(f"removed repro fragment from {path}")
-PY
+          import sys
+          path = sys.argv[1]
+          lines = open(path).read().splitlines(keepends=True)
+          out, skip = [], False
+          for line in lines:
+              if line.startswith("# >>> vvterm-repro-zmx"):
+                  skip = True
+                  continue
+              if line.startswith("# <<< vvterm-repro-zmx"):
+                  skip = False
+                  continue
+              if not skip:
+                  out.append(line)
+          open(path, "w").writelines(out)
+          print(f"removed repro fragment from {path}")
+          PY
             fi
           done
           echo "teardown complete"
