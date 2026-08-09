@@ -73,6 +73,25 @@ struct TerminalReconnectUITestHarness: View {
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .topLeading) {
+                if exposesKeyboardToggleControls {
+                    HStack(spacing: 6) {
+                        Button("Hide") {
+                            focusedTerminal?.dismissKeyboardFromToolbar()
+                        }
+                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.hide")
+
+                        Button("Show") {
+                            tabManager.keyboardCoordinator.userRequestedShow()
+                        }
+                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.show")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .padding(.top, 140)
+                    .padding(.leading, 8)
+                }
+            }
+            .overlay(alignment: .topLeading) {
                 if exposesKeyboardLossControl {
                     HStack(spacing: 6) {
                         Button("Lose Input") {
@@ -151,6 +170,12 @@ struct TerminalReconnectUITestHarness: View {
     private var activeServer: Server? {
         guard case .ready(let server) = fixtureState else { return nil }
         return server
+    }
+
+    private var exposesKeyboardToggleControls: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-keyboard-toggle-controls"
+        )
     }
 
     private var exposesKeyboardLossControl: Bool {
