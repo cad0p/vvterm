@@ -185,6 +185,10 @@ def sampler():
 
 
 def handle_connection(client):
+    # Accepted sockets must never time out: the proxy exists to measure
+    # byte flows, not to enforce idle limits (a 10s recv timeout here was
+    # the rig's false-positive connection killer).
+    client.settimeout(None)
     conn_id = next(conn_ids)
     open_ts = time.time()
     with lock:
@@ -199,6 +203,11 @@ def handle_connection(client):
     upstream = None
     try:
         upstream = socket.create_connection((TARGET_HOST, TARGET_PORT), timeout=10)
+        # create_connection leaves a 10s recv timeout on the socket: a zmx
+        # session idle for 10s (no server output) would raise socket.timeout
+        # in the pump, killing a perfectly healthy SSH connection — the
+        # rig's original false-positive tap-kill (-43) source. Clear it.
+        upstream.settimeout(None)
     except OSError as exc:
         logging.error("CONNECT conn=%d upstream %s:%d failed: %s",
                       conn_id, TARGET_HOST, TARGET_PORT, exc)
