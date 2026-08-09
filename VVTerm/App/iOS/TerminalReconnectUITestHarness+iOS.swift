@@ -419,8 +419,16 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             let state = tabManager.paneStates[paneId]?.connectionState ?? .idle
             let title = tabManager.runtimeTitleByPane[paneId] ?? "none"
             let workingDirectory = tabManager.paneStates[paneId]?.workingDirectory ?? "none"
+            let failureDetail: String
+            if case .failed(let message) = state {
+                failureDetail = "failure=\(message)"
+            } else {
+                failureDetail = "failure=none"
+            }
+            let disconnectReason = tabManager.paneStates[paneId]?.disconnectReason
+                .map { "\($0)" } ?? "none"
             guard let terminal = tabManager.getTerminal(for: paneId) else {
-                publish("setup=ready state=\(connectionToken(state)) title=\(title) terminal=missing")
+                publish("setup=ready state=\(connectionToken(state)) title=\(title) \(failureDetail) disconnectReason=\(disconnectReason) terminal=missing")
                 return
             }
 
@@ -449,6 +457,8 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "state=\(connectionToken(state))",
                 "title=\(title)",
                 "cwd=\(workingDirectory)",
+                failureDetail,
+                "disconnectReason=\(disconnectReason)",
                 "shell=\(shellId != nil)",
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,

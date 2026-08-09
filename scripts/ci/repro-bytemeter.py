@@ -130,11 +130,19 @@ class StateHandler(BaseHTTPRequestHandler):
 
 
 def pump(src, dst, direction, conn_id, counters):
-    """Copy src -> dst, counting bytes into counters[direction]."""
+    """Copy src -> dst, counting bytes into counters[direction].
+
+    Returns "app" when the app-side socket EOF'd first (the app closed the
+    connection), "server" when the upstream/sshd side did, or None if the
+    loop ended for another reason. This direction is decisive for BUG A:
+    an app-side close means the app's own logic ended the shell.
+    """
+    eof_side = None
     try:
         while True:
             data = src.recv(65536)
             if not data:
+                eof_side = "app" if direction == "upBytes" else "server"
                 break
             dst.sendall(data)
             with lock:
@@ -155,6 +163,18 @@ def pump(src, dst, direction, conn_id, counters):
             dst.shutdown(socket.SHUT_WR)
         except OSError:
             pass
+    return eof_side
+
+
+def sampler():
+    """Log aggregate byte totals every 2s so the burst shape per phase is
+    visible even when per-chunk DATA lines are sparse."""
+    while True:
+        time.sleep(2)
+        with lock:
+            up, down = state["upBytes"], state["downBytes"]
+            conns = state["connections"]
+        logging.info("SAMPLE totalUp=%d totalDown=%d connections=%d", up, down, conns)
 
 
 def handle_connection(client):
@@ -184,8 +204,9 @@ def handle_connection(client):
         return
 
     counters = {"log_count": 0}
-    up = threading.Thread(target=pump, args=(client, upstream, "upBytes", conn_id, counters), daemon=True)
-    down = threading.Thread(target=pump, args=(upstream, client, "downBytes", conn_id, counters), daemon=True)
+    eof_sides = []
+    up = threading.Thread(target=lambda: eof_sides.append(pump(client, upstream, "upBytes", conn_id, counters)), daemon=True)
+    down = threading.Thread(target=lambda: eof_sides.append(pump(upstream, client, "downBytes", conn_id, counters)), daemon=True)
     up.start()
     down.start()
     up.join()
@@ -196,10 +217,14 @@ def handle_connection(client):
             if ev["n"] == conn_id:
                 ev["closeTs"] = close_ts
                 break
-    logging.info("CLOSE conn=%d upBytes=%d downBytes=%d",
+    # First side to EOF is the closer. "app" = app-side socket EOF'd first
+    # (app closed); "server" = sshd side EOF'd first (remote shell exited).
+    first_eof = eof_sides[0] if eof_sides else "unknown"
+    logging.info("CLOSE conn=%d upBytes=%d downBytes=%d firstEof=%s",
                  conn_id,
                  state["connectionEvents"][-1]["upBytes"],
-                 state["connectionEvents"][-1]["downBytes"])
+                 state["connectionEvents"][-1]["downBytes"],
+                 first_eof)
     client.close()
     upstream.close()
 
@@ -215,6 +240,7 @@ def main():
                  LISTEN_HOST, LISTEN_PORT, TARGET_HOST, TARGET_PORT,
                  LISTEN_HOST, STATE_PORT)
     threading.Thread(target=serve_http, daemon=True).start()
+    threading.Thread(target=sampler, daemon=True).start()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((LISTEN_HOST, LISTEN_PORT))

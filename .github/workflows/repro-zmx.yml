@@ -63,6 +63,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Boot + warm simulator (iPhone 17)
+        # Pre-boot so the first test launch is not cold (observed: first
+        # XCUIApplication.launch() timed out when xcodebuild booted the sim
+        # lazily) and so the post-test log capture finds a booted device.
+        run: |
+          set -euo pipefail
+          SIM_NAME="iPhone 17"
+          if ! xcrun simctl list devices booted | grep -q "$SIM_NAME"; then
+            xcrun simctl boot "$SIM_NAME" 2>/dev/null || true
+          fi
+          xcrun simctl bootstatus "$SIM_NAME" -b
+          xcrun simctl list devices booted
+
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
         uses: ./.github/actions/prepare-xcode-build
         with:
@@ -229,8 +242,12 @@ jobs:
         if: always()
         run: |
           set +e
+          # Tests may have shut the sim down; boot it if needed so `log show`
+          # can read the persistent log store.
+          xcrun simctl boot "iPhone 17" 2>/dev/null
+          xcrun simctl bootstatus "iPhone 17" -b >/dev/null 2>&1
           UDID=$(xcrun simctl list devices booted -j 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print([dev["udid"] for devs in d["devices"].values() for dev in devs if dev["state"]=="Booted"][0])')
-          xcrun simctl spawn "$UDID" log show --last 40m \
+          xcrun simctl spawn "$UDID" log show --last 50m \
             --predicate 'processImagePath CONTAINS "VVTerm"' \
             > "$RUNNER_TEMP/sim-vvterm.log" 2>&1 || true
           echo "captured $(wc -l < "$RUNNER_TEMP/sim-vvterm.log") lines"
