@@ -144,8 +144,8 @@ jobs:
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
         uses: ./.github/actions/prepare-xcode-build
         with:
-          deriveddata-key-prefix: xcode27-deriveddata
-          deriveddata-restore-keys: xcode27-deriveddata-${{ github.workflow }}-
+          deriveddata-key-prefix: xcode27-deriveddata-ct
+          deriveddata-restore-keys: xcode27-deriveddata-ct-${{ github.workflow }}-
 
       - name: Build for iOS Simulator (build-for-testing)
         run: |
@@ -307,8 +307,8 @@ jobs:
         # (~6m waste). The cache's mtime sidecar is the source of truth.
         uses: ./.github/actions/prepare-xcode-build
         with:
-          deriveddata-key-prefix: xcode27-deriveddata
-          deriveddata-restore-keys: xcode27-deriveddata-${{ github.workflow }}-
+          deriveddata-key-prefix: xcode27-deriveddata-ct
+          deriveddata-restore-keys: xcode27-deriveddata-ct-${{ github.workflow }}-
 
       - name: Run unit tests (VVTermTests)
         run: |
@@ -364,9 +364,9 @@ jobs:
           # fail-fast is disabled so one failing shard does not cancel others.
           #
           # Shard split is LPT bin-packing of measured per-method runtimes
-          # from CI run 30331655632 (commit 83bf31b). Total test time ~41m
-          # across 82 methods → ideal 4-shard = 10.3m each. Actual LPT
-          # balance: 10.2–10.4m per shard (max/min ratio 1.02, well under
+          # from CI run 31272216842 (PR #118). Total measured test time
+          # ~33m across 85 methods → ideal 4-shard = 8.3m each. Actual LPT
+          # balance: 493–504s per shard (max/min ratio 1.02, well under
           # the 1.3 rebalance threshold). Each entry's `only-testing` is a
           # comma-separated list of Target/Class/method — no spaces.
           #
@@ -374,13 +374,13 @@ jobs:
           # across the 4 shards (~4-5 per shard) rather than a separate 5th
           # shard, to preserve the 5-concurrent-cap zero-queueing invariant.
           - name: shard-0
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly"
+            only-testing: "VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/VVTermUITests/testExample,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"
           - name: shard-1
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity"
+            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName"
           - name: shard-2
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim"
+            only-testing: "VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayDetachesAndRestoresAccessoryWithoutLosingTyping,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot"
           - name: shard-3
-            only-testing: "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/VVTermUITests/testExample,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayDetachesAndRestoresAccessoryWithoutLosingTyping,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord"
+            only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss"
 
     steps:
       - name: Checkout
@@ -462,6 +462,13 @@ jobs:
               for target in cfg.get("TestTargets", []):
                   env = target.setdefault("EnvironmentVariables", {})
                   env["SCREENSHOT_DIR"] = screenshot_dir
+                  # The UI-test runner's env comes ONLY from this plist
+                  # (TEST_RUNNER_ prefixes do not work with
+                  # test-without-building -xctestrun), so the shell's CI=true
+                  # never reaches the runner. Inject it explicitly so
+                  # ProcessInfo checks (e.g. the #45 template-test skip in
+                  # VVTermUITests/testExample) actually fire in CI.
+                  env["CI"] = "1"
                   # Keep XCTAttachment screenshots even when tests pass.
                   target["UserAttachmentLifetime"] = "keepAlways"
                   target["SystemAttachmentLifetime"] = "keepAlways"
@@ -497,9 +504,21 @@ jobs:
           # ("Failed to initialize for UI testing: Timed out waiting for AX
           # loaded notification", #43 family). Retrying the whole shard then is
           # safe (no test ran) and turns an infra coin-flip into a retry instead
-          # of a failed run. Real test failures still fail on the first attempt.
+          # of a failed run. Up to 3 attempts: one retry for launch-level
+          # wedges, a second for mid-test AX-wedge signatures (#85) that only
+          # appear after the simulator was already degraded. Real test failures
+          # still fail on the first attempt (the retry predicate requires zero
+          # assertion output), and a persistently wedged runner still surfaces
+          # after the 3rd attempt.
+          #
+          # Each retry reboots the simulator first (per #85's proposed
+          # simctl shutdown/boot cycle on wedge detection): a wedged AX daemon
+          # stays wedged across attempts on the same boot — observed when
+          # attempt 2 of a shard passed a test that attempt 3 then failed 15
+          # minutes later with a slow launch (10s) and a notice title that
+          # never appeared (both #43-family launch/notice wedges).
           XC_EXIT=0
-          for ATTEMPT in 1 2; do
+          for ATTEMPT in 1 2 3; do
             rm -rf "$RUNNER_TEMP/TestResults.xcresult"
             xcodebuild test-without-building -collect-test-diagnostics never \
               -xctestrun "$XCRUN" \
@@ -516,24 +535,56 @@ jobs:
             if [ "$XC_EXIT" -eq 0 ]; then
               break
             fi
-            if [ "$ATTEMPT" -lt 2 ]; then
+            if [ "$ATTEMPT" -lt 3 ]; then
+              # Reboot the simulator before the retry so each attempt gets a
+              # clean AX daemon (see the loop comment above). ~30-60s cost,
+              # only paid when a retry actually fires.
+              echo "Rebooting simulator for retry environment..."
+              xcrun simctl shutdown all >/dev/null 2>&1 || true
+              xcrun simctl boot "iPhone 17" >/dev/null 2>&1 || true
+              xcrun simctl bootstatus "iPhone 17" -b >/dev/null 2>&1 || true
               # Case 1 — runner died before ANY test executed (zero "Test
               # Case" lines). Message varies: "Failed to initialize for UI
               # testing" (AX timeout), "Early unexpected exit ... signal abrt
               # while preparing to run tests", etc. All are infra by
               # definition — no product assertion can fail before tests run.
               if ! grep -q "Test Case '-\[" "$RUNNER_TEMP/test.log"; then
-                echo "Runner failed before any test executed (infra wedge); retrying shard (attempt 2/2)."
+                echo "Runner failed before any test executed (infra wedge); retrying shard (attempt $((ATTEMPT+1))/3)."
                 continue
               fi
               # Case 2 — launch-level failures only (simulator infra: "Failed to
-              # launch", "does not have a process ID", AX timeouts) with zero
-              # assertion failures. These are never product bugs in the UI-test
-              # harnesses; a real crash-on-launch regression simply fails again
-              # on attempt 2, costing ~3 minutes.
+              # launch", "does not have a process ID", "Failed to terminate",
+              # AX timeouts) with zero assertion failures. These are never product
+              # bugs in the UI-test harnesses; a real crash-on-launch regression
+              # simply fails again on the next attempt, costing ~3 minutes.
+              #
+              # Mid-test AX-daemon wedges (issue #85) are covered here too:
+              # kAXScrollToVisibleAction failing with kAXErrorFailure on stale
+              # element frames is an infra signature (never a product assertion —
+              # the AX daemon serves a stale/off-screen frame, e.g. terminal
+              # surface at {{0,-155},{402,98}} on an otherwise healthy shard,
+              # and different tests fail on each run of the same shard).
+              # "No such process" (simctl launch wedge) and "Lost connection to
+              # the application" (XCTest lost the app — the #45 launch-test
+              # signature; also the standard crash-report message, so an
+              # intermittent app crash would be retried once before surfacing
+              # on the next attempt, an accepted tradeoff for launch-crash
+              # wedges). All
+              # signatures only fire the retry when the log contains zero
+              # assertion failures, so a genuine product regression still fails
+              # on attempt 1.
+              #
+              # The harness wait-helper's own timeout message
+              # ("Timed out waiting for <diagnostics key>=<value>", e.g.
+              # keyboardVisible=true) is also an AX-wedge signature when it
+              # appears with zero XCTAssert failures: the app-side keyboard
+              # state (keyboardShows=0) contradicts the AX tree (a keyboards
+              # element the harness never presented), i.e. stale AX frames
+              # again. A genuinely broken keyboard fails again on the next
+              # attempt and surfaces.
               if ! grep -q "XCTAssert" "$RUNNER_TEMP/test.log" \
-                 && grep -qE "Failed to launch|does not have a process ID|AX loaded notification" "$RUNNER_TEMP/test.log"; then
-                echo "Only launch-level failures (simulator infra, no assertions); retrying shard (attempt 2/2)."
+                 && grep -qE "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|Timed out waiting for AX|Timed out waiting for [A-Za-z]+=" "$RUNNER_TEMP/test.log"; then
+                echo "Only infra signatures (no assertions); retrying shard (attempt $((ATTEMPT+1))/3)."
                 continue
               fi
             fi
@@ -618,8 +669,8 @@ jobs:
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
         uses: ./.github/actions/prepare-xcode-build
         with:
-          deriveddata-key-prefix: xcode27-deriveddata
-          deriveddata-restore-keys: xcode27-deriveddata-${{ github.workflow }}-
+          deriveddata-key-prefix: xcode27-deriveddata-ct
+          deriveddata-restore-keys: xcode27-deriveddata-ct-${{ github.workflow }}-
 
       - name: Download build products
         uses: actions/download-artifact@v8
