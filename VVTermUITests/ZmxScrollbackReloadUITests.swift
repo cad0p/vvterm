@@ -408,6 +408,8 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
 
     // MARK: - Keyboard helpers
 
+    @MainActor
+    private func hideKeyboard(diagnostics: XCUIElement, app: XCUIApplication) {
         let hideButton = app.buttons["vvterm.reconnectTest.keyboard.hide"]
         XCTAssertTrue(hideButton.waitForExistence(timeout: 8), diagnosticText(in: app))
         hideButton.tap()
