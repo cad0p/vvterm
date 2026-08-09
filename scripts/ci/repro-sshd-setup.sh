@@ -66,7 +66,10 @@ EOF
 if pgrep -f "sshd -D -f $REPRO_DIR/sshd_config" >/dev/null; then
   echo "sshd already running for this rig"
 else
-  sudo "$SSHD" -D -f "$REPRO_DIR/sshd_config" >>"$REPRO_DIR/sshd.log" 2>&1 &
+  # -ddd: sshd debug to stderr, captured in sshd.log (ground truth for
+  # who closed/reset the connection at the tap-kill moment; the config's
+  # LogLevel VERBOSE only covers syslog, which CI cannot read).
+  sudo "$SSHD" -ddd -D -f "$REPRO_DIR/sshd_config" >>"$REPRO_DIR/sshd.log" 2>&1 &
   SSHD_PID=$!
   echo "$SSHD_PID" > "$REPRO_DIR/sshd.pid"
   # Wait for the listener (macOS python3 socket probe).

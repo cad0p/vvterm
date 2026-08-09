@@ -156,8 +156,15 @@ def pump(src, dst, direction, conn_id, counters):
                 logging.info("DATA conn=%d dir=%s bytes=%d totalUp=%d totalDown=%d",
                              conn_id, direction, len(data),
                              state["upBytes"], state["downBytes"])
-    except OSError:
-        pass
+    except OSError as exc:
+        # Decisive for the tap-kill -43 origin (issue #120): a recv error on
+        # the APP side means the app's socket was reset (app closed its fd
+        # with unread data, or the proxy/server reset it); an error on the
+        # SERVER side means sshd/zmx side reset the connection. Clean FINs
+        # never land here (they produce eof_side instead).
+        side = "app" if direction == "upBytes" else "server"
+        logging.info("ERR conn=%d side=%s dir=%s errno=%s (%s)",
+                     conn_id, side, direction, exc.errno, exc)
     finally:
         try:
             dst.shutdown(socket.SHUT_WR)
