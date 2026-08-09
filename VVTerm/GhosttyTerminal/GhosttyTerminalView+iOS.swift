@@ -1882,6 +1882,10 @@ class GhosttyTerminalView: UIView {
         #if DEBUG
         keyboardUITestGridResizeCount += 1
         #endif
+        Self.logger.diagInfo(
+            "GhosttyTerminal",
+            "grid_resize cols=\(cols) rows=\(rows) surface=\(renderedSurfaceSize)"
+        )
         onResize?(cols, rows)
     }
 

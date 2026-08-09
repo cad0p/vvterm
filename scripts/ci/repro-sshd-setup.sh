@@ -73,6 +73,9 @@ else
   sudo "$SSHD" -E "$REPRO_DIR/sshd.log" -D -f "$REPRO_DIR/sshd_config" >/dev/null 2>&1 &
   SSHD_PID=$!
   echo "$SSHD_PID" > "$REPRO_DIR/sshd.pid"
+  # The -E file is opened as root (sudo); the evidence dump + artifact
+  # upload run as the runner user.
+  sudo chown "$USERNAME" "$REPRO_DIR/sshd.log" 2>/dev/null || true
   # Wait for the listener (macOS python3 socket probe).
   for i in $(seq 1 30); do
     if python3 - "$SSH_PORT" <<'PY' >/dev/null 2>&1
