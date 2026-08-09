@@ -1351,6 +1351,7 @@ class GhosttyTerminalView: UIView {
 
     /// Observer for config reload notifications
     private var configReloadObserver: NSObjectProtocol?
+    private var scrollbarObserver: NSObjectProtocol?
     private var inputModeObserver: NSObjectProtocol?
     private var hardwareKeyboardObservers: [NSObjectProtocol] = []
     private var hasHardwareKeyboardAttached = false
@@ -1530,6 +1531,7 @@ class GhosttyTerminalView: UIView {
 
         setupConfigReloadObservation()
         setupInputModeObservation()
+        setupScrollbarObservation()
         registerColorSchemeObserver()
         setupHardwareKeyboardObservation()
     }
@@ -1575,6 +1577,10 @@ class GhosttyTerminalView: UIView {
         if let observer = inputModeObserver {
             NotificationCenter.default.removeObserver(observer)
             inputModeObserver = nil
+        }
+        if let observer = scrollbarObserver {
+            NotificationCenter.default.removeObserver(observer)
+            scrollbarObserver = nil
         }
         removeHardwareKeyboardObservers()
 
@@ -1729,6 +1735,26 @@ class GhosttyTerminalView: UIView {
             Task { @MainActor [weak self] in
                 self?.handleCurrentInputModeDidChange()
             }
+        }
+    }
+
+    /// Track ghostty scrollbar state (content rows) on iOS so the caret-
+    /// reveal cap can use the full scrollable content height — a caret at
+    /// the bottom of scrolled content sits below the visible frame but is
+    /// legitimate. macOS already consumes this notification in
+    /// TerminalScrollView; iOS only ever declared the property.
+    private func setupScrollbarObservation() {
+        scrollbarObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyDidUpdateScrollbar,
+            object: self,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            if let scrollbar = notification.userInfo?[Notification.Name.ScrollbarKey]
+                as? Ghostty.Action.Scrollbar {
+                self.scrollbar = scrollbar
+            }
+            self.updateKeyboardAvoidanceRevealOffsetIfNeeded()
         }
     }
 
@@ -2167,11 +2193,28 @@ class GhosttyTerminalView: UIView {
             : TerminalKeyboardAvoidancePolicy.revealOffset(
                 caretFrame: textInputCaretRect(for: textInputModel.cursorIndex),
                 visibleFrame: bounds,
-                gridFrame: keyboardAvoidanceTerminalRect()
+                gridFrame: keyboardAvoidanceContentRect()
             )
         guard abs(reveal - keyboardAvoidanceRevealOffset) >= 0.5 else { return }
         keyboardAvoidanceRevealOffset = reveal
         applyKeyboardAvoidanceRevealOffset()
+    }
+
+    /// The full scrollable content frame: the preserved grid plus any
+    /// scrollback (ghostty reports the caret in content coordinates — a
+    /// caret at the bottom of scrolled content sits below the visible
+    /// frame but is legitimate). Capping the reveal at the CONTENT overflow
+    /// (not the surface overflow) lets the caret be revealed wherever it is
+    /// in the scrollback, while still rejecting truly stale carets beyond
+    /// the content.
+    private func keyboardAvoidanceContentRect() -> CGRect {
+        if let scrollbar, scrollbar.total > 0 {
+            let totalRows = CGFloat(scrollbar.total)
+            let cellHeight = max(cellSize.height, 1)
+            let width = keyboardAvoidanceTerminalRect().width
+            return CGRect(x: 0, y: 0, width: width, height: totalRows * cellHeight)
+        }
+        return keyboardAvoidanceTerminalRect()
     }
 
     /// Shifts every rendered grid layer up by the reveal offset so the caret
