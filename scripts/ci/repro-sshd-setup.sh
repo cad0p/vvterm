@@ -30,8 +30,9 @@ echo "== repro sshd: user=$USERNAME home=$HOME shell check =="
 SHELL_PATH="$(dscl . -read "/Users/$USERNAME" UserShell 2>/dev/null | awk '{print $2}')"
 echo "UserShell=$SHELL_PATH"
 case "$SHELL_PATH" in
-  */zsh) echo "login shell is zsh — auto-attach fragment will run" ;;
-  *) echo "::warning::login shell is $SHELL_PATH, NOT zsh; .zprofile/.zshrc fragment may not run" ;;
+  */bash) echo "login shell is bash — the zmx fragment goes to ~/.bash_profile (handled)" ;;
+  */zsh) echo "login shell is zsh — the zmx fragment goes to ~/.zprofile/.zshrc (handled)" ;;
+  *) echo "::warning::unexpected login shell $SHELL_PATH; the zmx auto-attach fragment may not run" ;;
 esac
 
 # --- keys -----------------------------------------------------------------

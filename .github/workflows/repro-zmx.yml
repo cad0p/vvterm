@@ -70,11 +70,15 @@ jobs:
           deriveddata-restore-keys: |
             xcode27-deriveddata-
 
-      - name: Setup zmx (download, auto-attach fragment, scrollback injection)
-        run: bash scripts/ci/repro-zmx-setup.sh
-
       - name: Setup loopback sshd (host/client keys, config, smoke)
         run: bash scripts/ci/repro-sshd-setup.sh
+
+      - name: Setup zmx (download, auto-attach fragment, scrollback injection)
+        # Runs AFTER sshd: the smoke test in repro-sshd-setup.sh must see a
+        # plain login shell (no fragment yet), and the scrollback injection
+        # goes through SSH so the zmx server lives in the same login-shell
+        # TMPDIR the app's attach client will use.
+        run: bash scripts/ci/repro-zmx-setup.sh
 
       - name: Start bytemeter proxy + mark-driven screenshotter
         run: |
@@ -261,7 +265,7 @@ jobs:
           if [ -f "$REPRO_DIR/bytemeter.pid" ]; then kill "$(cat "$REPRO_DIR/bytemeter.pid")" 2>/dev/null; fi
           if [ -f "$REPRO_DIR/sshd.pid" ]; then sudo kill "$(cat "$REPRO_DIR/sshd.pid")" 2>/dev/null; fi
           rm -f "$REPRO_DIR/attach-armed"
-          for RC in "$HOME/.zprofile" "$HOME/.zshrc"; do
+          for RC in "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile"; do
             if [ -f "$RC" ] && grep -q "vvterm-repro-zmx" "$RC"; then
               python3 - "$RC" <<'PY'
           import sys

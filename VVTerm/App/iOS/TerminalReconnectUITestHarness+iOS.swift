@@ -39,7 +39,7 @@ struct TerminalReconnectUITestHarness: View {
     /// ZmxScrollbackReloadUITests) so the rig can re-point the harness at
     /// its byte-counting proxy without a code change.
     private static var sshPort: Int {
-        if let raw = ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PORT"],
+        if let raw = Foundation.ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PORT"],
            let port = Int(raw), port > 0 {
             return port
         }
@@ -312,7 +312,7 @@ struct TerminalReconnectUITestHarness: View {
     }
 
     private func fixtureUsername() throws -> String {
-        if let username = ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_USERNAME"],
+        if let username = Foundation.ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_USERNAME"],
            !username.isEmpty {
             return username
         }
@@ -322,7 +322,7 @@ struct TerminalReconnectUITestHarness: View {
     }
 
     private func fixturePrivateKey() throws -> Data {
-        if let encoded = ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PRIVATE_KEY"],
+        if let encoded = Foundation.ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PRIVATE_KEY"],
            let data = Data(base64Encoded: encoded),
            !data.isEmpty {
             return data
