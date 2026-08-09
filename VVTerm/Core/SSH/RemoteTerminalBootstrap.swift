@@ -187,6 +187,15 @@ enum RemoteTerminalBootstrap {
         "/bin/sh -lc \(doubleQuotedShellArgument(script))"
     }
 
+    /// Non-login POSIX wrapper for connect-time probes (remote environment /
+    /// terminal type detection). Unlike `wrapPOSIXShellCommand`, it never
+    /// sources the account's login profile, so login hooks (e.g. tmux/zmx
+    /// auto-attach in .bash_profile/.zprofile) cannot fire inside the probe's
+    /// exec channel and swallow its marker output.
+    nonisolated static func wrapPOSIXProbeCommand(_ script: String) -> String {
+        "sh -c \(shellQuoted(script))"
+    }
+
     nonisolated static func wrapPowerShellCommand(_ script: String, executableName: String) -> String {
         let data = script.data(using: .utf16LittleEndian) ?? Data()
         return "\(executableName) -NoLogo -NoProfile -EncodedCommand \(data.base64EncodedString())"
