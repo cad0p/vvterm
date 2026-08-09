@@ -169,6 +169,8 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
         let beforeTerminalId = diagnosticValue("terminalId", in: diagnostics)
         let beforeShellId = diagnosticValue("shellId", in: diagnostics)
         let beforeGridRows = diagnosticIntegerValue("gridRows", in: diagnostics)
+        let beforeConnectionAttempts = diagnosticIntegerValue("connectionAttempts", in: diagnostics)
+        let beforeGridResizes = diagnosticIntegerValue("gridResizes", in: diagnostics)
         let windowFrame = app.windows.firstMatch.frame
 
         terminal.tap()
@@ -219,6 +221,22 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
                 + "window=\(windowFrame). \(diagnosticText(in: app))"
         )
         XCTAssertEqual(
+            diagnosticIntegerValue("gridResizes", in: diagnostics),
+            beforeGridResizes,
+            "BUG B: keyboard open resized the terminal grid "
+                + "(\(beforeGridResizes.map(String.init) ?? "nil") -> "
+                + "\(diagnosticIntegerValue("gridResizes", in: diagnostics).map(String.init) ?? "nil")). "
+                + diagnosticText(in: app)
+        )
+        XCTAssertEqual(
+            diagnosticIntegerValue("connectionAttempts", in: diagnostics),
+            beforeConnectionAttempts,
+            "BUG A: keyboard open started a new SSH connection attempt "
+                + "(\(beforeConnectionAttempts.map(String.init) ?? "nil") -> "
+                + "\(diagnosticIntegerValue("connectionAttempts", in: diagnostics).map(String.init) ?? "nil")). "
+                + diagnosticText(in: app)
+        )
+        XCTAssertEqual(
             diagnosticValue("terminalId", in: diagnostics),
             beforeTerminalId,
             "Keyboard open replaced the terminal surface. \(diagnosticText(in: app))"
@@ -266,6 +284,9 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
         waitForDiagnostics(diagnostics, containing: "sizePreserved=true", timeout: 10, app: app)
         let openMark = try mark(phase: "keyboard-open-close")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let beforeConnectionAttempts = diagnosticIntegerValue("connectionAttempts", in: diagnostics)
+        let beforeGridResizes = diagnosticIntegerValue("gridResizes", in: diagnostics)
+        let beforeGridRows = diagnosticIntegerValue("gridRows", in: diagnostics)
 
         hideKeyboard(diagnostics: diagnostics, app: app)
         // Bug window: the close may also tear down the shell.
@@ -274,6 +295,31 @@ final class ZmxScrollbackReloadUITests: XCTestCase {
         let report = phaseReport(from: attached, to: closedMark, label: "keyboard-toggle-close")
         assertNoReload(report, attachBytes: attached.downBytes - baseline.downBytes, app: app)
         _ = openMark
+
+        XCTAssertEqual(
+            diagnosticIntegerValue("connectionAttempts", in: diagnostics),
+            beforeConnectionAttempts,
+            "BUG A: keyboard close started a new SSH connection attempt "
+                + "(\(beforeConnectionAttempts.map(String.init) ?? "nil") -> "
+                + "\(diagnosticIntegerValue("connectionAttempts", in: diagnostics).map(String.init) ?? "nil")). "
+                + diagnosticText(in: app)
+        )
+        XCTAssertEqual(
+            diagnosticIntegerValue("gridResizes", in: diagnostics),
+            beforeGridResizes,
+            "BUG B: keyboard close resized the terminal grid "
+                + "(\(beforeGridResizes.map(String.init) ?? "nil") -> "
+                + "\(diagnosticIntegerValue("gridResizes", in: diagnostics).map(String.init) ?? "nil")). "
+                + diagnosticText(in: app)
+        )
+        XCTAssertEqual(
+            diagnosticIntegerValue("gridRows", in: diagnostics),
+            beforeGridRows,
+            "BUG B: preserve-size grid changed rows when the keyboard closed "
+                + "(\(beforeGridRows.map(String.init) ?? "nil") -> "
+                + "\(diagnosticIntegerValue("gridRows", in: diagnostics).map(String.init) ?? "nil")). "
+                + diagnosticText(in: app)
+        )
 
         XCTAssertEqual(
             diagnosticValue("terminalId", in: diagnostics),

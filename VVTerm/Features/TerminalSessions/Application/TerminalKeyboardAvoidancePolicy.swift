@@ -20,7 +20,6 @@ enum TerminalKeyboardAvoidancePolicy {
     }
 
     nonisolated static let defaultCursorClearance: CGFloat = 12
-    nonisolated static let minimumVisibleHeight: CGFloat = 1
 
     nonisolated static func resolvedGeometry(
         screenFrame: CGRect,
@@ -63,7 +62,13 @@ enum TerminalKeyboardAvoidancePolicy {
               !terminalFrame.isEmpty,
               !terminalFrame.isInfinite,
               !cursorFrame.isNull,
+              !cursorFrame.isEmpty,
               !cursorFrame.isInfinite,
+              // Reject stale caret rects: a caret that lies outside the
+              // terminal grid (e.g. not revalidated after scrollback
+              // navigation or a grid resize) must never lift the terminal.
+              cursorFrame.maxY <= terminalFrame.maxY + 1,
+              cursorFrame.minY >= terminalFrame.minY - 1,
               terminalFrame.intersects(keyboardFrame)
         else {
             return 0
@@ -76,10 +81,16 @@ enum TerminalKeyboardAvoidancePolicy {
         let requiredLift = cursorFrame.maxY + max(cursorClearance, 0) - keyboardFrame.minY
         guard requiredLift > 0 else { return 0 }
 
-        let maximumLift = max(terminalFrame.height - minimumVisibleHeight, 0)
-        guard maximumLift > 0 else { return 0 }
+        // The lift may never exceed the keyboard overlap with the terminal:
+        // the terminal's top must never leave the visible area, even when the
+        // caret sits far below the keyboard or the clearance is large.
+        let keyboardOverlap = min(
+            max(terminalFrame.maxY - keyboardFrame.minY, 0),
+            max(terminalFrame.height, 0)
+        )
+        guard keyboardOverlap > 0 else { return 0 }
 
-        return -min(requiredLift, maximumLift)
+        return -min(requiredLift, keyboardOverlap)
     }
 
     nonisolated static func layout(

@@ -945,10 +945,10 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid() throws {
-        // #92: upstream keyboard UI tests are coupled to upstream's TerminalTabManager
-        // wiring — harness control-panel geometry + keyboard state machine diverge on
-        // the fork's app. Tracked in https://github.com/cad0p/vvterm/issues/92.
-        throw XCTSkip("#92: upstream keyboard test coupled to upstream TerminalTabManager wiring")
+        // Un-quarantined for #122: the terminal-lift cap (lift <= keyboard
+        // overlap) guarantees the preserved surface stays on screen across
+        // docked/floating transitions; the stale-caret rejection removes the
+        // full-height lift that made the old geometry invalid.
         let app = launchKeyboardHarness(
             preservesTerminalSize: true,
             simulatesKeyboardFrames: true
@@ -2838,6 +2838,22 @@ final class TerminalKeyboardUITests: XCTestCase {
             file: file,
             line: line
         )
+        // #122 regression: the lift is capped at the keyboard overlap, so at
+        // least half of the preserved surface must always stay visible above
+        // the keyboard (the old full-height cap could push the terminal
+        // entirely off-screen).
+        if let terminalHeight = metrics["terminalHeight"], terminalHeight > 0 {
+            let visibleFraction = (metrics["visibleTerminalHeight"] ?? 0) / terminalHeight
+            XCTAssertGreaterThanOrEqual(
+                visibleFraction,
+                0.5,
+                "Preserved surface lost more than half its height above the "
+                    + "keyboard: visibleTerminalHeight=\(metrics["visibleTerminalHeight"] ?? 0) "
+                    + "terminalHeight=\(terminalHeight). \(diagnostics)",
+                file: file,
+                line: line
+            )
+        }
         XCTAssertGreaterThan(metrics["gridCols"] ?? 0, 0, diagnostics, file: file, line: line)
         XCTAssertGreaterThan(metrics["gridRows"] ?? 0, 0, diagnostics, file: file, line: line)
     }

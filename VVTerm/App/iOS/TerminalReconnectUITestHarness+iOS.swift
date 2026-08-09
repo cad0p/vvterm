@@ -386,6 +386,8 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
         private var serverId: UUID?
         private var fallback = "setup=preparing"
         private var timer: Timer?
+        private var lastConnectionState: ConnectionState?
+        private var connectionAttemptCount = 0
 
         func install(_ label: UILabel) {
             self.label = label
@@ -417,6 +419,14 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             }
 
             let state = tabManager.paneStates[paneId]?.connectionState ?? .idle
+            if let lastConnectionState, state.isConnecting, !lastConnectionState.isConnecting {
+                // Cumulative SSH connection attempts: any transition into a
+                // connecting state after the harness settled counts. The zmx
+                // repro tests assert this stays put across keyboard toggles
+                // (a reconnect would re-run the login shell's zmx attach).
+                connectionAttemptCount += 1
+            }
+            lastConnectionState = state
             let title = tabManager.runtimeTitleByPane[paneId] ?? "none"
             let workingDirectory = tabManager.paneStates[paneId]?.workingDirectory ?? "none"
             let failureDetail: String
@@ -459,6 +469,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "cwd=\(workingDirectory)",
                 failureDetail,
                 "disconnectReason=\(disconnectReason)",
+                "connectionAttempts=\(connectionAttemptCount)",
                 "shell=\(shellId != nil)",
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
