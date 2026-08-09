@@ -220,6 +220,19 @@ jobs:
           done
           exit $XC_EXIT
 
+      - name: Dump rig evidence into the log (upload-flake-safe)
+        if: always()
+        run: |
+          set +e
+          echo "=== bytemeter.log (tail 200) ==="
+          tail -200 "$RUNNER_TEMP/vvterm-repro/bytemeter.log" 2>/dev/null || echo "(missing)"
+          echo "=== sshd.log (tail 80) ==="
+          tail -80 "$RUNNER_TEMP/vvterm-repro/sshd.log" 2>/dev/null || echo "(missing)"
+          echo "=== screenshotter.log ==="
+          cat "$RUNNER_TEMP/vvterm-repro/screenshotter.log" 2>/dev/null || echo "(missing)"
+          echo "=== zmx list (SSH context) ==="
+          cat "$RUNNER_TEMP/vvterm-repro/zmx-list.txt" 2>/dev/null || echo "(missing)"
+
       - name: Analyze screenshots (terminal region above keyboard)
         if: always()
         run: |
