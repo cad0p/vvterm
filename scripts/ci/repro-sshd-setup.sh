@@ -66,7 +66,7 @@ EOF
 if pgrep -f "sshd -D -f $REPRO_DIR/sshd_config" >/dev/null; then
   echo "sshd already running for this rig"
 else
-  sudo "$SSHD" -D -f "$REPRO_DIR/sshd_config" >>"$REPRO_DIR/sshd.log" 2>&1 &
+  sudo "$SSHD" -D -E "$REPRO_DIR/sshd.log" -f "$REPRO_DIR/sshd_config" >/dev/null 2>&1 &
   SSHD_PID=$!
   echo "$SSHD_PID" > "$REPRO_DIR/sshd.pid"
   # Wait for the listener (macOS python3 socket probe).

@@ -81,6 +81,11 @@ cat "$REPRO_DIR/zmx-version.txt"
 # channel closes and the app sees a shell-ended disconnect — the exact loop
 # BUG A measures.
 FRAGMENT="# >>> vvterm-repro-zmx (repro rig; remove both marker lines to disable)
+# Attach only for INTERACTIVE login shells: the app's remote-environment
+# probes run \`sh -lc\` (non-interactive) and must not fire the attach — a
+# probe attach never produces the probe's expected marker, the probe times
+# out, and its cancellation tears the SSH session down (repro experiment).
+case \$- in *i*) ;; *) exit 0 ;; esac
 if [ -z \"\${ZMX_NO_AUTOATTACH:-}\" ] && [ -f \"$REPRO_DIR/attach-armed\" ] && [ \"\$(ps -o comm= -p \"\$PPID\" 2>/dev/null)\" != \"zmx\" ]; then
   exec \"$ZMX_BIN\" attach repro
 fi
