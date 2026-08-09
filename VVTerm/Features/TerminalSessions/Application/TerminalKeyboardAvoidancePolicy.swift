@@ -161,6 +161,41 @@ enum TerminalKeyboardAvoidancePolicy {
         }
     }
 
+    /// Amount (in points) the preserved grid content must shift up so the
+    /// caret becomes visible again.
+    ///
+    /// In preserve mode the surface keeps its pre-keyboard grid while the
+    /// visible view is shorter: a caret on a row below the visible area is
+    /// legitimate (it is the cursor of the preserved grid, e.g. sitting on
+    /// the bottom row), not stale. Ghostty's viewport cannot scroll further
+    /// once it reaches the active area, so the app reveals the caret by
+    /// translating the rendered grid within the view. The reveal is capped
+    /// at the grid's overflow below the visible area: a caret beyond the
+    /// grid itself (truly stale, after a grid shrink or scrollback
+    /// navigation) yields zero and keeps the stale-caret rejection in
+    /// `verticalOffset` as the safety net.
+    nonisolated static func revealOffset(
+        caretFrame: CGRect,
+        visibleFrame: CGRect,
+        gridFrame: CGRect
+    ) -> CGFloat {
+        guard !caretFrame.isNull,
+              !caretFrame.isEmpty,
+              !caretFrame.isInfinite,
+              !visibleFrame.isNull,
+              !visibleFrame.isEmpty,
+              !visibleFrame.isInfinite,
+              !gridFrame.isNull,
+              !gridFrame.isEmpty,
+              !gridFrame.isInfinite else {
+            return 0
+        }
+        let overflow = caretFrame.maxY - visibleFrame.maxY
+        guard overflow > 0 else { return 0 }
+        let maxReveal = max(0, gridFrame.height - visibleFrame.height)
+        return min(overflow, maxReveal)
+    }
+
     private nonisolated static func bottomAccessoryInset(
         terminalFrame: CGRect,
         accessoryFrame: CGRect?
