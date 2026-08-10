@@ -305,7 +305,6 @@ final class ServerNavigationUITests: XCTestCase {
         // list at rest so the comparison is frame-stable.
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         let actualFrame = activeRow.frame
-        let actualServerFrame = serverRow?.exists == true ? serverRow?.frame : nil
         let actualListFrame = list.frame
         XCTAssertEqual(
             actualFrame.midY,
@@ -313,8 +312,8 @@ final class ServerNavigationUITests: XCTestCase {
             accuracy: 8,
             "Server-list scroll position changed during pop (expected \(expectedFrame.midY), "
                 + "actual \(actualFrame.midY); server row midY "
-                + "\(initialServerRowFrame.midY) -> \(actualServerFrame?.midY ?? -999); list frame "
-                + "\(initialListFrame) -> \(actualListFrame)). \(diagnosticText(in: app))"
+                + "\(initialServerRowFrame.midY) -> \(serverRow?.exists == true ? String(describing: serverRow?.frame.midY) : "gone"); "
+                + "list frame \(initialListFrame) -> \(actualListFrame)). \(diagnosticText(in: app))"
         )
     }
 

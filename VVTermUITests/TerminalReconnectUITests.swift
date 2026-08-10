@@ -445,16 +445,47 @@ final class TerminalReconnectUITests: XCTestCase {
     ) {
         XCTAssertTrue(terminal.exists, diagnosticText(in: app))
         wait(for: diagnostics, containing: "imeProxyFirstResponder=true", timeout: 5, app: app)
-        terminal.typeText("hello")
-        let returnKey = app.buttons["Return"]
-        XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-        returnKey.tap()
-        wait(
-            for: diagnostics,
-            containing: "title=DEV212_CODEX_READY_1",
-            timeout: 8,
-            app: app
-        )
+        // Let the keyboard presentation settle before typing: characters
+        // sent during the input-view animation can be dropped by the IME
+        // proxy (observed in CI as the shell never receiving the command).
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        var attempts = 0
+        while attempts < 2 {
+            attempts += 1
+            terminal.typeText("hello")
+            let returnKey = app.buttons["Return"]
+            XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
+            returnKey.tap()
+            if waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: "title=DEV212_CODEX_READY_1",
+                timeout: 8,
+                app: app
+            ) {
+                return
+            }
+            // The command may not have reached the shell; retype once.
+        }
+        XCTFail("Codex-ready title never arrived after typing the marker command. \(diagnosticText(in: app))")
+    }
+
+    /// Same polling wait as `wait(for:containing:app:)` but returns a Bool
+    /// instead of failing, so callers can retry an input action.
+    @MainActor
+    private func waitForDiagnosticsReturningBool(
+        _ element: XCUIElement,
+        containing expected: String,
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists, element.label.contains(expected) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
     }
 
     @MainActor
