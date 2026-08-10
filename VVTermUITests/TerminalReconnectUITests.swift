@@ -452,23 +452,47 @@ final class TerminalReconnectUITests: XCTestCase {
         var attempts = 0
         while attempts < 2 {
             attempts += 1
-            terminal.typeText("hello")
-            // Verify the characters reached the IME model before pressing
-            // Return: chars dropped during the keyboard animation would
-            // otherwise send a partial/empty command to the shell.
-            if !waitForDiagnosticsReturningBool(
-                diagnostics,
-                containing: "imeModelText=hello",
-                timeout: 3,
-                app: app
-            ) {
-                // Clear whatever partial input arrived, then retype.
-                terminal.typeText(
-                    String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
-                )
-                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-                continue
+            // Type character-by-character, verifying each char reached the
+            // IME model: whole-string typeText can drop entirely while the
+            // keyboard animation is settling (observed in CI).
+            var typed = ""
+            for char in "hello" {
+                let key = app.keys[String(char)]
+                guard key.waitForExistence(timeout: 5) else {
+                    XCTFail("Key \(char) never appeared. \(diagnosticText(in: app))")
+                    return
+                }
+                key.tap()
+                typed.append(char)
+                if !waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "imeModelText=\(typed)",
+                    timeout: 3,
+                    app: app
+                ) {
+                    // This char was dropped; clear and restart the attempt.
+                    terminal.typeText(
+                        String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+                    )
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                    typed = ""
+                    for _ in 0..<12 {
+                        _ = waitForDiagnosticsReturningBool(
+                            diagnostics,
+                            containing: "imeModelText=empty",
+                            timeout: 2,
+                            app: app
+                        )
+                        if diagnosticValue("imeModelText", in: diagnostics) == "empty" {
+                            break
+                        }
+                        terminal.typeText(XCUIKeyboardKey.delete.rawValue)
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                    }
+                    break
+                }
             }
+            guard typed == "hello" else { continue }
             let returnKey = app.buttons["Return"]
             XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
             returnKey.tap()

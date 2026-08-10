@@ -347,8 +347,24 @@ final class TerminalZenModeUITests: XCTestCase {
 
         // BUG B: preserve-size grid must not change rows when the keyboard
         // opens, and no resize may occur (open phase is exact — the close
-        // phase allows the benign accessory-transition transient).
-        let openGridRows = diagnosticIntegerValue("gridRows", in: diagnostics)
+        // phase allows the benign accessory-transition transient). The label
+        // publishes every 0.15s; re-read until two consecutive reads agree
+        // so a stale AX snapshot cannot masquerade as a resize.
+        func stableInteger(_ name: String, in diagnostics: XCUIElement) -> Int? {
+            let deadline = Date().addingTimeInterval(4)
+            var last: Int?
+            while Date() < deadline {
+                let value = diagnosticIntegerValue(name, in: diagnostics)
+                if let value, value == last {
+                    return value
+                }
+                last = value
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            }
+            return last
+        }
+        let openGridResizes = stableInteger("gridResizes", in: diagnostics)
+        let openGridRows = stableInteger("gridRows", in: diagnostics)
         XCTAssertEqual(
             openGridRows, beforeGridRows,
             "Keyboard open resized the preserved grid rows "
@@ -356,8 +372,7 @@ final class TerminalZenModeUITests: XCTestCase {
                 + "\(openGridRows.map(String.init) ?? "nil")). \(diagnosticText(in: app))"
         )
         XCTAssertEqual(
-            diagnosticIntegerValue("gridResizes", in: diagnostics),
-            beforeGridResizes,
+            openGridResizes, beforeGridResizes,
             "Keyboard open resized the terminal grid. \(diagnosticText(in: app))"
         )
 

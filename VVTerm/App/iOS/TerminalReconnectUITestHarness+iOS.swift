@@ -526,6 +526,8 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
                 "servers=\(ServerManager.shared.servers.count)",
+                "serverIds=\(ServerManager.shared.servers.prefix(3).map { String($0.id.uuidString.prefix(8)) }.joined(separator: ","))",
+                "workspaces=\(ServerManager.shared.workspaces.count)",
                 "zenRoute=\(zenRouteEnabled ? "on" : "off")",
             ].joined(separator: " "))
         }
