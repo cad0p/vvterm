@@ -590,6 +590,15 @@ struct ServerTerminalRoute: View {
 
     private func reconcileZenMode() {
         applyStartupZenIfNeeded()
+        // Startup zen is one-shot per visit and is never overridden by an
+        // explicit exit; the inverse must also hold — a transient context
+        // drop (e.g. the tab re-registering during connect or an input
+        // session teardown) must not silently exit full-screen zen. Only an
+        // explicit exit (isZenModeEnabled = false) or a real context end
+        // (dismissIfContextEnded -> leaveRoute) turns zen off.
+        if isZenModeEnabled, didApplyStartupZenForVisit, !hasNavigationContext {
+            return
+        }
         isZenModeEnabled = TerminalZenModePolicy.resolvedEnabled(
             requested: isZenModeEnabled,
             hasRouteContext: hasNavigationContext

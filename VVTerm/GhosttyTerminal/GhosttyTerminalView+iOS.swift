@@ -1198,6 +1198,10 @@ class GhosttyTerminalView: UIView {
     var zenOverscrollEnabled = false {
         didSet {
             guard oldValue != zenOverscrollEnabled else { return }
+            #if DEBUG
+            zenDebugState.toggles += 1
+            zenDebugState.lastTransition = zenOverscrollEnabled ? "enable" : "disable"
+            #endif
             if zenOverscrollEnabled {
                 // Entering full-screen zen: reveal the rows that sit behind
                 // the top cutout (the shell prompt right after connect) by
@@ -3198,10 +3202,25 @@ class GhosttyTerminalView: UIView {
     /// history (the shift would fight the scroll) or after the shift has
     /// been consumed by an interaction.
     private func applyInitialZenOverscrollIfNeeded() {
-        guard zenOverscrollEnabled, !hasAppliedInitialZenOverscroll else { return }
+        guard zenOverscrollEnabled else {
+            #if DEBUG
+            zenDebugState.latchReason = "disabled"
+            #endif
+            return
+        }
+        guard !hasAppliedInitialZenOverscroll else {
+            #if DEBUG
+            zenDebugState.latchReason = "alreadyApplied"
+            #endif
+            return
+        }
         guard abs(zenOverscrollShift) < 0.5 else {
             // The user already moved the content; never override.
             hasAppliedInitialZenOverscroll = true
+            #if DEBUG
+            zenDebugState.latchReason = "userMoved"
+            zenDebugState.latchScrollbar = scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil"
+            #endif
             return
         }
 
@@ -3216,6 +3235,10 @@ class GhosttyTerminalView: UIView {
             // Viewport sits mid-history or at live with scrollback: the
             // visible content is not behind the cutout; nothing to reveal.
             hasAppliedInitialZenOverscroll = true
+            #if DEBUG
+            zenDebugState.latchReason = "scrollbarMid"
+            zenDebugState.latchScrollbar = scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil"
+            #endif
             return
         }
 
@@ -3225,6 +3248,12 @@ class GhosttyTerminalView: UIView {
             bottomInset: safeAreaInsets.bottom,
             cellHeight: cellSize.height
         )
+        #if DEBUG
+        zenDebugState.latchReason = "applied"
+        zenDebugState.latchScrollbar = scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil"
+        zenDebugState.latchInsets = "top=\(Int(safeAreaInsets.top)) bottom=\(Int(safeAreaInsets.bottom))"
+        zenDebugState.latchCellHeight = String(format: "%.1f", Double(cellSize.height))
+        #endif
         zenInitialAutoShift = limits.top
         zenOverscrollShift = limits.top
         applyZenOverscrollShift()
@@ -6365,7 +6394,23 @@ extension GhosttyTerminalView {
         let inputViewMode = keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild
             ? "testUnexpectedHidden"
             : (shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")
-        return [
+        #if DEBUG
+        let zenDiagnostics = [
+            "zen=\(zenOverscrollEnabled ? "on" : "off")",
+            "zenShift=\(Int(zenOverscrollShift.rounded()))",
+            "zenLatch=\(zenDebugState.latchReason)",
+            "zenToggles=\(zenDebugState.toggles)",
+            "zenLastTransition=\(zenDebugState.lastTransition)",
+            "zenScrollbar=\(zenDebugState.latchScrollbar)",
+            "zenInsets=\(zenDebugState.latchInsets)",
+            "zenCellH=\(zenDebugState.latchCellHeight)",
+            "themeName=\(UserDefaults.standard.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "nil")",
+            "themeUsePerAppearance=\(Self.themeUsePerAppearanceDiagnostic)"
+        ]
+        #else
+        let zenDiagnostics: [String] = []
+        #endif
+        return ([
             "windowAttached=\(snapshot.windowAttached)",
             "keyWindow=\(snapshot.windowIsKey)",
             "scene=\(snapshot.sceneActivationState)",
@@ -6410,8 +6455,32 @@ extension GhosttyTerminalView {
             "hideRequests=\(keyboardHideRequestCount)",
             "inputRebuilds=\(keyboardInputSessionRebuildCount)",
             "inputReloads=\(keyboardInputViewReloadCount)"
-        ].joined(separator: " ")
+        ] + zenDiagnostics).joined(separator: " ")
     }
+
+    #if DEBUG
+    /// Why the one-shot initial zen overscroll reveal did or did not apply,
+    /// surfaced in the UI-test diagnostics (``zenLatch=``).
+    private var zenDebugState = ZenOverscrollDebugState()
+
+    private struct ZenOverscrollDebugState {
+        var toggles = 0
+        var lastTransition = "unset"
+        var latchReason = "unset"
+        var latchScrollbar = "unset"
+        var latchInsets = "unset"
+        var latchCellHeight = "unset"
+    }
+
+    private static var themeUsePerAppearanceDiagnostic: String {
+        let defaults = UserDefaults.standard
+        let key = CloudKitSyncConstants.terminalUsePerAppearanceThemeKey
+        guard let value = defaults.object(forKey: key) else { return "nil" }
+        if let bool = value as? Bool { return "\(bool)" }
+        if let string = value as? String { return "string(\(string))" }
+        return "other"
+    }
+    #endif
 
     /// Test-only factory for the keyboard input accessory view. Used by unit
     /// tests to assert the self-sizing contract (a concrete
@@ -7330,7 +7399,11 @@ private class TerminalInputAccessoryView: UIInputView {
     ) -> UIColor {
         let defaults = UserDefaults.standard
 
-        let usePerAppearance = defaults.object(forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) as? Bool ?? true
+        let usePerAppearance = TerminalDefaults.storedBool(
+            defaults,
+            forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey,
+            defaultValue: true
+        )
         let darkTheme = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "Aizen Dark"
         let lightTheme = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameLightKey) ?? "Aizen Light"
         let themeName: String

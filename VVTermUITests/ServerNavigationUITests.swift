@@ -42,6 +42,9 @@ final class ServerNavigationUITests: XCTestCase {
             app: app
         )
         scrollToVisible(activeRow, in: list, app: app)
+        // Let the swipe momentum and any banner transitions settle so the
+        // baseline frame is measured with the list at rest.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         let initialRowFrame = activeRow.frame
 
         tapVisible(activeRow)
@@ -290,11 +293,15 @@ final class ServerNavigationUITests: XCTestCase {
             activeRow.waitForExistence(timeout: 5) && isVisible(activeRow, in: list),
             "Active row left the visible list after pop. \(diagnosticText(in: app))"
         )
+        // The pop transition + keyboard dismissal animate; measure with the
+        // list at rest so the comparison is frame-stable.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         XCTAssertEqual(
             activeRow.frame.midY,
             expectedFrame.midY,
             accuracy: 8,
-            "Server-list scroll position changed during pop"
+            "Server-list scroll position changed during pop (expected \(expectedFrame.midY), "
+                + "actual \(activeRow.frame.midY)). \(diagnosticText(in: app))"
         )
     }
 

@@ -313,7 +313,14 @@ final class TerminalZenModeUITests: XCTestCase {
         let beforeGridRows = diagnosticIntegerValue("gridRows", in: diagnostics)
         let windowFrame = app.windows.firstMatch.frame
 
-        terminal.tap()
+        // The harness hides the keyboard during launch (browse mode). A plain
+        // tap cannot restore it — TerminalKeyboardFocusPolicy browse mode
+        // refuses directTouch refocus by design (production: the user taps
+        // the route's floating Show Keyboard control, which is an explicit
+        // request). Use the harness's Show button, the same explicit path.
+        let showKeyboard = app.buttons["vvterm.reconnectTest.keyboard.show"]
+        XCTAssertTrue(showKeyboard.waitForExistence(timeout: 5), diagnosticText(in: app))
+        showKeyboard.tap()
         waitForDiagnostics(diagnostics, containing: "keyboardVisible=true", timeout: 10, app: app)
         waitForDiagnostics(diagnostics, containing: "sizePreserved=true", timeout: 10, app: app)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8), diagnosticText(in: app))

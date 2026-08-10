@@ -234,11 +234,26 @@ enum TerminalDefaults {
     }
 
     static func sshAutoReconnectEnabled(defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: sshAutoReconnectKey) as? Bool) ?? true
+        storedBool(defaults, forKey: sshAutoReconnectKey, defaultValue: true)
     }
 
     static func keepScreenAwakeEnabled(defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: keepScreenAwakeKey) as? Bool) ?? defaultKeepScreenAwake
+        storedBool(defaults, forKey: keepScreenAwakeKey, defaultValue: defaultKeepScreenAwake)
+    }
+
+    /// Reads a stored boolean with the caller's default when the key is
+    /// absent. Unlike `object(forKey:) as? Bool`, this also resolves the
+    /// argument-domain string forms (`-key YES`/`-key NO`), which arrive as
+    /// NSStrings rather than NSNumbers and would otherwise fall through to
+    /// the default. UI tests configure the app through launch arguments, so
+    /// both forms must agree.
+    nonisolated static func storedBool(
+        _ defaults: UserDefaults,
+        forKey key: String,
+        defaultValue: Bool
+    ) -> Bool {
+        guard defaults.object(forKey: key) != nil else { return defaultValue }
+        return defaults.bool(forKey: key)
     }
 
     static func optionAsAltMode(defaults: UserDefaults = .standard) -> TerminalOptionAsAltMode {

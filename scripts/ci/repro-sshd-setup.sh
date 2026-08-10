@@ -129,6 +129,42 @@ if ! echo "$SMOKE_OUT" | grep -q SSH_SMOKE_OK; then
   exit 1
 fi
 
+# --- login-shell title fragment ----------------------------------------------
+# The app's PTY SSH session runs an interactive login shell; its first prompt
+# must emit an OSC 0 title so the reconnect/zen UI tests can wait for
+# `title=DEV199_READY_1` (the dev fixture's PS1 carries the same marker).
+# macOS bash/zsh do not emit a title by default. Interactive-only, so the
+# non-interactive smoke command below is unaffected. Idempotent.
+TITLE_FRAGMENT="# >>> vvterm-repro-title (repro rig; remove both marker lines to disable)
+case \$- in *i*) ;; *) return ;; esac
+if [ -t 1 ]; then
+  PS1=\"\[\e]0;DEV199_READY_1\a\]\${PS1:-\\$ }\"
+fi
+# <<< vvterm-repro-title"
+
+for RC in "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.zprofile"; do
+  if [ -f "$RC" ] && grep -q "vvterm-repro-title" "$RC"; then
+    python3 - "$RC" <<'PY'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines(keepends=True)
+out, skip = [], False
+for line in lines:
+    if line.startswith("# >>> vvterm-repro-title"):
+        skip = True
+        continue
+    if line.startswith("# <<< vvterm-repro-title"):
+        skip = False
+        continue
+    if not skip:
+        out.append(line)
+open(path, "w").writelines(out)
+PY
+  fi
+  printf '\n%s\n' "$TITLE_FRAGMENT" >> "$RC"
+  echo "title fragment appended to $RC"
+done
+
 # --- fixture env ------------------------------------------------------------
 PRIVATE_KEY_B64="$(base64 < "$REPRO_DIR/client_key" | tr -d '\n')"
 cat > "$REPRO_DIR/vvterm-repro.env" <<EOF

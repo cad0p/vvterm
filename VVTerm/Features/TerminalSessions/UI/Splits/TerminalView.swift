@@ -1224,7 +1224,11 @@ struct TerminalPaneView: View {
             return Color.fromHex(cachedHex)
         }
 
-        let usePerAppearanceTheme = defaults.object(forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) as? Bool ?? true
+        let usePerAppearanceTheme = TerminalDefaults.storedBool(
+            defaults,
+            forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey,
+            defaultValue: true
+        )
         let darkThemeName = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "Aizen Dark"
         let lightThemeName = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameLightKey) ?? "Aizen Light"
         #if os(macOS)
