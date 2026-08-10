@@ -453,6 +453,22 @@ final class TerminalReconnectUITests: XCTestCase {
         while attempts < 2 {
             attempts += 1
             terminal.typeText("hello")
+            // Verify the characters reached the IME model before pressing
+            // Return: chars dropped during the keyboard animation would
+            // otherwise send a partial/empty command to the shell.
+            if !waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: "imeModelText=hello",
+                timeout: 3,
+                app: app
+            ) {
+                // Clear whatever partial input arrived, then retype.
+                terminal.typeText(
+                    String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+                )
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                continue
+            }
             let returnKey = app.buttons["Return"]
             XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
             returnKey.tap()
@@ -464,7 +480,12 @@ final class TerminalReconnectUITests: XCTestCase {
             ) {
                 return
             }
-            // The command may not have reached the shell; retype once.
+            // The command reached the shell but the marker did not arrive;
+            // clear the buffer and retype once.
+            terminal.typeText(
+                String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
         XCTFail("Codex-ready title never arrived after typing the marker command. \(diagnosticText(in: app))")
     }

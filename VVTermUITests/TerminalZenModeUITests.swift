@@ -226,7 +226,7 @@ final class TerminalZenModeUITests: XCTestCase {
         }
         let engagedShift = try XCTUnwrap(
             shift,
-            "Overscroll shift never engaged while swiping past the top edge"
+            "Overscroll shift never engaged while swiping past the top edge. \(diagnosticText(in: app))"
         )
         XCTAssertGreaterThan(engagedShift, 0)
 

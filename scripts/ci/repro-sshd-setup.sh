@@ -142,9 +142,28 @@ fi
 TITLE_FRAGMENT="# >>> vvterm-repro-title (repro rig; remove both marker lines to disable)
 case \$- in *i*) ;; *) return ;; esac
 if [ -t 1 ]; then
-  mkdir -p /tmp/DEV199_INPUT_X_1
+  mkdir -p /tmp/DEV199_INPUT_X_1 /tmp/DEV199_INPUT_X_2 /tmp/DEV199_INPUT_X_3 /tmp/DEV199_INPUT_X_4 /tmp/DEV212_INPUT_X_1 /tmp/DEV212_INPUT_Z_1
   cd /tmp/DEV199_INPUT_X_1
-  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; }
+  VVTERM_REPRO_X_COUNT=0
+  VVTERM_REPRO_MODE=plain
+  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; VVTERM_REPRO_MODE=codex; }
+  vvterm_repro_handle_key() {
+    local key=\"\$1\"
+    if [ \"\$VVTERM_REPRO_MODE\" = codex ]; then
+      case \"\$key\" in
+        z) cd /tmp/DEV212_INPUT_Z_1 ;;
+        x) cd /tmp/DEV212_INPUT_X_1 ;;
+      esac
+    else
+      VVTERM_REPRO_X_COUNT=\$((VVTERM_REPRO_X_COUNT + 1))
+      cd \"/tmp/DEV199_INPUT_X_\${VVTERM_REPRO_X_COUNT}\"
+    fi
+    # Re-print the prompt so the OSC 7 cwd update reaches the app.
+    printf '\n'
+    PS1=\"\[\e]0;DEV199_READY_1\a\]\[\e]7;file://\$HOSTNAME\$(pwd)\a\]\${PS1:-\\$ }\"
+  }
+  bind -x '\"x\": vvterm_repro_handle_key x'
+  bind -x '\"z\": vvterm_repro_handle_key z'
   PS1=\"\[\e]0;DEV199_READY_1\a\]\[\e]7;file://\$HOSTNAME\$(pwd)\a\]\${PS1:-\\$ }\"
 fi
 # <<< vvterm-repro-title"
