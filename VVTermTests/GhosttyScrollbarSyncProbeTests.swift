@@ -12,7 +12,7 @@ import Testing
 @MainActor
 struct GhosttyScrollbarSyncProbeTests {
     @Test
-    func scrollbarNotificationIsSynchronousOnMainThread() throws {
+    func scrollbarNotificationIsSynchronousOnMainThread() async throws {
         let app = Ghostty.App()
         let appHandle = try #require(app.app)
         let terminal = GhosttyTerminalView(
@@ -57,7 +57,7 @@ struct GhosttyScrollbarSyncProbeTests {
         surface.sendMouseScroll(
             Ghostty.Input.MouseScrollEvent(
                 x: 0,
-                y: -rowCount * 20,
+                y: Double(-rowCount * 20),
                 mods: Ghostty.Input.ScrollMods(precision: true, momentum: .none)
             )
         )
