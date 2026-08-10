@@ -200,11 +200,16 @@ final class TerminalZenModeUITests: XCTestCase {
         // edge's overscroll (the scrollbar confirms the edge asynchronously),
         // so the baseline is "reveal cleared" (<= 0), not exactly zero.
         let consumeDeadline = Date().addingTimeInterval(20)
+        var consumeSwipes = 0
         while Date() < consumeDeadline {
             terminal.swipeUp()
+            consumeSwipes += 1
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-            if let value = overscrollShift(of: terminal), value <= 0 {
-                break
+            if let value = overscrollShift(of: terminal) {
+                print("ZEN-OVERSCOLL phase1 swipe=\(consumeSwipes) shift=\(value)")
+                if value <= 0 {
+                    break
+                }
             }
         }
         XCTAssertLessThanOrEqual(
@@ -216,12 +221,19 @@ final class TerminalZenModeUITests: XCTestCase {
         // reached and the overscroll shift engages interactively.
         var shift: Int?
         let deadline = Date().addingTimeInterval(30)
+        var swipeCount = 0
         while Date() < deadline {
             terminal.swipeDown()
+            swipeCount += 1
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-            if let value = overscrollShift(of: terminal), value > 0 {
-                shift = value
-                break
+            if let value = overscrollShift(of: terminal) {
+                print("ZEN-OVERSCOLL phase2 swipe=\(swipeCount) shift=\(value)")
+                if value > 0 {
+                    shift = value
+                    break
+                }
+            } else {
+                print("ZEN-OVERSCOLL phase2 swipe=\(swipeCount) shift=missing")
             }
         }
         let engagedShift = try XCTUnwrap(

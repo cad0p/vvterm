@@ -470,6 +470,7 @@ final class TerminalReconnectUITests: XCTestCase {
                     timeout: 3,
                     app: app
                 ) {
+                    print("CODEX-TYPE char=\(char) dropped; model=\(diagnosticValue("imeModelText", in: diagnostics) ?? "nil")")
                     // This char was dropped; clear and restart the attempt.
                     terminal.typeText(
                         String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)

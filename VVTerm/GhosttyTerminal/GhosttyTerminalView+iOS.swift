@@ -1812,9 +1812,10 @@ class GhosttyTerminalView: UIView {
             if let scrollbar = notification.userInfo?[Notification.Name.ScrollbarKey]
                 as? Ghostty.Action.Scrollbar {
                 self.scrollbar = scrollbar
-                // Fresh edge state: a forwarded scroll has been confirmed.
-                self.zenOverscrollEdgeStale = false
             }
+            // Any scrollbar notification confirms the edge state (even a
+            // nil-payload one): a forwarded scroll is no longer stale.
+            self.zenOverscrollEdgeStale = false
             // The scrollbar may not exist yet when full-screen zen engaged
             // (fresh connect); once the first state arrives, apply the
             // one-shot initial reveal shift if the terminal is at the top

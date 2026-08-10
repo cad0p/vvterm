@@ -158,9 +158,9 @@ if [ -t 1 ]; then
       VVTERM_REPRO_X_COUNT=\$((VVTERM_REPRO_X_COUNT + 1))
       cd \"/tmp/DEV199_INPUT_X_\${VVTERM_REPRO_X_COUNT}\"
     fi
-    # Re-print the prompt so the OSC 7 cwd update reaches the app.
-    printf '\n'
-    PS1=\"\[\e]0;DEV199_READY_1\a\]\[\e]7;file://\$HOSTNAME\$(pwd)\a\]\${PS1:-\\$ }\"
+    # Emit the OSC 7 cwd update directly: the readline redraw does not
+    # re-evaluate PS1, so the app would never see the new directory.
+    printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\"
   }
   bind -x '\"x\": vvterm_repro_handle_key x'
   bind -x '\"z\": vvterm_repro_handle_key z'
