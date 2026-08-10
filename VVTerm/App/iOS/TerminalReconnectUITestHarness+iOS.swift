@@ -273,7 +273,7 @@ struct TerminalReconnectUITestHarness: View {
         // floating controls). Keep the new zen defaults off unless a test
         // explicitly opts into startup zen; persisted values from a previous
         // launch are re-clamped here for determinism.
-        if !ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-enable-startup-zen") {
+        if !Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-enable-startup-zen") {
             UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeStartupKey)
             UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeFullScreenKey)
         }
