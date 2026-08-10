@@ -467,6 +467,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
     let onReady: () -> Void
     let onVoiceTrigger: (() -> Void)?
 
+    @Environment(\.terminalZenFullScreenEnabled) private var zenFullScreenEnabled
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.scenePhase) private var scenePhase
 
@@ -580,6 +581,13 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
         guard let terminalView = uiView as? GhosttyTerminalView else {
             return
         }
+
+        // Self-healing zen full-screen sync: the terminal derives its
+        // overscroll-enabled state from the environment on every SwiftUI
+        // update, so a modifier onDisappear/onAppear desync (the view
+        // container reappearing without re-applying) cannot leave the
+        // terminal with zen overscroll disabled while the route is in zen.
+        terminalView.zenOverscrollEnabled = zenFullScreenEnabled
 
         guard TerminalTabManager.shared.paneStates[paneId] != nil else {
             terminalView.acceptsTerminalInput = false

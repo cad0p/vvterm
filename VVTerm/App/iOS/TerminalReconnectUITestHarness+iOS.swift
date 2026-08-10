@@ -516,7 +516,6 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             )
             publish([
                 "setup=ready",
-                "zenRoute=\(zenRouteEnabled ? "on" : "off")",
                 "state=\(connectionToken(state))",
                 "title=\(title)",
                 "cwd=\(workingDirectory)",
@@ -526,6 +525,8 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "shell=\(shellId != nil)",
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
+                "servers=\(ServerManager.shared.servers.count)",
+                "zenRoute=\(zenRouteEnabled ? "on" : "off")",
             ].joined(separator: " "))
         }
 
