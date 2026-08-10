@@ -69,7 +69,11 @@ enum RemoteTerminalTypeResolver {
           printf '\(probeMissMarker)';
         fi
         """
-        return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+        // Non-login shell: login hooks (e.g. tmux/zmx auto-attach in
+        // .bash_profile/.zprofile) must not fire inside the probe's exec
+        // channel, where their scrollback replay would swallow the marker and
+        // the timeout cancellation would corrupt the libssh2 session.
+        return "sh -c \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
     static func installCommand(
@@ -106,7 +110,9 @@ enum RemoteTerminalTypeResolver {
           printf '\(failedMarker)';
         fi
         """
-        return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+        // Non-login shell: same rationale as probeCommand — the install must
+        // not source the account's login profile.
+        return "sh -c \(RemoteTerminalBootstrap.shellQuoted(body))"
     }
 
     private static func remoteHasGhosttyTerminfo(

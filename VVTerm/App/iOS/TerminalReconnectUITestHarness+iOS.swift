@@ -29,10 +29,22 @@ struct TerminalReconnectUITestHarness: View {
     private static let serverId = UUID(uuidString: "D3A03FD5-453E-43AC-8BB5-838E5D5D1990")!
     private static let workspaceId = UUID(uuidString: "B51203C0-15B5-47E3-9322-D4D7E8A51990")!
     private static let sshHost = "127.0.0.1"
-    private static let sshPort = 22_229
     private static let fixtureDefaults = UserDefaults(suiteName: "app.vivy.vvterm.dev199-ui-test")!
     private static let fixturePrivateKeyDefaultsKey = "sshPrivateKeyBase64"
     private static let fixtureUsernameDefaultsKey = "sshUsername"
+
+    /// Fixture port for the loopback SSH server. Defaults to 22229 (the
+    /// dev-seeded fixture port); the zmx repro rig overrides it via the
+    /// `VVTERM_REPRO_SSH_PORT` env var (set through `launchEnvironment` by
+    /// ZmxScrollbackReloadUITests) so the rig can re-point the harness at
+    /// its byte-counting proxy without a code change.
+    private static var sshPort: Int {
+        if let raw = Foundation.ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PORT"],
+           let port = Int(raw), port > 0 {
+            return port
+        }
+        return 22_229
+    }
 
     @ObservedObject private var tabManager = TerminalTabManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
@@ -59,6 +71,25 @@ struct TerminalReconnectUITestHarness: View {
                     .padding(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .allowsHitTesting(false)
+            }
+            .overlay(alignment: .topLeading) {
+                if exposesKeyboardToggleControls {
+                    HStack(spacing: 6) {
+                        Button("Hide") {
+                            focusedTerminal?.dismissKeyboardFromToolbar()
+                        }
+                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.hide")
+
+                        Button("Show") {
+                            tabManager.keyboardCoordinator.userRequestedShow()
+                        }
+                        .accessibilityIdentifier("vvterm.reconnectTest.keyboard.show")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .padding(.top, 140)
+                    .padding(.leading, 8)
+                }
             }
             .overlay(alignment: .topLeading) {
                 if exposesKeyboardLossControl {
@@ -139,6 +170,12 @@ struct TerminalReconnectUITestHarness: View {
     private var activeServer: Server? {
         guard case .ready(let server) = fixtureState else { return nil }
         return server
+    }
+
+    private var exposesKeyboardToggleControls: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-keyboard-toggle-controls"
+        )
     }
 
     private var exposesKeyboardLossControl: Bool {
@@ -300,12 +337,21 @@ struct TerminalReconnectUITestHarness: View {
     }
 
     private func fixtureUsername() throws -> String {
+        if let username = Foundation.ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_USERNAME"],
+           !username.isEmpty {
+            return username
+        }
         guard let username = Self.fixtureDefaults.string(forKey: Self.fixtureUsernameDefaultsKey),
               !username.isEmpty else { throw FixtureError.missingUsername }
         return username
     }
 
     private func fixturePrivateKey() throws -> Data {
+        if let encoded = Foundation.ProcessInfo.processInfo.environment["VVTERM_REPRO_SSH_PRIVATE_KEY"],
+           let data = Data(base64Encoded: encoded),
+           !data.isEmpty {
+            return data
+        }
         guard let encoded = Self.fixtureDefaults.string(forKey: Self.fixturePrivateKeyDefaultsKey),
               let data = Data(base64Encoded: encoded),
               !data.isEmpty else {
@@ -365,6 +411,8 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
         private var serverId: UUID?
         private var fallback = "setup=preparing"
         private var timer: Timer?
+        private var lastConnectionState: ConnectionState?
+        private var connectionAttemptCount = 0
 
         func install(_ label: UILabel) {
             self.label = label
@@ -396,10 +444,26 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             }
 
             let state = tabManager.paneStates[paneId]?.connectionState ?? .idle
+            if let lastConnectionState, state.isConnecting, !lastConnectionState.isConnecting {
+                // Cumulative SSH connection attempts: any transition into a
+                // connecting state after the harness settled counts. The zmx
+                // repro tests assert this stays put across keyboard toggles
+                // (a reconnect would re-run the login shell's zmx attach).
+                connectionAttemptCount += 1
+            }
+            lastConnectionState = state
             let title = tabManager.runtimeTitleByPane[paneId] ?? "none"
             let workingDirectory = tabManager.paneStates[paneId]?.workingDirectory ?? "none"
+            let failureDetail: String
+            if case .failed(let message) = state {
+                failureDetail = "failure=\(message)"
+            } else {
+                failureDetail = "failure=none"
+            }
+            let disconnectReason = tabManager.paneStates[paneId]?.disconnectReason
+                .map { "\($0)" } ?? "none"
             guard let terminal = tabManager.getTerminal(for: paneId) else {
-                publish("setup=ready state=\(connectionToken(state)) title=\(title) terminal=missing")
+                publish("setup=ready state=\(connectionToken(state)) title=\(title) \(failureDetail) disconnectReason=\(disconnectReason) terminal=missing")
                 return
             }
 
@@ -428,6 +492,9 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "state=\(connectionToken(state))",
                 "title=\(title)",
                 "cwd=\(workingDirectory)",
+                failureDetail,
+                "disconnectReason=\(disconnectReason)",
+                "connectionAttempts=\(connectionAttemptCount)",
                 "shell=\(shellId != nil)",
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,

@@ -1454,7 +1454,7 @@ actor SSHSession {
     }
     #endif
 
-    private final class ExecRequest {
+    final class ExecRequest {
         let id: UUID
         let command: String
         let continuation: CheckedContinuation<String, Error>
@@ -1469,11 +1469,37 @@ actor SSHSession {
         /// proxy-subsystem pump, not the outer session's socket). Mirrors the
         /// `ShellChannelState.isInner` flag.
         var isInner: Bool = false
+        /// Set by the off-loop cancellation path (`cancelExecRequest` — probe
+        /// timeouts, task cancellation), which resumes the continuation with
+        /// the cancellation error but must NOT close/free the channel (the
+        /// owning I/O loop may be suspended between reads on it; issue #121).
+        /// The loop checks this flag on every pass and performs the channel
+        /// teardown itself, exactly once.
+        var isCancelled = false
+        /// Guards the single-resume invariant: a checked continuation crashes
+        /// if resumed twice, and cancellation (`cancelExecRequest`),
+        /// loop-side completion (`finishExecRequest`) and session teardown
+        /// (`failAllExecRequests`) race to complete the same request.
+        private(set) var continuationResumed = false
 
         init(id: UUID, command: String, continuation: CheckedContinuation<String, Error>) {
             self.id = id
             self.command = command
             self.continuation = continuation
+        }
+
+        /// Resume exactly once; later calls are no-ops.
+        func resume(returning output: String) {
+            guard !continuationResumed else { return }
+            continuationResumed = true
+            continuation.resume(returning: output)
+        }
+
+        /// Resume exactly once; later calls are no-ops.
+        func resume(throwing error: Error) {
+            guard !continuationResumed else { return }
+            continuationResumed = true
+            continuation.resume(throwing: error)
         }
     }
 
@@ -1547,6 +1573,10 @@ actor SSHSession {
     private var isActive = false
     private var ioTask: Task<Void, Never>?
     private var execRequests: [UUID: ExecRequest] = [:]
+    /// Monotonic diagnostic event counter shared by the `ssh_diag` read-
+    /// failure and shell-close logs (issue #120). Actor-isolated, so the
+    /// ordering between log sites is total within a session.
+    private var diagEventCounter: UInt64 = 0
     private var connectedPeerAddress: String?
     private let logger = Logger.forCategory("SSHSession")
     private let startupTrace: SSHStartupTrace?
@@ -3697,6 +3727,20 @@ actor SSHSession {
         hasInnerChannels || hasInnerExec
     }
 
+    /// Pure decision extracted from `ioLoop`'s exit condition so it can be
+    /// unit-tested without a live libssh2 session. The loop must keep running
+    /// while any outer shell channel or outer exec request exists. A request
+    /// cancelled off-loop (probe timeout) stays in `execRequests` until the
+    /// loop tears its channel down, so it counts as work — this is what
+    /// guarantees the deferred teardown (issue #121) always runs before the
+    /// loop exits.
+    nonisolated static func shouldOuterIOLoopContinue(
+        hasOuterShell: Bool,
+        hasOuterExec: Bool
+    ) -> Bool {
+        hasOuterShell || hasOuterExec
+    }
+
     private func stopInnerIOLoop() {
         innerIOTask?.cancel()
         innerIOTask = nil
@@ -3754,8 +3798,14 @@ actor SSHSession {
                     if !state.batchBuffer.isEmpty {
                         state.continuation.yield(state.batchBuffer)
                     }
-                    logger.error("Inner read error: \(bytesRead)")
-                    closeShellInternal(state.id)
+                    logSSHReadFailure(
+                        kind: "inner_shell_read_failed",
+                        code: Int32(bytesRead),
+                        session: innerLibssh2Session,
+                        channelId: state.id,
+                        loop: "inner"
+                    )
+                    closeShellInternal(state.id, reason: .readError(Int32(bytesRead)))
                     didWork = true
                     continue
                 }
@@ -3765,7 +3815,7 @@ actor SSHSession {
                         state.continuation.yield(state.batchBuffer)
                     }
                     logger.info("Inner channel EOF")
-                    closeShellInternal(state.id)
+                    closeShellInternal(state.id, reason: .eof)
                     didWork = true
                 }
             }
@@ -3781,7 +3831,20 @@ actor SSHSession {
                 for requestId in requestIds {
                     guard let request = execRequests[requestId] else { continue }
                     guard request.isInner else { continue }
-                    guard ensureInnerExecChannelReady(request) else { continue }
+                    // Off-loop cancellation (probe timeout) marks the request
+                    // and resumes its continuation; channel teardown is
+                    // deferred to this loop — the only execution context that
+                    // reads the inner channel (issue #121). The request stays
+                    // in `execRequests` until torn down, keeping
+                    // `hasInnerExec` true so the loop does not exit before
+                    // the teardown runs.
+                    if request.isCancelled {
+                        await teardownExecChannel(request)
+                        execRequests.removeValue(forKey: requestId)
+                        didWork = true
+                        continue
+                    }
+                    guard await ensureInnerExecChannelReady(request) else { continue }
 
                     guard let execChannel = request.channel else { continue }
 
@@ -3792,7 +3855,14 @@ actor SSHSession {
                     } else if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
                         // No data yet
                     } else if bytesRead < 0 {
-                        finishExecRequest(requestId, error: SSHError.socketError("Inner exec read failed: \(bytesRead)"))
+                        logSSHReadFailure(
+                            kind: "inner_exec_read_failed",
+                            code: Int32(bytesRead),
+                            session: innerLibssh2Session,
+                            channelId: requestId,
+                            loop: "inner"
+                        )
+                        await finishExecRequest(requestId, error: SSHError.socketError("Inner exec read failed: \(bytesRead)"))
                         continue
                     }
 
@@ -3803,12 +3873,19 @@ actor SSHSession {
                     } else if stderrRead == Int(LIBSSH2_ERROR_EAGAIN) {
                         // No stderr data yet
                     } else if stderrRead < 0 {
-                        finishExecRequest(requestId, error: SSHError.socketError("Inner exec stderr read failed: \(stderrRead)"))
+                        logSSHReadFailure(
+                            kind: "inner_exec_stderr_read_failed",
+                            code: Int32(stderrRead),
+                            session: innerLibssh2Session,
+                            channelId: requestId,
+                            loop: "inner"
+                        )
+                        await finishExecRequest(requestId, error: SSHError.socketError("Inner exec stderr read failed: \(stderrRead)"))
                         continue
                     }
 
                     if let currentChannel = request.channel, libssh2_channel_eof(currentChannel) != 0 {
-                        finishExecRequest(requestId, error: nil)
+                        await finishExecRequest(requestId, error: nil)
                         didWork = true
                     }
                 }
@@ -3941,22 +4018,37 @@ actor SSHSession {
 
     private func completeActiveChannelCleanupCall(
         session: OpaquePointer,
+        isInner: Bool = false,
         operation: () -> Int32
     ) async -> Int32 {
         for _ in 0..<1_024 {
-            guard isActive,
-                  let currentSession = libssh2Session,
-                  currentSession == session,
-                  socket >= 0,
-                  atomicSocket.isUsable else {
-                return -1
+            if isInner {
+                guard isActive,
+                      let currentSession = innerLibssh2Session,
+                      currentSession == session,
+                      innerSocket >= 0,
+                      innerAtomicSocket.isUsable else {
+                    return -1
+                }
+            } else {
+                guard isActive,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    return -1
+                }
             }
 
             let result = operation()
             if result != LIBSSH2_ERROR_EAGAIN {
                 return result
             }
-            await waitForSocket()
+            if isInner {
+                await waitForInnerSocket()
+            } else {
+                await waitForSocket()
+            }
             await Task.yield()
         }
         return LIBSSH2_ERROR_EAGAIN
@@ -4047,8 +4139,14 @@ actor SSHSession {
                         if !state.batchBuffer.isEmpty {
                             state.continuation.yield(state.batchBuffer)
                         }
-                        logger.error("Read error: \(bytesRead)")
-                        closeShellInternal(state.id)
+                        logSSHReadFailure(
+                            kind: "shell_read_failed",
+                            code: Int32(bytesRead),
+                            session: libssh2Session,
+                            channelId: state.id,
+                            loop: "outer"
+                        )
+                        closeShellInternal(state.id, reason: .readError(Int32(bytesRead)))
                         continue
                     }
 
@@ -4058,7 +4156,7 @@ actor SSHSession {
                             state.continuation.yield(state.batchBuffer)
                         }
                         logger.info("Channel EOF")
-                        closeShellInternal(state.id)
+                        closeShellInternal(state.id, reason: .eof)
                         didWork = true
                     }
                 }
@@ -4074,7 +4172,20 @@ actor SSHSession {
                     // doing so would open/read the channel on the outer
                     // (proxy) session and fail with -22.
                     if request.isInner { continue }
-                    guard ensureExecChannelReady(request) else { continue }
+                    // Off-loop cancellation (probe timeout) marks the
+                    // request and resumes its continuation; channel teardown
+                    // is deferred to this loop — the only execution context
+                    // that reads the channel (issue #121). The request stays
+                    // in `execRequests` until torn down, keeping the loop
+                    // alive (see `shouldOuterIOLoopContinue`) so the
+                    // teardown is guaranteed to run.
+                    if request.isCancelled {
+                        await teardownExecChannel(request)
+                        execRequests.removeValue(forKey: requestId)
+                        didWork = true
+                        continue
+                    }
+                    guard await ensureExecChannelReady(request) else { continue }
 
                     guard let execChannel = request.channel else { continue }
 
@@ -4085,7 +4196,14 @@ actor SSHSession {
                     } else if bytesRead == Int(LIBSSH2_ERROR_EAGAIN) {
                         // No data yet
                     } else if bytesRead < 0 {
-                        finishExecRequest(requestId, error: SSHError.socketError("Exec read failed: \(bytesRead)"))
+                        logSSHReadFailure(
+                            kind: "exec_read_failed",
+                            code: Int32(bytesRead),
+                            session: libssh2Session,
+                            channelId: requestId,
+                            loop: "outer"
+                        )
+                        await finishExecRequest(requestId, error: SSHError.socketError("Exec read failed: \(bytesRead)"))
                         continue
                     }
 
@@ -4096,12 +4214,19 @@ actor SSHSession {
                     } else if stderrRead == Int(LIBSSH2_ERROR_EAGAIN) {
                         // No stderr data yet
                     } else if stderrRead < 0 {
-                        finishExecRequest(requestId, error: SSHError.socketError("Exec stderr read failed: \(stderrRead)"))
+                        logSSHReadFailure(
+                            kind: "exec_stderr_read_failed",
+                            code: Int32(stderrRead),
+                            session: libssh2Session,
+                            channelId: requestId,
+                            loop: "outer"
+                        )
+                        await finishExecRequest(requestId, error: SSHError.socketError("Exec stderr read failed: \(stderrRead)"))
                         continue
                     }
 
                     if let currentChannel = request.channel, libssh2_channel_eof(currentChannel) != 0 {
-                        finishExecRequest(requestId, error: nil)
+                        await finishExecRequest(requestId, error: nil)
                         didWork = true
                     }
                 }
@@ -4111,10 +4236,17 @@ actor SSHSession {
             // AND no outer exec requests. Inner (Teleport) shell/exec
             // requests are tracked in the same dictionaries but drained by
             // `innerIOLoop`; they must not keep the outer loop alive (it
-            // would spin on `waitForSocket` with no work to do).
+            // would spin on `waitForSocket` with no work to do). A request
+            // cancelled off-loop stays in `execRequests` until this loop
+            // tears its channel down, so it counts as work and keeps the
+            // loop alive — guaranteeing the deferred teardown runs
+            // (issue #121).
             let hasOuterShell = shellChannels.values.contains { !$0.isInner }
             let hasOuterExec = execRequests.values.contains { !$0.isInner }
-            if !hasOuterShell, !hasOuterExec {
+            if !Self.shouldOuterIOLoopContinue(
+                hasOuterShell: hasOuterShell,
+                hasOuterExec: hasOuterExec
+            ) {
                 break
             }
 
@@ -4131,11 +4263,36 @@ actor SSHSession {
         stopIOLoop()
     }
 
-    func closeShell(_ shellId: UUID) async {
-        closeShellInternal(shellId)
+    /// Why a shell channel is being closed. Logged with the monotonic
+    /// `diagEventCounter` so CI evidence can order a read failure
+    /// (remote/network cause, issue #120) against the close (app-initiated
+    /// cause): `shell_read_failed event=N` immediately followed by
+    /// `shell_closed reason=read_error event=N+1` means the transport died
+    /// first; a bare `shell_closed reason=app_initiated` with no preceding
+    /// read failure means the app tore the shell down.
+    enum ShellCloseReason {
+        case eof
+        case readError(Int32)
+        case appInitiated
+        case loopExit
+        case transportInvalidated
+
+        var diagDescription: String {
+            switch self {
+            case .eof: return "eof"
+            case .readError(let code): return "read_error:\(code)"
+            case .appInitiated: return "app_initiated"
+            case .loopExit: return "loop_exit"
+            case .transportInvalidated: return "transport_invalidated"
+            }
+        }
     }
 
-    private func closeShellInternal(_ shellId: UUID) {
+    func closeShell(_ shellId: UUID) async {
+        closeShellInternal(shellId, reason: .appInitiated)
+    }
+
+    private func closeShellInternal(_ shellId: UUID, reason: ShellCloseReason) {
         guard let state = shellChannels.removeValue(forKey: shellId) else { return }
         if !state.batchBuffer.isEmpty {
             state.continuation.yield(state.batchBuffer)
@@ -4143,6 +4300,10 @@ actor SSHSession {
         libssh2_channel_close(state.channel)
         libssh2_channel_free(state.channel)
         state.continuation.finish()
+        logger.diagError(
+            "SSHSession",
+            "ssh_diag shell_closed shell=\(shellId.uuidString) reason=\(reason.diagDescription) event=\(nextDiagEventCounter())"
+        )
     }
 
     private func closeAllShellChannels() {
@@ -4155,6 +4316,10 @@ actor SSHSession {
             libssh2_channel_close(state.channel)
             libssh2_channel_free(state.channel)
             state.continuation.finish()
+            logger.diagError(
+                "SSHSession",
+                "ssh_diag shell_closed shell=\(state.id.uuidString) reason=loop_exit event=\(nextDiagEventCounter())"
+            )
         }
     }
 
@@ -4166,6 +4331,10 @@ actor SSHSession {
                 state.continuation.yield(state.batchBuffer)
             }
             state.continuation.finish()
+            logger.diagError(
+                "SSHSession",
+                "ssh_diag shell_closed shell=\(state.id.uuidString) reason=transport_invalidated event=\(nextDiagEventCounter())"
+            )
         }
     }
 
@@ -4174,13 +4343,51 @@ actor SSHSession {
         execRequests.removeAll()
         for request in requests.values {
             request.channel = nil
-            request.continuation.resume(throwing: error)
+            // `resume` is a no-op for a request already completed by the
+            // off-loop cancellation path — resuming twice would crash.
+            request.resume(throwing: error)
         }
     }
 
-    private func ensureExecChannelReady(_ request: ExecRequest) -> Bool {
+    /// Increment and return the session's monotonic diagnostic counter.
+    private func nextDiagEventCounter() -> UInt64 {
+        diagEventCounter += 1
+        return diagEventCounter
+    }
+
+    /// Emit a socket-level read-failure diagnostic (issue #120 evidence).
+    /// Combines the libssh2 last-error string, the failing code, a
+    /// monotonic event counter, and the affected channel id so CI logs can
+    /// order a read failure against a subsequent shell close. The libssh2
+    /// error string is IP-redacted; no credentials, hosts, or terminal
+    /// content are logged. Mirrored into the on-device diagnostics ring
+    /// AND os_log (both are captured by the CI `simctl log show` dump).
+    private func logSSHReadFailure(
+        kind: String,
+        code: Int32,
+        session: OpaquePointer?,
+        channelId: UUID,
+        loop: String
+    ) {
+        var errmsg: UnsafeMutablePointer<CChar>?
+        var errmsgLen: Int32 = 0
+        let lastErrno = session.map { libssh2_session_last_errno($0) } ?? 0
+        var lastError = "no-session"
+        if let session {
+            libssh2_session_last_error(session, &errmsg, &errmsgLen, 0)
+            if let errmsg {
+                lastError = SSHError.redacted(String(cString: errmsg), server: nil)
+            }
+        }
+        logger.diagError(
+            "SSHSession",
+            "ssh_diag \(kind) id=\(channelId.uuidString) code=\(code) errno=\(lastErrno) libssh2=\(lastError) event=\(nextDiagEventCounter()) loop=\(loop)"
+        )
+    }
+
+    private func ensureExecChannelReady(_ request: ExecRequest) async -> Bool {
         guard let session = libssh2Session else {
-            finishExecRequest(request.id, error: SSHError.notConnected)
+            await finishExecRequest(request.id, error: SSHError.notConnected)
             return false
         }
 
@@ -4201,7 +4408,7 @@ actor SSHSession {
                 if lastError == LIBSSH2_ERROR_EAGAIN {
                     return false
                 }
-                finishExecRequest(request.id, error: SSHError.channelOpenFailed)
+                await finishExecRequest(request.id, error: SSHError.channelOpenFailed)
                 return false
             }
         }
@@ -4218,7 +4425,7 @@ actor SSHSession {
                 return false
             }
             if execResult != 0 {
-                finishExecRequest(request.id, error: SSHError.unknown("Exec failed: \(execResult)"))
+                await finishExecRequest(request.id, error: SSHError.unknown("Exec failed: \(execResult)"))
                 return false
             }
             request.isStarted = true
@@ -4234,12 +4441,12 @@ actor SSHSession {
     /// re-enties this via the per-request guard). Returns `false` (without
     /// failing the request) on EAGAIN so the loop retries; returns `false`
     /// (failing the request) on a hard error.
-    private func ensureInnerExecChannelReady(_ request: ExecRequest) -> Bool {
+    private func ensureInnerExecChannelReady(_ request: ExecRequest) async -> Bool {
         guard let session = innerLibssh2Session,
               innerSocket >= 0,
               innerAtomicSocket.isUsable,
               !hasBeenCleaned else {
-            finishExecRequest(request.id, error: SSHError.notConnected)
+            await finishExecRequest(request.id, error: SSHError.notConnected)
             return false
         }
 
@@ -4260,7 +4467,7 @@ actor SSHSession {
                 if lastError == LIBSSH2_ERROR_EAGAIN {
                     return false
                 }
-                finishExecRequest(request.id, error: SSHError.channelOpenFailed)
+                await finishExecRequest(request.id, error: SSHError.channelOpenFailed)
                 return false
             }
         }
@@ -4277,7 +4484,7 @@ actor SSHSession {
                 return false
             }
             if execResult != 0 {
-                finishExecRequest(request.id, error: SSHError.unknown("Inner exec failed: \(execResult)"))
+                await finishExecRequest(request.id, error: SSHError.unknown("Inner exec failed: \(execResult)"))
                 return false
             }
             request.isStarted = true
@@ -4286,22 +4493,33 @@ actor SSHSession {
         return true
     }
 
+    /// Off-loop cancellation path (probe timeouts via
+    /// `withTaskCancellationHandler`, task cancellation). Marks the request
+    /// cancelled and resumes its continuation with the error, but does NOT
+    /// touch the libssh2 channel: the owning I/O loop is the only execution
+    /// context that reads the channel, and closing/freeing it here while the
+    /// loop is suspended between reads corrupts the session (issue #121:
+    /// `Exec read failed: -43` + `channelOpenFailed` cascade + reconnect
+    /// loop). The loop detects `isCancelled` on its next pass — it wakes at
+    /// least every 5ms via the poll timeout in `waitForSocket` — and
+    /// performs the teardown exactly once. The request stays in
+    /// `execRequests` until then, which also keeps the loop alive.
     private func cancelExecRequest(_ requestId: UUID, error: Error) {
-        guard execRequests[requestId] != nil else { return }
-        finishExecRequest(requestId, error: error)
+        guard let request = execRequests[requestId], !request.isCancelled else { return }
+        request.isCancelled = true
+        request.resume(throwing: error)
     }
 
-    private func finishExecRequest(_ requestId: UUID, error: Error?) {
+    /// Loop-side completion of an exec request: removes the request from
+    /// `execRequests` (transferring channel ownership to this context),
+    /// closes + frees the channel EAGAIN-aware, then resumes the
+    /// continuation exactly once. Must only run on the I/O loop that reads
+    /// the channel — never from the cancellation/timeout path.
+    private func finishExecRequest(_ requestId: UUID, error: Error?) async {
         guard let request = execRequests.removeValue(forKey: requestId) else { return }
-
-        if let channel = request.channel {
-            libssh2_channel_close(channel)
-            libssh2_channel_free(channel)
-            request.channel = nil
-        }
-
+        await teardownExecChannel(request)
         if let error = error {
-            request.continuation.resume(throwing: error)
+            request.resume(throwing: error)
         } else {
             if !request.stderr.isEmpty,
                let stderr = String(data: request.stderr, encoding: .utf8)?
@@ -4310,7 +4528,42 @@ actor SSHSession {
                 logger.debug("Exec command stderr: \(stderr, privacy: .public)")
             }
             let output = String(data: request.output, encoding: .utf8) ?? ""
-            request.continuation.resume(returning: output)
+            request.resume(returning: output)
+        }
+    }
+
+    /// Close + free an exec request's channel from the owning I/O loop.
+    ///
+    /// Ownership rule (issue #121): the loop that reads a channel is the
+    /// only execution context allowed to close/free it; off-loop
+    /// cancellation only marks the request. EAGAIN-aware: on a non-blocking
+    /// session a close may need retries before the channel can be freed —
+    /// freeing early leaves a dangling entry in the session's channel list
+    /// and corrupts subsequent reads on other channels. Runs on the loop,
+    /// so it can await socket wakeups between retries. If the session is
+    /// already gone the channel is left for `libssh2_session_free` to reap.
+    private func teardownExecChannel(_ request: ExecRequest) async {
+        guard let channel = request.channel else { return }
+        // Claim ownership before any suspension so a concurrent
+        // `failAllExecRequests` (session teardown) cannot abandon a channel
+        // this context is about to close.
+        request.channel = nil
+        if request.isInner {
+            guard let session = innerLibssh2Session else { return }
+            _ = await completeActiveChannelCleanupCall(session: session, isInner: true) {
+                libssh2_channel_close(channel)
+            }
+            _ = await completeActiveChannelCleanupCall(session: session, isInner: true) {
+                libssh2_channel_free(channel)
+            }
+        } else {
+            guard let session = libssh2Session else { return }
+            _ = await completeActiveChannelCleanupCall(session: session) {
+                libssh2_channel_close(channel)
+            }
+            _ = await completeActiveChannelCleanupCall(session: session) {
+                libssh2_channel_free(channel)
+            }
         }
     }
 

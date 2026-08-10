@@ -184,6 +184,9 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
             cursorFrame: baseCursorFrame,
             accessoryFrame: accessoryFrameInWindow
         )
+        terminal.recordKeyboardAvoidanceLayoutDescription(
+            "geom=\(geometry) term=\(baseGeometry.terminalFrame.debugDescription) caret=\(baseCursorFrame.debugDescription) kb=\(keyboardFrameInWindow?.debugDescription ?? "nil") acc=\(accessoryFrameInWindow?.debugDescription ?? "nil") -> inset=\(Int(newLayout.bottomInset.rounded())) offset=\(Int(newLayout.verticalOffset.rounded())) preserve=\(newLayout.preservesTerminalSurfaceSize ? 1 : 0)"
+        )
         terminal.setKeyboardAvoidanceSizePreservationEnabled(
             newLayout.preservesTerminalSurfaceSize
         )

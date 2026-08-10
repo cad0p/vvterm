@@ -1724,6 +1724,7 @@ class GhosttyTerminalView: UIView {
         }
     }
 
+
     private func handleCurrentInputModeDidChange() {
         guard !isShuttingDown else { return }
         TerminalIMEProxyTextView.dictationLogger.log("inputModeDidChange primary=\(self.currentIMEPrimaryLanguage ?? "nil", privacy: .public) terminalFirstResponder=\(self.isTerminalTextInputActive) session=\(self.imeProxyTextView.isDictationSessionActive)")
@@ -1874,6 +1875,10 @@ class GhosttyTerminalView: UIView {
         #if DEBUG
         keyboardUITestGridResizeCount += 1
         #endif
+        Self.logger.diagInfo(
+            "GhosttyTerminal",
+            "grid_resize cols=\(cols) rows=\(rows) surface=\(renderedSurfaceSize)"
+        )
         onResize?(cols, rows)
     }
 
@@ -2114,6 +2119,15 @@ class GhosttyTerminalView: UIView {
     }
 
     func setKeyboardAvoidanceSizePreservationEnabled(_ isEnabled: Bool) {
+        // Idempotence guard: the TerminalView drives this from every layout
+        // pass; only act on actual transitions (also keeps the diagnostic
+        // ring free of the steady-state pin-off spam).
+        let isPinned = keyboardAvoidancePreservedSurfaceSize != nil
+        if isEnabled == isPinned { return }
+        Self.logger.diagInfo(
+            "GhosttyTerminal",
+            "avoidance_pin \(isEnabled ? "on" : "off") preserved=\(keyboardAvoidancePreservedSurfaceSize?.debugDescription ?? "nil") bounds=\(bounds.size) ref=\(keyboardAvoidanceReferenceSurfaceSize?.debugDescription ?? "nil") tracks=\(tracksKeyboardAvoidanceReferenceSize)"
+        )
         if isEnabled {
             guard keyboardAvoidancePreservedSurfaceSize == nil else { return }
             tracksKeyboardAvoidanceReferenceSize = false
@@ -2138,6 +2152,14 @@ class GhosttyTerminalView: UIView {
 
     func keyboardAvoidanceTerminalRect() -> CGRect {
         CGRect(origin: .zero, size: keyboardAvoidancePreservedSurfaceSize ?? bounds.size)
+    }
+
+    /// Last keyboard-avoidance layout decision, recorded by the avoidance
+    /// view model for diagnostics (harness-only visibility).
+    private(set) var lastKeyboardAvoidanceLayoutDescription: String = "none"
+
+    func recordKeyboardAvoidanceLayoutDescription(_ description: String) {
+        lastKeyboardAvoidanceLayoutDescription = description
     }
 
     private var renderedSurfaceSize: CGSize {
@@ -6181,6 +6203,12 @@ extension GhosttyTerminalView {
     func keyboardUITestMoveCursorToBottom() {
         let lines = (0..<200).map { "line-\($0)" }.joined(separator: "\r\n") + "\r\n"
         feedData(Data(lines.utf8))
+    }
+
+    func keyboardUITestMoveCursorToTop() {
+        // Cursor home: with the caret on the first row the keyboard-avoidance
+        // lift never engages, so the grid stays at its natural position.
+        feedData(Data("\u{1B}[H".utf8))
     }
 
     func keyboardUITestSetMarkedText(_ text: String) {

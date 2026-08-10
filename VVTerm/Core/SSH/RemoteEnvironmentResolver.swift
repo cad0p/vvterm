@@ -199,7 +199,7 @@ enum RemoteEnvironmentResolver {
         if [ -z "$VVTERM_SHELL" ]; then VVTERM_SHELL="$(ps -p $$ -o comm= 2>/dev/null || true)"; fi;
         printf '\(platformMarker)%s\n\(shellMarker)%s' "$VVTERM_PLATFORM" "$VVTERM_SHELL"
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(body)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(body)
     }
 
     nonisolated static func parsePOSIXEnvironmentProbe(_ output: String) -> RemoteEnvironment? {
@@ -241,7 +241,7 @@ enum RemoteEnvironmentResolver {
         }
 
         if let output = await probe(
-            RemoteTerminalBootstrap.wrapPOSIXShellCommand("/usr/bin/uname -s 2>/dev/null || /bin/uname -s 2>/dev/null || uname -s"),
+            RemoteTerminalBootstrap.wrapPOSIXProbeCommand("/usr/bin/uname -s 2>/dev/null || /bin/uname -s 2>/dev/null || uname -s"),
             execute: execute
         ) {
             return RemotePlatform.detect(from: output)

@@ -20,7 +20,16 @@ enum TerminalKeyboardAvoidancePolicy {
     }
 
     nonisolated static let defaultCursorClearance: CGFloat = 12
-    nonisolated static let minimumVisibleHeight: CGFloat = 1
+
+    /// How far below the grid bottom a caret rect may legitimately sit.
+    /// The IME caret rect is computed with a slightly different cell height
+    /// than the surface (font-metric rounding), and the two metrics can
+    /// diverge by a few percent across runtimes (e.g. the CI simulator
+    /// reports a caret ~4.7% taller than the grid). A proportional
+    /// tolerance admits the grid-bottom caret on any runtime while still
+    /// rejecting stale carets from scrollback navigation (the content caret
+    /// sits orders of magnitude below the grid).
+    nonisolated static let staleCaretToleranceFraction: CGFloat = 0.05
 
     nonisolated static func resolvedGeometry(
         screenFrame: CGRect,
@@ -44,6 +53,23 @@ enum TerminalKeyboardAvoidancePolicy {
 
         let attachesToBottom = keyboardFrame.maxY >= screenFrame.maxY - 1
         let spansScreenWidth = keyboardFrame.width >= screenFrame.width * 0.8
+        // The system may slide a full-width keyboard up the screen to follow
+        // the focused input (iOS 26 focus-following keyboards, and the
+        // full-width undocked state). A full-width keyboard is still
+        // bottom-docked geometry: snapping it back to the bottom keeps the
+        // lift computation from chasing the keyboard (lift → keyboard
+        // follows up → bigger overlap → bigger lift → runaway until the
+        // terminal is off-screen). Compact floating keyboards (iPad) keep
+        // their frame.
+        if spansScreenWidth {
+            let snapped = CGRect(
+                x: keyboardFrame.minX,
+                y: screenFrame.maxY - keyboardFrame.height,
+                width: keyboardFrame.width,
+                height: keyboardFrame.height
+            )
+            return .docked(frame: snapped)
+        }
         return attachesToBottom && spansScreenWidth
             ? .docked(frame: keyboardFrame)
             : .floating(frame: keyboardFrame)
@@ -63,7 +89,16 @@ enum TerminalKeyboardAvoidancePolicy {
               !terminalFrame.isEmpty,
               !terminalFrame.isInfinite,
               !cursorFrame.isNull,
+              !cursorFrame.isEmpty,
               !cursorFrame.isInfinite,
+              // Reject stale caret rects: a caret that lies outside the
+              // terminal grid (e.g. not revalidated after scrollback
+              // navigation or a grid resize) must never lift the terminal.
+              // The proportional bottom tolerance admits the grid-bottom
+              // caret's font-metric overflow (up to a few percent of the
+              // grid height across runtimes).
+              cursorFrame.maxY <= terminalFrame.maxY * (1 + staleCaretToleranceFraction),
+              cursorFrame.minY >= terminalFrame.minY - 1,
               terminalFrame.intersects(keyboardFrame)
         else {
             return 0
@@ -73,13 +108,25 @@ enum TerminalKeyboardAvoidancePolicy {
             && cursorFrame.minX < keyboardFrame.maxX
         guard cursorOverlapsKeyboardHorizontally else { return 0 }
 
-        let requiredLift = cursorFrame.maxY + max(cursorClearance, 0) - keyboardFrame.minY
+        // The caret may extend a few points past the grid bottom (font
+        // metrics); that part is not visible, so the lift is computed from
+        // the caret clamped to the grid.
+        let caretMaxY = min(cursorFrame.maxY, terminalFrame.maxY)
+        let requiredLift = caretMaxY + max(cursorClearance, 0) - keyboardFrame.minY
         guard requiredLift > 0 else { return 0 }
 
-        let maximumLift = max(terminalFrame.height - minimumVisibleHeight, 0)
-        guard maximumLift > 0 else { return 0 }
+        // The lift may never exceed the keyboard overlap with the terminal:
+        // the terminal's top must never leave the visible area, even when the
+        // caret sits far below the keyboard. The cursor clearance is part of
+        // the required lift and may be included in the cap — otherwise a
+        // caret at the grid bottom can never fully clear the keyboard.
+        let keyboardOverlap = min(
+            max(terminalFrame.maxY - keyboardFrame.minY, 0),
+            max(terminalFrame.height, 0)
+        )
+        guard keyboardOverlap > 0 else { return 0 }
 
-        return -min(requiredLift, maximumLift)
+        return -min(requiredLift, keyboardOverlap + max(cursorClearance, 0))
     }
 
     nonisolated static func layout(
@@ -96,6 +143,24 @@ enum TerminalKeyboardAvoidancePolicy {
 
         switch geometry {
         case .hidden:
+            if preservesTerminalSize {
+                // Keep-size mode: transient chrome (the accessory still
+                // detaching after the keyboard hides) must never resize the
+                // grid — a resize sends TIOCSWINSZ to the remote, the zmx
+                // daemon reflows and the whole screen redraws (the user's
+                // 'scrollback reload' flash on every keyboard toggle). The
+                // accessory may briefly overlay the bottom rows; that beats
+                // a resize + reflow storm. Once the accessory detaches, the
+                // grid returns to the natural full size — a no-op, since
+                // the view is already at that size, so no resize happens
+                // either way.
+                guard accessoryInset > 0 else { return .unobstructed }
+                return Layout(
+                    bottomInset: 0,
+                    verticalOffset: 0,
+                    preservesTerminalSurfaceSize: true
+                )
+            }
             guard accessoryInset > 0 else { return .unobstructed }
             return Layout(
                 bottomInset: accessoryInset,

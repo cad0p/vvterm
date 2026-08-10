@@ -945,10 +945,10 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid() throws {
-        // #92: upstream keyboard UI tests are coupled to upstream's TerminalTabManager
-        // wiring — harness control-panel geometry + keyboard state machine diverge on
-        // the fork's app. Tracked in https://github.com/cad0p/vvterm/issues/92.
-        throw XCTSkip("#92: upstream keyboard test coupled to upstream TerminalTabManager wiring")
+        // Un-quarantined for #122: the terminal-lift cap (lift <= keyboard
+        // overlap) guarantees the preserved surface stays on screen across
+        // docked/floating transitions; the stale-caret rejection removes the
+        // full-height lift that made the old geometry invalid.
         let app = launchKeyboardHarness(
             preservesTerminalSize: true,
             simulatesKeyboardFrames: true
@@ -963,10 +963,26 @@ final class TerminalKeyboardUITests: XCTestCase {
             timeout: 5,
             diagnostics: diagnosticsText(in: app)
         )
+        // Settle the preserve capture with the first docked transition
+        // before snapshotting the stability baseline. The simulated frames
+        // only start driving the avoidance once the first frame is applied;
+        // until then the coordinator reports no keyboard frame, so the
+        // surface follows the real keyboard's layout and the preserved size
+        // re-captures on enable (one-way, bounded: the launch surface). The
+        // grid is guaranteed stable across the remaining geometry
+        // transitions, which is the invariant this test guards.
+        let settleButton = app.buttons["vvterm.keyboardTest.geometry.docked"]
+        XCTAssertTrue(settleButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        settleButton.tap()
+        wait(
+            for: diagnostics,
+            labelContaining: "sizePreserved=true",
+            timeout: 5,
+            diagnostics: diagnosticsText(in: app)
+        )
         let stableGridRows = try requiredDiagnosticMetric("gridRows", in: app)
         let stableGridResizes = try requiredDiagnosticMetric("gridResizes", in: app)
         for identifier in [
-            "vvterm.keyboardTest.geometry.docked",
             "vvterm.keyboardTest.geometry.floating",
             "vvterm.keyboardTest.geometry.docked",
             "vvterm.keyboardTest.geometry.floating",
@@ -997,6 +1013,13 @@ final class TerminalKeyboardUITests: XCTestCase {
         let hiddenButton = app.buttons["vvterm.keyboardTest.geometry.hidden"]
         XCTAssertTrue(hiddenButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
         hiddenButton.tap()
+        // The harness's toolbar floats at the (simulated) keyboard position,
+        // never reaching the terminal bottom, so bottomAccessoryInset is 0
+        // and the hidden state is the steady state: keep-size releases the
+        // grid (a no-op size-wise in the real app, where the view is already
+        // at the natural size). The transient protection (accessory still
+        // attached at the bottom while the keyboard leaves) is covered by
+        // the policy unit tests.
         wait(
             for: diagnostics,
             labelContaining: "sizePreserved=false",
@@ -2838,6 +2861,22 @@ final class TerminalKeyboardUITests: XCTestCase {
             file: file,
             line: line
         )
+        // #122 regression: the lift is capped at the keyboard overlap, so at
+        // least half of the preserved surface must always stay visible above
+        // the keyboard (the old full-height cap could push the terminal
+        // entirely off-screen).
+        if let terminalHeight = metrics["terminalHeight"], terminalHeight > 0 {
+            let visibleFraction = (metrics["visibleTerminalHeight"] ?? 0) / terminalHeight
+            XCTAssertGreaterThanOrEqual(
+                visibleFraction,
+                0.5,
+                "Preserved surface lost more than half its height above the "
+                    + "keyboard: visibleTerminalHeight=\(metrics["visibleTerminalHeight"] ?? 0) "
+                    + "terminalHeight=\(terminalHeight). \(diagnostics)",
+                file: file,
+                line: line
+            )
+        }
         XCTAssertGreaterThan(metrics["gridCols"] ?? 0, 0, diagnostics, file: file, line: line)
         XCTAssertGreaterThan(metrics["gridRows"] ?? 0, 0, diagnostics, file: file, line: line)
     }
