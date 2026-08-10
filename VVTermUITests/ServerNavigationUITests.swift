@@ -43,14 +43,31 @@ final class ServerNavigationUITests: XCTestCase {
         )
         scrollToVisible(activeRow, in: list, app: app)
         // Let the swipe momentum and any banner transitions settle so the
-        // baseline frame is measured with the list at rest.
-        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        // baseline frame is measured with the list at rest. The AX snapshot
+        // can report a zero/empty list frame right after the scroll loop
+        // (observed in CI: list frame (0,0,0,0) while the active row read a
+        // real frame), so wait for a non-empty list frame plus two
+        // consecutive identical active-row midY reads before measuring.
+        let settleDeadline = Date().addingTimeInterval(8)
+        var previousMidY: CGFloat = .nan
+        while Date() < settleDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            let currentMidY = activeRow.frame.midY
+            if !list.frame.isEmpty, currentMidY == previousMidY {
+                break
+            }
+            previousMidY = currentMidY
+        }
         let initialRowFrame = activeRow.frame
         // The fixture metadata reload can collapse the list asynchronously
         // (observed in CI: servers=25 -> 1 mid-test); measure what exists so
         // the post-pop assertion can report the state instead of crashing.
         let initialServerRowFrame = serverRow.exists ? serverRow.frame : .zero
         let initialListFrame = list.frame
+        print("NAV-FRAMES pre active=(\(Int(initialRowFrame.midY)),\(Int(initialRowFrame.height))) "
+            + "list=(\(Int(initialListFrame.minY)),\(Int(initialListFrame.height))) "
+            + "serverRow=\(initialServerRowFrame == .zero ? "missing" : "\(Int(initialServerRowFrame.midY))") "
+            + "servers=\(diagnosticValue("servers", in: diagnostics) ?? "?")")
 
         tapVisible(activeRow)
         let terminal = productionTerminal(in: app)
@@ -306,9 +323,22 @@ final class ServerNavigationUITests: XCTestCase {
         )
         // The pop transition + keyboard dismissal animate; measure with the
         // list at rest so the comparison is frame-stable.
-        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        let settleDeadline = Date().addingTimeInterval(8)
+        var previousMidY: CGFloat = .nan
+        while Date() < settleDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            let currentMidY = activeRow.frame.midY
+            if !list.frame.isEmpty, currentMidY == previousMidY {
+                break
+            }
+            previousMidY = currentMidY
+        }
         let actualFrame = activeRow.frame
         let actualListFrame = list.frame
+        print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
+            + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
+            + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?") "
+            + "drift=\(Int(actualFrame.midY - expectedFrame.midY))")
         XCTAssertEqual(
             actualFrame.midY,
             expectedFrame.midY,

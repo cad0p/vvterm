@@ -1236,6 +1236,20 @@ class GhosttyTerminalView: UIView {
     /// surfaced in the UI-test diagnostics (``zenLatch=``).
     private var zenDebugState = ZenOverscrollDebugState()
 
+    /// Last terminal-bound input send (text or key name) and how many
+    /// explicit Enter key events were sent, surfaced as ``lastSent=`` and
+    /// ``enterSent=`` so UI tests can tell whether keystrokes left the IME
+    /// model and reached the terminal at all.
+    private var keyboardUITestLastSent = "none"
+    private var keyboardUITestEnterSent = 0
+
+    private func keyboardUITestNoteSent(_ label: String) {
+        keyboardUITestLastSent = label
+        if label == "enter" {
+            keyboardUITestEnterSent += 1
+        }
+    }
+
     private struct ZenOverscrollDebugState {
         var toggles = 0
         var lastTransition = "unset"
@@ -5681,6 +5695,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendKeyPress(_ key: Ghostty.Input.Key) {
+        #if DEBUG
+        keyboardUITestNoteSent("<key:\(key.rawValue)>")
+        #endif
         guard canRouteTerminalInput else { return }
         guard let surface = surface else { return }
         surface.sendKeyEvent(.init(key: key, action: .press))
@@ -5696,6 +5713,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendAnsiSequence(_ data: Data) {
+        #if DEBUG
+        keyboardUITestNoteSent("ansi:\(data.map { String(format: "%02x", $0) }.joined())")
+        #endif
         guard canRouteTerminalInput else { return }
         invalidateLocalTextInputSession()
         let text = String(decoding: data, as: UTF8.self)
@@ -5753,6 +5773,9 @@ class GhosttyTerminalView: UIView {
     ) {
         guard canRouteTerminalInput else { return }
         guard let surface = surface else { return }
+        #if DEBUG
+        keyboardUITestNoteSent(text ?? "<key:\(key.rawValue)>")
+        #endif
         if invalidateLocalSession {
             invalidateLocalTextInputSession()
         }
@@ -6552,6 +6575,8 @@ extension GhosttyTerminalView {
             "imeModelText=\(keyboardUITestToken(textInputModel.text))",
             "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
             "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
+            "lastSent=\(keyboardUITestLastSent)",
+            "enterSent=\(keyboardUITestEnterSent)",
             "hideRequests=\(keyboardHideRequestCount)",
             "inputRebuilds=\(keyboardInputSessionRebuildCount)",
             "inputReloads=\(keyboardInputViewReloadCount)"
