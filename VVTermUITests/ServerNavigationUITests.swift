@@ -118,6 +118,9 @@ final class ServerNavigationUITests: XCTestCase {
         )
 
         popTerminal(in: app)
+        let secondCycleBaseline = activeRow.frame
+        print("NAV-FRAMES secondPre active=(\(Int(secondCycleBaseline.midY)),\(Int(secondCycleBaseline.height))) "
+            + "drift-from-first-post=\(Int(secondCycleBaseline.midY - initialRowFrame.midY))")
         assertListPosition(
             initialRowFrame,
             activeRow: activeRow,

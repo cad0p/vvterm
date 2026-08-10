@@ -557,6 +557,11 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "disconnectReason=\(disconnectReason)",
                 "connectionAttempts=\(connectionAttemptCount)",
                 "shell=\(shellId != nil)",
+                #if DEBUG
+                "sshWrites=\(SSHClient.UITestDebug.writeCount)",
+                "sshWriteTail=\(SSHClient.UITestDebug.writeTail)",
+                "sshWriteError=\(SSHClient.UITestDebug.writeError)",
+                #endif
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
                 "servers=\(ServerManager.shared.servers.count)",
