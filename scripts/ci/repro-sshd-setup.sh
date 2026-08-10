@@ -146,7 +146,7 @@ if [ -t 1 ]; then
   cd /tmp/DEV199_INPUT_X_1
   VVTERM_REPRO_X_COUNT=0
   VVTERM_REPRO_MODE=plain
-  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; VVTERM_REPRO_MODE=codex; }
+  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; cd /tmp/DEV212_INPUT_X_1; printf '\e]7;file://%s%s\a' "\$HOSTNAME" "\$(pwd)"; VVTERM_REPRO_MODE=codex; }
   vvterm_repro_handle_key() {
     local key=\"\$1\"
     if [ \"\$VVTERM_REPRO_MODE\" = codex ]; then

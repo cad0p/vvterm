@@ -46,7 +46,10 @@ final class ServerNavigationUITests: XCTestCase {
         // baseline frame is measured with the list at rest.
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         let initialRowFrame = activeRow.frame
-        let initialServerRowFrame = serverRow.frame
+        // The fixture metadata reload can collapse the list asynchronously
+        // (observed in CI: servers=25 -> 1 mid-test); measure what exists so
+        // the post-pop assertion can report the state instead of crashing.
+        let initialServerRowFrame = serverRow.exists ? serverRow.frame : .zero
         let initialListFrame = list.frame
 
         tapVisible(activeRow)

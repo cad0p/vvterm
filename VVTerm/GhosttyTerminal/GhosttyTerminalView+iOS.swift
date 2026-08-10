@@ -3113,6 +3113,11 @@ class GhosttyTerminalView: UIView {
             // pinned against an edge and shifts the rendered grid instead.
             let rawX = Double(translation.x) * Self.scrollMultiplier
             let rawY = Double(translation.y) * Self.scrollMultiplier
+            #if DEBUG
+            if zenOverscrollEnabled {
+                NSLog("VVTerm-zen pan rawY=%.1f stale=%d shift=%.1f scrollbar=%@", rawY, zenOverscrollEdgeStale, zenOverscrollShift, scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil")
+            }
+            #endif
             let forwardedY = resolveZenOverscroll(rawDelta: rawY)
             let scrollEvent = Ghostty.Input.MouseScrollEvent(
                 x: rawX,
@@ -3165,8 +3170,24 @@ class GhosttyTerminalView: UIView {
     /// forwarded instead of being absorbed into the opposite edge's
     /// overscroll, which would otherwise swallow the remainder of the same
     /// gesture (the “intermittent bottom overscroll” / “scrolling down
-    /// doesn't work” reports). Cleared by the next scrollbar notification.
+    /// doesn't work” reports). Cleared by the next scrollbar notification;
+    /// also expires after ``zenOverscrollStaleTTL`` because a scrollbar
+    /// update may never arrive (empty scrollback), and without the expiry
+    /// every later gesture would be forwarded raw forever (the interactive
+    /// top overscroll could never engage).
     private var zenOverscrollEdgeStale = false
+    private var zenOverscrollStaleSince = CFAbsoluteTime(0)
+    private static let zenOverscrollStaleTTL: CFAbsoluteTime = 1.0
+
+    /// Computes the overscroll limit inputs from the live surface metrics,
+    /// falling back to the viewport-derived cell height when the ghostty
+    /// cell-size action has not arrived yet (fresh connect).
+    private var zenOverscrollCellHeight: CGFloat {
+        if cellSize.height > 0 { return cellSize.height }
+        let rows = max(lastReportedGrid.rows, 1)
+        if bounds.height > 0 { return bounds.height / CGFloat(rows) }
+        return 1
+    }
 
     /// Routes a vertical scroll delta (points, finger-down positive, in the
     /// same units sent to ghostty) through the full-screen zen overscroll
@@ -3195,19 +3216,25 @@ class GhosttyTerminalView: UIView {
                 // The reveal cleared and the remainder crossed the edge; its
                 // effect is not yet reflected in the scrollbar (async
                 // delivery).
-                zenOverscrollEdgeStale = true
+                markZenOverscrollEdgeStale()
             }
             return Double(delta - (delta >= 0 ? absorbed : -absorbed))
         }
         // While the edge state is stale, forward instead of absorbing into
         // the opposite edge's overscroll.
         if zenOverscrollEdgeStale, abs(zenOverscrollShift) < 0.5 {
-            return Double(delta)
+            let elapsed = CFAbsoluteTimeGetCurrent() - zenOverscrollStaleSince
+            if elapsed < Self.zenOverscrollStaleTTL {
+                return Double(delta)
+            }
+            // The confirmation never arrived (e.g. empty scrollback); stop
+            // treating the edge as stale so normal edge overscroll resumes.
+            zenOverscrollEdgeStale = false
         }
         let limits = TerminalZenFullScreenPolicy.overscrollLimits(
             topInset: safeAreaInsets.top,
             bottomInset: safeAreaInsets.bottom,
-            cellHeight: cellSize.height
+            cellHeight: zenOverscrollCellHeight
         )
         let edge = TerminalZenFullScreenPolicy.edgeState(
             offset: scrollbar?.offset ?? 0,
@@ -3229,9 +3256,14 @@ class GhosttyTerminalView: UIView {
         if resolved.forwarded != 0, edge.atTop || edge.atBottom {
             // A real scroll was forwarded while the viewport is pinned at an
             // edge; the scrollbar has not confirmed the new state yet.
-            zenOverscrollEdgeStale = true
+            markZenOverscrollEdgeStale()
         }
         return Double(resolved.forwarded)
+    }
+
+    private func markZenOverscrollEdgeStale() {
+        zenOverscrollEdgeStale = true
+        zenOverscrollStaleSince = CFAbsoluteTimeGetCurrent()
     }
 
     /// Applies the current overscroll shift to the ghostty rendered layers.
@@ -3307,7 +3339,7 @@ class GhosttyTerminalView: UIView {
         let limits = TerminalZenFullScreenPolicy.overscrollLimits(
             topInset: safeAreaInsets.top,
             bottomInset: safeAreaInsets.bottom,
-            cellHeight: cellSize.height
+            cellHeight: zenOverscrollCellHeight
         )
         #if DEBUG
         zenDebugState.latchReason = "applied"
@@ -3334,7 +3366,7 @@ class GhosttyTerminalView: UIView {
         let limits = TerminalZenFullScreenPolicy.overscrollLimits(
             topInset: safeAreaInsets.top,
             bottomInset: safeAreaInsets.bottom,
-            cellHeight: cellSize.height
+            cellHeight: zenOverscrollCellHeight
         )
         guard limits.top > zenInitialAutoShift + 0.5 else { return }
         zenInitialAutoShift = limits.top
@@ -5485,6 +5517,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendTerminalInputText(_ text: String) {
+        #if DEBUG
+        NSLog("VVTerm-kbd sendTerminalInputText text=%@ canRoute=%d", text, canRouteTerminalInput)
+        #endif
         guard canRouteTerminalInput else { return }
         let normalized = text.precomposedStringWithCanonicalMapping
         guard normalized.count == 1, let character = normalized.first else {
@@ -5510,6 +5545,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendRawTerminalInputText(_ text: String, invalidateLocalSession: Bool = true) {
+        #if DEBUG
+        NSLog("VVTerm-kbd sendRaw text=%@ canRoute=%d", text, canRouteTerminalInput)
+        #endif
         guard canRouteTerminalInput else { return }
         let terminalText = text
             .replacingOccurrences(of: "\r\n", with: "\r")

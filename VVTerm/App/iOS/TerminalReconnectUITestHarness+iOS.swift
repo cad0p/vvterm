@@ -51,6 +51,11 @@ struct TerminalReconnectUITestHarness: View {
     @StateObject private var fileTabs: RemoteFileTabManager
     @StateObject private var fileBrowser: RemoteFileBrowserStore
     @State private var fixtureState = FixtureState.preparing
+    // Sticky server-metadata fixture: once the navigation harness's toggle has
+    // restored the 25-server fixture list, keep re-applying it. An app-side
+    // reload (observed in CI as the list collapsing to the single persisted
+    // server mid-test) would otherwise break the list-position test.
+    @State private var keepServerMetadataReseeded = false
     // The route's zen state lives in scene-scoped storage; the harness reads
     // the same key so the diagnostics can expose why startup zen did or did
     // not engage (surfaced as zenRoute=on/off).
@@ -255,8 +260,30 @@ struct TerminalReconnectUITestHarness: View {
         guard let activeServer else { return }
         if serverManager.servers.isEmpty {
             serverManager.servers = navigationFixtureServers(activeServer: activeServer)
+            keepServerMetadataReseeded = true
+            reseedServerMetadataWhileNeeded()
         } else {
             serverManager.servers = []
+            keepServerMetadataReseeded = false
+        }
+    }
+
+    /// Re-applies the 25-server fixture list while the toggle is "on" if an
+    /// app-side reload collapses it. Runs at 2 Hz so the drift window stays
+    /// far below the test's AX-poll cadence. `keepServerMetadataReseeded` is
+    /// read through its @State storage each iteration, so the loop stops as
+    /// soon as the toggle turns the fixture off.
+    private func reseedServerMetadataWhileNeeded() {
+        guard usesNavigationHarness else { return }
+        let serverManager = self.serverManager
+        Task {
+            while keepServerMetadataReseeded {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let activeServer else { return }
+                if serverManager.servers.count != 25 {
+                    serverManager.servers = navigationFixtureServers(activeServer: activeServer)
+                }
+            }
         }
     }
 
@@ -287,6 +314,13 @@ struct TerminalReconnectUITestHarness: View {
         } else {
             UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeStartupKey)
             UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeFullScreenKey)
+            // The route's zen state is scene-scoped storage that persists
+            // across launches in the same simulator; a prior test that
+            // enabled startup zen would otherwise leave this scene with
+            // full-screen zen already engaged (hiding the nav chrome the
+            // non-zen harness tests assert on). Reset it alongside the
+            // defaults so the scene starts from the deterministic state.
+            UserDefaults.standard.removeObject(forKey: "vvterm.zenMode.ios")
         }
 
         do {

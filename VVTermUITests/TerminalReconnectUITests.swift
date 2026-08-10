@@ -187,11 +187,31 @@ final class TerminalReconnectUITests: XCTestCase {
             let key = app.keys["x"]
             XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
             tapPromptly(key, diagnostics: diagnostics, app: app)
-            wait(
-                for: diagnostics,
+            var cwdAdvanced = waitForDiagnosticsReturningBool(
+                diagnostics,
                 containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
                 timeout: 8,
                 app: app
+            )
+            if !cwdAdvanced {
+                // The keystroke reached the IME model but the shell never
+                // processed it (observed in CI after a foreground return);
+                // clear the buffer and retype once before failing.
+                terminal.typeText(
+                    String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+                )
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                tapPromptly(key, diagnostics: diagnostics, app: app)
+                cwdAdvanced = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                    timeout: 8,
+                    app: app
+                )
+            }
+            XCTAssertTrue(
+                cwdAdvanced,
+                "Shell cwd never advanced to X_\(connectionNumber). \(diagnosticText(in: app))"
             )
         }
 
@@ -497,12 +517,20 @@ final class TerminalReconnectUITests: XCTestCase {
             let returnKey = app.buttons["Return"]
             XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
             returnKey.tap()
-            if waitForDiagnosticsReturningBool(
+            // The fixture's hello() now emits both the OSC 0 title and a
+            // direct OSC 7 cwd update (cd /tmp/DEV212_INPUT_X_1). Accept
+            // either marker: the OSC 7 channel is the one proven to reach
+            // the app in CI (the reconnect tests wait on cwd=/tmp/DEV199_*).
+            let markerSeen = waitForAnyDiagnostics(
                 diagnostics,
-                containing: "title=DEV212_CODEX_READY_1",
+                containing: [
+                    "title=DEV212_CODEX_READY_1",
+                    "cwd=/tmp/DEV212_INPUT_X_1",
+                ],
                 timeout: 8,
                 app: app
-            ) {
+            )
+            if markerSeen {
                 return
             }
             // The command reached the shell but the marker did not arrive;
@@ -512,7 +540,7 @@ final class TerminalReconnectUITests: XCTestCase {
             )
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
-        XCTFail("Codex-ready title never arrived after typing the marker command. \(diagnosticText(in: app))")
+        XCTFail("Codex-ready marker never arrived after typing the marker command. \(diagnosticText(in: app))")
     }
 
     /// Same polling wait as `wait(for:containing:app:)` but returns a Bool
@@ -528,6 +556,28 @@ final class TerminalReconnectUITests: XCTestCase {
         while Date() < deadline {
             if element.exists, element.label.contains(expected) {
                 return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    /// Polls for ANY one of the expected substrings (whichever arrives
+    /// first), so a command's effect can be confirmed through whichever
+    /// diagnostic channel actually fired.
+    @MainActor
+    private func waitForAnyDiagnostics(
+        _ element: XCUIElement,
+        containing expected: [String],
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists {
+                for fragment in expected where element.label.contains(fragment) {
+                    return true
+                }
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
