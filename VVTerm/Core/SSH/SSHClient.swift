@@ -108,30 +108,32 @@ enum SSHUploadStrategy: Sendable {
     case execPreferred
 }
 
-actor SSHClient {
 #if DEBUG
-    /// Shell-channel write telemetry for UI-test diagnostics
-    /// (sshWrites=/sshWriteTail=/sshWriteError=): the ghostty write
-    /// callback hands bytes to the transport, but CI shows the shell never
-    /// receives them — these counters locate whether libssh2 accepted the
-    /// write or the channel/socket rejected it.
-    nonisolated(unsafe) enum UITestDebug {
-        static var writeCount = 0
-        static var writeTail = ""
-        static var writeError = ""
-        static func noteWrite(_ data: Data) {
-            writeCount += 1
-            let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
-            let normalized = text.replacingOccurrences(of: " ", with: "_")
-                .replacingOccurrences(of: "\n", with: "\\n")
-                .replacingOccurrences(of: "\r", with: "\\r")
-            writeTail = normalized.count > 12 ? String(normalized.suffix(12)) : normalized
-        }
-        static func noteError(_ message: String) {
-            writeError = String(message.prefix(60))
-        }
+/// Shell-channel write telemetry for UI-test diagnostics
+/// (sshWrites=/sshWriteTail=/sshWriteError=): the ghostty write callback
+/// hands bytes to the transport, but CI shows the shell never receives them
+/// — these counters locate whether libssh2 accepted the write or the
+/// channel/socket rejected it. DEBUG-only cross-actor telemetry; benign
+/// data race.
+nonisolated(unsafe) enum SSHClientUITestDebug {
+    static var writeCount = 0
+    static var writeTail = ""
+    static var writeError = ""
+    static func noteWrite(_ data: Data) {
+        writeCount += 1
+        let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
+        let normalized = text.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        writeTail = normalized.count > 12 ? String(normalized.suffix(12)) : normalized
     }
+    static func noteError(_ message: String) {
+        writeError = String(message.prefix(60))
+    }
+}
 #endif
+
+actor SSHClient {
 
     private struct DisconnectOperation {
         let id: UUID
@@ -4686,14 +4688,14 @@ actor SSHSession {
                 offset += written
                 remaining -= written
                 #if DEBUG
-                UITestDebug.noteWrite(data)
+                SSHClientUITestDebug.noteWrite(data)
                 #endif
             } else if written == Int(LIBSSH2_ERROR_EAGAIN) {
                 // Would block - actually wait for socket to be ready
                 await waitForSocket()
             } else {
                 #if DEBUG
-                UITestDebug.noteError("libssh2_channel_write_ex returned \(written)")
+                SSHClientUITestDebug.noteError("libssh2_channel_write_ex returned \(written)")
                 #endif
                 throw SSHError.socketError("Write failed: \(written)")
             }

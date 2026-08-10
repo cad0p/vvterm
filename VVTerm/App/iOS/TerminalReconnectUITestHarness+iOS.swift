@@ -548,6 +548,16 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 keyboardVisible: keyboard.isSoftwareKeyboardVisible,
                 keyboardHeight: keyboardHeight
             )
+            let sshDiagnostics: [String]
+            #if DEBUG
+            sshDiagnostics = [
+                "sshWrites=\(SSHClientUITestDebug.writeCount)",
+                "sshWriteTail=\(SSHClientUITestDebug.writeTail)",
+                "sshWriteError=\(SSHClientUITestDebug.writeError)",
+            ]
+            #else
+            sshDiagnostics = []
+            #endif
             publish([
                 "setup=ready",
                 "state=\(connectionToken(state))",
@@ -557,11 +567,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "disconnectReason=\(disconnectReason)",
                 "connectionAttempts=\(connectionAttemptCount)",
                 "shell=\(shellId != nil)",
-                #if DEBUG
-                "sshWrites=\(SSHClient.UITestDebug.writeCount)",
-                "sshWriteTail=\(SSHClient.UITestDebug.writeTail)",
-                "sshWriteError=\(SSHClient.UITestDebug.writeError)",
-                #endif
+            ] + sshDiagnostics + [
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
                 "servers=\(ServerManager.shared.servers.count)",
