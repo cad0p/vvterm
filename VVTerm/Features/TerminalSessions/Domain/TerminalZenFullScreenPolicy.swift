@@ -77,9 +77,26 @@ nonisolated enum TerminalZenFullScreenPolicy {
             return (0, delta)
         }
 
-        let newShift = min(max(shift + delta, -maxBottom), maxTop)
+        // An active shift is pinned to the edge it was accumulated at.
+        // Motion pushing deeper into that edge accumulates (clamped); the
+        // excess is forwarded to ghostty, which is pinned at the same edge
+        // and clamps it — but the shift may outlive the edge if the
+        // scrollback changed, so the overflow must keep flowing.
+        let movingDeeper = (shift > 0 && delta > 0) || (shift < 0 && delta < 0)
+        if movingDeeper {
+            let newShift = shift > 0
+                ? min(shift + delta, maxTop)
+                : max(shift + delta, -maxBottom)
+            let absorbed = newShift - shift
+            return (newShift, delta - absorbed)
+        }
+
+        // Motion away from the edge consumes the shift. Crossing zero makes
+        // the remainder a real scroll instead of flipping into the opposite
+        // edge's overscroll — the opposite overscroll only applies once the
+        // viewport actually reaches that edge.
+        let newShift = shift > 0 ? max(shift + delta, 0) : min(shift + delta, 0)
         let absorbed = newShift - shift
-        let forwarded = delta - absorbed
-        return (newShift, forwarded)
+        return (newShift, delta - absorbed)
     }
 }

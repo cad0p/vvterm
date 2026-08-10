@@ -173,7 +173,10 @@ struct TerminalZenFullScreenPolicyTests {
     }
 
     @Test
-    func oppositeEdgeClampsWhenCrossing() {
+    func crossingThroughZeroForwardsOverflowAsRealScroll() {
+        // A single gesture from the top edge's overscroll across zero must
+        // not flip into the bottom edge's overscroll: the overflow past zero
+        // becomes a real scroll toward the bottom edge.
         let resolved = TerminalZenFullScreenPolicy.resolvedShift(
             shift: 30,
             delta: -80,
@@ -182,8 +185,8 @@ struct TerminalZenFullScreenPolicyTests {
             maxTop: 60,
             maxBottom: 40
         )
-        #expect(resolved.shift == -40)
-        #expect(resolved.forwarded == -10)
+        #expect(resolved.shift == 0)
+        #expect(resolved.forwarded == -50)
     }
 
     @Test
