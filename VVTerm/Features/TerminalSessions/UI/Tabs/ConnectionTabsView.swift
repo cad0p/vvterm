@@ -35,6 +35,7 @@ struct ConnectionTerminalContainer: View {
     #if os(iOS)
     @AppStorage(TerminalDefaults.preserveTerminalSizeForKeyboardKey) var preservesTerminalSizeForKeyboard = TerminalDefaults.defaultPreserveTerminalSizeForKeyboard
     #endif
+    @AppStorage(TerminalDefaults.zenModeFullScreenKey) var zenModeFullScreenEnabled = TerminalDefaults.defaultZenModeFullScreen
 
     /// Disconnect confirmation
     @State var showingDisconnectConfirmation = false

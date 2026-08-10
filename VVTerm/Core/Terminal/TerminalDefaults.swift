@@ -190,6 +190,8 @@ enum TerminalDefaults {
     static let keepScreenAwakeKey = "terminalKeepScreenAwake"
     static let optionAsAltModeKey = "terminalOptionAsAltMode"
     static let preserveTerminalSizeForKeyboardKey = "terminalPreserveSizeForKeyboard"
+    static let zenModeFullScreenKey = "terminalZenModeFullScreen"
+    static let zenModeStartupKey = "terminalZenModeStartup"
     static let legacyDefaultFontName = "JetBrainsMono Nerd Font"
     static let minimumFontSize = 4.0
     static let maximumFontSize = 32.0
@@ -198,6 +200,8 @@ enum TerminalDefaults {
     static let defaultCursorBlink = true
     static let defaultKeepScreenAwake = true
     static let defaultPreserveTerminalSizeForKeyboard = true
+    static let defaultZenModeFullScreen = true
+    static let defaultZenModeStartup = true
     #if os(macOS)
     static let defaultPrimaryFontName = "Menlo"
     static let macOSFallbackFontFamilies = [

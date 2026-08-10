@@ -1,6 +1,134 @@
 import XCTest
 
 final class TerminalZenModeUITests: XCTestCase {
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    private static let zenHarnessArguments = [
+        "--vvterm-ui-test-terminal-reconnect-harness",
+        "--vvterm-ui-test-enable-startup-zen",
+        "--vvterm-ui-test-keyboard-toggle-controls",
+        "-AppleLanguages", "(en)",
+        "-AppleLocale", "en_US",
+        "-hasSeenWelcome", "YES",
+        "-iCloudSyncEnabled", "NO",
+        "-sshAutoReconnect", "NO",
+        "-terminalTmuxEnabledDefault", "NO",
+        "-terminalUsePerAppearanceTheme", "NO",
+        "-terminalThemeName", "Aizen Dark",
+        "-security.privacyModeEnabled", "NO",
+        "-security.fullAppLockEnabled", "NO",
+        "-security.lockOnBackground", "NO",
+    ]
+
+    /// Boots the production server route against the loopback SSH fixture
+    /// (skipped in CI, like the reconnect suite) and returns the terminal
+    /// surface element.
+    @MainActor
+    private func launchZenRouteHarness(
+        _ app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIElement {
+        app.launchArguments = Self.zenHarnessArguments
+        _ = launchForTest(app, file: file, line: line)
+        let terminal = app.descendants(matching: .any)["vvterm.terminal.surface"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 45), "Terminal surface never appeared", file: file, line: line)
+        // The loopback shell takes focus on connect; hide the software keyboard
+        // so geometry assertions see the unobstructed terminal frame.
+        let hideKeyboard = app.buttons["vvterm.reconnectTest.keyboard.hide"]
+        if hideKeyboard.waitForExistence(timeout: 5) {
+            hideKeyboard.tap()
+        }
+        return terminal
+    }
+
+    @MainActor
+    private func overscrollShift(of terminal: XCUIElement) -> Int? {
+        guard let value = terminal.value as? String,
+              value.hasPrefix("overscroll="),
+              let raw = value.split(separator: "=").last else {
+            return nil
+        }
+        return Int(raw)
+    }
+
+    /// With "Open in Zen mode by default" on (the default), the production
+    /// route must enter zen automatically once the terminal is active — no
+    /// menu tap — and the full-screen terminal must span the whole screen
+    /// (behind the notch and home indicator).
+    @MainActor
+    func testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        let terminal = launchZenRouteHarness(app)
+
+        let launcher = app.buttons["vvterm.zen.controls"]
+        XCTAssertTrue(
+            launcher.waitForExistence(timeout: 10),
+            "Startup zen should enter zen mode automatically without user action"
+        )
+
+        let screenFrame = app.frame
+        let terminalFrame = terminal.frame
+        XCTAssertEqual(
+            terminalFrame.minY, screenFrame.minY, accuracy: 1,
+            "Full-screen zen terminal should start at the top of the screen"
+        )
+        XCTAssertEqual(
+            terminalFrame.maxY, screenFrame.maxY, accuracy: 1,
+            "Full-screen zen terminal should reach the bottom of the screen"
+        )
+    }
+
+    /// The full-screen terminal hides rows behind the notch; scrolling past
+    /// the top edge must shift the rendered content (overscroll) so those
+    /// rows become visible, and scrolling back must return to normal.
+    @MainActor
+    func testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        let terminal = launchZenRouteHarness(app)
+        XCTAssertTrue(
+            app.buttons["vvterm.zen.controls"].waitForExistence(timeout: 10)
+        )
+
+        // Swipe down (toward older content) until the top edge is reached and
+        // the overscroll shift engages.
+        var shift: Int?
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            terminal.swipeDown()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            if let value = overscrollShift(of: terminal), value > 0 {
+                shift = value
+                break
+            }
+        }
+        let engagedShift = try XCTUnwrap(
+            shift,
+            "Overscroll shift never engaged while swiping past the top edge"
+        )
+        XCTAssertGreaterThan(engagedShift, 0)
+
+        // Swipe up (toward newer content): the shift must be consumed and
+        // return to zero before normal scrolling resumes.
+        let resetDeadline = Date().addingTimeInterval(20)
+        while Date() < resetDeadline {
+            terminal.swipeUp()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            if let value = overscrollShift(of: terminal), value == 0 {
+                return
+            }
+        }
+        XCTFail("Overscroll shift did not reset after scrolling back from the top edge")
+    }
+
     @MainActor
     func testRealTerminalLauncherOpensZenPanel() {
         let app = XCUIApplication()

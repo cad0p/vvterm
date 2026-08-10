@@ -54,6 +54,13 @@ extension ConnectionTerminalContainer {
             }
 
             content
+                .modifier(
+                    TerminalZenFullScreenSafeAreaModifier(
+                        isEnabled: isZenModeEnabled
+                            && zenModeFullScreenEnabled
+                            && selectedView == ConnectionViewTab.terminal.id
+                    )
+                )
         }
         .overlay(alignment: .topTrailing) {
             if isZenModeEnabled {
@@ -101,6 +108,12 @@ extension ConnectionTerminalContainer {
             // representable (and its Ghostty view + SSH coordinator) when the
             // selected tab changes.
             .id(tab.id)
+            .terminalZenFullScreen(
+                enabled: isZenModeEnabled && zenModeFullScreenEnabled,
+                paneIds: tab.allPaneIds,
+                terminalRegistryVersion: tabManager.terminalRegistryVersion,
+                terminalProvider: { tabManager.getTerminal(for: $0) }
+            )
         }
 
         if selectedView == ConnectionViewTab.terminal.id && serverTabs.isEmpty {
@@ -242,6 +255,23 @@ private struct TerminalKeyboardSafeAreaModifier: ViewModifier {
     func body(content: Content) -> some View {
         if isEnabled {
             content.ignoresSafeArea(.keyboard, edges: .bottom)
+        } else {
+            content
+        }
+    }
+}
+
+/// Lets the terminal extend behind the notch, rounded corners, and home
+/// indicator in full-screen zen. Only the terminal content ignores the
+/// container safe area — the zen launcher overlay and the keyboard avoidance
+/// stay in the safe region.
+private struct TerminalZenFullScreenSafeAreaModifier: ViewModifier {
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.ignoresSafeArea(.container, edges: .all)
         } else {
             content
         }

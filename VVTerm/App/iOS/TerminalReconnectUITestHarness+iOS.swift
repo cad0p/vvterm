@@ -269,6 +269,15 @@ struct TerminalReconnectUITestHarness: View {
     private func prepareFixture() async {
         guard case .preparing = fixtureState else { return }
 
+        // Harness tests assert the pre-zen chrome (nav bar, segmented picker,
+        // floating controls). Keep the new zen defaults off unless a test
+        // explicitly opts into startup zen; persisted values from a previous
+        // launch are re-clamped here for determinism.
+        if !ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-enable-startup-zen") {
+            UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeStartupKey)
+            UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeFullScreenKey)
+        }
+
         do {
             let username = try fixtureUsername()
             let privateKey = try fixturePrivateKey()

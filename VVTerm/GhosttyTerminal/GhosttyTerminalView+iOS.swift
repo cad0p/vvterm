@@ -1190,6 +1190,28 @@ class GhosttyTerminalView: UIView {
     /// Current scrollbar state from Ghostty core
     var scrollbar: Ghostty.Action.Scrollbar?
 
+    /// Whether full-screen zen overscroll is active for this terminal. When
+    /// enabled, scroll deltas that ghostty would clamp at the top or bottom
+    /// edge accumulate into ``zenOverscrollShift`` instead, shifting the
+    /// rendered grid so content hidden behind the notch/corners stays
+    /// reachable.
+    var zenOverscrollEnabled = false {
+        didSet {
+            guard oldValue != zenOverscrollEnabled else { return }
+            resetZenOverscroll()
+        }
+    }
+
+    /// Current overscroll shift in points (positive = grid shifted down,
+    /// revealing rows that sat behind the top cutout).
+    private var zenOverscrollShift: CGFloat = 0
+
+    /// Tracks whether ghostty received any momentum event in the current
+    /// momentum run so the trailing `.ended` is only sent when ghostty saw
+    /// the matching `.began`/`.changed` events.
+    private var momentumForwardedToGhostty = false
+    private var scrollbarObserver: NSObjectProtocol?
+
     private static let logger = Logger.forCategory("GhosttyTerminal")
     private static let keyboardLifecycleLoggingEnabled = DebugLogConfiguration.isEnabled("keyboard")
     private static let keyboardLifecycleLogger = Logger.forCategory("TerminalKeyboardInput")
@@ -1448,6 +1470,12 @@ class GhosttyTerminalView: UIView {
         // window's screen scale is applied again in didMoveToWindow.
         self.contentScaleFactor = max(UITraitCollection.current.displayScale, 1)
 
+        #if DEBUG
+        // Geometry assertions in UI tests (e.g. full-screen zen coverage).
+        accessibilityIdentifier = "vvterm.terminal.surface"
+        isAccessibilityElement = true
+        #endif
+
         setupSurface()
         addSubview(imeProxyTextView)
         zoomIndicatorView.isHidden = true
@@ -1523,6 +1551,7 @@ class GhosttyTerminalView: UIView {
 
         setupConfigReloadObservation()
         setupInputModeObservation()
+        setupScrollbarObservation()
         registerColorSchemeObserver()
         setupHardwareKeyboardObservation()
     }
@@ -1538,6 +1567,9 @@ class GhosttyTerminalView: UIView {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = inputModeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = scrollbarObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         let wrapper = self.ghosttyAppWrapper
@@ -1568,6 +1600,10 @@ class GhosttyTerminalView: UIView {
         if let observer = inputModeObserver {
             NotificationCenter.default.removeObserver(observer)
             inputModeObserver = nil
+        }
+        if let observer = scrollbarObserver {
+            NotificationCenter.default.removeObserver(observer)
+            scrollbarObserver = nil
         }
         removeHardwareKeyboardObservers()
 
@@ -1720,6 +1756,22 @@ class GhosttyTerminalView: UIView {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.handleCurrentInputModeDidChange()
+            }
+        }
+    }
+
+    /// Track ghostty scrollbar state (content rows) so the full-screen zen
+    /// overscroll can detect when the user is scrolling past an edge.
+    private func setupScrollbarObservation() {
+        scrollbarObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyDidUpdateScrollbar,
+            object: self,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            if let scrollbar = notification.userInfo?[Notification.Name.ScrollbarKey]
+                as? Ghostty.Action.Scrollbar {
+                self.scrollbar = scrollbar
             }
         }
     }
@@ -2557,8 +2609,12 @@ class GhosttyTerminalView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imeProxyTextView.frame = bounds
-        nativeFindOverlay.frame = bounds
-        touchSelectionOverlay.frame = bounds
+        // The find/selection overlays draw rects in grid coordinates, so they
+        // must follow the full-screen zen overscroll shift to stay aligned
+        // with the rendered content.
+        let overlayFrame = bounds.offsetBy(dx: 0, dy: zenOverscrollShift)
+        nativeFindOverlay.frame = overlayFrame
+        touchSelectionOverlay.frame = overlayFrame
         bringSubviewToFront(nativeFindOverlay)
         bringSubviewToFront(touchSelectionOverlay)
         bringSubviewToFront(touchSelectionLoupe)
@@ -2999,14 +3055,21 @@ class GhosttyTerminalView: UIView {
             // Update mouse position so TUI apps receive wheel events with coordinates.
             let pos = ghosttyPoint(location)
             surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
-            // Send scroll delta directly with increased multiplier for snappy feel
+            // Send scroll delta directly with increased multiplier for snappy feel.
+            // Full-screen zen overscroll absorbs the delta while the scroll is
+            // pinned against an edge and shifts the rendered grid instead.
+            let rawX = Double(translation.x) * Self.scrollMultiplier
+            let rawY = Double(translation.y) * Self.scrollMultiplier
+            let forwardedY = resolveZenOverscroll(rawDelta: rawY)
             let scrollEvent = Ghostty.Input.MouseScrollEvent(
-                x: Double(translation.x) * Self.scrollMultiplier,
-                y: Double(translation.y) * Self.scrollMultiplier,
+                x: rawX,
+                y: forwardedY,
                 mods: Ghostty.Input.ScrollMods(precision: true, momentum: .none)
             )
-            surface.sendMouseScroll(scrollEvent)
-            requestRender()
+            if rawX != 0 || forwardedY != 0 {
+                surface.sendMouseScroll(scrollEvent)
+                requestRender()
+            }
 
             // Reset translation so we get delta on next call
             recognizer.setTranslation(.zero, in: self)
@@ -3038,6 +3101,62 @@ class GhosttyTerminalView: UIView {
         selectionAutoscrollLocation = location
         selectionAutoscrollMods = mods
         startSelectionAutoscrollIfNeeded()
+    }
+
+    // MARK: - Full-Screen Zen Overscroll
+
+    /// Routes a vertical scroll delta (points, finger-down positive, in the
+    /// same units sent to ghostty) through the full-screen zen overscroll
+    /// policy. Returns the portion that should be forwarded to ghostty;
+    /// the absorbed portion accumulates into ``zenOverscrollShift`` and is
+    /// applied to the rendered layers immediately.
+    private func resolveZenOverscroll(rawDelta: Double) -> Double {
+        guard zenOverscrollEnabled else { return rawDelta }
+        let delta = CGFloat(rawDelta)
+        let limits = TerminalZenFullScreenPolicy.overscrollLimits(
+            topInset: safeAreaInsets.top,
+            bottomInset: safeAreaInsets.bottom,
+            cellHeight: cellSize.height
+        )
+        let edge = TerminalZenFullScreenPolicy.edgeState(
+            offset: scrollbar?.offset ?? 0,
+            total: scrollbar?.total ?? 0,
+            len: scrollbar?.len ?? 0
+        )
+        let resolved = TerminalZenFullScreenPolicy.resolvedShift(
+            shift: zenOverscrollShift,
+            delta: delta,
+            atTop: edge.atTop,
+            atBottom: edge.atBottom,
+            maxTop: limits.top,
+            maxBottom: limits.bottom
+        )
+        if abs(resolved.shift - zenOverscrollShift) >= 0.5 {
+            zenOverscrollShift = resolved.shift
+            applyZenOverscrollShift()
+        }
+        return Double(resolved.forwarded)
+    }
+
+    /// Applies the current overscroll shift to the ghostty rendered layers.
+    private func applyZenOverscrollShift() {
+        guard !isShuttingDown else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for sublayer in layer.sublayers ?? [] where isGhosttySurfaceLayer(sublayer) {
+            sublayer.frame = CGRect(origin: CGPoint(x: 0, y: zenOverscrollShift), size: bounds.size)
+        }
+        CATransaction.commit()
+        #if DEBUG
+        // Let UI tests observe the shift through the accessibility tree.
+        accessibilityValue = "overscroll=\(Int(zenOverscrollShift.rounded()))"
+        #endif
+    }
+
+    private func resetZenOverscroll() {
+        guard abs(zenOverscrollShift) >= 0.5 else { return }
+        zenOverscrollShift = 0
+        applyZenOverscrollShift()
     }
 
     private func startSelectionAutoscrollIfNeeded() {
@@ -3113,6 +3232,7 @@ class GhosttyTerminalView: UIView {
 
         // Create display link for smooth animation
         momentumPhase = .began
+        momentumForwardedToGhostty = false
         momentumDisplayLink = CADisplayLink(target: self, selector: #selector(momentumScrollTick))
         momentumDisplayLink?.add(to: .main, forMode: .common)
     }
@@ -3134,18 +3254,28 @@ class GhosttyTerminalView: UIView {
             return
         }
 
-        // Send momentum scroll event (began -> changed)
+        // Send momentum scroll event. The `.began` phase travels with the
+        // first event ghostty actually receives; events fully absorbed by
+        // full-screen zen overscroll never reach ghostty, so the phase chain
+        // must not start mid-run.
+        let rawX = Double(momentumVelocity.x)
+        let rawY = Double(momentumVelocity.y)
+        let forwardedY = resolveZenOverscroll(rawDelta: rawY)
+        let isFirstForwarded = momentumPhase == .began && !momentumForwardedToGhostty
         let scrollEvent = Ghostty.Input.MouseScrollEvent(
-            x: Double(momentumVelocity.x),
-            y: Double(momentumVelocity.y),
+            x: rawX,
+            y: forwardedY,
             mods: Ghostty.Input.ScrollMods(
                 precision: true,
-                momentum: momentumPhase == .began ? .began : .changed
+                momentum: isFirstForwarded ? .began : .changed
             )
         )
-        surface.sendMouseScroll(scrollEvent)
+        if rawX != 0 || forwardedY != 0 {
+            surface.sendMouseScroll(scrollEvent)
+            momentumForwardedToGhostty = true
+            requestRender()
+        }
         momentumPhase = .changed
-        requestRender()
     }
 
     private func stopMomentumScrolling() {
@@ -3157,12 +3287,14 @@ class GhosttyTerminalView: UIView {
 
     private func sendMomentumEnd() {
         guard let surface = surface else { return }
+        guard momentumForwardedToGhostty else { return }
         let endEvent = Ghostty.Input.MouseScrollEvent(
             x: 0,
             y: 0,
             mods: Ghostty.Input.ScrollMods(precision: true, momentum: .ended)
         )
         surface.sendMouseScroll(endEvent)
+        momentumForwardedToGhostty = false
         momentumPhase = .none
     }
 
@@ -5543,7 +5675,10 @@ class GhosttyTerminalView: UIView {
     private func configureIOSurfaceLayers(size: CGSize?) {
         let scale = self.contentScaleFactor
         guard let sublayers = layer.sublayers else { return }
-        let targetBounds = size.map { CGRect(origin: .zero, size: $0) } ?? bounds
+        // Full-screen zen overscroll shifts the rendered grid inside the
+        // viewport; keep the layers aligned with the shift on every resize.
+        let targetBounds = (size.map { CGRect(origin: .zero, size: $0) } ?? bounds)
+            .offsetBy(dx: 0, dy: zenOverscrollShift)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for sublayer in sublayers {
