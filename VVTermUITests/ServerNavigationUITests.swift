@@ -46,6 +46,8 @@ final class ServerNavigationUITests: XCTestCase {
         // baseline frame is measured with the list at rest.
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         let initialRowFrame = activeRow.frame
+        let initialServerRowFrame = serverRow.frame
+        let initialListFrame = list.frame
 
         tapVisible(activeRow)
         let terminal = productionTerminal(in: app)
