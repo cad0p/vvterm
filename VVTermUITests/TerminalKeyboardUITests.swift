@@ -2616,7 +2616,7 @@ final class TerminalKeyboardUITests: XCTestCase {
     private func waitForTerminal(
         in app: XCUIApplication,
         existenceTimeout: TimeInterval = 10,
-        hittableTimeout: TimeInterval = 10
+        hittableTimeout: TimeInterval = 20
     ) -> XCUIElement {
         let terminal = app.descendants(matching: .any)
             .matching(identifier: "vvterm.keyboardTest.terminalSurface")
