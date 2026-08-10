@@ -19,6 +19,7 @@ final class TerminalReconnectUITests: XCTestCase {
     func testColdRelaunchRestoresTabsSplitsSelectionAndReconnects() throws {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         let commonArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-ui-test-cold-relaunch",
@@ -52,6 +53,7 @@ final class TerminalReconnectUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(1))
 
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = commonArguments
         _ = launchForTest(app)
 
@@ -74,6 +76,7 @@ final class TerminalReconnectUITests: XCTestCase {
     func testProductionSSHBackgroundPreservesSessionKeyboardAndTyping() throws {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-debug-log", "keyboard",
@@ -376,6 +379,7 @@ final class TerminalReconnectUITests: XCTestCase {
     ) -> (XCUIApplication, XCUIElement) {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-debug-log", "keyboard",

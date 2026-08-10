@@ -35,10 +35,7 @@ final class TerminalZenModeUITests: XCTestCase {
         // Re-export the fixture env into the app launch environment (same
         // pattern as ZmxScrollbackReloadUITests): the harness reads
         // VVTERM_REPRO_SSH_* from the app's ProcessInfo.
-        let env = ProcessInfo.processInfo.environment
-        app.launchEnvironment["VVTERM_REPRO_SSH_USERNAME"] = env["VVTERM_REPRO_SSH_USERNAME"] ?? ""
-        app.launchEnvironment["VVTERM_REPRO_SSH_PRIVATE_KEY"] = env["VVTERM_REPRO_SSH_PRIVATE_KEY"] ?? ""
-        app.launchEnvironment["VVTERM_REPRO_SSH_PORT"] = env["VVTERM_REPRO_SSH_PORT"] ?? "22229"
+        seedLoopbackFixtureEnv(into: app)
         _ = launchForTest(app, file: file, line: line)
         // The reconnect harness re-identifies the surface; the zen DEBUG
         // identifier is only the pre-harness default.
@@ -250,9 +247,7 @@ final class TerminalZenModeUITests: XCTestCase {
         defer { listener.close() }
 
         app.launchArguments = Self.zenHarnessArguments
-        let env = ProcessInfo.processInfo.environment
-        app.launchEnvironment["VVTERM_REPRO_SSH_USERNAME"] = env["VVTERM_REPRO_SSH_USERNAME"] ?? ""
-        app.launchEnvironment["VVTERM_REPRO_SSH_PRIVATE_KEY"] = env["VVTERM_REPRO_SSH_PRIVATE_KEY"] ?? ""
+        seedLoopbackFixtureEnv(into: app)
         // Point the harness at the silent listener instead of the fixture sshd.
         app.launchEnvironment["VVTERM_REPRO_SSH_PORT"] = String(listener.port)
         _ = launchForTest(app)

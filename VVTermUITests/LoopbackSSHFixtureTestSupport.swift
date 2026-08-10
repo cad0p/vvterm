@@ -54,3 +54,17 @@ func skipUnlessLoopbackFixtureAvailable(
 ) throws {
     try LoopbackSSHFixtureTestSupport.skipUnlessAvailable(file: file, line: line)
 }
+
+/// Seeds the loopback-SSH fixture env vars into the app's launch environment
+/// (the harness reads `VVTERM_REPRO_SSH_*` from the app's ProcessInfo). In CI
+/// the fixture env is injected into the test runner via the xctestrun plist;
+/// XCUIApplication does NOT inherit the runner env into the app, so every
+/// fixture-driven launch must copy the vars explicitly (same pattern as
+/// ZmxScrollbackReloadUITests). Locally (no env), empty values fall through
+/// to the dev-seeded UserDefaults suite.
+func seedLoopbackFixtureEnv(into app: XCUIApplication) {
+    let env = ProcessInfo.processInfo.environment
+    app.launchEnvironment["VVTERM_REPRO_SSH_USERNAME"] = env["VVTERM_REPRO_SSH_USERNAME"] ?? ""
+    app.launchEnvironment["VVTERM_REPRO_SSH_PRIVATE_KEY"] = env["VVTERM_REPRO_SSH_PRIVATE_KEY"] ?? ""
+    app.launchEnvironment["VVTERM_REPRO_SSH_PORT"] = env["VVTERM_REPRO_SSH_PORT"] ?? "22229"
+}

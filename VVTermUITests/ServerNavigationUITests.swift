@@ -186,6 +186,7 @@ final class ServerNavigationUITests: XCTestCase {
     private func launchNavigationHarness() -> XCUIApplication {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-ui-test-server-navigation",

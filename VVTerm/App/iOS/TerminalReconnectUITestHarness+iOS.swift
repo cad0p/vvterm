@@ -272,8 +272,14 @@ struct TerminalReconnectUITestHarness: View {
         // Harness tests assert the pre-zen chrome (nav bar, segmented picker,
         // floating controls). Keep the new zen defaults off unless a test
         // explicitly opts into startup zen; persisted values from a previous
-        // launch are re-clamped here for determinism.
-        if !Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-enable-startup-zen") {
+        // launch are re-clamped here for determinism. Symmetrically, tests
+        // that DO opt in force the defaults back on — otherwise a prior
+        // no-flag launch in the same simulator would leave zen defaults
+        // persisted false and silently disable startup zen.
+        if Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-enable-startup-zen") {
+            UserDefaults.standard.set(true, forKey: TerminalDefaults.zenModeStartupKey)
+            UserDefaults.standard.set(true, forKey: TerminalDefaults.zenModeFullScreenKey)
+        } else {
             UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeStartupKey)
             UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeFullScreenKey)
         }
