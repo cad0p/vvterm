@@ -132,13 +132,20 @@ fi
 # --- login-shell title fragment ----------------------------------------------
 # The app's PTY SSH session runs an interactive login shell; its first prompt
 # must emit an OSC 0 title so the reconnect/zen UI tests can wait for
-# `title=DEV199_READY_1` (the dev fixture's PS1 carries the same marker).
-# macOS bash/zsh do not emit a title by default. Interactive-only, so the
-# non-interactive smoke command below is unaffected. Idempotent.
+# `title=DEV199_READY_1` (the dev fixture's PS1 carries the same marker), and
+# OSC 7 so the cwd diagnostic tracks the shell's directory (the tests type
+# into the shell and wait for `cwd=/tmp/DEV199_INPUT_X_1`). macOS bash/zsh do
+# not emit either by default. The `hello` command reproduces the dev
+# fixture's codex-prompt marker (`title=DEV212_CODEX_READY_1`) that
+# enterCodexModes() waits for. Interactive-only, so the non-interactive smoke
+# command below is unaffected. Idempotent.
 TITLE_FRAGMENT="# >>> vvterm-repro-title (repro rig; remove both marker lines to disable)
 case \$- in *i*) ;; *) return ;; esac
 if [ -t 1 ]; then
-  PS1=\"\[\e]0;DEV199_READY_1\a\]\${PS1:-\\$ }\"
+  mkdir -p /tmp/DEV199_INPUT_X_1
+  cd /tmp/DEV199_INPUT_X_1
+  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; }
+  PS1=\"\[\e]0;DEV199_READY_1\a\]\[\e]7;file://\$HOSTNAME\$(pwd)\a\]\${PS1:-\\$ }\"
 fi
 # <<< vvterm-repro-title"
 

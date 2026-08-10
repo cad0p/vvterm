@@ -1812,6 +1812,8 @@ class GhosttyTerminalView: UIView {
             if let scrollbar = notification.userInfo?[Notification.Name.ScrollbarKey]
                 as? Ghostty.Action.Scrollbar {
                 self.scrollbar = scrollbar
+                // Fresh edge state: a forwarded scroll has been confirmed.
+                self.zenOverscrollEdgeStale = false
             }
             // The scrollbar may not exist yet when full-screen zen engaged
             // (fresh connect); once the first state arrives, apply the
@@ -3155,6 +3157,16 @@ class GhosttyTerminalView: UIView {
 
     // MARK: - Full-Screen Zen Overscroll
 
+    /// Set while a forwarded scroll (a real ghostty scroll that crossed an
+    /// edge) is still unconfirmed: scrollbar notifications are delivered
+    /// asynchronously from the ghostty callback thread, so the edge state
+    /// read during the next deltas may be stale. While stale, deltas are
+    /// forwarded instead of being absorbed into the opposite edge's
+    /// overscroll, which would otherwise swallow the remainder of the same
+    /// gesture (the “intermittent bottom overscroll” / “scrolling down
+    /// doesn't work” reports). Cleared by the next scrollbar notification.
+    private var zenOverscrollEdgeStale = false
+
     /// Routes a vertical scroll delta (points, finger-down positive, in the
     /// same units sent to ghostty) through the full-screen zen overscroll
     /// policy. Returns the portion that should be forwarded to ghostty;
@@ -3163,6 +3175,34 @@ class GhosttyTerminalView: UIView {
     private func resolveZenOverscroll(rawDelta: Double) -> Double {
         guard zenOverscrollEnabled else { return rawDelta }
         let delta = CGFloat(rawDelta)
+        // The one-shot initial reveal (zenInitialAutoShift) is provisional:
+        // the first user scroll in ANY direction consumes it (magnitude-
+        // based, clamped at zero) so the reveal can never block scrolling
+        // into history or absorb the user's scroll motion. The reveal sits at
+        // the full top limit, so without this rule the first finger-downs are
+        // fully absorbed (“scrolling down doesn't work at all”). Once the
+        // user has moved the content, normal edge overscroll rules apply.
+        if delta != 0,
+           zenInitialAutoShift > 0,
+           abs(zenOverscrollShift - zenInitialAutoShift) < 0.5 {
+            let previous = zenOverscrollShift
+            let consumed = max(previous - abs(delta), 0)
+            let absorbed = previous - consumed
+            zenOverscrollShift = consumed
+            applyZenOverscrollShift()
+            if absorbed < abs(delta) {
+                // The reveal cleared and the remainder crossed the edge; its
+                // effect is not yet reflected in the scrollbar (async
+                // delivery).
+                zenOverscrollEdgeStale = true
+            }
+            return Double(delta - (delta >= 0 ? absorbed : -absorbed))
+        }
+        // While the edge state is stale, forward instead of absorbing into
+        // the opposite edge's overscroll.
+        if zenOverscrollEdgeStale, abs(zenOverscrollShift) < 0.5 {
+            return Double(delta)
+        }
         let limits = TerminalZenFullScreenPolicy.overscrollLimits(
             topInset: safeAreaInsets.top,
             bottomInset: safeAreaInsets.bottom,
@@ -3184,6 +3224,11 @@ class GhosttyTerminalView: UIView {
         if abs(resolved.shift - zenOverscrollShift) >= 0.5 {
             zenOverscrollShift = resolved.shift
             applyZenOverscrollShift()
+        }
+        if resolved.forwarded != 0, edge.atTop || edge.atBottom {
+            // A real scroll was forwarded while the viewport is pinned at an
+            // edge; the scrollbar has not confirmed the new state yet.
+            zenOverscrollEdgeStale = true
         }
         return Double(resolved.forwarded)
     }
@@ -6420,7 +6465,8 @@ extension GhosttyTerminalView {
             "zenInsets=\(zenDebugState.latchInsets)",
             "zenCellH=\(zenDebugState.latchCellHeight)",
             "themeName=\(UserDefaults.standard.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "nil")",
-            "themeUsePerAppearance=\(Self.themeUsePerAppearanceDiagnostic)"
+            "themeUsePerAppearance=\(Self.themeUsePerAppearanceDiagnostic)",
+            "zenFullScreenPref=\(UserDefaults.standard.bool(forKey: TerminalDefaults.zenModeFullScreenKey))"
         ]
         #else
         let zenDiagnostics: [String] = []

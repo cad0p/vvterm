@@ -51,6 +51,10 @@ struct TerminalReconnectUITestHarness: View {
     @StateObject private var fileTabs: RemoteFileTabManager
     @StateObject private var fileBrowser: RemoteFileBrowserStore
     @State private var fixtureState = FixtureState.preparing
+    // The route's zen state lives in scene-scoped storage; the harness reads
+    // the same key so the diagnostics can expose why startup zen did or did
+    // not engage (surfaced as zenRoute=on/off).
+    @SceneStorage("vvterm.zenMode.ios") private var sceneZenMode = false
 
     init() {
         _fileTabs = StateObject(
@@ -66,7 +70,8 @@ struct TerminalReconnectUITestHarness: View {
             .overlay(alignment: .topLeading) {
                 TerminalReconnectDiagnosticsLabel(
                     serverId: activeServer?.id,
-                    fallback: fixtureDiagnosticFallback
+                    fallback: fixtureDiagnosticFallback,
+                    zenRouteEnabled: sceneZenMode
                 )
                     .padding(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -395,6 +400,7 @@ struct TerminalReconnectUITestHarness: View {
 private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
     let serverId: UUID?
     let fallback: String
+    let zenRouteEnabled: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -413,7 +419,11 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
     }
 
     func updateUIView(_ label: UILabel, context: Context) {
-        context.coordinator.update(serverId: serverId, fallback: fallback)
+        context.coordinator.update(
+            serverId: serverId,
+            fallback: fallback,
+            zenRouteEnabled: zenRouteEnabled
+        )
     }
 
     static func dismantleUIView(_ label: UILabel, coordinator: Coordinator) {
@@ -425,6 +435,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
         private weak var configuredTerminal: GhosttyTerminalView?
         private var serverId: UUID?
         private var fallback = "setup=preparing"
+        private var zenRouteEnabled = false
         private var timer: Timer?
         private var lastConnectionState: ConnectionState?
         private var connectionAttemptCount = 0
@@ -439,9 +450,10 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             refresh()
         }
 
-        func update(serverId: UUID?, fallback: String) {
+        func update(serverId: UUID?, fallback: String, zenRouteEnabled: Bool) {
             self.serverId = serverId
             self.fallback = fallback
+            self.zenRouteEnabled = zenRouteEnabled
             refresh()
         }
 
@@ -504,6 +516,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             )
             publish([
                 "setup=ready",
+                "zenRoute=\(zenRouteEnabled ? "on" : "off")",
                 "state=\(connectionToken(state))",
                 "title=\(title)",
                 "cwd=\(workingDirectory)",

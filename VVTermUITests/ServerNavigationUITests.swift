@@ -71,7 +71,10 @@ final class ServerNavigationUITests: XCTestCase {
             initialRowFrame,
             activeRow: activeRow,
             list: list,
-            app: app
+            app: app,
+            serverRow: serverRow,
+            initialServerRowFrame: initialServerRowFrame,
+            initialListFrame: initialListFrame
         )
 
         tapVisible(activeRow)
@@ -287,7 +290,10 @@ final class ServerNavigationUITests: XCTestCase {
         _ expectedFrame: CGRect,
         activeRow: XCUIElement,
         list: XCUIElement,
-        app: XCUIApplication
+        app: XCUIApplication,
+        serverRow: XCUIElement? = nil,
+        initialServerRowFrame: CGRect = .zero,
+        initialListFrame: CGRect = .zero
     ) {
         XCTAssertTrue(
             activeRow.waitForExistence(timeout: 5) && isVisible(activeRow, in: list),
@@ -296,12 +302,17 @@ final class ServerNavigationUITests: XCTestCase {
         // The pop transition + keyboard dismissal animate; measure with the
         // list at rest so the comparison is frame-stable.
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        let actualFrame = activeRow.frame
+        let actualServerFrame = serverRow?.frame
+        let actualListFrame = list.frame
         XCTAssertEqual(
-            activeRow.frame.midY,
+            actualFrame.midY,
             expectedFrame.midY,
             accuracy: 8,
             "Server-list scroll position changed during pop (expected \(expectedFrame.midY), "
-                + "actual \(activeRow.frame.midY)). \(diagnosticText(in: app))"
+                + "actual \(actualFrame.midY); server row midY "
+                + "\(initialServerRowFrame.midY) -> \(actualServerFrame?.midY ?? 0); list frame "
+                + "\(initialListFrame) -> \(actualListFrame)). \(diagnosticText(in: app))"
         )
     }
 
