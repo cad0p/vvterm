@@ -1242,9 +1242,11 @@ class GhosttyTerminalView: UIView {
     /// model and reached the terminal at all.
     private var keyboardUITestLastSent = "none"
     private var keyboardUITestEnterSent = 0
+    private var keyboardUITestSentCount = 0
 
     private func keyboardUITestNoteSent(_ label: String) {
         keyboardUITestLastSent = label
+        keyboardUITestSentCount += 1
         if label == "enter" {
             keyboardUITestEnterSent += 1
         }
@@ -6576,6 +6578,7 @@ extension GhosttyTerminalView {
             "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
             "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
             "lastSent=\(keyboardUITestLastSent)",
+            "sentCount=\(keyboardUITestSentCount)",
             "enterSent=\(keyboardUITestEnterSent)",
             "hideRequests=\(keyboardHideRequestCount)",
             "inputRebuilds=\(keyboardInputSessionRebuildCount)",

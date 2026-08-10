@@ -133,6 +133,15 @@ final class ServerNavigationUITests: XCTestCase {
             diagnostics: diagnostics,
             app: app
         )
+        // Keep the second cycle symmetric with the first: the keyboard is
+        // shown and then hidden so the pop happens under the same layout
+        // conditions (observed in CI: with the keyboard hidden the whole
+        // cycle, the post-pop list scroll position drifted one row).
+        terminal.tap()
+        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
+        let hideKeyboardAgain = app.buttons["vvterm.keyboard.accessory.hide"]
+        XCTAssertTrue(hideKeyboardAgain.waitForExistence(timeout: 8), diagnosticText(in: app))
+        hideKeyboardAgain.tap()
         wait(for: diagnostics, containing: "keyboardVisible=false", app: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists, diagnosticText(in: app))
 

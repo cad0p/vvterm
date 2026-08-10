@@ -186,8 +186,20 @@ final class TerminalReconnectUITests: XCTestCase {
 
             let key = app.keys["x"]
             XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
+            guard let sentBefore = diagnosticIntegerValue("sentCount", in: diagnostics) else {
+                XCTFail("Missing sentCount baseline. \(diagnosticText(in: app))")
+                return
+            }
             tapPromptly(key, diagnostics: diagnostics, app: app)
-            var cwdAdvanced = waitForDiagnosticsReturningBool(
+            // The keystroke must at least leave the app toward the terminal
+            // (the IME model can hold the char while nothing is delivered).
+            var delivered = waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: "sentCount=\(sentBefore + 1)",
+                timeout: 5,
+                app: app
+            )
+            var cwdAdvanced = delivered && waitForDiagnosticsReturningBool(
                 diagnostics,
                 containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
                 timeout: 8,
@@ -201,14 +213,28 @@ final class TerminalReconnectUITests: XCTestCase {
                     String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
                 )
                 RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                guard let sentMid = diagnosticIntegerValue("sentCount", in: diagnostics) else {
+                    XCTFail("Missing sentCount mid-retry. \(diagnosticText(in: app))")
+                    return
+                }
                 tapPromptly(key, diagnostics: diagnostics, app: app)
-                cwdAdvanced = waitForDiagnosticsReturningBool(
+                delivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "sentCount=\(sentMid + 1)",
+                    timeout: 5,
+                    app: app
+                )
+                cwdAdvanced = delivered && waitForDiagnosticsReturningBool(
                     diagnostics,
                     containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
                     timeout: 8,
                     app: app
                 )
             }
+            XCTAssertTrue(
+                delivered,
+                "The x keystroke never left the app toward the terminal. \(diagnosticText(in: app))"
+            )
             XCTAssertTrue(
                 cwdAdvanced,
                 "Shell cwd never advanced to X_\(connectionNumber). \(diagnosticText(in: app))"
@@ -514,9 +540,47 @@ final class TerminalReconnectUITests: XCTestCase {
                 }
             }
             guard typed == "hello" else { continue }
-            let returnKey = app.buttons["Return"]
-            XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-            returnKey.tap()
+            // The Return key: the AX element can exist as either a key or a
+            // button depending on the keyboard presentation, and a tap that
+            // misses produces NO enter event at all (observed in CI:
+            // enterSent=0 while the model held the typed text). Try the key,
+            // then the button, then a literal newline, and confirm the
+            // terminal actually received an enter before waiting for the
+            // shell marker.
+            var enterDelivered = false
+            let returnKeyElement = app.keys["Return"]
+            let returnButton = app.buttons["Return"]
+            if returnKeyElement.waitForExistence(timeout: 3) {
+                returnKeyElement.tap()
+                enterDelivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "enterSent=1",
+                    timeout: 3,
+                    app: app
+                )
+            }
+            if !enterDelivered, returnButton.waitForExistence(timeout: 3) {
+                returnButton.tap()
+                enterDelivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "enterSent=1",
+                    timeout: 3,
+                    app: app
+                )
+            }
+            if !enterDelivered {
+                terminal.typeText("\n")
+                enterDelivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "enterSent=1",
+                    timeout: 3,
+                    app: app
+                )
+            }
+            XCTAssertTrue(
+                enterDelivered,
+                "Return never produced an enter event to the terminal. \(diagnosticText(in: app))"
+            )
             // The fixture's hello() now emits both the OSC 0 title and a
             // direct OSC 7 cwd update (cd /tmp/DEV212_INPUT_X_1). Accept
             // either marker: the OSC 7 channel is the one proven to reach
