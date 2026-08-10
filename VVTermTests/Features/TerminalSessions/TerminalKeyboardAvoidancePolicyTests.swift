@@ -429,10 +429,50 @@ extension TerminalKeyboardAvoidancePolicyTests {
         )
 
         #expect(layout.preservesTerminalSurfaceSize)
-        // Caret maxY 880 vs keyboard top 518: required lift 374. The caret
-        // sits 6pt below the grid bottom (874, IME font-metric overflow), so
-        // the stale-caret tolerance admits it; the cap is the overlap
-        // (874 - 518 = 356) plus the clearance (12) = 368.
+        // Caret maxY 880 vs keyboard top 518. The caret sits 6pt below the
+        // grid bottom (874, IME font-metric overflow), admitted by the
+        // proportional tolerance; the lift uses the clamped caret (874):
+        // required 874 + 12 - 518 = 368, capped at overlap (356) + clearance
+        // (12) = 368.
         #expect(layout.verticalOffset == -368)
+    }
+}
+
+extension TerminalKeyboardAvoidancePolicyTests {
+    @Test
+    func ciRuntimeGridBottomCaretLiftsWithProportionalTolerance() {
+        // CI simulator metrics (Xcode 27 beta runner): the grid is 54 rows
+        // x 15.56pt = 840 but the caret rect uses a ~16.3pt cell, so the
+        // grid-bottom caret sits 40pt below grid.maxY. The proportional
+        // tolerance admits it and the lift clamps to the grid.
+        let terminalFrame = CGRect(x: 0, y: 0, width: 402, height: 840)
+        let caret = CGRect(x: 8, y: 864, width: 8, height: 16)
+        let keyboard = CGRect(x: 0, y: 525, width: 402, height: 349)
+
+        let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: terminalFrame,
+            cursorFrame: caret,
+            keyboardFrame: keyboard
+        )
+
+        // Clamped caret 840: required 840 + 12 - 525 = 327, capped at
+        // overlap (315) + clearance (12) = 327.
+        #expect(offset == -327)
+        // The clamped (visible) caret clears the keyboard.
+        #expect(min(caret.maxY, terminalFrame.maxY) + offset <= keyboard.minY)
+    }
+
+    @Test
+    func deepScrollbackCaretBeyondProportionalToleranceDoesNotLift() {
+        // A caret deep in the scrollback content (content-relative rect) is
+        // orders of magnitude below the grid and must still be rejected.
+        let terminalFrame = CGRect(x: 0, y: 0, width: 390, height: 709)
+        let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 79_900, width: 8, height: 16),
+            keyboardFrame: CGRect(x: 0, y: 495, width: 390, height: 349)
+        )
+
+        #expect(offset == 0)
     }
 }

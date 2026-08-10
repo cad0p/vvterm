@@ -23,10 +23,13 @@ enum TerminalKeyboardAvoidancePolicy {
 
     /// How far below the grid bottom a caret rect may legitimately sit.
     /// The IME caret rect is computed with a slightly different cell height
-    /// than the surface (font-metric rounding), so a caret on the grid's
-    /// bottom row can extend a few points past grid.maxY. Carets beyond one
-    /// cell (scrollback navigation, stale rects) are still rejected.
-    nonisolated static let staleCaretTolerance: CGFloat = 24
+    /// than the surface (font-metric rounding), and the two metrics can
+    /// diverge by a few percent across runtimes (e.g. the CI simulator
+    /// reports a caret ~4.7% taller than the grid). A proportional
+    /// tolerance admits the grid-bottom caret on any runtime while still
+    /// rejecting stale carets from scrollback navigation (the content caret
+    /// sits orders of magnitude below the grid).
+    nonisolated static let staleCaretToleranceFraction: CGFloat = 0.05
 
     nonisolated static func resolvedGeometry(
         screenFrame: CGRect,
@@ -91,9 +94,10 @@ enum TerminalKeyboardAvoidancePolicy {
               // Reject stale caret rects: a caret that lies outside the
               // terminal grid (e.g. not revalidated after scrollback
               // navigation or a grid resize) must never lift the terminal.
-              // The bottom tolerance allows the IME font-metric overflow
-              // on the grid's bottom row.
-              cursorFrame.maxY <= terminalFrame.maxY + staleCaretTolerance,
+              // The proportional bottom tolerance admits the grid-bottom
+              // caret's font-metric overflow (up to a few percent of the
+              // grid height across runtimes).
+              cursorFrame.maxY <= terminalFrame.maxY * (1 + staleCaretToleranceFraction),
               cursorFrame.minY >= terminalFrame.minY - 1,
               terminalFrame.intersects(keyboardFrame)
         else {
@@ -104,7 +108,11 @@ enum TerminalKeyboardAvoidancePolicy {
             && cursorFrame.minX < keyboardFrame.maxX
         guard cursorOverlapsKeyboardHorizontally else { return 0 }
 
-        let requiredLift = cursorFrame.maxY + max(cursorClearance, 0) - keyboardFrame.minY
+        // The caret may extend a few points past the grid bottom (font
+        // metrics); that part is not visible, so the lift is computed from
+        // the caret clamped to the grid.
+        let caretMaxY = min(cursorFrame.maxY, terminalFrame.maxY)
+        let requiredLift = caretMaxY + max(cursorClearance, 0) - keyboardFrame.minY
         guard requiredLift > 0 else { return 0 }
 
         // The lift may never exceed the keyboard overlap with the terminal:

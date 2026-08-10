@@ -1006,6 +1006,10 @@ struct TerminalKeyboardUITestHarness: View {
         let terminalFrame = terminal.convert(terminal.bounds, to: window)
         let visibleTerminalFrame = terminalFrame.intersection(window.bounds)
         let cursorFrame = terminal.convert(terminal.keyboardAvoidanceCursorRect(), to: window)
+        // The caret rect can extend a few points past the terminal's bottom
+        // (IME font-metric overflow); what the user sees — and what the
+        // avoidance lift can move — is the clamped caret.
+        let visibleCursorBottom = min(cursorFrame.maxY, terminalFrame.maxY)
         let keyboardTop = keyboardFrame.map {
             window.convert($0, from: window.screen.coordinateSpace).minY
         }
@@ -1014,7 +1018,7 @@ struct TerminalKeyboardUITestHarness: View {
             "terminalTop=\(metricText(terminalFrame.minY))",
             "terminalHeight=\(metricText(terminalFrame.height))",
             "visibleTerminalHeight=\(metricText(visibleTerminalFrame.isNull ? 0 : visibleTerminalFrame.height))",
-            "cursorBottom=\(metricText(cursorFrame.maxY))",
+            "cursorBottom=\(metricText(visibleCursorBottom))",
             "keyboardTop=\(keyboardTop.map(metricText) ?? "none")",
             "policy=\(terminal.lastKeyboardAvoidanceLayoutDescription)",
         ].joined(separator: " ")
