@@ -439,7 +439,7 @@ final class TerminalZenModeUITests: XCTestCase {
                     // Hold the connection open (no SSH banner) for up to 30s
                     // so the app stays in "connecting".
                     Thread.sleep(forTimeInterval: 30)
-                    close(clientFD)
+                    Darwin.close(clientFD)
                 }
             }
         }
