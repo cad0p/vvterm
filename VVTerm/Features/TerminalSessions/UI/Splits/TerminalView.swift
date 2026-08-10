@@ -15,6 +15,24 @@ import AppKit
 import UIKit
 #endif
 
+// MARK: - Full-Screen Zen Environment
+
+/// Whether the containing terminal pane is in full-screen zen mode (terminal
+/// content extends behind the display notch / window chrome). Views inside the
+/// pane use this to keep their own chrome (connection banners, floating
+/// controls) inside the safe region. Set by the `terminalZenFullScreen`
+/// modifier on both platforms.
+private struct TerminalZenFullScreenEnvironmentKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var terminalZenFullScreenEnabled: Bool {
+        get { self[TerminalZenFullScreenEnvironmentKey.self] }
+        set { self[TerminalZenFullScreenEnvironmentKey.self] = newValue }
+    }
+}
+
 // MARK: - Terminal Tab View
 
 /// Renders a single terminal tab with its split layout
@@ -516,6 +534,7 @@ struct TerminalPaneView: View {
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.terminalZenFullScreenEnabled) private var zenFullScreenEnabled
 
     @State private var isReady = false
     @State private var credentials: ServerCredentials?
@@ -745,12 +764,30 @@ struct TerminalPaneView: View {
         bottomOperationNotice == nil ? 0 : 104
     }
 
+    /// Top inset for in-pane banners (connection status / notices) when
+    /// full-screen zen makes the terminal extend behind the notch. The
+    /// terminal view is positioned at the screen edge, so its UIKit/AppKit
+    /// safe-area top is the real obscured height even though SwiftUI's safe
+    /// area is ignored for the terminal content.
+    private var zenTopBannerInset: CGFloat {
+        guard zenFullScreenEnabled,
+              let terminal = TerminalTabManager.shared.getTerminal(for: paneId) else {
+            return 0
+        }
+        #if os(iOS)
+        return terminal.safeAreaInsets.top
+        #else
+        return terminal.window?.contentView?.safeAreaInsets.top ?? 0
+        #endif
+    }
+
     var body: some View {
         NoticeHost(
             topBanner: topBannerNotice,
             bottomOperation: bottomOperationNotice,
             bannerSurfaceStyle: noticeSurfaceStyle,
-            operationSurfaceStyle: noticeSurfaceStyle
+            operationSurfaceStyle: noticeSurfaceStyle,
+            topBannerAdditionalInset: zenTopBannerInset
         ) {
             ZStack {
                 terminalBackgroundColor
@@ -764,6 +801,7 @@ struct TerminalPaneView: View {
                     connectionAttemptID: connectWatchdogToken,
                     surfaceStyle: noticeSurfaceStyle,
                     isActive: shouldFocus,
+                    topBannerInset: zenTopBannerInset,
                     onRetry: retryConnection,
                     onTrustNewHostKey: { showingRetrustHostConfirmation = true }
                 )

@@ -136,6 +136,11 @@ struct NoticeHost<Content: View>: View {
     var bottomInsetBehavior: NoticeBottomInsetBehavior = .safeAreaBottom
     var bannerSurfaceStyle: NoticeSurfaceStyle = .standard
     var operationSurfaceStyle: NoticeSurfaceStyle = .standard
+    /// Extra top padding for the top banner, applied on top of the inset
+    /// behavior. Full-screen zen terminals use this to drop the banner below
+    /// the display notch / window chrome that the terminal content extends
+    /// behind.
+    var topBannerAdditionalInset: CGFloat = 0
     let content: Content
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -148,6 +153,7 @@ struct NoticeHost<Content: View>: View {
         bottomInsetBehavior: NoticeBottomInsetBehavior = .safeAreaBottom,
         bannerSurfaceStyle: NoticeSurfaceStyle = .standard,
         operationSurfaceStyle: NoticeSurfaceStyle = .standard,
+        topBannerAdditionalInset: CGFloat = 0,
         @ViewBuilder content: () -> Content
     ) {
         self.topBanner = topBanner
@@ -156,6 +162,7 @@ struct NoticeHost<Content: View>: View {
         self.bottomInsetBehavior = bottomInsetBehavior
         self.bannerSurfaceStyle = bannerSurfaceStyle
         self.operationSurfaceStyle = operationSurfaceStyle
+        self.topBannerAdditionalInset = topBannerAdditionalInset
         self.content = content()
     }
 
@@ -172,7 +179,7 @@ struct NoticeHost<Content: View>: View {
                                     .padding(.horizontal, topHorizontalPadding)
                                     .padding(.top, topPadding(for: proxy.safeAreaInsets))
                                     .transition(.move(edge: .top).combined(with: .opacity))
-                                    .allowsHitTesting(true)
+                                    .allowsHitTesting(topBanner.isInteractive)
                             }
 
                             Spacer(minLength: 0)
@@ -227,12 +234,14 @@ struct NoticeHost<Content: View>: View {
     }
 
     private func topPadding(for safeAreaInsets: EdgeInsets) -> CGFloat {
+        let base: CGFloat
         switch topInsetBehavior {
         case .contentTop:
-            return topVerticalPadding
+            base = topVerticalPadding
         case .safeAreaTop:
-            return safeAreaInsets.top + topVerticalPadding
+            base = safeAreaInsets.top + topVerticalPadding
         }
+        return base + topBannerAdditionalInset
     }
 
     private var bottomHorizontalPadding: CGFloat {

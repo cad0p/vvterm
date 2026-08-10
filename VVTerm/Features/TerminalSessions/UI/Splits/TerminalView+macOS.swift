@@ -41,6 +41,7 @@ extension View {
                 terminalProvider: terminalProvider
             )
         )
+        .environment(\.terminalZenFullScreenEnabled, enabled)
     }
 }
 

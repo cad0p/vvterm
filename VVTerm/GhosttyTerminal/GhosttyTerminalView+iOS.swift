@@ -1198,13 +1198,34 @@ class GhosttyTerminalView: UIView {
     var zenOverscrollEnabled = false {
         didSet {
             guard oldValue != zenOverscrollEnabled else { return }
-            resetZenOverscroll()
+            if zenOverscrollEnabled {
+                // Entering full-screen zen: reveal the rows that sit behind
+                // the top cutout (the shell prompt right after connect) by
+                // pre-applying the top overscroll shift once.
+                hasAppliedInitialZenOverscroll = false
+                applyInitialZenOverscrollIfNeeded()
+            } else {
+                hasAppliedInitialZenOverscroll = false
+                zenInitialAutoShift = 0
+                resetZenOverscroll()
+            }
         }
     }
 
     /// Current overscroll shift in points (positive = grid shifted down,
     /// revealing rows that sat behind the top cutout).
     private var zenOverscrollShift: CGFloat = 0
+
+    /// The shift value the one-shot initial reveal applied. While the user
+    /// has not touched the content (shift still equals this value), layout
+    /// changes may re-adjust it to a larger limit (e.g. the terminal only
+    /// reached the screen edge — and thus the real notch inset — after the
+    /// full-screen zen layout pass finished).
+    private var zenInitialAutoShift: CGFloat = 0
+
+    /// Whether the one-shot initial reveal shift has been applied for the
+    /// current full-screen zen entry.
+    private var hasAppliedInitialZenOverscroll = false
 
     /// Tracks whether ghostty received any momentum event in the current
     /// momentum run so the trailing `.ended` is only sent when ghostty saw
@@ -1773,6 +1794,11 @@ class GhosttyTerminalView: UIView {
                 as? Ghostty.Action.Scrollbar {
                 self.scrollbar = scrollbar
             }
+            // The scrollbar may not exist yet when full-screen zen engaged
+            // (fresh connect); once the first state arrives, apply the
+            // one-shot initial reveal shift if the terminal is at the top
+            // edge (empty scrollback or scrolled to the start).
+            self.applyInitialZenOverscrollIfNeeded()
         }
     }
 
@@ -2625,6 +2651,11 @@ class GhosttyTerminalView: UIView {
         // Tell Ghostty the new size after the view has laid out.
         sizeDidChange(bounds.size)
 
+        // The frame may have just reached the screen edge (full-screen zen
+        // layout pass), which changes the safe-area insets the initial reveal
+        // shift is derived from.
+        readjustInitialZenOverscrollIfNeeded()
+
     }
 
     override func didMoveToWindow() {
@@ -3156,6 +3187,68 @@ class GhosttyTerminalView: UIView {
     private func resetZenOverscroll() {
         guard abs(zenOverscrollShift) >= 0.5 else { return }
         zenOverscrollShift = 0
+        applyZenOverscrollShift()
+    }
+
+    /// One-shot reveal of the rows hidden behind the top cutout when
+    /// full-screen zen engages: if the viewport is pinned at the top edge
+    /// (fresh shell, empty scrollback, or scrolled back to the start), apply
+    /// the full top overscroll limit so the initial prompt clears the notch
+    /// without any user scroll. Skipped once the user has scrolled into
+    /// history (the shift would fight the scroll) or after the shift has
+    /// been consumed by an interaction.
+    private func applyInitialZenOverscrollIfNeeded() {
+        guard zenOverscrollEnabled, !hasAppliedInitialZenOverscroll else { return }
+        guard abs(zenOverscrollShift) < 0.5 else {
+            // The user already moved the content; never override.
+            hasAppliedInitialZenOverscroll = true
+            return
+        }
+
+        let edge = TerminalZenFullScreenPolicy.edgeState(
+            offset: scrollbar?.offset ?? 0,
+            total: scrollbar?.total ?? 0,
+            len: scrollbar?.len ?? 0
+        )
+        // Unknown scrollbar state (no output yet) or pinned at the top edge:
+        // the top rows are (or will be) behind the cutout — reveal them.
+        guard scrollbar == nil || edge.atTop else {
+            // Viewport sits mid-history or at live with scrollback: the
+            // visible content is not behind the cutout; nothing to reveal.
+            hasAppliedInitialZenOverscroll = true
+            return
+        }
+
+        hasAppliedInitialZenOverscroll = true
+        let limits = TerminalZenFullScreenPolicy.overscrollLimits(
+            topInset: safeAreaInsets.top,
+            bottomInset: safeAreaInsets.bottom,
+            cellHeight: cellSize.height
+        )
+        zenInitialAutoShift = limits.top
+        zenOverscrollShift = limits.top
+        applyZenOverscrollShift()
+    }
+
+    /// Re-adjusts an untouched initial reveal shift when the layout settles
+    /// with larger safe-area insets (the terminal frame reaches the screen
+    /// edge only after the full-screen zen layout pass, so the first
+    /// application may have read a zero top inset). Never touches a shift
+    /// the user has already moved or consumed.
+    private func readjustInitialZenOverscrollIfNeeded() {
+        guard zenOverscrollEnabled,
+              zenInitialAutoShift > 0,
+              abs(zenOverscrollShift - zenInitialAutoShift) < 0.5 else {
+            return
+        }
+        let limits = TerminalZenFullScreenPolicy.overscrollLimits(
+            topInset: safeAreaInsets.top,
+            bottomInset: safeAreaInsets.bottom,
+            cellHeight: cellSize.height
+        )
+        guard limits.top > zenInitialAutoShift + 0.5 else { return }
+        zenInitialAutoShift = limits.top
+        zenOverscrollShift = limits.top
         applyZenOverscrollShift()
     }
 

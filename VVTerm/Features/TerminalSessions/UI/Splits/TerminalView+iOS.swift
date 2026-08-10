@@ -51,7 +51,9 @@ extension View {
     }
 
     /// Propagates the full-screen zen state to the pane's registered terminal
-    /// views so they enable edge overscroll (and reset it when leaving zen).
+    /// views so they enable edge overscroll (and reset it when leaving zen),
+    /// and to the pane's overlays (connection banners) so they clear the
+    /// notch.
     func terminalZenFullScreen(
         enabled: Bool,
         paneIds: [UUID],
@@ -66,6 +68,7 @@ extension View {
                 terminalProvider: terminalProvider
             )
         )
+        .environment(\.terminalZenFullScreenEnabled, enabled)
     }
 }
 

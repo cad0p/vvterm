@@ -397,9 +397,14 @@ class TerminalScrollView: NSView, NSUserInterfaceValidations {
     /// Routes a vertical scroll delta through the overscroll policy.
     private func resolveOverscroll(deltaY: CGFloat) -> (forwardedY: CGFloat, didChangeShift: Bool) {
         guard zenOverscrollEnabled else { return (deltaY, false) }
+        // This view overrides safeAreaInsets to zero (the whole scroll view
+        // is a safe area); the chrome height the terminal extends behind in
+        // full-screen zen is the window content view's top inset.
+        let topInset = window?.contentView?.safeAreaInsets.top ?? 0
+        let bottomInset = window?.contentView?.safeAreaInsets.bottom ?? 0
         let limits = TerminalZenFullScreenPolicy.overscrollLimits(
-            topInset: safeAreaInsets.top,
-            bottomInset: safeAreaInsets.bottom,
+            topInset: topInset,
+            bottomInset: bottomInset,
             cellHeight: surfaceView.cellSize.height
         )
         let edge = TerminalZenFullScreenPolicy.edgeState(

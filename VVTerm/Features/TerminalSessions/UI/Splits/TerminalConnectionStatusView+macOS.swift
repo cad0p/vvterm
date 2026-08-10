@@ -6,6 +6,9 @@ struct TerminalConnectionStatusView: View {
     let connectionAttemptID: UUID
     let surfaceStyle: NoticeSurfaceStyle
     let isActive: Bool
+    /// Shared with the iOS variant for a uniform call site; macOS renders
+    /// connection status as centered cards, so the inset is unused.
+    var topBannerInset: CGFloat = 0
     let onRetry: () -> Void
     let onTrustNewHostKey: () -> Void
 
