@@ -1243,12 +1243,31 @@ class GhosttyTerminalView: UIView {
     private var keyboardUITestLastSent = "none"
     private var keyboardUITestEnterSent = 0
     private var keyboardUITestSentCount = 0
+    /// Writes that left the terminal toward the transport (ghostty's write
+    /// callback dispatched to the SSH coordinator), plus the last payload
+    /// tail, so UI tests can tell where input stops (key events delivered to
+    /// the surface vs. bytes actually handed to the SSH transport).
+    private var keyboardUITestTransportSentCount = 0
+    private var keyboardUITestTransportTail = ""
 
     private func keyboardUITestNoteSent(_ label: String) {
         keyboardUITestLastSent = label
         keyboardUITestSentCount += 1
         if label == "enter" {
             keyboardUITestEnterSent += 1
+        }
+    }
+
+    private func keyboardUITestNoteTransportWrite(_ data: Data) {
+        keyboardUITestTransportSentCount += 1
+        let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
+        let normalized = text.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        if normalized.count > 12 {
+            keyboardUITestTransportTail = String(normalized.suffix(12))
+        } else {
+            keyboardUITestTransportTail = normalized
         }
     }
 
@@ -5776,7 +5795,7 @@ class GhosttyTerminalView: UIView {
         guard canRouteTerminalInput else { return }
         guard let surface = surface else { return }
         #if DEBUG
-        keyboardUITestNoteSent(text ?? "<key:\(key.rawValue)>")
+        keyboardUITestNoteSent(key == .enter ? "enter" : (text ?? "<key:\(key.rawValue)>"))
         #endif
         if invalidateLocalSession {
             invalidateLocalTextInputSession()
@@ -5986,7 +6005,12 @@ class GhosttyTerminalView: UIView {
             guard let data = data, len > 0 else { return }
             let swiftData = Data(bytes: data, count: len)
             // Call directly - Ghostty calls this from main thread, no queue hop needed
-            view.writeCallback?(swiftData)
+            if view.writeCallback != nil {
+                #if DEBUG
+                view.keyboardUITestNoteTransportWrite(swiftData)
+                #endif
+                view.writeCallback?(swiftData)
+            }
         }, userdata)
     }
 
@@ -6580,6 +6604,8 @@ extension GhosttyTerminalView {
             "lastSent=\(keyboardUITestLastSent)",
             "sentCount=\(keyboardUITestSentCount)",
             "enterSent=\(keyboardUITestEnterSent)",
+            "transportSent=\(keyboardUITestTransportSentCount)",
+            "transportTail=\(keyboardUITestTransportTail)",
             "hideRequests=\(keyboardHideRequestCount)",
             "inputRebuilds=\(keyboardInputSessionRebuildCount)",
             "inputReloads=\(keyboardInputViewReloadCount)"
