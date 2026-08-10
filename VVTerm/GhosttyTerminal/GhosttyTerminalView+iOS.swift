@@ -1231,6 +1231,21 @@ class GhosttyTerminalView: UIView {
     /// current full-screen zen entry.
     private var hasAppliedInitialZenOverscroll = false
 
+    #if DEBUG
+    /// Why the one-shot initial zen overscroll reveal did or did not apply,
+    /// surfaced in the UI-test diagnostics (``zenLatch=``).
+    private var zenDebugState = ZenOverscrollDebugState()
+
+    private struct ZenOverscrollDebugState {
+        var toggles = 0
+        var lastTransition = "unset"
+        var latchReason = "unset"
+        var latchScrollbar = "unset"
+        var latchInsets = "unset"
+        var latchCellHeight = "unset"
+    }
+    #endif
+
     /// Tracks whether ghostty received any momentum event in the current
     /// momentum run so the trailing `.ended` is only sent when ghostty saw
     /// the matching `.began`/`.changed` events.
@@ -6459,19 +6474,6 @@ extension GhosttyTerminalView {
     }
 
     #if DEBUG
-    /// Why the one-shot initial zen overscroll reveal did or did not apply,
-    /// surfaced in the UI-test diagnostics (``zenLatch=``).
-    private var zenDebugState = ZenOverscrollDebugState()
-
-    private struct ZenOverscrollDebugState {
-        var toggles = 0
-        var lastTransition = "unset"
-        var latchReason = "unset"
-        var latchScrollbar = "unset"
-        var latchInsets = "unset"
-        var latchCellHeight = "unset"
-    }
-
     private static var themeUsePerAppearanceDiagnostic: String {
         let defaults = UserDefaults.standard
         let key = CloudKitSyncConstants.terminalUsePerAppearanceThemeKey
