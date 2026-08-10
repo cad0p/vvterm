@@ -21,6 +21,13 @@ enum TerminalKeyboardAvoidancePolicy {
 
     nonisolated static let defaultCursorClearance: CGFloat = 12
 
+    /// How far below the grid bottom a caret rect may legitimately sit.
+    /// The IME caret rect is computed with a slightly different cell height
+    /// than the surface (font-metric rounding), so a caret on the grid's
+    /// bottom row can extend a few points past grid.maxY. Carets beyond one
+    /// cell (scrollback navigation, stale rects) are still rejected.
+    nonisolated static let staleCaretTolerance: CGFloat = 24
+
     nonisolated static func resolvedGeometry(
         screenFrame: CGRect,
         terminalFrame: CGRect,
@@ -84,7 +91,9 @@ enum TerminalKeyboardAvoidancePolicy {
               // Reject stale caret rects: a caret that lies outside the
               // terminal grid (e.g. not revalidated after scrollback
               // navigation or a grid resize) must never lift the terminal.
-              cursorFrame.maxY <= terminalFrame.maxY + 1,
+              // The bottom tolerance allows the IME font-metric overflow
+              // on the grid's bottom row.
+              cursorFrame.maxY <= terminalFrame.maxY + staleCaretTolerance,
               cursorFrame.minY >= terminalFrame.minY - 1,
               terminalFrame.intersects(keyboardFrame)
         else {
@@ -100,14 +109,16 @@ enum TerminalKeyboardAvoidancePolicy {
 
         // The lift may never exceed the keyboard overlap with the terminal:
         // the terminal's top must never leave the visible area, even when the
-        // caret sits far below the keyboard or the clearance is large.
+        // caret sits far below the keyboard. The cursor clearance is part of
+        // the required lift and may be included in the cap — otherwise a
+        // caret at the grid bottom can never fully clear the keyboard.
         let keyboardOverlap = min(
             max(terminalFrame.maxY - keyboardFrame.minY, 0),
             max(terminalFrame.height, 0)
         )
         guard keyboardOverlap > 0 else { return 0 }
 
-        return -min(requiredLift, keyboardOverlap)
+        return -min(requiredLift, keyboardOverlap + max(cursorClearance, 0))
     }
 
     nonisolated static func layout(
@@ -131,7 +142,11 @@ enum TerminalKeyboardAvoidancePolicy {
                 // daemon reflows and the whole screen redraws (the user's
                 // 'scrollback reload' flash on every keyboard toggle). The
                 // accessory may briefly overlay the bottom rows; that beats
-                // a resize + reflow storm.
+                // a resize + reflow storm. Once the accessory detaches, the
+                // grid returns to the natural full size — a no-op, since
+                // the view is already at that size, so no resize happens
+                // either way.
+                guard accessoryInset > 0 else { return .unobstructed }
                 return Layout(
                     bottomInset: 0,
                     verticalOffset: 0,

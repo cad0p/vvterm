@@ -1013,6 +1013,13 @@ final class TerminalKeyboardUITests: XCTestCase {
         let hiddenButton = app.buttons["vvterm.keyboardTest.geometry.hidden"]
         XCTAssertTrue(hiddenButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
         hiddenButton.tap()
+        // The harness's toolbar floats at the (simulated) keyboard position,
+        // never reaching the terminal bottom, so bottomAccessoryInset is 0
+        // and the hidden state is the steady state: keep-size releases the
+        // grid (a no-op size-wise in the real app, where the view is already
+        // at the natural size). The transient protection (accessory still
+        // attached at the bottom while the keyboard leaves) is covered by
+        // the policy unit tests.
         wait(
             for: diagnostics,
             labelContaining: "sizePreserved=false",

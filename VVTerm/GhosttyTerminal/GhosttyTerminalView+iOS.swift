@@ -2154,6 +2154,14 @@ class GhosttyTerminalView: UIView {
         CGRect(origin: .zero, size: keyboardAvoidancePreservedSurfaceSize ?? bounds.size)
     }
 
+    /// Last keyboard-avoidance layout decision, recorded by the avoidance
+    /// view model for diagnostics (harness-only visibility).
+    private(set) var lastKeyboardAvoidanceLayoutDescription: String = "none"
+
+    func recordKeyboardAvoidanceLayoutDescription(_ description: String) {
+        lastKeyboardAvoidanceLayoutDescription = description
+    }
+
     private var renderedSurfaceSize: CGSize {
         let scale = lastContentScale > 0 ? lastContentScale : contentScaleFactor
         let size = CGSize(
@@ -6195,6 +6203,12 @@ extension GhosttyTerminalView {
     func keyboardUITestMoveCursorToBottom() {
         let lines = (0..<200).map { "line-\($0)" }.joined(separator: "\r\n") + "\r\n"
         feedData(Data(lines.utf8))
+    }
+
+    func keyboardUITestMoveCursorToTop() {
+        // Cursor home: with the caret on the first row the keyboard-avoidance
+        // lift never engages, so the grid stays at its natural position.
+        feedData(Data("\u{1B}[H".utf8))
     }
 
     func keyboardUITestSetMarkedText(_ text: String) {

@@ -431,6 +431,11 @@ struct TerminalKeyboardUITestHarness: View {
                 }
                 .accessibilityIdentifier("vvterm.keyboardTest.cursor.bottom")
 
+                Button("Cursor Top") {
+                    terminalView?.keyboardUITestMoveCursorToTop()
+                }
+                .accessibilityIdentifier("vvterm.keyboardTest.cursor.top")
+
                 HStack(spacing: 8) {
                     Button("Other App") {
                         lifecycleStatus = .inactive
@@ -1010,7 +1015,8 @@ struct TerminalKeyboardUITestHarness: View {
             "terminalHeight=\(metricText(terminalFrame.height))",
             "visibleTerminalHeight=\(metricText(visibleTerminalFrame.isNull ? 0 : visibleTerminalFrame.height))",
             "cursorBottom=\(metricText(cursorFrame.maxY))",
-            "keyboardTop=\(keyboardTop.map(metricText) ?? "none")"
+            "keyboardTop=\(keyboardTop.map(metricText) ?? "none")",
+            "policy=\(terminal.lastKeyboardAvoidanceLayoutDescription)",
         ].joined(separator: " ")
     }
 

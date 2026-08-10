@@ -47,7 +47,16 @@ final class TerminalLinkTapUITests: XCTestCase {
 
         // The link sits at grid (10,0); tap its center via window-relative
         // coordinates (element-relative AX frames can be stale/offset, and
-        // the top screen edge is unreliable for synthetic taps).
+        // the top screen edge is unreliable for synthetic taps). The OSC8
+        // feed leaves the caret at the bottom of the grid, which engages the
+        // keyboard-avoidance lift and pushes row 10 off-screen — move the
+        // caret home first so the grid stays at its natural position.
+        let cursorTopButton = app.buttons["vvterm.keyboardTest.cursor.top"]
+        XCTAssertTrue(cursorTopButton.waitForExistence(timeout: 5), diagnosticsText(in: app))
+        cursorTopButton.tap()
+        waitForDiagnosticMetrics(in: app) { metrics in
+            (metrics["terminalTop"] ?? -1) == 0
+        }
         let terminalHeight = terminalHeight(in: app)
         tapGridCell(row: 10, col: 0, cols: cols, rows: rows, terminalHeight: terminalHeight, in: app).tap()
         wait(

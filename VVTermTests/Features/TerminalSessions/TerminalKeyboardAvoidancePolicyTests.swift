@@ -41,6 +41,23 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 
     @Test
+    func hiddenKeyboardWithoutAccessoryReleasesPreservationInKeepSizeMode() {
+        // Once the accessory detaches (the steady state after a keyboard
+        // hide), keep-size mode releases the grid — a no-op size-wise since
+        // the view is already at the natural size, so no resize/reflow
+        // happens.
+        let layout = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: true,
+            geometry: .hidden,
+            terminalFrame: terminalFrame,
+            cursorFrame: CGRect(x: 8, y: 760, width: 8, height: 18),
+            accessoryFrame: nil
+        )
+
+        #expect(layout == .unobstructed)
+    }
+
+    @Test
     func cursorAboveKeyboardDoesNotMoveTerminal() {
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
@@ -70,7 +87,8 @@ struct TerminalKeyboardAvoidancePolicyTests {
         // The caret (valid, inside the grid) sits far below the keyboard top
         // and the requested clearance would push the lift past the covered
         // height. The lift is capped at the keyboard overlap with the
-        // terminal (800 - 500 = 300), never at the old full-height cap.
+        // terminal plus the requested clearance (800 - 500 + 40 = 340), so
+        // the caret can still fully clear the keyboard.
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
             cursorFrame: CGRect(x: 8, y: 780, width: 8, height: 18),
@@ -78,13 +96,14 @@ struct TerminalKeyboardAvoidancePolicyTests {
             cursorClearance: 40
         )
 
-        #expect(offset == -300)
+        #expect(offset == -338)
     }
 
     @Test
     func liftNeverExceedsKeyboardOverlapWhenCaretIsFarBelowKeyboard() {
         // Caret far below the keyboard but still inside the terminal grid:
-        // the offset is -(keyboard overlap), NOT -(terminalHeight - 1).
+        // the offset is -(keyboard overlap + clearance), NOT
+        // -(terminalHeight - 1).
         let cursor = CGRect(x: 8, y: 780, width: 8, height: 18)
         let keyboard = CGRect(x: 0, y: 500, width: 390, height: 300)
         let overlap = terminalFrame.maxY - keyboard.minY
@@ -94,7 +113,9 @@ struct TerminalKeyboardAvoidancePolicyTests {
             keyboardFrame: keyboard
         )
 
-        #expect(offset == -overlap)
+        // Required lift 798 + 12 - 500 = 310, below the cap (overlap 300 +
+        // clearance 12 = 312): the required lift wins.
+        #expect(offset == -(cursor.maxY + TerminalKeyboardAvoidancePolicy.defaultCursorClearance - keyboard.minY))
         #expect(offset != -(terminalFrame.height - 1))
         #expect(cursor.maxY + offset <= keyboard.minY)
     }
@@ -130,8 +151,9 @@ struct TerminalKeyboardAvoidancePolicyTests {
         )
 
         #expect(cursor.maxY == terminalFrame.maxY)
-        #expect(offset == -(terminalFrame.maxY - keyboard.minY))
-        #expect(cursor.maxY + offset == keyboard.minY)
+        let overlap = terminalFrame.maxY - keyboard.minY
+        #expect(offset == -(overlap + TerminalKeyboardAvoidancePolicy.defaultCursorClearance))
+        #expect(cursor.maxY + offset == keyboard.minY - TerminalKeyboardAvoidancePolicy.defaultCursorClearance)
     }
 
 
@@ -381,3 +403,36 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 }
 #endif
+
+extension TerminalKeyboardAvoidancePolicyTests {
+    @Test
+    func harnessRepro_LiftAppliesWithBottomCaret() {
+        // Exact harness numbers from the failing CI test:
+        // grid (0,0,393,874) = 54 rows, caret at the grid bottom
+        // (8,864,8,16) — 6pt below grid.maxY via IME font-metric overflow,
+        // keyboard (0,518,393,356), accessory (0,792,393,48).
+        let terminalFrame = CGRect(x: 0, y: 0, width: 393, height: 874)
+        let caret = CGRect(x: 8, y: 864, width: 8, height: 16)
+        let keyboard = CGRect(x: 0, y: 518, width: 393, height: 356)
+
+        let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: CGRect(x: 0, y: 0, width: 393, height: 874),
+            terminalFrame: terminalFrame,
+            keyboardFrame: keyboard
+        )
+        let layout = TerminalKeyboardAvoidancePolicy.layout(
+            preservesTerminalSize: true,
+            geometry: geometry,
+            terminalFrame: terminalFrame,
+            cursorFrame: caret,
+            accessoryFrame: CGRect(x: 0, y: 792, width: 393, height: 48)
+        )
+
+        #expect(layout.preservesTerminalSurfaceSize)
+        // Caret maxY 880 vs keyboard top 518: required lift 374. The caret
+        // sits 6pt below the grid bottom (874, IME font-metric overflow), so
+        // the stale-caret tolerance admits it; the cap is the overlap
+        // (874 - 518 = 356) plus the clearance (12) = 368.
+        #expect(layout.verticalOffset == -368)
+    }
+}
