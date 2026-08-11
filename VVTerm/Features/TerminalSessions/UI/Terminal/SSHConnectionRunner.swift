@@ -93,9 +93,15 @@ enum SSHConnectionRunner {
                     }
 
                     for title in titleParser.parse(visibleData) {
+                        #if DEBUG
+                        SSHClientUITestDebug.osc0Hits += 1
+                        #endif
                         onTitleChange(title)
                     }
                     for pwd in pwdParser.parse(visibleData) {
+                        #if DEBUG
+                        SSHClientUITestDebug.osc7Hits += 1
+                        #endif
                         onPwdChange(pwd)
                     }
                     let shouldContinue = shouldContinueStreaming(visibleData, terminal)

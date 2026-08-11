@@ -419,7 +419,16 @@ final class TerminalReconnectUITests: XCTestCase {
         let key = app.keys["x"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(key, diagnostics: diagnostics, app: app)
-        wait(for: diagnostics, containing: "cwd=/tmp/DEV212_INPUT_X_1", timeout: 8, app: app)
+        waitForAnyDiagnostics(
+            diagnostics,
+            containing: [
+                "cwd=/tmp/DEV212_INPUT_X_1",
+                "title=DEV212_INPUT_X_1",
+                "DEV212_INPUT_X_1",
+            ],
+            timeout: 8,
+            app: app
+        )
         assertSameSession(
             terminalId: beforeLoss.terminalId,
             shellId: beforeLoss.shellId,

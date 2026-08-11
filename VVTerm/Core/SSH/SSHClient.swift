@@ -122,6 +122,8 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
     static var receivedCount = 0
     static var receivedBytes = 0
     static var receivedTail = ""
+    static var osc0Hits = 0
+    static var osc7Hits = 0
     static func noteWrite(_ data: Data) {
         writeCount += 1
         let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
