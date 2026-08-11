@@ -144,7 +144,7 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
         let normalized = text.replacingOccurrences(of: " ", with: "_")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
-        receivedTail = normalized.count > 60 ? String(normalized.suffix(60)) : normalized
+        receivedTail = normalized.count > 160 ? String(normalized.suffix(160)) : normalized
     }
     static func noteError(_ message: String) {
         writeError = String(message.prefix(60))
