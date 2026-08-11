@@ -237,7 +237,7 @@ final class TerminalReconnectUITests: XCTestCase {
             )
             XCTAssertTrue(
                 cwdAdvanced,
-                "Shell cwd never advanced to X_\(connectionNumber). \(diagnosticText(in: app))"
+                "Shell cwd never advanced to X_\(connectionNumber). \(diagnosticText(in: app)) sshdLog=[\(sshdLogTail())]"
             )
         }
 
@@ -604,12 +604,11 @@ final class TerminalReconnectUITests: XCTestCase {
             )
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
-        XCTFail("Codex-ready marker never arrived after typing the marker command. \(diagnosticText(in: app))")
+        XCTFail("Codex-ready marker never arrived after typing the marker command. \(diagnosticText(in: app)) sshdLog=[\(sshdLogTail())]")
     }
 
     /// Same polling wait as `wait(for:containing:app:)` but returns a Bool
-    /// instead of failing, so callers can retry an input action.
-    @MainActor
+    /// instead of failing, so callers can retry an input action.    @MainActor
     private func waitForDiagnosticsReturningBool(
         _ element: XCUIElement,
         containing expected: String,
@@ -646,6 +645,28 @@ final class TerminalReconnectUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         return false
+    }
+
+    /// Tail of the fixture sshd's DEBUG3 log (written by the setup script to
+    /// `$RUNNER_TEMP/vvterm-repro/sshd.log` on the CI host). The simulator
+    /// shares the host filesystem, so the test can read ground truth about
+    /// what the sshd did with channel writes (accepted bytes, PTY errors,
+    /// window adjustments) when the shell appears deaf to typed input.
+    private func sshdLogTail(limit: Int = 2500) -> String {
+        let candidates = [
+            "/Users/runner/work/_temp/vvterm-repro/sshd.log",
+            "/tmp/vvterm-repro/sshd.log",
+        ]
+        for path in candidates {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                continue
+            }
+            let tail = String(text.suffix(limit))
+                .replacingOccurrences(of: "\n", with: " | ")
+            return "\(path): \(tail)"
+        }
+        return "sshd.log unreadable"
     }
 
     @MainActor

@@ -120,6 +120,7 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
     static var writeTail = ""
     static var writeError = ""
     static var receivedCount = 0
+    static var receivedBytes = 0
     static var receivedTail = ""
     static func noteWrite(_ data: Data) {
         writeCount += 1
@@ -131,11 +132,12 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
     }
     static func noteReceived(_ data: Data) {
         receivedCount += 1
+        receivedBytes += data.count
         let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
         let normalized = text.replacingOccurrences(of: " ", with: "_")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
-        receivedTail = normalized.count > 12 ? String(normalized.suffix(12)) : normalized
+        receivedTail = normalized.count > 60 ? String(normalized.suffix(60)) : normalized
     }
     static func noteError(_ message: String) {
         writeError = String(message.prefix(60))

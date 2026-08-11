@@ -118,9 +118,6 @@ final class ServerNavigationUITests: XCTestCase {
         )
 
         popTerminal(in: app)
-        let secondCycleBaseline = activeRow.frame
-        print("NAV-FRAMES secondPre active=(\(Int(secondCycleBaseline.midY)),\(Int(secondCycleBaseline.height))) "
-            + "drift-from-first-post=\(Int(secondCycleBaseline.midY - initialRowFrame.midY))")
         assertListPosition(
             initialRowFrame,
             activeRow: activeRow,
@@ -357,6 +354,7 @@ final class ServerNavigationUITests: XCTestCase {
             return "\(Int(frame.minY))"
         }
         print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
+            + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
             + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
             + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?") "
             + "drift=\(Int(actualFrame.midY - expectedFrame.midY)) "
