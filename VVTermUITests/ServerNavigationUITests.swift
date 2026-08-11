@@ -355,12 +355,22 @@ final class ServerNavigationUITests: XCTestCase {
                 .replacingOccurrences(of: "vvterm.serverList.server.", with: "")
             return "\(Int(frame.minY)):\(cellID.prefix(8))"
         }
+        let activeCells = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'vvterm.serverList.activeConnection.'"))
+        let visibleActive = (0..<min(activeCells.count, 8)).compactMap { index -> String? in
+            let cell = activeCells.element(boundBy: index)
+            guard cell.exists else { return nil }
+            let frame = cell.frame
+            guard !frame.isEmpty, frame.maxY > 0, frame.minY < app.frame.height else { return nil }
+            return "\(Int(frame.minY))"
+        }
         print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
             + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
             + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
             + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?") "
             + "drift=\(Int(actualFrame.midY - expectedFrame.midY)) "
-            + "visibleServerRows=[\(visibleCells.joined(separator: ","))]")
+            + "visibleServerRows=[\(visibleCells.joined(separator: ","))] "
+            + "visibleActiveRows=[\(visibleActive.joined(separator: ","))]")
         XCTAssertEqual(
             actualFrame.midY,
             expectedFrame.midY,

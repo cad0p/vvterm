@@ -418,7 +418,7 @@ struct TerminalReconnectUITestHarness: View {
     /// row identities (random UUIDs on every reseed made the ForEach diff
     /// rebuild rows mid-test and shifted the list scroll position).
     private static func fillerServerID(_ index: Int) -> UUID {
-        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index))!
+        UUID(uuidString: String(format: "%08X-0000-0000-0000-000000000000", index))!
     }
 
     private func navigationFixtureServers(activeServer: Server) -> [Server] {
@@ -586,6 +586,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 terminalDiagnostics,
                 "servers=\(ServerManager.shared.servers.count)",
                 "serverIds=\(ServerManager.shared.servers.map { String($0.id.uuidString.prefix(8)) }.joined(separator: ","))",
+                "activeConnections=\(tabManager.tabsByServer.keys.map { String($0.uuidString.prefix(8)) }.joined(separator: ","))",
                 "workspaces=\(ServerManager.shared.workspaces.count)",
                 "zenRoute=\(zenRouteEnabled ? "on" : "off")",
             ]).joined(separator: " "))

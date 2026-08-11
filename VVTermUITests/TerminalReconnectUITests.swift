@@ -851,8 +851,15 @@ final class TerminalReconnectUITests: XCTestCase {
         if !digits.isEmpty {
             let terminal = productionTerminal(in: app)
             if terminal.exists {
-                terminal.typeText(digits)
+                // The fixture command needs "x 2": "x2" is a single word and
+                // the shell reports command-not-found (observed in CI with
+                // the write sequence reaching the channel in perfect order).
+                terminal.typeText(" " + digits)
             } else {
+                let spaceKey = app.keys["space"]
+                if spaceKey.waitForExistence(timeout: 3) {
+                    tapPromptly(spaceKey, diagnostics: diagnostics, app: app)
+                }
                 for char in digits {
                     let digitKey = app.keys[String(char)]
                     XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
