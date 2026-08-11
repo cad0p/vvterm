@@ -146,6 +146,10 @@ if [ -t 1 ]; then
   cd /tmp/DEV199_INPUT_X_1
   VVTERM_REPRO_X_COUNT=0
   VVTERM_REPRO_MODE=plain
+  # Codex mode is per-login: the hello() flag must not leak into the next
+  # test's fresh SSH session (observed in CI: the background test's x 2
+  # command took the codex branch and cd'd to DEV212_INPUT_X_1).
+  rm -f \"\$HOME/.vvterm_codex_mode\"
   hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; cd /tmp/DEV212_INPUT_X_1; touch \"\$HOME/.vvterm_codex_mode\"; printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\" ; VVTERM_REPRO_MODE=codex; }
   # x/z are real commands in ~/bin (typed as x<N> or z + Enter): the
   # readline bind -x handlers never fire in this CI login shell, while a
