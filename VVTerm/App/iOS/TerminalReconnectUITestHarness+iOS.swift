@@ -414,9 +414,17 @@ struct TerminalReconnectUITestHarness: View {
         return data
     }
 
+    /// Deterministic filler IDs: the 2 Hz metadata reseed must not change
+    /// row identities (random UUIDs on every reseed made the ForEach diff
+    /// rebuild rows mid-test and shifted the list scroll position).
+    private static func fillerServerID(_ index: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index))!
+    }
+
     private func navigationFixtureServers(activeServer: Server) -> [Server] {
         let fillerServers = (1...24).map { index in
             Server(
+                id: Self.fillerServerID(index),
                 workspaceId: Self.workspaceId,
                 environment: .development,
                 name: String(format: "Navigation Server %02d", index),
@@ -577,7 +585,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
                 "servers=\(ServerManager.shared.servers.count)",
-                "serverIds=\(ServerManager.shared.servers.prefix(3).map { String($0.id.uuidString.prefix(8)) }.joined(separator: ","))",
+                "serverIds=\(ServerManager.shared.servers.map { String($0.id.uuidString.prefix(8)) }.joined(separator: ","))",
                 "workspaces=\(ServerManager.shared.workspaces.count)",
                 "zenRoute=\(zenRouteEnabled ? "on" : "off")",
             ]).joined(separator: " "))
