@@ -351,7 +351,9 @@ final class ServerNavigationUITests: XCTestCase {
             guard cell.exists else { return nil }
             let frame = cell.frame
             guard !frame.isEmpty, frame.maxY > 0, frame.minY < app.frame.height else { return nil }
-            return "\(Int(frame.minY))"
+            let cellID = cell.identifier
+                .replacingOccurrences(of: "vvterm.serverList.server.", with: "")
+            return "\(Int(frame.minY)):\(cellID.prefix(8))"
         }
         print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
             + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
