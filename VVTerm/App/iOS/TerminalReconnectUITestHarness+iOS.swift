@@ -554,6 +554,8 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "sshWrites=\(SSHClientUITestDebug.writeCount)",
                 "sshWriteTail=\(SSHClientUITestDebug.writeTail)",
                 "sshWriteError=\(SSHClientUITestDebug.writeError)",
+                "sshReceived=\(SSHClientUITestDebug.receivedCount)",
+                "sshReceivedTail=\(SSHClientUITestDebug.receivedTail)",
             ]
             #else
             sshDiagnostics = []

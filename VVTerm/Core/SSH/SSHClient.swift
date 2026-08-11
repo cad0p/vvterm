@@ -119,6 +119,8 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
     static var writeCount = 0
     static var writeTail = ""
     static var writeError = ""
+    static var receivedCount = 0
+    static var receivedTail = ""
     static func noteWrite(_ data: Data) {
         writeCount += 1
         let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
@@ -126,6 +128,14 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
         writeTail = normalized.count > 12 ? String(normalized.suffix(12)) : normalized
+    }
+    static func noteReceived(_ data: Data) {
+        receivedCount += 1
+        let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
+        let normalized = text.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        receivedTail = normalized.count > 12 ? String(normalized.suffix(12)) : normalized
     }
     static func noteError(_ message: String) {
         writeError = String(message.prefix(60))
@@ -4124,7 +4134,11 @@ actor SSHSession {
                             startupTrace?.recordOnce(.firstTerminalByte, detail: "ssh")
                         }
                         let readCount = Int(bytesRead)
-                        state.batchBuffer.append(Data(bytes: buffer, count: readCount))
+                        let readData = Data(bytes: buffer, count: readCount)
+                        #if DEBUG
+                        SSHClientUITestDebug.noteReceived(readData)
+                        #endif
+                        state.batchBuffer.append(readData)
                         didWork = true
 
                         // Update exponential moving average (alpha = 0.3 for quick adaptation)
