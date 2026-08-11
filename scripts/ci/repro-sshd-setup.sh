@@ -149,17 +149,21 @@ if [ -t 1 ]; then
   hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; cd /tmp/DEV212_INPUT_X_1; printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\" ; VVTERM_REPRO_MODE=codex; }
   vvterm_repro_handle_key() {
     local key=\"\$1\"
+    local marker
     if [ \"\$VVTERM_REPRO_MODE\" = codex ]; then
       case \"\$key\" in
-        z) cd /tmp/DEV212_INPUT_Z_1 ;;
-        x) cd /tmp/DEV212_INPUT_X_1 ;;
+        z) cd /tmp/DEV212_INPUT_Z_1; marker=DEV212_INPUT_Z_1 ;;
+        x) cd /tmp/DEV212_INPUT_X_1; marker=DEV212_INPUT_X_1 ;;
       esac
     else
       VVTERM_REPRO_X_COUNT=\$((VVTERM_REPRO_X_COUNT + 1))
       cd \"/tmp/DEV199_INPUT_X_\${VVTERM_REPRO_X_COUNT}\"
+      marker=\"DEV199_INPUT_X_\${VVTERM_REPRO_X_COUNT}\"
     fi
-    # Emit the OSC 7 cwd update directly: the readline redraw does not
-    # re-evaluate PS1, so the app would never see the new directory.
+    # Emit an OSC 0 title marker and the OSC 7 cwd update directly: the
+    # readline redraw does not re-evaluate PS1, so the app would never see
+    # the new directory otherwise.
+    printf '\e]0;%s\a' \"\$marker\"
     printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\"
   }
   bind -x '\"x\": vvterm_repro_handle_key x'

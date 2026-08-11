@@ -6454,7 +6454,12 @@ extension GhosttyTerminalView {
     }
 
     private var shouldHideKeyboardAccessoryBar: Bool {
-        shouldSuppressSoftwareKeyboard
+        #if DEBUG
+        if keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild {
+            return true
+        }
+        #endif
+        return shouldSuppressSoftwareKeyboard
             || suppressAccessoryForMissingSoftwareKeyboard
     }
 

@@ -203,6 +203,7 @@ final class TerminalReconnectUITests: XCTestCase {
                 diagnostics,
                 containing: [
                     "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                    "title=DEV199_INPUT_X_\(connectionNumber)",
                     "DEV199_INPUT_X_\(connectionNumber)",
                 ],
                 timeout: 8,
@@ -231,6 +232,7 @@ final class TerminalReconnectUITests: XCTestCase {
                     diagnostics,
                     containing: [
                         "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                        "title=DEV199_INPUT_X_\(connectionNumber)",
                         "DEV199_INPUT_X_\(connectionNumber)",
                     ],
                     timeout: 8,
@@ -301,7 +303,16 @@ final class TerminalReconnectUITests: XCTestCase {
         let key = app.keys["z"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(key, diagnostics: diagnostics, app: app)
-        wait(for: diagnostics, containing: "cwd=/tmp/DEV212_INPUT_Z_1", timeout: 8, app: app)
+        waitForAnyDiagnostics(
+            diagnostics,
+            containing: [
+                "cwd=/tmp/DEV212_INPUT_Z_1",
+                "title=DEV212_INPUT_Z_1",
+                "DEV212_INPUT_Z_1",
+            ],
+            timeout: 8,
+            app: app
+        )
 
         assertKeyboardAndAccessoryVisible(diagnostics: diagnostics, app: app)
         assertSameSession(as: beforeCodex, diagnostics: diagnostics, app: app)
