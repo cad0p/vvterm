@@ -558,7 +558,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             #else
             sshDiagnostics = []
             #endif
-            publish([
+            publish(([
                 "setup=ready",
                 "state=\(connectionToken(state))",
                 "title=\(title)",
@@ -574,7 +574,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "serverIds=\(ServerManager.shared.servers.prefix(3).map { String($0.id.uuidString.prefix(8)) }.joined(separator: ","))",
                 "workspaces=\(ServerManager.shared.workspaces.count)",
                 "zenRoute=\(zenRouteEnabled ? "on" : "off")",
-            ].joined(separator: " "))
+            ]).joined(separator: " "))
         }
 
         private func publish(_ diagnostics: String) {
