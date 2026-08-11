@@ -839,16 +839,26 @@ final class TerminalReconnectUITests: XCTestCase {
     /// Enter delivery through a bare key tap is unreliable (CI: enterSent=0
     /// with the model holding the text), so the key, then the button, then
     /// a literal newline through the IME proxy are tried in order.
+    /// The digit keys can also go dead after a foreground return (a tap
+    /// produces no key event at all while the session survives), so the
+    /// digits are typed through the IME proxy directly.
     @MainActor
     private func tapCommandArguments(
         _ digits: String,
         diagnostics: XCUIElement,
         app: XCUIApplication
     ) {
-        for char in digits {
-            let digitKey = app.keys[String(char)]
-            XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-            tapPromptly(digitKey, diagnostics: diagnostics, app: app)
+        if !digits.isEmpty {
+            let terminal = productionTerminal(in: app)
+            if terminal.exists {
+                terminal.typeText(digits)
+            } else {
+                for char in digits {
+                    let digitKey = app.keys[String(char)]
+                    XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
+                    tapPromptly(digitKey, diagnostics: diagnostics, app: app)
+                }
+            }
         }
         let enterBaseline = diagnosticIntegerValue("enterSent", in: diagnostics) ?? 0
         let enterTarget = "enterSent=\(enterBaseline + 1)"
