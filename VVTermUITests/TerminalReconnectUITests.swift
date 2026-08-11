@@ -537,6 +537,7 @@ final class TerminalReconnectUITests: XCTestCase {
         var attempts = 0
         while attempts < 2 {
             attempts += 1
+            let enterBaseline = diagnosticIntegerValue("enterSent", in: diagnostics) ?? 0
             // Type character-by-character, verifying each char reached the
             // IME model: whole-string typeText can drop entirely while the
             // keyboard animation is settling (observed in CI).
@@ -593,7 +594,7 @@ final class TerminalReconnectUITests: XCTestCase {
                 returnKeyElement.tap()
                 enterDelivered = waitForDiagnosticsReturningBool(
                     diagnostics,
-                    containing: "enterSent=1",
+                    containing: "enterSent=\(enterBaseline + 1)",
                     timeout: 3,
                     app: app
                 )
@@ -602,7 +603,7 @@ final class TerminalReconnectUITests: XCTestCase {
                 returnButton.tap()
                 enterDelivered = waitForDiagnosticsReturningBool(
                     diagnostics,
-                    containing: "enterSent=1",
+                    containing: "enterSent=\(enterBaseline + 1)",
                     timeout: 3,
                     app: app
                 )
@@ -611,7 +612,7 @@ final class TerminalReconnectUITests: XCTestCase {
                 terminal.typeText("\n")
                 enterDelivered = waitForDiagnosticsReturningBool(
                     diagnostics,
-                    containing: "enterSent=1",
+                    containing: "enterSent=\(enterBaseline + 1)",
                     timeout: 3,
                     app: app
                 )
@@ -832,9 +833,12 @@ final class TerminalReconnectUITests: XCTestCase {
         )
     }
 
-    /// Types a command's argument digits followed by Return: the fixture's
+    /// Types a command's argument digits followed by Enter: the fixture's
     /// x/z markers are real commands (bind -x readline handlers never fire
     /// in the CI login shell), so the tests type "x<N>" / "z" + Enter.
+    /// Enter delivery through a bare key tap is unreliable (CI: enterSent=0
+    /// with the model holding the text), so the key, then the button, then
+    /// a literal newline through the IME proxy are tried in order.
     @MainActor
     private func tapCommandArguments(
         _ digits: String,
@@ -846,9 +850,38 @@ final class TerminalReconnectUITests: XCTestCase {
             XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
             tapPromptly(digitKey, diagnostics: diagnostics, app: app)
         }
-        let returnKey = app.keys["Return"]
-        XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-        tapPromptly(returnKey, diagnostics: diagnostics, app: app)
+        let enterBaseline = diagnosticIntegerValue("enterSent", in: diagnostics) ?? 0
+        let enterTarget = "enterSent=\(enterBaseline + 1)"
+        let returnKeyElement = app.keys["Return"]
+        let returnButton = app.buttons["Return"]
+        if returnKeyElement.waitForExistence(timeout: 3) {
+            tapPromptly(returnKeyElement, diagnostics: diagnostics, app: app)
+            if waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: enterTarget,
+                timeout: 3,
+                app: app
+            ) {
+                return
+            }
+        }
+        if returnButton.waitForExistence(timeout: 3) {
+            tapPromptly(returnButton, diagnostics: diagnostics, app: app)
+            if waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: enterTarget,
+                timeout: 3,
+                app: app
+            ) {
+                return
+            }
+        }
+        // No enter event through the keyboard: type a literal newline
+        // through the terminal's IME proxy (proven reliable in CI).
+        let terminal = productionTerminal(in: app)
+        if terminal.exists {
+            terminal.typeText("\n")
+        }
     }
 
     @MainActor
