@@ -123,6 +123,7 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
     static var receivedCount = 0
     static var receivedBytes = 0
     static var receivedTail = ""
+    static var receivedTails: [String] = []
     static var osc0Hits = 0
     static var osc7Hits = 0
     static func noteWrite(_ data: Data) {
@@ -145,6 +146,10 @@ nonisolated(unsafe) enum SSHClientUITestDebug {
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
         receivedTail = normalized.count > 160 ? String(normalized.suffix(160)) : normalized
+        receivedTails.append(receivedTail)
+        if receivedTails.count > 3 {
+            receivedTails.removeFirst(receivedTails.count - 3)
+        }
     }
     static func noteError(_ message: String) {
         writeError = String(message.prefix(60))

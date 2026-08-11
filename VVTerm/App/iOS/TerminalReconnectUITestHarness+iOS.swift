@@ -566,6 +566,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "sshReceived=\(SSHClientUITestDebug.receivedCount)",
                 "sshReceivedBytes=\(SSHClientUITestDebug.receivedBytes)",
                 "sshReceivedTail=\(SSHClientUITestDebug.receivedTail)",
+                "sshReceivedTails=\(SSHClientUITestDebug.receivedTails.joined(separator: "|"))",
                 "osc0Hits=\(SSHClientUITestDebug.osc0Hits)",
                 "osc7Hits=\(SSHClientUITestDebug.osc7Hits)",
             ]
