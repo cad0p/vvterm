@@ -1240,6 +1240,7 @@ class GhosttyTerminalView: UIView {
     /// explicit Enter key events were sent, surfaced as ``lastSent=`` and
     /// ``enterSent=`` so UI tests can tell whether keystrokes left the IME
     /// model and reached the terminal at all.
+    private var keyboardUITestLastPwdRaw = "none"
     private var keyboardUITestLastSent = "none"
     private var keyboardUITestEnterSent = 0
     private var keyboardUITestSentCount = 0
@@ -6601,6 +6602,7 @@ extension GhosttyTerminalView {
             "imeModelText=\(keyboardUITestToken(textInputModel.text))",
             "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
             "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
+            "pwdRaw=\(keyboardUITestLastPwdRaw)",
             "lastSent=\(keyboardUITestLastSent)",
             "sentCount=\(keyboardUITestSentCount)",
             "enterSent=\(keyboardUITestEnterSent)",

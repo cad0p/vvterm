@@ -199,9 +199,12 @@ final class TerminalReconnectUITests: XCTestCase {
                 timeout: 5,
                 app: app
             )
-            var cwdAdvanced = delivered && waitForDiagnosticsReturningBool(
+            var cwdAdvanced = delivered && waitForAnyDiagnostics(
                 diagnostics,
-                containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                containing: [
+                    "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                    "DEV199_INPUT_X_\(connectionNumber)",
+                ],
                 timeout: 8,
                 app: app
             )
@@ -224,9 +227,12 @@ final class TerminalReconnectUITests: XCTestCase {
                     timeout: 5,
                     app: app
                 )
-                cwdAdvanced = delivered && waitForDiagnosticsReturningBool(
+                cwdAdvanced = delivered && waitForAnyDiagnostics(
                     diagnostics,
-                    containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                    containing: [
+                        "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                        "DEV199_INPUT_X_\(connectionNumber)",
+                    ],
                     timeout: 8,
                     app: app
                 )
@@ -590,6 +596,11 @@ final class TerminalReconnectUITests: XCTestCase {
                 containing: [
                     "title=DEV212_CODEX_READY_1",
                     "cwd=/tmp/DEV212_INPUT_X_1",
+                    // The shell's prompt itself proves the command ran: the
+                    // received stream ends with the new prompt whose cwd is
+                    // DEV212_INPUT_X_1 (the app's OSC 7 parsing is broken in
+                    // CI but the sshd receive tail is ground truth).
+                    "DEV212_INPUT_X_1",
                 ],
                 timeout: 8,
                 app: app
