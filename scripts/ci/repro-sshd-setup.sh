@@ -146,28 +146,11 @@ if [ -t 1 ]; then
   cd /tmp/DEV199_INPUT_X_1
   VVTERM_REPRO_X_COUNT=0
   VVTERM_REPRO_MODE=plain
-  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; cd /tmp/DEV212_INPUT_X_1; printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\" ; VVTERM_REPRO_MODE=codex; }
-  vvterm_repro_handle_key() {
-    local key=\"\$1\"
-    local marker
-    if [ \"\$VVTERM_REPRO_MODE\" = codex ]; then
-      case \"\$key\" in
-        z) cd /tmp/DEV212_INPUT_Z_1; marker=DEV212_INPUT_Z_1 ;;
-        x) cd /tmp/DEV212_INPUT_X_1; marker=DEV212_INPUT_X_1 ;;
-      esac
-    else
-      VVTERM_REPRO_X_COUNT=\$((VVTERM_REPRO_X_COUNT + 1))
-      cd \"/tmp/DEV199_INPUT_X_\${VVTERM_REPRO_X_COUNT}\"
-      marker=\"DEV199_INPUT_X_\${VVTERM_REPRO_X_COUNT}\"
-    fi
-    # Emit an OSC 0 title marker and the OSC 7 cwd update directly: the
-    # readline redraw does not re-evaluate PS1, so the app would never see
-    # the new directory otherwise.
-    printf '\e]0;%s\a' \"\$marker\"
-    printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\"
-  }
-  bind -x '\"x\": vvterm_repro_handle_key x'
-  bind -x '\"z\": vvterm_repro_handle_key z'
+  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; cd /tmp/DEV212_INPUT_X_1; touch \"\$HOME/.vvterm_codex_mode\"; printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\" ; VVTERM_REPRO_MODE=codex; }
+  # x/z are real commands in ~/bin (typed as x<N> or z + Enter): the
+  # readline bind -x handlers never fire in this CI login shell, while a
+  # typed command executes reliably.
+  export PATH=\"\$HOME/bin:\$PATH\"
   PS1=\"\[\e]0;DEV199_READY_1\a\]\[\e]7;file://\$HOSTNAME\$(pwd)\a\]\${PS1:-\\$ }\"
 fi
 # <<< vvterm-repro-title"
@@ -194,6 +177,37 @@ PY
   printf '\n%s\n' "$TITLE_FRAGMENT" >> "$RC"
   echo "title fragment appended to $RC"
 done
+
+# --- key-command markers ------------------------------------------------------
+# x/z are real commands (the tests type x<N>/z + Enter). The scripts emit an
+# OSC 0 title marker and an OSC 7 cwd update directly so the app's stream
+# parsers see the new directory.
+mkdir -p "$HOME/bin"
+cat > "$HOME/bin/x" <<'XEOF'
+#!/bin/bash
+if [ -f "$HOME/.vvterm_codex_mode" ]; then
+  cd /tmp/DEV212_INPUT_X_1
+  printf '\e]0;DEV212_INPUT_X_1\a'
+  printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(pwd)"
+  exit 0
+fi
+N="${1:-1}"
+mkdir -p "/tmp/DEV199_INPUT_X_${N}"
+cd "/tmp/DEV199_INPUT_X_${N}"
+printf '\e]0;DEV199_INPUT_X_%s\a' "$N"
+printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(pwd)"
+XEOF
+cat > "$HOME/bin/z" <<'ZEOF'
+#!/bin/bash
+if [ -f "$HOME/.vvterm_codex_mode" ]; then
+  cd /tmp/DEV212_INPUT_Z_1
+  printf '\e]0;DEV212_INPUT_Z_1\a'
+  printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(pwd)"
+fi
+exit 0
+ZEOF
+chmod +x "$HOME/bin/x" "$HOME/bin/z"
+echo "key-command scripts written to $HOME/bin"
 
 # --- fixture env ------------------------------------------------------------
 PRIVATE_KEY_B64="$(base64 < "$REPRO_DIR/client_key" | tr -d '\n')"

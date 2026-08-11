@@ -141,6 +141,7 @@ final class TerminalReconnectUITests: XCTestCase {
         let initialKey = app.keys["x"]
         XCTAssertTrue(initialKey.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(initialKey, diagnostics: diagnostics, app: app)
+        tapCommandArguments("1", diagnostics: diagnostics, app: app)
         wait(for: diagnostics, containing: "cwd=/tmp/DEV199_INPUT_X_1", timeout: 8, app: app)
 
         for connectionNumber in 2...4 {
@@ -199,6 +200,11 @@ final class TerminalReconnectUITests: XCTestCase {
                 timeout: 5,
                 app: app
             )
+            tapCommandArguments(
+                String(connectionNumber),
+                diagnostics: diagnostics,
+                app: app
+            )
             var cwdAdvanced = delivered && waitForAnyDiagnostics(
                 diagnostics,
                 containing: [
@@ -226,6 +232,11 @@ final class TerminalReconnectUITests: XCTestCase {
                     diagnostics,
                     containing: "sentCount=\(sentMid + 1)",
                     timeout: 5,
+                    app: app
+                )
+                tapCommandArguments(
+                    String(connectionNumber),
+                    diagnostics: diagnostics,
                     app: app
                 )
                 cwdAdvanced = delivered && waitForAnyDiagnostics(
@@ -303,6 +314,7 @@ final class TerminalReconnectUITests: XCTestCase {
         let key = app.keys["z"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(key, diagnostics: diagnostics, app: app)
+        tapCommandArguments("", diagnostics: diagnostics, app: app)
         waitForAnyDiagnostics(
             diagnostics,
             containing: [
@@ -419,6 +431,7 @@ final class TerminalReconnectUITests: XCTestCase {
         let key = app.keys["x"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(key, diagnostics: diagnostics, app: app)
+        tapCommandArguments("", diagnostics: diagnostics, app: app)
         waitForAnyDiagnostics(
             diagnostics,
             containing: [
@@ -817,6 +830,25 @@ final class TerminalReconnectUITests: XCTestCase {
             10,
             "Software-keyboard input stalled. \(diagnosticText(in: app))"
         )
+    }
+
+    /// Types a command's argument digits followed by Return: the fixture's
+    /// x/z markers are real commands (bind -x readline handlers never fire
+    /// in the CI login shell), so the tests type "x<N>" / "z" + Enter.
+    @MainActor
+    private func tapCommandArguments(
+        _ digits: String,
+        diagnostics: XCUIElement,
+        app: XCUIApplication
+    ) {
+        for char in digits {
+            let digitKey = app.keys[String(char)]
+            XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
+            tapPromptly(digitKey, diagnostics: diagnostics, app: app)
+        }
+        let returnKey = app.keys["Return"]
+        XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
+        tapPromptly(returnKey, diagnostics: diagnostics, app: app)
     }
 
     @MainActor
