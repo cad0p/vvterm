@@ -99,6 +99,14 @@ Hand-merge the known conflict spots:
    gain a `.callback` arm; recent example: `getProcessInfo` in `src/termio/backend.zig`
    (callback has no process → `return null`). Grep for `switch (self.*)` / `switch (data.backend)`
    in `src/termio/backend.zig` and `src/termio/Thread.zig` and check every arm.
+4. **libghostty C API signature drift (app-side)** — when the probe build succeeds but the
+   unit suite fails to compile, upstream changed a C API the app compiles against.
+   Known: `ghostty_runtime_read_clipboard_cb` returns `bool` since ~2026-08-12 (was `void`);
+   `VVTerm/GhosttyTerminal/Ghostty.App.swift`'s `readClipboard` returns `Bool` (false when
+   the clipboard can't be read, so paste bindings fall through), and the three vendored
+   `Vendor/libghostty/{,ios/,ios-simulator/}include/ghostty.h` typedefs are kept in sync
+   (the app targets the new API on main even before a bump merges; the old lib ignores the
+   return value — ABI-safe).
 
 Then:
 
