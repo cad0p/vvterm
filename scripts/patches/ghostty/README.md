@@ -183,6 +183,22 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
   secret `GHOSTTY_BUMP_PRIVATE_KEY` (full PEM). Revoke anytime by deleting the app
   or uninstalling it.
 
+### Ruleset constraint (learned the hard way, 2026-08-12)
+
+`gh-ruleset-all` must NOT contain `required_linear_history` or `required_signatures`:
+
+- `required_linear_history` on a ruleset evaluates the **entire branch history**,
+  not just new commits ([known GitHub bug — GH community #80952](https://github.com/orgs/community/discussions/80952)).
+  This repo's `main` contains historical merge commits, so **every new-branch push
+  fails** — including the probe's bump branch. The rule only works on the default
+  branch (delta-only evaluation), where `gh-ruleset-main` keeps it.
+- `required_signatures` rejects the probe runner's unsigned bump commit (a GitHub App
+  cannot sign commits; no bypass actors allowed by design).
+
+`gh-ruleset-all` currently has `non_fast_forward` only; `gh-ruleset-main` keeps
+`deletion`, `non_fast_forward`, `pull_request` (squash), `required_signatures`,
+`required_linear_history`, `required_status_checks`, `code_quality`.
+
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr`
 (skip PR creation — useful for validation runs).
 
