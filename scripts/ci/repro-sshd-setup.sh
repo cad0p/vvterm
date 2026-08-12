@@ -129,6 +129,90 @@ if ! echo "$SMOKE_OUT" | grep -q SSH_SMOKE_OK; then
   exit 1
 fi
 
+# --- login-shell title fragment ----------------------------------------------
+# The app's PTY SSH session runs an interactive login shell; its first prompt
+# must emit an OSC 0 title so the reconnect/zen UI tests can wait for
+# `title=DEV199_READY_1` (the dev fixture's PS1 carries the same marker), and
+# OSC 7 so the cwd diagnostic tracks the shell's directory (the tests type
+# into the shell and wait for `cwd=/tmp/DEV199_INPUT_X_1`). macOS bash/zsh do
+# not emit either by default. The `hello` command reproduces the dev
+# fixture's codex-prompt marker (`title=DEV212_CODEX_READY_1`) that
+# enterCodexModes() waits for. Interactive-only, so the non-interactive smoke
+# command below is unaffected. Idempotent.
+TITLE_FRAGMENT="# >>> vvterm-repro-title (repro rig; remove both marker lines to disable)
+case \$- in *i*) ;; *) return ;; esac
+if [ -t 1 ]; then
+  mkdir -p /tmp/DEV199_INPUT_X_1 /tmp/DEV199_INPUT_X_2 /tmp/DEV199_INPUT_X_3 /tmp/DEV199_INPUT_X_4 /tmp/DEV212_INPUT_X_1 /tmp/DEV212_INPUT_Z_1
+  cd /tmp/DEV199_INPUT_X_1
+  VVTERM_REPRO_X_COUNT=0
+  VVTERM_REPRO_MODE=plain
+  # Codex mode is per-login: the hello() flag must not leak into the next
+  # test's fresh SSH session (observed in CI: the background test's x 2
+  # command took the codex branch and cd'd to DEV212_INPUT_X_1).
+  rm -f \"\$HOME/.vvterm_codex_mode\"
+  hello() { printf '\e]0;DEV212_CODEX_READY_1\a'; cd /tmp/DEV212_INPUT_X_1; touch \"\$HOME/.vvterm_codex_mode\"; printf '\e]7;file://%s%s\a' \"\$HOSTNAME\" \"\$(pwd)\" ; VVTERM_REPRO_MODE=codex; }
+  # x/z are real commands in ~/bin (typed as x<N> or z + Enter): the
+  # readline bind -x handlers never fire in this CI login shell, while a
+  # typed command executes reliably.
+  export PATH=\"\$HOME/bin:\$PATH\"
+  PS1=\"\[\e]0;DEV199_READY_1\a\]\[\e]7;file://\$HOSTNAME\$(pwd)\a\]\${PS1:-\\$ }\"
+fi
+# <<< vvterm-repro-title"
+
+for RC in "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.zprofile"; do
+  if [ -f "$RC" ] && grep -q "vvterm-repro-title" "$RC"; then
+    python3 - "$RC" <<'PY'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines(keepends=True)
+out, skip = [], False
+for line in lines:
+    if line.startswith("# >>> vvterm-repro-title"):
+        skip = True
+        continue
+    if line.startswith("# <<< vvterm-repro-title"):
+        skip = False
+        continue
+    if not skip:
+        out.append(line)
+open(path, "w").writelines(out)
+PY
+  fi
+  printf '\n%s\n' "$TITLE_FRAGMENT" >> "$RC"
+  echo "title fragment appended to $RC"
+done
+
+# --- key-command markers ------------------------------------------------------
+# x/z are real commands (the tests type x<N>/z + Enter). The scripts emit an
+# OSC 0 title marker and an OSC 7 cwd update directly so the app's stream
+# parsers see the new directory.
+mkdir -p "$HOME/bin"
+cat > "$HOME/bin/x" <<'XEOF'
+#!/bin/bash
+if [ -f "$HOME/.vvterm_codex_mode" ]; then
+  cd /tmp/DEV212_INPUT_X_1
+  printf '\e]0;DEV212_INPUT_X_1\a'
+  printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(pwd)"
+  exit 0
+fi
+N="${1:-1}"
+mkdir -p "/tmp/DEV199_INPUT_X_${N}"
+cd "/tmp/DEV199_INPUT_X_${N}"
+printf '\e]0;DEV199_INPUT_X_%s\a' "$N"
+printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(pwd)"
+XEOF
+cat > "$HOME/bin/z" <<'ZEOF'
+#!/bin/bash
+if [ -f "$HOME/.vvterm_codex_mode" ]; then
+  cd /tmp/DEV212_INPUT_Z_1
+  printf '\e]0;DEV212_INPUT_Z_1\a'
+  printf '\e]7;file://%s%s\a' "$HOSTNAME" "$(pwd)"
+fi
+exit 0
+ZEOF
+chmod +x "$HOME/bin/x" "$HOME/bin/z"
+echo "key-command scripts written to $HOME/bin"
+
 # --- fixture env ------------------------------------------------------------
 PRIVATE_KEY_B64="$(base64 < "$REPRO_DIR/client_key" | tr -d '\n')"
 cat > "$REPRO_DIR/vvterm-repro.env" <<EOF

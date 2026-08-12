@@ -79,7 +79,8 @@ enum TerminalKeyboardAvoidancePolicy {
         terminalFrame: CGRect,
         cursorFrame: CGRect,
         keyboardFrame: CGRect?,
-        cursorClearance: CGFloat = defaultCursorClearance
+        cursorClearance: CGFloat = defaultCursorClearance,
+        anchored: Bool = false
     ) -> CGFloat {
         guard let keyboardFrame,
               !keyboardFrame.isNull,
@@ -126,7 +127,20 @@ enum TerminalKeyboardAvoidancePolicy {
         )
         guard keyboardOverlap > 0 else { return 0 }
 
-        return -min(requiredLift, keyboardOverlap + max(cursorClearance, 0))
+        let cap = keyboardOverlap + max(cursorClearance, 0)
+        if anchored {
+            // Anchored lift (docked keyboard in keep-size mode): whenever the
+            // caret is ANYWHERE in the covered zone, the content is pinned so
+            // its bottom row clears the keyboard — the lift is the full
+            // overlap + clearance, NOT the caret's exact position. Chasing
+            // the caret makes the whole terminal bounce on every caret move
+            // in live TUIs (a running pi/htop session moves the cursor
+            // row-by-row; the content jumped 16-32pt per move — the "content
+            // jump when the keyboard is on" report). The lift changes only
+            // when the caret crosses the keyboard-top boundary.
+            return -cap
+        }
+        return -min(requiredLift, cap)
     }
 
     nonisolated static func layout(
@@ -174,7 +188,8 @@ enum TerminalKeyboardAvoidancePolicy {
                     verticalOffset: verticalOffset(
                         terminalFrame: terminalFrame,
                         cursorFrame: cursorFrame,
-                        keyboardFrame: frame
+                        keyboardFrame: frame,
+                        anchored: true
                     ),
                     preservesTerminalSurfaceSize: true
                 )
@@ -238,5 +253,42 @@ enum TerminalKeyboardAvoidancePolicy {
             max(terminalFrame.maxY - max(accessoryFrame.minY, terminalFrame.minY), 0),
             max(terminalFrame.height, 0)
         )
+    }
+}
+
+/// Pure rules for the keyboard-lift viewport shift (keep-size mode, docked
+/// keyboard).
+///
+/// The anchored lift pins the content so its bottom row clears the keyboard;
+/// the user can then pull the content back DOWN (finger-down pan) to reveal
+/// the rows hidden by the lift — a bounded viewport shift of the rendered
+/// grid, like the full-screen-zen edge overscroll — WITHOUT scrolling ghostty:
+/// the TUI stays anchored to its live position (new output keeps flowing in
+/// place; the “content starts flowing” regression). The shift range is
+/// [0, maxLift] (0 = anchored, maxLift = the anchored lift = the natural
+/// position); it is caret-INDEPENDENT so a live TUI moving its cursor
+/// row-by-row cannot make the content bounce. Deltas beyond the range are
+/// forwarded to ghostty (a deliberate scroll into history).
+nonisolated enum TerminalKeyboardLiftPolicy {
+    /// Resolves a vertical pan delta (points, finger-down positive) against
+    /// the current lift shift. Returns the new shift and the portion that
+    /// should be forwarded to ghostty.
+    nonisolated static func resolvedShift(
+        shift: CGFloat,
+        delta: CGFloat,
+        maxLift: CGFloat
+    ) -> (shift: CGFloat, forwarded: CGFloat) {
+        guard delta != 0, maxLift > 0 else { return (shift, delta) }
+        let absorbed: CGFloat
+        if delta > 0 {
+            // Pulling the content down (un-lift): absorb up to the remaining
+            // range; the excess forwards (deliberate scroll into history).
+            absorbed = min(delta, max(0, maxLift - shift))
+        } else {
+            // Pushing the content up (re-lift): absorb back toward the
+            // anchored position; the excess forwards to ghostty.
+            absorbed = max(delta, -shift)
+        }
+        return (shift + absorbed, delta - absorbed)
     }
 }

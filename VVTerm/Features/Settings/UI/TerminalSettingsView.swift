@@ -152,6 +152,10 @@ struct TerminalSettingsView: View {
     @AppStorage("terminalTmuxEnabledDefault") private var tmuxEnabledDefault = true
     @AppStorage("terminalTmuxStartupBehaviorDefault") private var tmuxStartupBehaviorDefaultRaw = TmuxStartupBehavior.askEveryTime.rawValue
 
+    // Zen mode settings
+    @AppStorage(TerminalDefaults.zenModeFullScreenKey) private var zenModeFullScreenEnabled = TerminalDefaults.defaultZenModeFullScreen
+    @AppStorage(TerminalDefaults.zenModeStartupKey) private var zenModeStartupEnabled = TerminalDefaults.defaultZenModeStartup
+
     // Copy settings
     @AppStorage("terminalCopyTrimTrailingWhitespace") private var copyTrimTrailingWhitespace = true
     @AppStorage("terminalCopyCollapseBlankLines") private var copyCollapseBlankLines = false
@@ -396,6 +400,19 @@ struct TerminalSettingsView: View {
         }
     }
 
+    private var zenModeSection: some View {
+        Section {
+            Toggle("Full screen terminal in Zen mode", isOn: $zenModeFullScreenEnabled)
+            Toggle("Open in Zen mode by default", isOn: $zenModeStartupEnabled)
+        } header: {
+            Text("Zen Mode")
+        } footer: {
+            Text("Full screen lets the terminal extend behind the notch and rounded corners. Scroll a little past the top or bottom to bring hidden content into view.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var sessionPersistenceSection: some View {
         Section {
             Toggle("Enable tmux by default", isOn: $tmuxEnabledDefault)
@@ -512,6 +529,7 @@ struct TerminalSettingsView: View {
             cursorSection
             themeSection
             terminalBehaviorSection
+            zenModeSection
             keyboardAccessorySection
             sessionPersistenceSection
             copyProcessingSection

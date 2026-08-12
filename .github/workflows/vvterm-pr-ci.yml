@@ -160,12 +160,22 @@ jobs:
           # iPhone 17,arch=arm64 — the libssh2 static lib in Vendor/libssh2/ios-simulator
           # is arm64-only. iPhone 17 exists as a concrete simulator on the iOS 27.0
           # runtime shipped with Xcode 27; arch=arm64 selects the arm64 slice.
+          #
+          # Ad-hoc sign (CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-) so the
+          # sim app embeds com.apple.security.network.client from
+          # VVTerm.entitlements. An UNSIGNED sim app has no entitlements and
+          # the iOS sim sandbox parks Network.framework connections of
+          # unentitled apps in .waiting(.waitingForNetwork) forever — this
+          # wedges the network monitor (NWPathMonitor), which gates the
+          # terminal's initial connect, so the loopback-SSH fixture tests
+          # (zen full-screen, reconnect, keyboard) could never connect. Same
+          # reasoning as repro-zmx.yml / teleport-e2e.yml.
           xcodebuild build-for-testing \
             -scheme VVTerm \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             | tee "$RUNNER_TEMP/build.log"
 
       - name: Archive build products
@@ -374,13 +384,17 @@ jobs:
           # across the 4 shards (~4-5 per shard) rather than a separate 5th
           # shard, to preserve the 5-concurrent-cap zero-queueing invariant.
           - name: shard-0
-            only-testing: "VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/VVTermUITests/testExample,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"
+            needs-fixture: true
+            only-testing: "VVTermUITests/TerminalZenModeUITests/testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets,VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesSessionKeyboardAndTyping,VVTermUITests/TerminalReconnectUITests/testProductionCodexFindKeyboardMenuRestoresPTYTyping,VVTermUITests/ServerNavigationUITests/testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness,VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesDarkAccessoryAppearance,VVTermUITests/TerminalZenModeUITests/testFullScreenZenAutoShiftsInitialPromptBelowNotch,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/testExample,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayDetachesAndRestoresAccessoryWithoutLosingTyping,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent"
           - name: shard-1
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName"
+            needs-fixture: true
+            only-testing: "VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible,VVTermUITests/TerminalReconnectUITests/testColdRelaunchRestoresTabsSplitsSelectionAndReconnects,VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping,VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPositionAndSession,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap"
           - name: shard-2
-            only-testing: "VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayDetachesAndRestoresAccessoryWithoutLosingTyping,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot"
+            needs-fixture: false
+            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName"
           - name: shard-3
-            only-testing: "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss"
+            needs-fixture: false
+            only-testing: "VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal"
 
     steps:
       - name: Checkout
@@ -423,6 +437,16 @@ jobs:
         # nested xcresult format more robustly than xcresulttool.
         run: brew install chargepoint/xcparse/xcparse
 
+      - name: Provision loopback SSH fixture (fixture shards only)
+        # Boots a pubkey-only sshd on 127.0.0.1:22232 and writes
+        # $RUNNER_TEMP/vvterm-repro/vvterm-repro.env with the fixture vars.
+        # The simulator shares the runner loopback, so the app's terminal
+        # can SSH into it like the dev-seeded local fixture. Only the shards
+        # whose tests drive real connections (zen full-screen, reconnect,
+        # server navigation) pay this ~10s cost.
+        if: matrix.shard.needs-fixture
+        run: bash scripts/ci/repro-sshd-setup.sh
+
       - name: Run UI tests (shard ${{ matrix.shard.name }})
         shell: bash
         run: |
@@ -452,16 +476,42 @@ jobs:
           # tests pass (so the xcresult ends up empty).
           export SCREENSHOT_DIR="$RUNNER_TEMP/screenshots"
           mkdir -p "$SCREENSHOT_DIR"
+
+          # Fixture shards: source the sshd rig's env (username, private key)
+          # and point the harness at the sshd port directly (22232). The rig
+          # script writes VVTERM_REPRO_SSH_PORT=22229 for the bytemeter proxy
+          # used by repro-zmx.yml; PR CI has no bytemeter, so the app must
+          # talk to sshd itself.
+          if [ "${{ matrix.shard.needs-fixture }}" == "true" ]; then
+            # shellcheck disable=SC1091
+            # `set -a` auto-exports every var the rig env file defines (plain
+            # `source` would leave them as shell-only vars, invisible to the
+            # python plist injection below).
+            set -a
+            source "$RUNNER_TEMP/vvterm-repro/vvterm-repro.env"
+            set +a
+            export VVTERM_REPRO_SSH_PORT=22232
+            echo "fixture: user=$VVTERM_REPRO_SSH_USERNAME port=$VVTERM_REPRO_SSH_PORT"
+          fi
           python3 - "$XCRUN" "$SCREENSHOT_DIR" <<'PY'
-          import plistlib, sys
+          import plistlib, os, sys
           path, screenshot_dir = sys.argv[1], sys.argv[2]
           with open(path, "rb") as f:
               data = plistlib.load(f)
+          # The loopback-SSH fixture tests (zen full-screen, reconnect,
+          # server navigation) run when VVTERM_REPRO_SSH_* reaches the test
+          # runner (LoopbackSSHFixtureTestSupport gates on it); the harness
+          # re-exports it into the app's launchEnvironment.
+          fixture_env = {}
+          for key in ("VVTERM_REPRO_SSH_USERNAME", "VVTERM_REPRO_SSH_PRIVATE_KEY", "VVTERM_REPRO_SSH_PORT"):
+              if key in os.environ:
+                  fixture_env[key] = os.environ[key]
           injected = 0
           for cfg in data.get("TestConfigurations", []):
               for target in cfg.get("TestTargets", []):
                   env = target.setdefault("EnvironmentVariables", {})
                   env["SCREENSHOT_DIR"] = screenshot_dir
+                  env.update(fixture_env)
                   # The UI-test runner's env comes ONLY from this plist
                   # (TEST_RUNNER_ prefixes do not work with
                   # test-without-building -xctestrun), so the shell's CI=true
@@ -475,7 +525,7 @@ jobs:
                   injected += 1
           with open(path, "wb") as f:
               plistlib.dump(data, f)
-          print(f"Injected SCREENSHOT_DIR + keepAlways into {injected} test target(s)")
+          print(f"Injected SCREENSHOT_DIR + keepAlways + fixture({list(fixture_env)}) into {injected} test target(s)")
           PY
           echo "xctestrun plist after injection:"
           python3 -c "import plistlib; d=plistlib.load(open('$XCRUN','rb')); [print(f'  target {i}: SCREENSHOT_DIR={t.get(\"EnvironmentVariables\",{}).get(\"SCREENSHOT_DIR\",\"<MISSING>\")}') for cfg in d.get('TestConfigurations',[]) for i,t in enumerate(cfg.get('TestTargets',[]))]"

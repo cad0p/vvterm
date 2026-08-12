@@ -1109,6 +1109,13 @@ class GhosttyTerminalView: UIView {
     private var keyboardAvoidancePreservedSurfaceSize: CGSize?
     private var keyboardAvoidanceReferenceSurfaceSize: CGSize?
     private var tracksKeyboardAvoidanceReferenceSize = false
+    /// Deferred-release state for the size-preservation pin: set when the
+    /// avoidance model asks to release while the view is still bouncing
+    /// (keyboard dismissal); the release lands once the view settles back to
+    /// the preserved size or the deadline expires.
+    private var keyboardAvoidanceReleasePending = false
+    private var keyboardAvoidanceReleaseDeadline: CFAbsoluteTime = 0
+    private static let keyboardAvoidanceReleaseDeadlineSeconds: CFAbsoluteTime = 1.5
 
     /// Callback invoked when a pinch gesture requests terminal pane zoom.
     var onZoomAction: ((TerminalZoomAction) -> TerminalZoomResult?)?
@@ -1189,6 +1196,151 @@ class GhosttyTerminalView: UIView {
 
     /// Current scrollbar state from Ghostty core
     var scrollbar: Ghostty.Action.Scrollbar?
+
+    /// Whether full-screen zen overscroll is active for this terminal. When
+    /// enabled, scroll deltas that ghostty would clamp at the top or bottom
+    /// edge accumulate into ``zenOverscrollShift`` instead, shifting the
+    /// rendered grid so content hidden behind the notch/corners stays
+    /// reachable.
+    var zenOverscrollEnabled = false {
+        didSet {
+            guard oldValue != zenOverscrollEnabled else { return }
+            #if DEBUG
+            zenDebugState.toggles += 1
+            zenDebugState.lastTransition = zenOverscrollEnabled ? "enable" : "disable"
+            #endif
+            if zenOverscrollEnabled {
+                // Entering full-screen zen: reveal the rows that sit behind
+                // the top cutout (the shell prompt right after connect) by
+                // pre-applying the top overscroll shift once.
+                hasAppliedInitialZenOverscroll = false
+                applyInitialZenOverscrollIfNeeded()
+            } else {
+                hasAppliedInitialZenOverscroll = false
+                zenInitialAutoShift = 0
+                resetZenOverscroll()
+            }
+        }
+    }
+
+    /// Current overscroll shift in points (positive = grid shifted down,
+    /// revealing rows that sat behind the top cutout).
+    private var zenOverscrollShift: CGFloat = 0
+
+    // MARK: - Keyboard-Lift Viewport Shift
+
+    /// Maximum keyboard-lift shift in points, recorded from the avoidance
+    /// model's anchored lift (the docked, keep-size case): while > 0, pan
+    /// deltas that pull the content DOWN accumulate into
+    /// ``keyboardLiftShift`` (up to ``keyboardLiftMaxLift`` — the natural
+    /// position) instead of scrolling ghostty, so the TUI stays anchored to
+    /// its live position. Reset to 0 when the lift releases.
+    private var keyboardLiftMaxLift: CGFloat = 0
+
+    /// The user's un-lift in points (0 = anchored; positive = content pulled
+    /// back down toward the natural position).
+    private var keyboardLiftShift: CGFloat = 0
+
+    /// Records the avoidance model's current lift so the view can engage the
+    /// keyboard-lift viewport shift: docked + keep-size + a negative offset
+    /// (the anchored lift) makes pan deltas shift the rendered grid instead
+    /// of scrolling ghostty. Releasing the lift (offset 0 / non-docked)
+    /// resets the shift.
+    func recordKeyboardAvoidanceLift(offset: CGFloat, docked: Bool) {
+        let maxLift = (docked && offset < 0) ? -offset : 0
+        guard maxLift != keyboardLiftMaxLift else { return }
+        keyboardLiftMaxLift = maxLift
+        if maxLift == 0, keyboardLiftShift != 0 {
+            keyboardLiftShift = 0
+            applyZenOverscrollShift()
+        }
+    }
+
+    /// Routes a vertical pan delta (points, finger-down positive) through the
+    /// keyboard-lift viewport shift. Returns the portion to forward (to the
+    /// zen overscroll, then ghostty).
+    private func resolveKeyboardLift(rawDelta: Double) -> Double {
+        guard keyboardLiftMaxLift > 0 else { return rawDelta }
+        let delta = CGFloat(rawDelta)
+        let resolved = TerminalKeyboardLiftPolicy.resolvedShift(
+            shift: keyboardLiftShift,
+            delta: delta,
+            maxLift: keyboardLiftMaxLift
+        )
+        if abs(resolved.shift - keyboardLiftShift) >= 0.5 {
+            keyboardLiftShift = resolved.shift
+            applyZenOverscrollShift()
+        }
+        return Double(resolved.forwarded)
+    }
+
+    /// The shift value the one-shot initial reveal applied. While the user
+    /// has not touched the content (shift still equals this value), layout
+    /// changes may re-adjust it to a larger limit (e.g. the terminal only
+    /// reached the screen edge — and thus the real notch inset — after the
+    /// full-screen zen layout pass finished).
+    private var zenInitialAutoShift: CGFloat = 0
+
+    /// Whether the one-shot initial reveal shift has been applied for the
+    /// current full-screen zen entry.
+    private var hasAppliedInitialZenOverscroll = false
+
+    #if DEBUG
+    /// Why the one-shot initial zen overscroll reveal did or did not apply,
+    /// surfaced in the UI-test diagnostics (``zenLatch=``).
+    private var zenDebugState = ZenOverscrollDebugState()
+
+    /// Last terminal-bound input send (text or key name) and how many
+    /// explicit Enter key events were sent, surfaced as ``lastSent=`` and
+    /// ``enterSent=`` so UI tests can tell whether keystrokes left the IME
+    /// model and reached the terminal at all.
+    var keyboardUITestLastPwdRaw = "none"
+    private var keyboardUITestLastSent = "none"
+    private var keyboardUITestEnterSent = 0
+    private var keyboardUITestSentCount = 0
+    /// Writes that left the terminal toward the transport (ghostty's write
+    /// callback dispatched to the SSH coordinator), plus the last payload
+    /// tail, so UI tests can tell where input stops (key events delivered to
+    /// the surface vs. bytes actually handed to the SSH transport).
+    private var keyboardUITestTransportSentCount = 0
+    private var keyboardUITestTransportTail = ""
+
+    private func keyboardUITestNoteSent(_ label: String) {
+        keyboardUITestLastSent = label
+        keyboardUITestSentCount += 1
+        if label == "enter" {
+            keyboardUITestEnterSent += 1
+        }
+    }
+
+    private func keyboardUITestNoteTransportWrite(_ data: Data) {
+        keyboardUITestTransportSentCount += 1
+        let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
+        let normalized = text.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        if normalized.count > 12 {
+            keyboardUITestTransportTail = String(normalized.suffix(12))
+        } else {
+            keyboardUITestTransportTail = normalized
+        }
+    }
+
+    private struct ZenOverscrollDebugState {
+        var toggles = 0
+        var lastTransition = "unset"
+        var latchReason = "unset"
+        var latchScrollbar = "unset"
+        var latchInsets = "unset"
+        var latchCellHeight = "unset"
+    }
+    #endif
+
+    /// Tracks whether ghostty received any momentum event in the current
+    /// momentum run so the trailing `.ended` is only sent when ghostty saw
+    /// the matching `.began`/`.changed` events.
+    private var momentumForwardedToGhostty = false
+    private var scrollbarObserver: NSObjectProtocol?
 
     private static let logger = Logger.forCategory("GhosttyTerminal")
     private static let keyboardLifecycleLoggingEnabled = DebugLogConfiguration.isEnabled("keyboard")
@@ -1448,6 +1600,12 @@ class GhosttyTerminalView: UIView {
         // window's screen scale is applied again in didMoveToWindow.
         self.contentScaleFactor = max(UITraitCollection.current.displayScale, 1)
 
+        #if DEBUG
+        // Geometry assertions in UI tests (e.g. full-screen zen coverage).
+        accessibilityIdentifier = "vvterm.terminal.surface"
+        isAccessibilityElement = true
+        #endif
+
         setupSurface()
         addSubview(imeProxyTextView)
         zoomIndicatorView.isHidden = true
@@ -1523,6 +1681,7 @@ class GhosttyTerminalView: UIView {
 
         setupConfigReloadObservation()
         setupInputModeObservation()
+        setupScrollbarObservation()
         registerColorSchemeObserver()
         setupHardwareKeyboardObservation()
     }
@@ -1538,6 +1697,9 @@ class GhosttyTerminalView: UIView {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = inputModeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = scrollbarObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         let wrapper = self.ghosttyAppWrapper
@@ -1568,6 +1730,10 @@ class GhosttyTerminalView: UIView {
         if let observer = inputModeObserver {
             NotificationCenter.default.removeObserver(observer)
             inputModeObserver = nil
+        }
+        if let observer = scrollbarObserver {
+            NotificationCenter.default.removeObserver(observer)
+            scrollbarObserver = nil
         }
         removeHardwareKeyboardObservers()
 
@@ -1721,6 +1887,30 @@ class GhosttyTerminalView: UIView {
             Task { @MainActor [weak self] in
                 self?.handleCurrentInputModeDidChange()
             }
+        }
+    }
+
+    /// Track ghostty scrollbar state (content rows) so the full-screen zen
+    /// overscroll can detect when the user is scrolling past an edge.
+    private func setupScrollbarObservation() {
+        scrollbarObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyDidUpdateScrollbar,
+            object: self,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            if let scrollbar = notification.userInfo?[Notification.Name.ScrollbarKey]
+                as? Ghostty.Action.Scrollbar {
+                self.scrollbar = scrollbar
+            }
+            // Any scrollbar notification confirms the edge state (even a
+            // nil-payload one): a forwarded scroll is no longer stale.
+            self.zenOverscrollEdgeStale = false
+            // The scrollbar may not exist yet when full-screen zen engaged
+            // (fresh connect); once the first state arrives, apply the
+            // one-shot initial reveal shift if the terminal is at the top
+            // edge (empty scrollback or scrolled to the start).
+            self.applyInitialZenOverscrollIfNeeded()
         }
     }
 
@@ -2123,12 +2313,16 @@ class GhosttyTerminalView: UIView {
         // pass; only act on actual transitions (also keeps the diagnostic
         // ring free of the steady-state pin-off spam).
         let isPinned = keyboardAvoidancePreservedSurfaceSize != nil
-        if isEnabled == isPinned { return }
-        Self.logger.diagInfo(
-            "GhosttyTerminal",
-            "avoidance_pin \(isEnabled ? "on" : "off") preserved=\(keyboardAvoidancePreservedSurfaceSize?.debugDescription ?? "nil") bounds=\(bounds.size) ref=\(keyboardAvoidanceReferenceSurfaceSize?.debugDescription ?? "nil") tracks=\(tracksKeyboardAvoidanceReferenceSize)"
-        )
         if isEnabled {
+            // A pin request always cancels a pending deferred release: the
+            // keyboard is (re)appearing, so the preserved size must hold
+            // through this session regardless of the settle state.
+            keyboardAvoidanceReleasePending = false
+            if isPinned { return }
+            Self.logger.diagInfo(
+                "GhosttyTerminal",
+                "avoidance_pin \(isEnabled ? "on" : "off") preserved=\(keyboardAvoidancePreservedSurfaceSize?.debugDescription ?? "nil") bounds=\(bounds.size) ref=\(keyboardAvoidanceReferenceSurfaceSize?.debugDescription ?? "nil") tracks=\(tracksKeyboardAvoidanceReferenceSize)"
+            )
             guard keyboardAvoidancePreservedSurfaceSize == nil else { return }
             tracksKeyboardAvoidanceReferenceSize = false
             keyboardAvoidancePreservedSurfaceSize = keyboardAvoidanceReferenceSurfaceSize
@@ -2137,14 +2331,55 @@ class GhosttyTerminalView: UIView {
                 sizeDidChange(preservedSize)
             }
         } else {
-            tracksKeyboardAvoidanceReferenceSize = true
-            keyboardAvoidancePreservedSurfaceSize = nil
+            guard isPinned, !keyboardAvoidanceReleasePending else { return }
+            // Deferred release: the keyboard-dismissal layout bounce (the
+            // full-screen zen terminal dipping by the bottom container inset
+            // for a few hundred ms) must not resize the grid — the preserved
+            // size holds until the view settles back to it (checked in
+            // layoutSubviews), or until a deadline in case it never does.
+            Self.logger.diagInfo(
+                "GhosttyTerminal",
+                "avoidance_pin off (deferred) preserved=\(keyboardAvoidancePreservedSurfaceSize?.debugDescription ?? "nil") bounds=\(bounds.size) ref=\(keyboardAvoidanceReferenceSurfaceSize?.debugDescription ?? "nil")"
+            )
+            keyboardAvoidanceReleasePending = true
+            keyboardAvoidanceReleaseDeadline = CFAbsoluteTimeGetCurrent()
+                + Self.keyboardAvoidanceReleaseDeadlineSeconds
+            // The settle check runs in layoutSubviews, which stops firing
+            // once the view is static (e.g. it settles at a size below the
+            // preserved one and never returns): schedule the deadline check
+            // so the pin can never hold the grid indefinitely.
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + Self.keyboardAvoidanceReleaseDeadlineSeconds
+            ) { [weak self] in
+                self?.settleKeyboardAvoidanceReleaseIfNeeded()
+            }
         }
+    }
+
+    /// Releases a deferred size-preservation once the view has settled back
+    /// to the preserved size (keyboard-dismissal bounce over) or the deadline
+    /// expired. Called from layoutSubviews so the release lands on the settle
+    /// layout pass.
+    private func settleKeyboardAvoidanceReleaseIfNeeded() {
+        guard keyboardAvoidanceReleasePending,
+              let preserved = keyboardAvoidancePreservedSurfaceSize else { return }
+        let settled = bounds.height >= preserved.height - 0.5
+        let expired = CFAbsoluteTimeGetCurrent() >= keyboardAvoidanceReleaseDeadline
+        guard settled || expired else { return }
+        keyboardAvoidanceReleasePending = false
+        tracksKeyboardAvoidanceReferenceSize = true
+        keyboardAvoidancePreservedSurfaceSize = nil
+        Self.logger.diagInfo(
+            "GhosttyTerminal",
+            "avoidance_release settled=\(settled ? 1 : 0) bounds=\(bounds.size) ref=\(keyboardAvoidanceReferenceSurfaceSize?.debugDescription ?? "nil")"
+        )
+        sizeDidChange(bounds.size)
     }
 
     func disableKeyboardAvoidanceSizePreservation() {
         tracksKeyboardAvoidanceReferenceSize = false
         keyboardAvoidanceReferenceSurfaceSize = nil
+        keyboardAvoidanceReleasePending = false
         guard keyboardAvoidancePreservedSurfaceSize != nil else { return }
         keyboardAvoidancePreservedSurfaceSize = nil
         sizeDidChange(bounds.size)
@@ -2557,8 +2792,12 @@ class GhosttyTerminalView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imeProxyTextView.frame = bounds
-        nativeFindOverlay.frame = bounds
-        touchSelectionOverlay.frame = bounds
+        // The find/selection overlays draw rects in grid coordinates, so they
+        // must follow the full-screen zen overscroll shift to stay aligned
+        // with the rendered content.
+        let overlayFrame = bounds.offsetBy(dx: 0, dy: zenOverscrollShift + keyboardLiftShift)
+        nativeFindOverlay.frame = overlayFrame
+        touchSelectionOverlay.frame = overlayFrame
         bringSubviewToFront(nativeFindOverlay)
         bringSubviewToFront(touchSelectionOverlay)
         bringSubviewToFront(touchSelectionLoupe)
@@ -2568,6 +2807,15 @@ class GhosttyTerminalView: UIView {
 
         // Tell Ghostty the new size after the view has laid out.
         sizeDidChange(bounds.size)
+
+        // A deferred preservation release lands on the settle layout pass
+        // (the keyboard-dismissal bounce back to the full-screen zen height).
+        settleKeyboardAvoidanceReleaseIfNeeded()
+
+        // The frame may have just reached the screen edge (full-screen zen
+        // layout pass), which changes the safe-area insets the initial reveal
+        // shift is derived from.
+        readjustInitialZenOverscrollIfNeeded()
 
     }
 
@@ -2999,14 +3247,26 @@ class GhosttyTerminalView: UIView {
             // Update mouse position so TUI apps receive wheel events with coordinates.
             let pos = ghosttyPoint(location)
             surface.sendMousePos(.init(x: pos.x, y: pos.y, mods: []))
-            // Send scroll delta directly with increased multiplier for snappy feel
+            // Send scroll delta directly with increased multiplier for snappy feel.
+            // Full-screen zen overscroll absorbs the delta while the scroll is
+            // pinned against an edge and shifts the rendered grid instead.
+            let rawX = Double(translation.x) * Self.scrollMultiplier
+            let rawY = Double(translation.y) * Self.scrollMultiplier
+            #if DEBUG
+            if zenOverscrollEnabled {
+                NSLog("VVTerm-zen pan rawY=%.1f stale=%d shift=%.1f scrollbar=%@", rawY, zenOverscrollEdgeStale, zenOverscrollShift, scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil")
+            }
+            #endif
+            let forwardedY = resolveZenOverscroll(rawDelta: resolveKeyboardLift(rawDelta: rawY))
             let scrollEvent = Ghostty.Input.MouseScrollEvent(
-                x: Double(translation.x) * Self.scrollMultiplier,
-                y: Double(translation.y) * Self.scrollMultiplier,
+                x: rawX,
+                y: forwardedY,
                 mods: Ghostty.Input.ScrollMods(precision: true, momentum: .none)
             )
-            surface.sendMouseScroll(scrollEvent)
-            requestRender()
+            if rawX != 0 || forwardedY != 0 {
+                surface.sendMouseScroll(scrollEvent)
+                requestRender()
+            }
 
             // Reset translation so we get delta on next call
             recognizer.setTranslation(.zero, in: self)
@@ -3038,6 +3298,230 @@ class GhosttyTerminalView: UIView {
         selectionAutoscrollLocation = location
         selectionAutoscrollMods = mods
         startSelectionAutoscrollIfNeeded()
+    }
+
+    // MARK: - Full-Screen Zen Overscroll
+
+    /// Set while a forwarded scroll (a real ghostty scroll that crossed an
+    /// edge) is still unconfirmed: scrollbar notifications are delivered
+    /// asynchronously from the ghostty callback thread, so the edge state
+    /// read during the next deltas may be stale. While stale, deltas are
+    /// forwarded instead of being absorbed into the opposite edge's
+    /// overscroll, which would otherwise swallow the remainder of the same
+    /// gesture (the “intermittent bottom overscroll” / “scrolling down
+    /// doesn't work” reports). Cleared by the next scrollbar notification;
+    /// also expires after ``zenOverscrollStaleTTL`` because a scrollbar
+    /// update may never arrive (empty scrollback), and without the expiry
+    /// every later gesture would be forwarded raw forever (the interactive
+    /// top overscroll could never engage).
+    private var zenOverscrollEdgeStale = false
+    private var zenOverscrollStaleSince = CFAbsoluteTime(0)
+    private static let zenOverscrollStaleTTL: CFAbsoluteTime = 1.0
+
+    /// Computes the overscroll limit inputs from the live surface metrics,
+    /// falling back to the viewport-derived cell height when the ghostty
+    /// cell-size action has not arrived yet (fresh connect).
+    private var zenOverscrollCellHeight: CGFloat {
+        if cellSize.height > 0 { return cellSize.height }
+        let rows = max(lastReportedGrid.rows, 1)
+        if bounds.height > 0 { return bounds.height / CGFloat(rows) }
+        return 1
+    }
+
+    /// Routes a vertical scroll delta (points, finger-down positive, in the
+    /// same units sent to ghostty) through the full-screen zen overscroll
+    /// policy. Returns the portion that should be forwarded to ghostty;
+    /// the absorbed portion accumulates into ``zenOverscrollShift`` and is
+    /// applied to the rendered layers immediately.
+    private func resolveZenOverscroll(rawDelta: Double) -> Double {
+        guard zenOverscrollEnabled else { return rawDelta }
+        let delta = CGFloat(rawDelta)
+        // The one-shot initial reveal (zenInitialAutoShift) is provisional:
+        // the first user scroll in ANY direction consumes it (magnitude-
+        // based, clamped at zero) so the reveal can never block scrolling
+        // into history or absorb the user's scroll motion. The reveal sits at
+        // the full top limit, so without this rule the first finger-downs are
+        // fully absorbed (“scrolling down doesn't work at all”). Once the
+        // user has moved the content, normal edge overscroll rules apply.
+        if delta != 0,
+           zenInitialAutoShift > 0,
+           abs(zenOverscrollShift - zenInitialAutoShift) < 0.5 {
+            let previous = zenOverscrollShift
+            let consumed = max(previous - abs(delta), 0)
+            let absorbed = previous - consumed
+            zenOverscrollShift = consumed
+            applyZenOverscrollShift()
+            if absorbed < abs(delta), (scrollbar?.total ?? 0) != 0 {
+                // The reveal cleared and the remainder crossed the edge; its
+                // effect is not yet reflected in the scrollbar (async
+                // delivery). With a degenerate scrollbar (empty scrollback)
+                // the edge state is trivially known and never goes stale.
+                markZenOverscrollEdgeStale()
+            }
+            return Double(delta - (delta >= 0 ? absorbed : -absorbed))
+        }
+        // While the edge state is stale, forward instead of absorbing into
+        // the opposite edge's overscroll.
+        if zenOverscrollEdgeStale, abs(zenOverscrollShift) < 0.5 {
+            let elapsed = CFAbsoluteTimeGetCurrent() - zenOverscrollStaleSince
+            if elapsed < Self.zenOverscrollStaleTTL {
+                return Double(delta)
+            }
+            // The confirmation never arrived (e.g. empty scrollback); stop
+            // treating the edge as stale so normal edge overscroll resumes.
+            zenOverscrollEdgeStale = false
+        }
+        let limits = TerminalZenFullScreenPolicy.overscrollLimits(
+            topInset: safeAreaInsets.top,
+            bottomInset: safeAreaInsets.bottom,
+            cellHeight: zenOverscrollCellHeight
+        )
+        let edge = TerminalZenFullScreenPolicy.edgeState(
+            offset: scrollbar?.offset ?? 0,
+            total: scrollbar?.total ?? 0,
+            len: scrollbar?.len ?? 0
+        )
+        // A degenerate scrollbar (empty scrollback or no state yet) pins the
+        // viewport at BOTH edges and can never change — the edge state cannot
+        // go stale, so a forwarded delta must not arm the stale window: on an
+        // empty session every gesture at a saturated shift forwards (ghostty
+        // clamps it) and would otherwise re-arm a 1s dead zone where no
+        // overscroll engages (the “scrolling at the top on an empty session
+        // feels laggy” report). The scrollbar notification that would clear
+        // the flag never arrives with total == 0, so the flag must not be
+        // set in the first place.
+        let degenerateScrollbar = (scrollbar?.total ?? 0) == 0
+        let resolved = TerminalZenFullScreenPolicy.resolvedShift(
+            shift: zenOverscrollShift,
+            delta: delta,
+            atTop: edge.atTop,
+            atBottom: edge.atBottom,
+            maxTop: limits.top,
+            maxBottom: limits.bottom
+        )
+        if abs(resolved.shift - zenOverscrollShift) >= 0.5 {
+            zenOverscrollShift = resolved.shift
+            applyZenOverscrollShift()
+        }
+        if resolved.forwarded != 0, edge.atTop || edge.atBottom, !degenerateScrollbar {
+            // A real scroll was forwarded while the viewport is pinned at an
+            // edge; the scrollbar has not confirmed the new state yet.
+            markZenOverscrollEdgeStale()
+        }
+        return Double(resolved.forwarded)
+    }
+
+    private func markZenOverscrollEdgeStale() {
+        zenOverscrollEdgeStale = true
+        zenOverscrollStaleSince = CFAbsoluteTimeGetCurrent()
+    }
+
+    /// Applies the current overscroll shift to the ghostty rendered layers.
+    private func applyZenOverscrollShift() {
+        guard !isShuttingDown else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for sublayer in layer.sublayers ?? [] where isGhosttySurfaceLayer(sublayer) {
+            sublayer.frame = CGRect(origin: CGPoint(x: 0, y: zenOverscrollShift + keyboardLiftShift), size: bounds.size)
+        }
+        CATransaction.commit()
+        #if DEBUG
+        // Let UI tests observe the shift through the accessibility tree.
+        accessibilityValue = "overscroll=\(Int(zenOverscrollShift.rounded()))"
+        #endif
+    }
+
+    private func resetZenOverscroll() {
+        guard abs(zenOverscrollShift) >= 0.5 else { return }
+        zenOverscrollShift = 0
+        applyZenOverscrollShift()
+    }
+
+    /// One-shot reveal of the rows hidden behind the top cutout when
+    /// full-screen zen engages: if the viewport is pinned at the top edge
+    /// (fresh shell, empty scrollback, or scrolled back to the start), apply
+    /// the full top overscroll limit so the initial prompt clears the notch
+    /// without any user scroll. Skipped once the user has scrolled into
+    /// history (the shift would fight the scroll) or after the shift has
+    /// been consumed by an interaction.
+    private func applyInitialZenOverscrollIfNeeded() {
+        guard zenOverscrollEnabled else {
+            #if DEBUG
+            zenDebugState.latchReason = "disabled"
+            #endif
+            return
+        }
+        guard !hasAppliedInitialZenOverscroll else {
+            #if DEBUG
+            zenDebugState.latchReason = "alreadyApplied"
+            #endif
+            return
+        }
+        guard abs(zenOverscrollShift) < 0.5 else {
+            // The user already moved the content; never override.
+            hasAppliedInitialZenOverscroll = true
+            #if DEBUG
+            zenDebugState.latchReason = "userMoved"
+            zenDebugState.latchScrollbar = scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil"
+            #endif
+            return
+        }
+
+        let edge = TerminalZenFullScreenPolicy.edgeState(
+            offset: scrollbar?.offset ?? 0,
+            total: scrollbar?.total ?? 0,
+            len: scrollbar?.len ?? 0
+        )
+        // Unknown scrollbar state (no output yet) or pinned at the top edge:
+        // the top rows are (or will be) behind the cutout — reveal them.
+        guard scrollbar == nil || edge.atTop else {
+            // Viewport sits mid-history or at live with scrollback: the
+            // visible content is not behind the cutout; nothing to reveal.
+            hasAppliedInitialZenOverscroll = true
+            #if DEBUG
+            zenDebugState.latchReason = "scrollbarMid"
+            zenDebugState.latchScrollbar = scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil"
+            #endif
+            return
+        }
+
+        hasAppliedInitialZenOverscroll = true
+        // The reveal parks the prompt just below the cutout (the inset
+        // alone — the interactive overscroll limit keeps its extra row).
+        let reveal = TerminalZenFullScreenPolicy.initialRevealShift(
+            topInset: safeAreaInsets.top,
+            cellHeight: zenOverscrollCellHeight
+        )
+        #if DEBUG
+        zenDebugState.latchReason = "applied"
+        zenDebugState.latchScrollbar = scrollbar.map { "o=\($0.offset) t=\($0.total) l=\($0.len)" } ?? "nil"
+        zenDebugState.latchInsets = "top=\(Int(safeAreaInsets.top)) bottom=\(Int(safeAreaInsets.bottom))"
+        zenDebugState.latchCellHeight = String(format: "%.1f", Double(cellSize.height))
+        #endif
+        zenInitialAutoShift = reveal
+        zenOverscrollShift = reveal
+        applyZenOverscrollShift()
+    }
+
+    /// Re-adjusts an untouched initial reveal shift when the layout settles
+    /// with larger safe-area insets (the terminal frame reaches the screen
+    /// edge only after the full-screen zen layout pass, so the first
+    /// application may have read a zero top inset). Never touches a shift
+    /// the user has already moved or consumed.
+    private func readjustInitialZenOverscrollIfNeeded() {
+        guard zenOverscrollEnabled,
+              zenInitialAutoShift > 0,
+              abs(zenOverscrollShift - zenInitialAutoShift) < 0.5 else {
+            return
+        }
+        let reveal = TerminalZenFullScreenPolicy.initialRevealShift(
+            topInset: safeAreaInsets.top,
+            cellHeight: zenOverscrollCellHeight
+        )
+        guard reveal > zenInitialAutoShift + 0.5 else { return }
+        zenInitialAutoShift = reveal
+        zenOverscrollShift = reveal
+        applyZenOverscrollShift()
     }
 
     private func startSelectionAutoscrollIfNeeded() {
@@ -3113,6 +3597,7 @@ class GhosttyTerminalView: UIView {
 
         // Create display link for smooth animation
         momentumPhase = .began
+        momentumForwardedToGhostty = false
         momentumDisplayLink = CADisplayLink(target: self, selector: #selector(momentumScrollTick))
         momentumDisplayLink?.add(to: .main, forMode: .common)
     }
@@ -3134,18 +3619,28 @@ class GhosttyTerminalView: UIView {
             return
         }
 
-        // Send momentum scroll event (began -> changed)
+        // Send momentum scroll event. The `.began` phase travels with the
+        // first event ghostty actually receives; events fully absorbed by
+        // full-screen zen overscroll never reach ghostty, so the phase chain
+        // must not start mid-run.
+        let rawX = Double(momentumVelocity.x)
+        let rawY = Double(momentumVelocity.y)
+        let forwardedY = resolveZenOverscroll(rawDelta: resolveKeyboardLift(rawDelta: rawY))
+        let isFirstForwarded = momentumPhase == .began && !momentumForwardedToGhostty
         let scrollEvent = Ghostty.Input.MouseScrollEvent(
-            x: Double(momentumVelocity.x),
-            y: Double(momentumVelocity.y),
+            x: rawX,
+            y: forwardedY,
             mods: Ghostty.Input.ScrollMods(
                 precision: true,
-                momentum: momentumPhase == .began ? .began : .changed
+                momentum: isFirstForwarded ? .began : .changed
             )
         )
-        surface.sendMouseScroll(scrollEvent)
+        if rawX != 0 || forwardedY != 0 {
+            surface.sendMouseScroll(scrollEvent)
+            momentumForwardedToGhostty = true
+            requestRender()
+        }
         momentumPhase = .changed
-        requestRender()
     }
 
     private func stopMomentumScrolling() {
@@ -3157,12 +3652,14 @@ class GhosttyTerminalView: UIView {
 
     private func sendMomentumEnd() {
         guard let surface = surface else { return }
+        guard momentumForwardedToGhostty else { return }
         let endEvent = Ghostty.Input.MouseScrollEvent(
             x: 0,
             y: 0,
             mods: Ghostty.Input.ScrollMods(precision: true, momentum: .ended)
         )
         surface.sendMouseScroll(endEvent)
+        momentumForwardedToGhostty = false
         momentumPhase = .none
     }
 
@@ -5170,6 +5667,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendTerminalInputText(_ text: String) {
+        #if DEBUG
+        NSLog("VVTerm-kbd sendTerminalInputText text=%@ canRoute=%d", text, canRouteTerminalInput)
+        #endif
         guard canRouteTerminalInput else { return }
         let normalized = text.precomposedStringWithCanonicalMapping
         guard normalized.count == 1, let character = normalized.first else {
@@ -5195,6 +5695,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendRawTerminalInputText(_ text: String, invalidateLocalSession: Bool = true) {
+        #if DEBUG
+        NSLog("VVTerm-kbd sendRaw text=%@ canRoute=%d", text, canRouteTerminalInput)
+        #endif
         guard canRouteTerminalInput else { return }
         let terminalText = text
             .replacingOccurrences(of: "\r\n", with: "\r")
@@ -5328,6 +5831,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendKeyPress(_ key: Ghostty.Input.Key) {
+        #if DEBUG
+        keyboardUITestNoteSent("<key:\(key.rawValue)>")
+        #endif
         guard canRouteTerminalInput else { return }
         guard let surface = surface else { return }
         surface.sendKeyEvent(.init(key: key, action: .press))
@@ -5343,6 +5849,9 @@ class GhosttyTerminalView: UIView {
     }
 
     private func sendAnsiSequence(_ data: Data) {
+        #if DEBUG
+        keyboardUITestNoteSent("ansi:\(data.map { String(format: "%02x", $0) }.joined())")
+        #endif
         guard canRouteTerminalInput else { return }
         invalidateLocalTextInputSession()
         let text = String(decoding: data, as: UTF8.self)
@@ -5400,6 +5909,9 @@ class GhosttyTerminalView: UIView {
     ) {
         guard canRouteTerminalInput else { return }
         guard let surface = surface else { return }
+        #if DEBUG
+        keyboardUITestNoteSent(key == .enter ? "enter" : (text ?? "<key:\(key.rawValue)>"))
+        #endif
         if invalidateLocalSession {
             invalidateLocalTextInputSession()
         }
@@ -5543,7 +6055,10 @@ class GhosttyTerminalView: UIView {
     private func configureIOSurfaceLayers(size: CGSize?) {
         let scale = self.contentScaleFactor
         guard let sublayers = layer.sublayers else { return }
-        let targetBounds = size.map { CGRect(origin: .zero, size: $0) } ?? bounds
+        // Full-screen zen overscroll shifts the rendered grid inside the
+        // viewport; keep the layers aligned with the shift on every resize.
+        let targetBounds = (size.map { CGRect(origin: .zero, size: $0) } ?? bounds)
+            .offsetBy(dx: 0, dy: zenOverscrollShift + keyboardLiftShift)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for sublayer in sublayers {
@@ -5605,7 +6120,12 @@ class GhosttyTerminalView: UIView {
             guard let data = data, len > 0 else { return }
             let swiftData = Data(bytes: data, count: len)
             // Call directly - Ghostty calls this from main thread, no queue hop needed
-            view.writeCallback?(swiftData)
+            if view.writeCallback != nil {
+                #if DEBUG
+                view.keyboardUITestNoteTransportWrite(swiftData)
+                #endif
+                view.writeCallback?(swiftData)
+            }
         }, userdata)
     }
 
@@ -6048,7 +6568,12 @@ extension GhosttyTerminalView {
     }
 
     private var shouldHideKeyboardAccessoryBar: Bool {
-        shouldSuppressSoftwareKeyboard
+        #if DEBUG
+        if keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild {
+            return true
+        }
+        #endif
+        return shouldSuppressSoftwareKeyboard
             || suppressAccessoryForMissingSoftwareKeyboard
     }
 
@@ -6137,7 +6662,24 @@ extension GhosttyTerminalView {
         let inputViewMode = keyboardUITestSoftwareKeyboardFailure == .untilSessionRebuild
             ? "testUnexpectedHidden"
             : (shouldSuppressSoftwareKeyboard ? "policyHidden" : "system")
-        return [
+        #if DEBUG
+        let zenDiagnostics = [
+            "zen=\(zenOverscrollEnabled ? "on" : "off")",
+            "zenShift=\(Int(zenOverscrollShift.rounded()))",
+            "zenLatch=\(zenDebugState.latchReason)",
+            "zenToggles=\(zenDebugState.toggles)",
+            "zenLastTransition=\(zenDebugState.lastTransition)",
+            "zenScrollbar=\(zenDebugState.latchScrollbar)",
+            "zenInsets=\(zenDebugState.latchInsets)",
+            "zenCellH=\(zenDebugState.latchCellHeight)",
+            "themeName=\(UserDefaults.standard.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "nil")",
+            "themeUsePerAppearance=\(Self.themeUsePerAppearanceDiagnostic)",
+            "zenFullScreenPref=\(UserDefaults.standard.bool(forKey: TerminalDefaults.zenModeFullScreenKey))"
+        ]
+        #else
+        let zenDiagnostics: [String] = []
+        #endif
+        return ([
             "windowAttached=\(snapshot.windowAttached)",
             "keyWindow=\(snapshot.windowIsKey)",
             "scene=\(snapshot.sceneActivationState)",
@@ -6179,11 +6721,28 @@ extension GhosttyTerminalView {
             "imeModelText=\(keyboardUITestToken(textInputModel.text))",
             "hardwareRepeatPhase=\(keyboardUITestHardwareRepeatPhase)",
             "hardwarePresses=\(hardwarePressesSentToGhostty.count)",
+            "pwdRaw=\(keyboardUITestLastPwdRaw)",
+            "lastSent=\(keyboardUITestLastSent)",
+            "sentCount=\(keyboardUITestSentCount)",
+            "enterSent=\(keyboardUITestEnterSent)",
+            "transportSent=\(keyboardUITestTransportSentCount)",
+            "transportTail=\(keyboardUITestTransportTail)",
             "hideRequests=\(keyboardHideRequestCount)",
             "inputRebuilds=\(keyboardInputSessionRebuildCount)",
             "inputReloads=\(keyboardInputViewReloadCount)"
-        ].joined(separator: " ")
+        ] + zenDiagnostics).joined(separator: " ")
     }
+
+    #if DEBUG
+    private static var themeUsePerAppearanceDiagnostic: String {
+        let defaults = UserDefaults.standard
+        let key = CloudKitSyncConstants.terminalUsePerAppearanceThemeKey
+        guard let value = defaults.object(forKey: key) else { return "nil" }
+        if let bool = value as? Bool { return "\(bool)" }
+        if let string = value as? String { return "string(\(string))" }
+        return "other"
+    }
+    #endif
 
     /// Test-only factory for the keyboard input accessory view. Used by unit
     /// tests to assert the self-sizing contract (a concrete
@@ -7102,7 +7661,11 @@ private class TerminalInputAccessoryView: UIInputView {
     ) -> UIColor {
         let defaults = UserDefaults.standard
 
-        let usePerAppearance = defaults.object(forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) as? Bool ?? true
+        let usePerAppearance = TerminalDefaults.storedBool(
+            defaults,
+            forKey: CloudKitSyncConstants.terminalUsePerAppearanceThemeKey,
+            defaultValue: true
+        )
         let darkTheme = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameKey) ?? "Aizen Dark"
         let lightTheme = defaults.string(forKey: CloudKitSyncConstants.terminalThemeNameLightKey) ?? "Aizen Light"
         let themeName: String

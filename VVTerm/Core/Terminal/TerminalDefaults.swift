@@ -190,6 +190,8 @@ enum TerminalDefaults {
     static let keepScreenAwakeKey = "terminalKeepScreenAwake"
     static let optionAsAltModeKey = "terminalOptionAsAltMode"
     static let preserveTerminalSizeForKeyboardKey = "terminalPreserveSizeForKeyboard"
+    static let zenModeFullScreenKey = "terminalZenModeFullScreen"
+    static let zenModeStartupKey = "terminalZenModeStartup"
     static let legacyDefaultFontName = "JetBrainsMono Nerd Font"
     static let minimumFontSize = 4.0
     static let maximumFontSize = 32.0
@@ -198,6 +200,8 @@ enum TerminalDefaults {
     static let defaultCursorBlink = true
     static let defaultKeepScreenAwake = true
     static let defaultPreserveTerminalSizeForKeyboard = true
+    static let defaultZenModeFullScreen = true
+    static let defaultZenModeStartup = true
     #if os(macOS)
     static let defaultPrimaryFontName = "Menlo"
     static let macOSFallbackFontFamilies = [
@@ -230,11 +234,26 @@ enum TerminalDefaults {
     }
 
     static func sshAutoReconnectEnabled(defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: sshAutoReconnectKey) as? Bool) ?? true
+        storedBool(defaults, forKey: sshAutoReconnectKey, defaultValue: true)
     }
 
     static func keepScreenAwakeEnabled(defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: keepScreenAwakeKey) as? Bool) ?? defaultKeepScreenAwake
+        storedBool(defaults, forKey: keepScreenAwakeKey, defaultValue: defaultKeepScreenAwake)
+    }
+
+    /// Reads a stored boolean with the caller's default when the key is
+    /// absent. Unlike `object(forKey:) as? Bool`, this also resolves the
+    /// argument-domain string forms (`-key YES`/`-key NO`), which arrive as
+    /// NSStrings rather than NSNumbers and would otherwise fall through to
+    /// the default. UI tests configure the app through launch arguments, so
+    /// both forms must agree.
+    nonisolated static func storedBool(
+        _ defaults: UserDefaults,
+        forKey key: String,
+        defaultValue: Bool
+    ) -> Bool {
+        guard defaults.object(forKey: key) != nil else { return defaultValue }
+        return defaults.bool(forKey: key)
     }
 
     static func optionAsAltMode(defaults: UserDefaults = .standard) -> TerminalOptionAsAltMode {

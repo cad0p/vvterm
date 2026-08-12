@@ -227,6 +227,10 @@ final class NoticePresentationUITests: XCTestCase {
     @MainActor
     private func launchNoticeHarness(additionalArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
+        // Terminate any stale instance from the previous test before
+        // launching: a leftover app process is the recurring cause of the
+        // "Failed to launch" wedge on the CI runners.
+        app.terminate()
         app.launchArguments = [
             "--vvterm-ui-test-notice-harness",
             "-AppleLanguages", "(en)",

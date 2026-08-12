@@ -49,6 +49,54 @@ extension View {
             )
         )
     }
+
+    /// Propagates the full-screen zen state to the pane's registered terminal
+    /// views so they enable edge overscroll (and reset it when leaving zen),
+    /// and to the pane's overlays (connection banners) so they clear the
+    /// notch.
+    func terminalZenFullScreen(
+        enabled: Bool,
+        paneIds: [UUID],
+        terminalRegistryVersion: Int,
+        terminalProvider: @escaping (UUID) -> GhosttyTerminalView?
+    ) -> some View {
+        modifier(
+            TerminalZenFullScreenModifier(
+                enabled: enabled,
+                paneIds: paneIds,
+                terminalRegistryVersion: terminalRegistryVersion,
+                terminalProvider: terminalProvider
+            )
+        )
+        .environment(\.terminalZenFullScreenEnabled, enabled)
+    }
+}
+
+private struct TerminalZenFullScreenModifier: ViewModifier {
+    let enabled: Bool
+    let paneIds: [UUID]
+    let terminalRegistryVersion: Int
+    let terminalProvider: (UUID) -> GhosttyTerminalView?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { apply() }
+            .onChange(of: enabled) { _ in apply() }
+            .onChange(of: terminalRegistryVersion) { _ in apply() }
+            .onDisappear { clear() }
+    }
+
+    private func apply() {
+        for paneId in paneIds {
+            terminalProvider(paneId)?.zenOverscrollEnabled = enabled
+        }
+    }
+
+    private func clear() {
+        for paneId in paneIds {
+            terminalProvider(paneId)?.zenOverscrollEnabled = false
+        }
+    }
 }
 
 @MainActor
@@ -186,6 +234,17 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
         )
         terminal.recordKeyboardAvoidanceLayoutDescription(
             "geom=\(geometry) term=\(baseGeometry.terminalFrame.debugDescription) caret=\(baseCursorFrame.debugDescription) kb=\(keyboardFrameInWindow?.debugDescription ?? "nil") acc=\(accessoryFrameInWindow?.debugDescription ?? "nil") -> inset=\(Int(newLayout.bottomInset.rounded())) offset=\(Int(newLayout.verticalOffset.rounded())) preserve=\(newLayout.preservesTerminalSurfaceSize ? 1 : 0)"
+        )
+        // Feed the anchored-lift state to the terminal so pan deltas can
+        // shift the rendered grid (the keyboard-lift viewport shift) instead
+        // of scrolling ghostty while the docked keep-size lift is active.
+        let docked: Bool = {
+            if case .docked = geometry { return true }
+            return false
+        }()
+        terminal.recordKeyboardAvoidanceLift(
+            offset: newLayout.verticalOffset,
+            docked: docked
         )
         terminal.setKeyboardAvoidanceSizePreservationEnabled(
             newLayout.preservesTerminalSurfaceSize
@@ -419,6 +478,7 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
     let onReady: () -> Void
     let onVoiceTrigger: (() -> Void)?
 
+    @Environment(\.terminalZenFullScreenEnabled) private var zenFullScreenEnabled
     @EnvironmentObject var ghosttyApp: Ghostty.App
     @Environment(\.scenePhase) private var scenePhase
 
@@ -532,6 +592,13 @@ private struct RemoteTerminalPaneRepresentable: UIViewRepresentable {
         guard let terminalView = uiView as? GhosttyTerminalView else {
             return
         }
+
+        // Self-healing zen full-screen sync: the terminal derives its
+        // overscroll-enabled state from the environment on every SwiftUI
+        // update, so a modifier onDisappear/onAppear desync (the view
+        // container reappearing without re-applying) cannot leave the
+        // terminal with zen overscroll disabled while the route is in zen.
+        terminalView.zenOverscrollEnabled = zenFullScreenEnabled
 
         guard TerminalTabManager.shared.paneStates[paneId] != nil else {
             terminalView.acceptsTerminalInput = false

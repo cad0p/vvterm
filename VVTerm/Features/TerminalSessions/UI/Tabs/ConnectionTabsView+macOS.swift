@@ -648,7 +648,10 @@ extension ConnectionTerminalContainer {
     }
 
     private var terminalContentInsets: EdgeInsets {
-        isZenModeEnabled ? zenWindowSafeAreaInsets : EdgeInsets()
+        guard isZenModeEnabled else { return EdgeInsets() }
+        // Full-screen zen: the terminal extends under the transparent
+        // titlebar; overscroll keeps chrome-hidden rows reachable.
+        return zenModeFullScreenEnabled ? EdgeInsets() : zenWindowSafeAreaInsets
     }
 
     @ViewBuilder
@@ -665,6 +668,12 @@ extension ConnectionTerminalContainer {
             .opacity(isVisible ? 1 : 0)
             .allowsHitTesting(isVisible)
             .zIndex(isVisible ? 1 : 0)
+            .terminalZenFullScreen(
+                enabled: isZenModeEnabled && zenModeFullScreenEnabled,
+                paneIds: tab.allPaneIds,
+                terminalRegistryVersion: tabManager.terminalRegistryVersion,
+                terminalProvider: { tabManager.getTerminal(for: $0) }
+            )
         }
 
         if selectedView == "terminal" && serverTabs.isEmpty {

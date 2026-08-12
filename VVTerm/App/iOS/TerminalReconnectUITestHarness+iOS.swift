@@ -51,6 +51,15 @@ struct TerminalReconnectUITestHarness: View {
     @StateObject private var fileTabs: RemoteFileTabManager
     @StateObject private var fileBrowser: RemoteFileBrowserStore
     @State private var fixtureState = FixtureState.preparing
+    // Sticky server-metadata fixture: once the navigation harness's toggle has
+    // restored the 25-server fixture list, keep re-applying it. An app-side
+    // reload (observed in CI as the list collapsing to the single persisted
+    // server mid-test) would otherwise break the list-position test.
+    @State private var keepServerMetadataReseeded = false
+    // The route's zen state lives in scene-scoped storage; the harness reads
+    // the same key so the diagnostics can expose why startup zen did or did
+    // not engage (surfaced as zenRoute=on/off).
+    @SceneStorage("vvterm.zenMode.ios") private var sceneZenMode = false
 
     init() {
         _fileTabs = StateObject(
@@ -66,7 +75,8 @@ struct TerminalReconnectUITestHarness: View {
             .overlay(alignment: .topLeading) {
                 TerminalReconnectDiagnosticsLabel(
                     serverId: activeServer?.id,
-                    fallback: fixtureDiagnosticFallback
+                    fallback: fixtureDiagnosticFallback,
+                    zenRouteEnabled: sceneZenMode
                 )
                     .padding(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,8 +260,30 @@ struct TerminalReconnectUITestHarness: View {
         guard let activeServer else { return }
         if serverManager.servers.isEmpty {
             serverManager.servers = navigationFixtureServers(activeServer: activeServer)
+            keepServerMetadataReseeded = true
+            reseedServerMetadataWhileNeeded()
         } else {
             serverManager.servers = []
+            keepServerMetadataReseeded = false
+        }
+    }
+
+    /// Re-applies the 25-server fixture list while the toggle is "on" if an
+    /// app-side reload collapses it. Runs at 2 Hz so the drift window stays
+    /// far below the test's AX-poll cadence. `keepServerMetadataReseeded` is
+    /// read through its @State storage each iteration, so the loop stops as
+    /// soon as the toggle turns the fixture off.
+    private func reseedServerMetadataWhileNeeded() {
+        guard usesNavigationHarness else { return }
+        let serverManager = self.serverManager
+        Task {
+            while keepServerMetadataReseeded {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let activeServer else { return }
+                if serverManager.servers.count != 25 {
+                    serverManager.servers = navigationFixtureServers(activeServer: activeServer)
+                }
+            }
         }
     }
 
@@ -268,6 +300,28 @@ struct TerminalReconnectUITestHarness: View {
 
     private func prepareFixture() async {
         guard case .preparing = fixtureState else { return }
+
+        // Harness tests assert the pre-zen chrome (nav bar, segmented picker,
+        // floating controls). Keep the new zen defaults off unless a test
+        // explicitly opts into startup zen; persisted values from a previous
+        // launch are re-clamped here for determinism. Symmetrically, tests
+        // that DO opt in force the defaults back on — otherwise a prior
+        // no-flag launch in the same simulator would leave zen defaults
+        // persisted false and silently disable startup zen.
+        if Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-enable-startup-zen") {
+            UserDefaults.standard.set(true, forKey: TerminalDefaults.zenModeStartupKey)
+            UserDefaults.standard.set(true, forKey: TerminalDefaults.zenModeFullScreenKey)
+        } else {
+            UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeStartupKey)
+            UserDefaults.standard.set(false, forKey: TerminalDefaults.zenModeFullScreenKey)
+            // The route's zen state is scene-scoped storage that persists
+            // across launches in the same simulator; a prior test that
+            // enabled startup zen would otherwise leave this scene with
+            // full-screen zen already engaged (hiding the nav chrome the
+            // non-zen harness tests assert on). Reset it alongside the
+            // defaults so the scene starts from the deterministic state.
+            UserDefaults.standard.removeObject(forKey: "vvterm.zenMode.ios")
+        }
 
         do {
             let username = try fixtureUsername()
@@ -360,9 +414,17 @@ struct TerminalReconnectUITestHarness: View {
         return data
     }
 
+    /// Deterministic filler IDs: the 2 Hz metadata reseed must not change
+    /// row identities (random UUIDs on every reseed made the ForEach diff
+    /// rebuild rows mid-test and shifted the list scroll position).
+    private static func fillerServerID(_ index: Int) -> UUID {
+        UUID(uuidString: String(format: "%08X-0000-0000-0000-000000000000", index))!
+    }
+
     private func navigationFixtureServers(activeServer: Server) -> [Server] {
         let fillerServers = (1...24).map { index in
             Server(
+                id: Self.fillerServerID(index),
                 workspaceId: Self.workspaceId,
                 environment: .development,
                 name: String(format: "Navigation Server %02d", index),
@@ -380,6 +442,7 @@ struct TerminalReconnectUITestHarness: View {
 private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
     let serverId: UUID?
     let fallback: String
+    let zenRouteEnabled: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -398,7 +461,11 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
     }
 
     func updateUIView(_ label: UILabel, context: Context) {
-        context.coordinator.update(serverId: serverId, fallback: fallback)
+        context.coordinator.update(
+            serverId: serverId,
+            fallback: fallback,
+            zenRouteEnabled: zenRouteEnabled
+        )
     }
 
     static func dismantleUIView(_ label: UILabel, coordinator: Coordinator) {
@@ -410,6 +477,7 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
         private weak var configuredTerminal: GhosttyTerminalView?
         private var serverId: UUID?
         private var fallback = "setup=preparing"
+        private var zenRouteEnabled = false
         private var timer: Timer?
         private var lastConnectionState: ConnectionState?
         private var connectionAttemptCount = 0
@@ -424,9 +492,10 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
             refresh()
         }
 
-        func update(serverId: UUID?, fallback: String) {
+        func update(serverId: UUID?, fallback: String, zenRouteEnabled: Bool) {
             self.serverId = serverId
             self.fallback = fallback
+            self.zenRouteEnabled = zenRouteEnabled
             refresh()
         }
 
@@ -487,7 +556,24 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 keyboardVisible: keyboard.isSoftwareKeyboardVisible,
                 keyboardHeight: keyboardHeight
             )
-            publish([
+            let sshDiagnostics: [String]
+            #if DEBUG
+            sshDiagnostics = [
+                "sshWrites=\(SSHClientUITestDebug.writeCount)",
+                "sshWriteTail=\(SSHClientUITestDebug.writeTail)",
+                "sshWriteTails=\(SSHClientUITestDebug.writeTails.joined(separator: "|"))",
+                "sshWriteError=\(SSHClientUITestDebug.writeError)",
+                "sshReceived=\(SSHClientUITestDebug.receivedCount)",
+                "sshReceivedBytes=\(SSHClientUITestDebug.receivedBytes)",
+                "sshReceivedTail=\(SSHClientUITestDebug.receivedTail)",
+                "sshReceivedTails=\(SSHClientUITestDebug.receivedTails.joined(separator: "|"))",
+                "osc0Hits=\(SSHClientUITestDebug.osc0Hits)",
+                "osc7Hits=\(SSHClientUITestDebug.osc7Hits)",
+            ]
+            #else
+            sshDiagnostics = []
+            #endif
+            publish(([
                 "setup=ready",
                 "state=\(connectionToken(state))",
                 "title=\(title)",
@@ -496,9 +582,15 @@ private struct TerminalReconnectDiagnosticsLabel: UIViewRepresentable {
                 "disconnectReason=\(disconnectReason)",
                 "connectionAttempts=\(connectionAttemptCount)",
                 "shell=\(shellId != nil)",
+            ] + sshDiagnostics + [
                 "shellId=\(shellId?.uuidString ?? "none")",
                 terminalDiagnostics,
-            ].joined(separator: " "))
+                "servers=\(ServerManager.shared.servers.count)",
+                "serverIds=\(ServerManager.shared.servers.map { String($0.id.uuidString.prefix(8)) }.joined(separator: ","))",
+                "activeConnections=\(tabManager.tabsByServer.keys.map { String($0.uuidString.prefix(8)) }.joined(separator: ","))",
+                "workspaces=\(ServerManager.shared.workspaces.count)",
+                "zenRoute=\(zenRouteEnabled ? "on" : "off")",
+            ]).joined(separator: " "))
         }
 
         private func publish(_ diagnostics: String) {

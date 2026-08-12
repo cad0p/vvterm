@@ -108,7 +108,57 @@ enum SSHUploadStrategy: Sendable {
     case execPreferred
 }
 
+#if DEBUG
+/// Shell-channel write telemetry for UI-test diagnostics
+/// (sshWrites=/sshWriteTail=/sshWriteError=): the ghostty write callback
+/// hands bytes to the transport, but CI shows the shell never receives them
+/// — these counters locate whether libssh2 accepted the write or the
+/// channel/socket rejected it. DEBUG-only cross-actor telemetry; benign
+/// data race.
+nonisolated(unsafe) enum SSHClientUITestDebug {
+    static var writeCount = 0
+    static var writeTail = ""
+    static var writeError = ""
+    static var writeTails: [String] = []
+    static var receivedCount = 0
+    static var receivedBytes = 0
+    static var receivedTail = ""
+    static var receivedTails: [String] = []
+    static var osc0Hits = 0
+    static var osc7Hits = 0
+    static func noteWrite(_ data: Data) {
+        writeCount += 1
+        let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
+        let normalized = text.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        writeTail = normalized.count > 12 ? String(normalized.suffix(12)) : normalized
+        writeTails.append(writeTail)
+        if writeTails.count > 6 {
+            writeTails.removeFirst(writeTails.count - 6)
+        }
+    }
+    static func noteReceived(_ data: Data) {
+        receivedCount += 1
+        receivedBytes += data.count
+        let text = String(data: data, encoding: .utf8) ?? data.map { String(format: "%02x", $0) }.joined()
+        let normalized = text.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        receivedTail = normalized.count > 160 ? String(normalized.suffix(160)) : normalized
+        receivedTails.append(receivedTail)
+        if receivedTails.count > 3 {
+            receivedTails.removeFirst(receivedTails.count - 3)
+        }
+    }
+    static func noteError(_ message: String) {
+        writeError = String(message.prefix(60))
+    }
+}
+#endif
+
 actor SSHClient {
+
     private struct DisconnectOperation {
         let id: UUID
         let task: Task<Void, Never>
@@ -4098,7 +4148,11 @@ actor SSHSession {
                             startupTrace?.recordOnce(.firstTerminalByte, detail: "ssh")
                         }
                         let readCount = Int(bytesRead)
-                        state.batchBuffer.append(Data(bytes: buffer, count: readCount))
+                        let readData = Data(bytes: buffer, count: readCount)
+                        #if DEBUG
+                        SSHClientUITestDebug.noteReceived(readData)
+                        #endif
+                        state.batchBuffer.append(readData)
                         didWork = true
 
                         // Update exponential moving average (alpha = 0.3 for quick adaptation)
@@ -4661,10 +4715,16 @@ actor SSHSession {
             if written > 0 {
                 offset += written
                 remaining -= written
+                #if DEBUG
+                SSHClientUITestDebug.noteWrite(data)
+                #endif
             } else if written == Int(LIBSSH2_ERROR_EAGAIN) {
                 // Would block - actually wait for socket to be ready
                 await waitForSocket()
             } else {
+                #if DEBUG
+                SSHClientUITestDebug.noteError("libssh2_channel_write_ex returned \(written)")
+                #endif
                 throw SSHError.socketError("Write failed: \(written)")
             }
         }

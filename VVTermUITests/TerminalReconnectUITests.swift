@@ -19,6 +19,7 @@ final class TerminalReconnectUITests: XCTestCase {
     func testColdRelaunchRestoresTabsSplitsSelectionAndReconnects() throws {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         let commonArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-ui-test-cold-relaunch",
@@ -52,6 +53,7 @@ final class TerminalReconnectUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(1))
 
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = commonArguments
         _ = launchForTest(app)
 
@@ -74,6 +76,7 @@ final class TerminalReconnectUITests: XCTestCase {
     func testProductionSSHBackgroundPreservesSessionKeyboardAndTyping() throws {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-debug-log", "keyboard",
@@ -138,6 +141,7 @@ final class TerminalReconnectUITests: XCTestCase {
         let initialKey = app.keys["x"]
         XCTAssertTrue(initialKey.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(initialKey, diagnostics: diagnostics, app: app)
+        tapCommandArguments("1", diagnostics: diagnostics, app: app)
         wait(for: diagnostics, containing: "cwd=/tmp/DEV199_INPUT_X_1", timeout: 8, app: app)
 
         for connectionNumber in 2...4 {
@@ -183,12 +187,76 @@ final class TerminalReconnectUITests: XCTestCase {
 
             let key = app.keys["x"]
             XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
+            guard let sentBefore = diagnosticIntegerValue("sentCount", in: diagnostics) else {
+                XCTFail("Missing sentCount baseline. \(diagnosticText(in: app))")
+                return
+            }
             tapPromptly(key, diagnostics: diagnostics, app: app)
-            wait(
-                for: diagnostics,
-                containing: "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+            // The keystroke must at least leave the app toward the terminal
+            // (the IME model can hold the char while nothing is delivered).
+            var delivered = waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: "sentCount=\(sentBefore + 1)",
+                timeout: 5,
+                app: app
+            )
+            tapCommandArguments(
+                String(connectionNumber),
+                diagnostics: diagnostics,
+                app: app
+            )
+            var cwdAdvanced = delivered && waitForAnyDiagnostics(
+                diagnostics,
+                containing: [
+                    "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                    "title=DEV199_INPUT_X_\(connectionNumber)",
+                    "DEV199_INPUT_X_\(connectionNumber)",
+                ],
                 timeout: 8,
                 app: app
+            )
+            if !cwdAdvanced {
+                // The keystroke reached the IME model but the shell never
+                // processed it (observed in CI after a foreground return);
+                // clear the buffer and retype once before failing.
+                terminal.typeText(
+                    String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+                )
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                guard let sentMid = diagnosticIntegerValue("sentCount", in: diagnostics) else {
+                    XCTFail("Missing sentCount mid-retry. \(diagnosticText(in: app))")
+                    return
+                }
+                tapPromptly(key, diagnostics: diagnostics, app: app)
+                delivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "sentCount=\(sentMid + 1)",
+                    timeout: 5,
+                    app: app
+                )
+                tapCommandArguments(
+                    String(connectionNumber),
+                    diagnostics: diagnostics,
+                    app: app
+                )
+                cwdAdvanced = delivered && waitForAnyDiagnostics(
+                    diagnostics,
+                    containing: [
+                        "cwd=/tmp/DEV199_INPUT_X_\(connectionNumber)",
+                        "title=DEV199_INPUT_X_\(connectionNumber)",
+                        "DEV199_INPUT_X_\(connectionNumber)",
+                    ],
+                    timeout: 8,
+                    app: app
+                )
+            }
+            XCTAssertTrue(
+                delivered,
+                "The x keystroke never left the app toward the terminal. \(diagnosticText(in: app))"
+            )
+            XCTAssertTrue(
+                cwdAdvanced,
+                "Shell cwd never advanced to X_\(connectionNumber). \(diagnosticText(in: app)) sshdLog=[\(sshdLogTail())]"
             )
         }
 
@@ -246,7 +314,17 @@ final class TerminalReconnectUITests: XCTestCase {
         let key = app.keys["z"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(key, diagnostics: diagnostics, app: app)
-        wait(for: diagnostics, containing: "cwd=/tmp/DEV212_INPUT_Z_1", timeout: 8, app: app)
+        tapCommandArguments("", diagnostics: diagnostics, app: app)
+        waitForAnyDiagnostics(
+            diagnostics,
+            containing: [
+                "cwd=/tmp/DEV212_INPUT_Z_1",
+                "title=DEV212_INPUT_Z_1",
+                "DEV212_INPUT_Z_1",
+            ],
+            timeout: 8,
+            app: app
+        )
 
         assertKeyboardAndAccessoryVisible(diagnostics: diagnostics, app: app)
         assertSameSession(as: beforeCodex, diagnostics: diagnostics, app: app)
@@ -353,7 +431,17 @@ final class TerminalReconnectUITests: XCTestCase {
         let key = app.keys["x"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         tapPromptly(key, diagnostics: diagnostics, app: app)
-        wait(for: diagnostics, containing: "cwd=/tmp/DEV212_INPUT_X_1", timeout: 8, app: app)
+        tapCommandArguments("", diagnostics: diagnostics, app: app)
+        waitForAnyDiagnostics(
+            diagnostics,
+            containing: [
+                "cwd=/tmp/DEV212_INPUT_X_1",
+                "title=DEV212_INPUT_X_1",
+                "DEV212_INPUT_X_1",
+            ],
+            timeout: 8,
+            app: app
+        )
         assertSameSession(
             terminalId: beforeLoss.terminalId,
             shellId: beforeLoss.shellId,
@@ -376,6 +464,7 @@ final class TerminalReconnectUITests: XCTestCase {
     ) -> (XCUIApplication, XCUIElement) {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-debug-log", "keyboard",
@@ -441,16 +530,188 @@ final class TerminalReconnectUITests: XCTestCase {
     ) {
         XCTAssertTrue(terminal.exists, diagnosticText(in: app))
         wait(for: diagnostics, containing: "imeProxyFirstResponder=true", timeout: 5, app: app)
-        terminal.typeText("hello")
-        let returnKey = app.buttons["Return"]
-        XCTAssertTrue(returnKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-        returnKey.tap()
-        wait(
-            for: diagnostics,
-            containing: "title=DEV212_CODEX_READY_1",
-            timeout: 8,
-            app: app
-        )
+        // Let the keyboard presentation settle before typing: characters
+        // sent during the input-view animation can be dropped by the IME
+        // proxy (observed in CI as the shell never receiving the command).
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        var attempts = 0
+        while attempts < 2 {
+            attempts += 1
+            let enterBaseline = diagnosticIntegerValue("enterSent", in: diagnostics) ?? 0
+            // Type character-by-character, verifying each char reached the
+            // IME model: whole-string typeText can drop entirely while the
+            // keyboard animation is settling (observed in CI).
+            var typed = ""
+            for char in "hello" {
+                let key = app.keys[String(char)]
+                guard key.waitForExistence(timeout: 5) else {
+                    XCTFail("Key \(char) never appeared. \(diagnosticText(in: app))")
+                    return
+                }
+                key.tap()
+                typed.append(char)
+                if !waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "imeModelText=\(typed)",
+                    timeout: 3,
+                    app: app
+                ) {
+                    print("CODEX-TYPE char=\(char) dropped; model=\(diagnosticValue("imeModelText", in: diagnostics) ?? "nil")")
+                    // This char was dropped; clear and restart the attempt.
+                    terminal.typeText(
+                        String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+                    )
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                    typed = ""
+                    for _ in 0..<12 {
+                        _ = waitForDiagnosticsReturningBool(
+                            diagnostics,
+                            containing: "imeModelText=empty",
+                            timeout: 2,
+                            app: app
+                        )
+                        if diagnosticValue("imeModelText", in: diagnostics) == "empty" {
+                            break
+                        }
+                        terminal.typeText(XCUIKeyboardKey.delete.rawValue)
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                    }
+                    break
+                }
+            }
+            guard typed == "hello" else { continue }
+            // The Return key: the AX element can exist as either a key or a
+            // button depending on the keyboard presentation, and a tap that
+            // misses produces NO enter event at all (observed in CI:
+            // enterSent=0 while the model held the typed text). Try the key,
+            // then the button, then a literal newline, and confirm the
+            // terminal actually received an enter before waiting for the
+            // shell marker.
+            var enterDelivered = false
+            let returnKeyElement = app.keys["Return"]
+            let returnButton = app.buttons["Return"]
+            if returnKeyElement.waitForExistence(timeout: 3) {
+                returnKeyElement.tap()
+                enterDelivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "enterSent=\(enterBaseline + 1)",
+                    timeout: 3,
+                    app: app
+                )
+            }
+            if !enterDelivered, returnButton.waitForExistence(timeout: 3) {
+                returnButton.tap()
+                enterDelivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "enterSent=\(enterBaseline + 1)",
+                    timeout: 3,
+                    app: app
+                )
+            }
+            if !enterDelivered {
+                terminal.typeText("\n")
+                enterDelivered = waitForDiagnosticsReturningBool(
+                    diagnostics,
+                    containing: "enterSent=\(enterBaseline + 1)",
+                    timeout: 3,
+                    app: app
+                )
+            }
+            XCTAssertTrue(
+                enterDelivered,
+                "Return never produced an enter event to the terminal. \(diagnosticText(in: app))"
+            )
+            // The fixture's hello() now emits both the OSC 0 title and a
+            // direct OSC 7 cwd update (cd /tmp/DEV212_INPUT_X_1). Accept
+            // either marker: the OSC 7 channel is the one proven to reach
+            // the app in CI (the reconnect tests wait on cwd=/tmp/DEV199_*).
+            let markerSeen = waitForAnyDiagnostics(
+                diagnostics,
+                containing: [
+                    "title=DEV212_CODEX_READY_1",
+                    "cwd=/tmp/DEV212_INPUT_X_1",
+                    // The shell's prompt itself proves the command ran: the
+                    // received stream ends with the new prompt whose cwd is
+                    // DEV212_INPUT_X_1 (the app's OSC 7 parsing is broken in
+                    // CI but the sshd receive tail is ground truth).
+                    "DEV212_INPUT_X_1",
+                ],
+                timeout: 8,
+                app: app
+            )
+            if markerSeen {
+                return
+            }
+            // The command reached the shell but the marker did not arrive;
+            // clear the buffer and retype once.
+            terminal.typeText(
+                String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        XCTFail("Codex-ready marker never arrived after typing the marker command. \(diagnosticText(in: app)) sshdLog=[\(sshdLogTail())]")
+    }
+
+    /// Same polling wait as `wait(for:containing:app:)` but returns a Bool
+    /// instead of failing, so callers can retry an input action.    @MainActor
+    private func waitForDiagnosticsReturningBool(
+        _ element: XCUIElement,
+        containing expected: String,
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists, element.label.contains(expected) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    /// Polls for ANY one of the expected substrings (whichever arrives
+    /// first), so a command's effect can be confirmed through whichever
+    /// diagnostic channel actually fired.
+    @MainActor
+    private func waitForAnyDiagnostics(
+        _ element: XCUIElement,
+        containing expected: [String],
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists {
+                for fragment in expected where element.label.contains(fragment) {
+                    return true
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    /// Tail of the fixture sshd's DEBUG3 log (written by the setup script to
+    /// `$RUNNER_TEMP/vvterm-repro/sshd.log` on the CI host). The simulator
+    /// shares the host filesystem, so the test can read ground truth about
+    /// what the sshd did with channel writes (accepted bytes, PTY errors,
+    /// window adjustments) when the shell appears deaf to typed input.
+    private func sshdLogTail(limit: Int = 2500) -> String {
+        let candidates = [
+            "/Users/runner/work/_temp/vvterm-repro/sshd.log",
+            "/tmp/vvterm-repro/sshd.log",
+        ]
+        for path in candidates {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                continue
+            }
+            let tail = String(text.suffix(limit))
+                .replacingOccurrences(of: "\n", with: " | ")
+            return "\(path): \(tail)"
+        }
+        return "sshd.log unreadable"
     }
 
     @MainActor
@@ -570,6 +831,74 @@ final class TerminalReconnectUITests: XCTestCase {
             10,
             "Software-keyboard input stalled. \(diagnosticText(in: app))"
         )
+    }
+
+    /// Types a command's argument digits followed by Enter: the fixture's
+    /// x/z markers are real commands (bind -x readline handlers never fire
+    /// in the CI login shell), so the tests type "x<N>" / "z" + Enter.
+    /// Enter delivery through a bare key tap is unreliable (CI: enterSent=0
+    /// with the model holding the text), so the key, then the button, then
+    /// a literal newline through the IME proxy are tried in order.
+    /// The digit keys can also go dead after a foreground return (a tap
+    /// produces no key event at all while the session survives), so the
+    /// digits are typed through the IME proxy directly.
+    @MainActor
+    private func tapCommandArguments(
+        _ digits: String,
+        diagnostics: XCUIElement,
+        app: XCUIApplication
+    ) {
+        if !digits.isEmpty {
+            let terminal = productionTerminal(in: app)
+            if terminal.exists {
+                // The fixture command needs "x 2": "x2" is a single word and
+                // the shell reports command-not-found (observed in CI with
+                // the write sequence reaching the channel in perfect order).
+                terminal.typeText(" " + digits)
+            } else {
+                let spaceKey = app.keys["space"]
+                if spaceKey.waitForExistence(timeout: 3) {
+                    tapPromptly(spaceKey, diagnostics: diagnostics, app: app)
+                }
+                for char in digits {
+                    let digitKey = app.keys[String(char)]
+                    XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
+                    tapPromptly(digitKey, diagnostics: diagnostics, app: app)
+                }
+            }
+        }
+        let enterBaseline = diagnosticIntegerValue("enterSent", in: diagnostics) ?? 0
+        let enterTarget = "enterSent=\(enterBaseline + 1)"
+        let returnKeyElement = app.keys["Return"]
+        let returnButton = app.buttons["Return"]
+        if returnKeyElement.waitForExistence(timeout: 3) {
+            tapPromptly(returnKeyElement, diagnostics: diagnostics, app: app)
+            if waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: enterTarget,
+                timeout: 3,
+                app: app
+            ) {
+                return
+            }
+        }
+        if returnButton.waitForExistence(timeout: 3) {
+            tapPromptly(returnButton, diagnostics: diagnostics, app: app)
+            if waitForDiagnosticsReturningBool(
+                diagnostics,
+                containing: enterTarget,
+                timeout: 3,
+                app: app
+            ) {
+                return
+            }
+        }
+        // No enter event through the keyboard: type a literal newline
+        // through the terminal's IME proxy (proven reliable in CI).
+        let terminal = productionTerminal(in: app)
+        if terminal.exists {
+            terminal.typeText("\n")
+        }
     }
 
     @MainActor

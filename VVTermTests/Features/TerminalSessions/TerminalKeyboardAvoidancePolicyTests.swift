@@ -69,40 +69,73 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 
     @Test
-    func coveredCursorMovesJustAboveKeyboard() {
+    func coveredCursorAnchorsContentSoBottomRowClearsKeyboard() {
+        // Keep-size + docked keyboard: the lift is anchored — whenever the
+        // caret is anywhere in the covered zone, the content is pinned so its
+        // bottom row clears the keyboard (overlap + clearance), NOT the
+        // caret's exact position.
         let cursor = CGRect(x: 8, y: 700, width: 8, height: 18)
         let keyboard = CGRect(x: 0, y: 500, width: 390, height: 300)
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
             cursorFrame: cursor,
-            keyboardFrame: keyboard
+            keyboardFrame: keyboard,
+            anchored: true
         )
 
-        #expect(offset == -230)
-        #expect(cursor.maxY + offset + TerminalKeyboardAvoidancePolicy.defaultCursorClearance == keyboard.minY)
+        let overlap = terminalFrame.maxY - keyboard.minY
+        #expect(offset == -(overlap + TerminalKeyboardAvoidancePolicy.defaultCursorClearance))
+        // The anchored lift over-shoots the caret (it clears by more than the
+        // requested clearance) — the content bottom clears the keyboard.
+        #expect(terminalFrame.maxY + offset == keyboard.minY - TerminalKeyboardAvoidancePolicy.defaultCursorClearance)
     }
 
     @Test
-    func cursorClearanceLiftIsCappedAtKeyboardOverlap() {
-        // The caret (valid, inside the grid) sits far below the keyboard top
-        // and the requested clearance would push the lift past the covered
-        // height. The lift is capped at the keyboard overlap with the
-        // terminal plus the requested clearance (800 - 500 + 40 = 340), so
-        // the caret can still fully clear the keyboard.
+    func anchoredLiftDoesNotChaseCaretPosition() {
+        // The anti-bounce regression: a live TUI (pi/htop) moves the cursor
+        // row-by-row while the keyboard is up. The anchored lift must NOT
+        // change with the caret's position inside the covered zone — the
+        // whole terminal would bounce 16-32pt per caret move.
+        let keyboard = CGRect(x: 0, y: 500, width: 390, height: 300)
+        let caretHigh = CGRect(x: 8, y: 700, width: 8, height: 18)
+        let caretLow = CGRect(x: 8, y: 780, width: 8, height: 18)
+
+        let offsetHigh = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: terminalFrame,
+            cursorFrame: caretHigh,
+            keyboardFrame: keyboard,
+            anchored: true
+        )
+        let offsetLow = TerminalKeyboardAvoidancePolicy.verticalOffset(
+            terminalFrame: terminalFrame,
+            cursorFrame: caretLow,
+            keyboardFrame: keyboard,
+            anchored: true
+        )
+
+        #expect(offsetHigh == offsetLow)
+    }
+
+    @Test
+    func anchoredLiftIsCappedAtKeyboardOverlap() {
+        // The anchored lift is the keyboard overlap with the terminal plus
+        // the requested clearance (800 - 500 + 40 = 340), so the caret can
+        // still fully clear the keyboard even when it sits deep in the zone.
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
             cursorFrame: CGRect(x: 8, y: 780, width: 8, height: 18),
             keyboardFrame: CGRect(x: 0, y: 500, width: 390, height: 300),
-            cursorClearance: 40
+            cursorClearance: 40,
+            anchored: true
         )
 
-        #expect(offset == -338)
+        #expect(offset == -340)
     }
 
     @Test
-    func liftNeverExceedsKeyboardOverlapWhenCaretIsFarBelowKeyboard() {
+    func anchoredLiftIsStableForCaretFarBelowKeyboard() {
         // Caret far below the keyboard but still inside the terminal grid:
-        // the offset is -(keyboard overlap + clearance), NOT
+        // the anchored offset is -(keyboard overlap + clearance), NOT
         // -(terminalHeight - 1).
         let cursor = CGRect(x: 8, y: 780, width: 8, height: 18)
         let keyboard = CGRect(x: 0, y: 500, width: 390, height: 300)
@@ -110,12 +143,11 @@ struct TerminalKeyboardAvoidancePolicyTests {
         let offset = TerminalKeyboardAvoidancePolicy.verticalOffset(
             terminalFrame: terminalFrame,
             cursorFrame: cursor,
-            keyboardFrame: keyboard
+            keyboardFrame: keyboard,
+            anchored: true
         )
 
-        // Required lift 798 + 12 - 500 = 310, below the cap (overlap 300 +
-        // clearance 12 = 312): the required lift wins.
-        #expect(offset == -(cursor.maxY + TerminalKeyboardAvoidancePolicy.defaultCursorClearance - keyboard.minY))
+        #expect(offset == -(overlap + TerminalKeyboardAvoidancePolicy.defaultCursorClearance))
         #expect(offset != -(terminalFrame.height - 1))
         #expect(cursor.maxY + offset <= keyboard.minY)
     }
@@ -295,7 +327,9 @@ struct TerminalKeyboardAvoidancePolicyTests {
         )
 
         #expect(docked.bottomInset == 0)
-        #expect(docked.verticalOffset == -230)
+        // Anchored lift: the covered caret pins the content to the keyboard
+        // overlap + clearance (800 - 500 + 12 = 312), not the caret position.
+        #expect(docked.verticalOffset == -312)
         #expect(docked.preservesTerminalSurfaceSize)
         #expect(floating.bottomInset == 0)
         #expect(floating.verticalOffset == -160)
@@ -403,6 +437,54 @@ struct TerminalKeyboardAvoidancePolicyTests {
     }
 }
 #endif
+
+extension TerminalKeyboardAvoidancePolicyTests {
+    // MARK: - Keyboard-Lift Viewport Shift
+
+    @Test
+    func liftShiftAbsorbsPullDownUpToTheLift() {
+        // Finger-down pan with the docked keep-size lift active: absorbed as
+        // a viewport shift (the TUI stays anchored), up to the lift amount.
+        let r1 = TerminalKeyboardLiftPolicy.resolvedShift(shift: 0, delta: 100, maxLift: 361)
+        #expect(r1.shift == 100)
+        #expect(r1.forwarded == 0)
+
+        let r2 = TerminalKeyboardLiftPolicy.resolvedShift(shift: 100, delta: 300, maxLift: 361)
+        #expect(r2.shift == 361)
+        #expect(r2.forwarded == 39)
+    }
+
+    @Test
+    func liftShiftForwardsOverflowPastTheNaturalPosition() {
+        // Pulling past the full un-lift is a deliberate scroll into history:
+        // the excess forwards to ghostty.
+        let r = TerminalKeyboardLiftPolicy.resolvedShift(shift: 361, delta: 50, maxLift: 361)
+        #expect(r.shift == 361)
+        #expect(r.forwarded == 50)
+    }
+
+    @Test
+    func liftShiftReLiftsBackToAnchored() {
+        // Finger-up pan absorbs back toward the anchored position; the excess
+        // forwards.
+        let r1 = TerminalKeyboardLiftPolicy.resolvedShift(shift: 200, delta: -150, maxLift: 361)
+        #expect(r1.shift == 50)
+        #expect(r1.forwarded == 0)
+
+        let r2 = TerminalKeyboardLiftPolicy.resolvedShift(shift: 50, delta: -200, maxLift: 361)
+        #expect(r2.shift == 0)
+        // The excess beyond the anchored position forwards (-200 - (-50)).
+        #expect(r2.forwarded == -150)
+    }
+
+    @Test
+    func liftShiftIsCaretIndependentAndInactiveWithoutLift() {
+        // No lift active: deltas pass through untouched.
+        let r = TerminalKeyboardLiftPolicy.resolvedShift(shift: 0, delta: 80, maxLift: 0)
+        #expect(r.shift == 0)
+        #expect(r.forwarded == 80)
+    }
+}
 
 extension TerminalKeyboardAvoidancePolicyTests {
     @Test
