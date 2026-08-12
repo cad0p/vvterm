@@ -142,10 +142,22 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
 
 - Resolves latest upstream `main` → no-op week if it equals `Vendor/libghostty/VERSION`
 - Rebuilds (upstream + patch), runs the probe tests
-- Pass → bump PR (`chore/ghostty-upstream-bump-<sha7>`, artifacts + VERSION + BASE) whose
-  CI is the merge gate; the `watch` job merges on green (no auto-merge — `main` has no
-  branch protection) or files an alarm issue on red
+- Pass → bump PR (`chore/ghostty-upstream-bump-<sha7>`, artifacts + VERSION + BASE) created
+  with GITHUB_TOKEN and **auto-merge enabled**; the full PR CI (build + unit + UI shards
+  incl. loopback SSH) is the merge gate — GitHub's branch protection on `main` requires
+  `build`, `unit-tests`, `ui-tests *` before any merge. The `watch` job files an alarm
+  issue on red CI and parks (never alarms) while the PR waits for the one-time
+  "Approve workflows to run" click or for auto-merge.
 - Fail → alarm issue (label `ghostty-patch`) with this runbook; the shipped app is untouched
+
+### The one human step per bump (no PAT secrets)
+
+Bump PRs are created by the probe with `GITHUB_TOKEN`. GitHub starts their `pull_request`
+workflows in an **approval-required** state — in the PR's merge box, click
+**"Approve workflows to run"** once. That starts the full PR CI against the new binaries;
+when it is green, auto-merge (already enabled by the probe) merges the PR. No PAT is
+needed and no other action is required. The per-PR OTA build (ad-hoc pipeline) is posted
+on the PR after CI runs — install it to validate the new core on a device before merge.
 
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr` (skip PR
 creation — useful for validation runs).
