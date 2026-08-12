@@ -142,6 +142,12 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
 ./scripts/build.sh ghostty                                    # full build (macOS machine)
 ```
 
+Known build.sh friction: the xcframework slice lib names drift upstream — the macOS
+slice is emitted by LipoStep with the out_name verbatim (`ghostty-internal.a`, no
+`lib` prefix) while the iOS slices go through addLibrary and keep the `lib` prefix
+(`libghostty-internal.a`). `scripts/build.sh` therefore matches `*.a` inside each
+slice dir and prints the xcframework contents + Info.plist on mismatch.
+
 ## Validating a rebuild
 
 - Behavioral probe: `VVTermTests/GhosttyCustomIOProbeTests` (custom-I/O round-trip,

@@ -271,12 +271,22 @@ PY
     local macos_lib
     local ios_lib
     local sim_lib
-    macos_lib=$(find "${xcframework}" -path "*/macos-*/libghostty*.a" -type f -print -quit)
-    ios_lib=$(find "${xcframework}" -path "*/ios-arm64/libghostty*.a" -type f -print -quit)
-    sim_lib=$(find "${xcframework}" -path "*/ios-arm64-simulator/libghostty*.a" -type f -print -quit)
+    # Slice lib filenames drift upstream (LipoStep emits out_name verbatim —
+    # "ghostty-internal.a" without the lib prefix — while addLibrary-based
+    # slices emit "libghostty-internal.a"), so match *.a inside each slice
+    # dir instead of a lib name pattern.
+    macos_lib=$(find "${xcframework}" -path "*/macos-*/*.a" -type f -print -quit)
+    ios_lib=$(find "${xcframework}" -path "*/ios-arm64/*.a" -type f -print -quit)
+    sim_lib=$(find "${xcframework}" -path "*/ios-arm64-simulator/*.a" -type f -print -quit)
 
     if [ -z "${macos_lib}" ] || [ -z "${ios_lib}" ] || [ -z "${sim_lib}" ]; then
         log_error "Failed to locate libghostty.a inside xcframework"
+        log_error "xcframework contents:"
+        find "${xcframework}" -type f 2>/dev/null | sort || true
+        if [ -f "${xcframework}/Info.plist" ]; then
+            log_error "Info.plist LibraryIdentifiers:"
+            grep -A2 'LibraryIdentifier' "${xcframework}/Info.plist" | grep string || true
+        fi
         exit 1
     fi
 
