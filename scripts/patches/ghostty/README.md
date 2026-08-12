@@ -141,36 +141,39 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
 `.github/workflows/ghostty-upstream-probe.yml` (Mon 06:00 UTC + manual dispatch):
 
 - Resolves latest upstream `main` → no-op week if it equals `Vendor/libghostty/VERSION`
-- Rebuilds (upstream + patch), runs the **full VVTermTests unit suite** (incl. the
-  behavioral probe tests) against the NEW binaries — the probe IS the merge gate
-- Pass → commits artifacts + VERSION + BASE and pushes **directly to `main`** over SSH
-  with the repo-scoped `vvterm-ghostty-probe` deploy key. The push is a real push, so it
-  also triggers `ios-testflight` (TestFlight release of the new core).
-- Fail (any step incl. a rejected push) → alarm issue (label `ghostty-patch`) with this
-  runbook; the shipped app is untouched
+- Rebuilds (upstream + patch), pre-validates with the **full VVTermTests unit suite**
+  (incl. the behavioral probe tests) against the NEW binaries
+- Pass → bump PR (`chore/ghostty-upstream-bump-<sha7>`, artifacts + VERSION + BASE)
+  created with the **vvterm-ghostty-bump GitHub App token**, auto-merge enabled
+- The bump PR's own `pull_request` CI runs **automatically** (app-created PRs are
+  first-class actors — no approval, no click) and is the **merge gate**: the
+  `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests *`) must pass;
+  auto-merge then merges. The `watch` job exits 0 on merge, files an alarm issue on
+  red CI, and parks (never alarms) on stalls.
+- Fail before PR creation → alarm issue (label `ghostty-patch`) with this runbook; the
+  shipped app is untouched
 
-### Why direct push, and the deploy key (no PAT, no human, no approval)
+### Why a GitHub App token (no PAT, no human, no bypass actor, no direct push)
 
 - A bump PR created with `GITHUB_TOKEN` runs its `pull_request` CI in an
   **approval-required** state (one human click per bump) — rejected by design.
-- The built-in GitHub Actions app can **never** be a ruleset bypass actor (by design),
-  so `GITHUB_TOKEN` cannot push past the ruleset either.
-- The `gh-ruleset-main` ruleset (Settings → Rules) therefore lists the
-  `vvterm-ghostty-probe` **deploy key** as a bypass actor (`always`): the probe's final
-  push uses the key over SSH and passes the pull_request/signature/checks rules. The
-  key is a repo-scoped service credential — not a PAT — used only for that push.
-- Setup (done 2026-08-12): `ssh-keygen -t ed25519` → public key added under
-  Settings → Deploy keys (write access, title `vvterm-ghostty-probe`) → private key
-  stored as the Actions secret `GHOSTTY_BUMP_DEPLOY_KEY`. Revoke anytime by deleting
-  the deploy key.
+- A PR created with a **GitHub App installation token** is a first-class actor: its
+  workflows run automatically, exactly like a human PR. The app is scoped to this
+  repo only (Contents + Pull requests read/write, installed on `cad0p/vvterm` only).
+- No direct pushes and no ruleset bypass actors: the bump goes through a normal PR
+  and the ruleset's required checks are the gate via auto-merge.
+- Setup (done 2026-08-12): GitHub App `vvterm-ghostty-bump` (App ID 4570338) created
+  and installed on `cad0p/vvterm`; **Client ID** stored as repo variable
+  `GHOSTTY_BUMP_CLIENT_ID`; the app's **private key** must be stored as the Actions
+  secret `GHOSTTY_BUMP_PRIVATE_KEY` (full PEM). Revoke anytime by deleting the app
+  or uninstalling it.
 
-Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `push_to_main` (skip the
-push — useful for validation runs). `create_bump_pr` is a deprecated alias kept for
-compat (still honored).
+Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr`
+(skip PR creation — useful for validation runs).
 
-Dispatch `ref` restriction: the workflow file must exist on `main` to be dispatched at
-all (GitHub's dispatch API resolves the workflow against the default branch). Validation
-runs dispatch from `main` with `force_rebuild=true, push_to_main=false`.
+Dispatch `ref` restriction: the workflow file must exist on `main` to be dispatched
+at all (GitHub's dispatch API resolves the workflow against the default branch).
+Validation runs dispatch from `main` with `force_rebuild=true, create_bump_pr=false`.
 
 ### Alarm drill (simulate patch drift)
 
