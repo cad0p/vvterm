@@ -1,3 +1,16 @@
+diff --git a/HACKING.md b/HACKING.md
+index ed9c84591..042687be6 100644
+--- a/HACKING.md
++++ b/HACKING.md
+@@ -50,7 +50,7 @@ dependencies:
+ ### macOS
+ 
+ Building the Ghostty macOS app requires that Xcode, the macOS SDK,
+-and Metal Toolchain are all installed.
++the iOS SDK, and Metal Toolchain are all installed.
+ 
+ A common issue is that the incorrect version of Xcode is either
+ installed or selected. Use the `xcode-select` command to
 diff --git a/include/ghostty.h b/include/ghostty.h
 index df9472d21..f7efe4d6f 100644
 --- a/include/ghostty.h
@@ -33,6 +46,33 @@ index df9472d21..f7efe4d6f 100644
  GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
  GHOSTTY_API void ghostty_surface_set_focus(ghostty_surface_t, bool);
  GHOSTTY_API void ghostty_surface_set_occlusion(ghostty_surface_t, bool);
+diff --git a/macos/build.nu b/macos/build.nu
+index 98d0b40d2..8c456d9b6 100755
+--- a/macos/build.nu
++++ b/macos/build.nu
+@@ -4,7 +4,7 @@
+ # to avoid Nix shell interference (NIX_LDFLAGS, NIX_CFLAGS_COMPILE, etc.).
+ 
+ def main [
+-    --scheme: string = "Ghostty"       # Xcode scheme (Ghostty, DockTilePlugin)
++    --scheme: string = "Ghostty"       # Xcode scheme (Ghostty, Ghostty-iOS, DockTilePlugin)
+     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
+     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
+ ] {
+diff --git a/nix/devShell.nix b/nix/devShell.nix
+index 609a8a31f..7f8fd6381 100644
+--- a/nix/devShell.nix
++++ b/nix/devShell.nix
+@@ -222,7 +222,8 @@ in
+       '')
+       + (lib.optionalString stdenv.hostPlatform.isDarwin ''
+         # On macOS, we unset the macOS SDK env vars that Nix sets up because
+-        # we rely on a system installation. Nix only provides a macOS SDK.
++        # we rely on a system installation. Nix only provides a macOS SDK
++        # and we need iOS too.
+         unset SDKROOT
+         unset DEVELOPER_DIR
+ 
 diff --git a/pkg/macos/iosurface/iosurface.zig b/pkg/macos/iosurface/iosurface.zig
 index 37f8712ba..6a546f1d8 100644
 --- a/pkg/macos/iosurface/iosurface.zig
@@ -277,6 +317,142 @@ index a380dc50c..9ba640d2b 100644
 +        }
      };
  };
+diff --git a/src/build/Config.zig b/src/build/Config.zig
+index 07e047ef5..d5ddf8ea5 100644
+--- a/src/build/Config.zig
++++ b/src/build/Config.zig
+@@ -106,17 +106,6 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
+             result = b.resolveTargetQuery(query);
+         }
+ 
+-        // The full Ghostty build no longer supports iOS; Fail early
+-        // with a clear message rather than partway through the build.
+-        if (result.result.os.tag == .ios and !emit_lib_vt) {
+-            std.log.err(
+-                "iOS is not a supported target for the full Ghostty build; " ++
+-                    "only libghostty-vt supports iOS (-Demit-lib-vt)",
+-                .{},
+-            );
+-            return error.UnsupportedTarget;
+-        }
+-
+         // If we have no minimum OS version, we set the default based on
+         // our tag. Not all tags have a minimum so this may be null.
+         if (result.query.os_version_min == null) {
+@@ -742,6 +731,13 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+             .patch = 0,
+         } },
+ 
++        // The full Ghostty path compiles metal shaders that require iOS 14.
++        .ios => .{ .semver = .{
++            .major = 14,
++            .minor = 0,
++            .patch = 0,
++        } },
++
+         // This should never happen currently. If we add a new target then
+         // we should add a new case here.
+         else => null,
+@@ -752,8 +748,7 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+ ///
+ /// This should only be used for Darwin targets.
+ pub fn osVersionMinLibVt(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+-    // lib-vt is the only thing we still build for iOS, so its deployment
+-    // target lives here rather than in osVersionMin.
++    // lib-vt has no newer deployment target requirement.
+     if (tag == .ios) return .{ .semver = .{ .major = 13, .minor = 0, .patch = 0 } };
+     return osVersionMin(tag);
+ }
+diff --git a/src/build/GhosttyXCFramework.zig b/src/build/GhosttyXCFramework.zig
+index 3f3b97eb2..a19dd18af 100644
+--- a/src/build/GhosttyXCFramework.zig
++++ b/src/build/GhosttyXCFramework.zig
+@@ -24,6 +24,35 @@ pub fn init(
+         Config.genericMacOSTarget(b, null),
+     ));
+ 
++    // iOS
++    const ios = try GhosttyLib.initStatic(b, &try deps.retarget(
++        b,
++        b.resolveTargetQuery(.{
++            .cpu_arch = .aarch64,
++            .os_tag = .ios,
++            .os_version_min = Config.osVersionMin(.ios),
++            .abi = null,
++        }),
++    ));
++
++    // iOS Simulator
++    const ios_sim = try GhosttyLib.initStatic(b, &try deps.retarget(
++        b,
++        b.resolveTargetQuery(.{
++            .cpu_arch = .aarch64,
++            .os_tag = .ios,
++            .os_version_min = Config.osVersionMin(.ios),
++            .abi = .simulator,
++
++            // We force the Apple CPU model because the simulator
++            // doesn't support the generic CPU model as of Zig 0.14 due
++            // to missing "altnzcv" instructions, which is false. This
++            // surely can't be right but we can fix this if/when we get
++            // back to running simulator builds.
++            .cpu_model = .{ .explicit = &std.Target.aarch64.cpu.apple_a17 },
++        }),
++    ));
++
+     // Generate a headers directory with only ghostty.h and the module
+     // map. We can't use include/ directly because it also contains the
+     // libghostty-vt headers under include/ghostty/, which would trigger
+@@ -46,6 +75,16 @@ pub fn init(
+                     .headers = headers,
+                     .dsym = macos_universal.dsym,
+                 },
++                .{
++                    .library = ios.output,
++                    .headers = headers,
++                    .dsym = ios.dsym,
++                },
++                .{
++                    .library = ios_sim.output,
++                    .headers = headers,
++                    .dsym = ios_sim.dsym,
++                },
+             },
+ 
+             .native => &.{.{
+diff --git a/src/build/MetallibStep.zig b/src/build/MetallibStep.zig
+index 81c7a4a9f..fcf3055f8 100644
+--- a/src/build/MetallibStep.zig
++++ b/src/build/MetallibStep.zig
+@@ -24,10 +24,20 @@ output: LazyPath,
+ pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
+     const sdk = switch (opts.target.result.os.tag) {
+         .macos => "macosx",
++        .ios => switch (opts.target.result.abi) {
++            // The iOS simulator uses the same SDK for Metal as the device,
++            // but the minimum version tag causes different behaviors.
++            .simulator => "iphoneos",
++            else => "iphoneos",
++        },
+         else => return null,
+     };
+     const platform_version_arg = switch (opts.target.result.os.tag) {
+         .macos => "-mmacos-version-min",
++        .ios => switch (opts.target.result.abi) {
++            .simulator => "-mios-simulator-version-min",
++            else => "-mios-version-min",
++        },
+         else => null,
+     };
+ 
+@@ -37,6 +47,7 @@ pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
+         b.fmt("{f}", .{v.semver})
+     else switch (opts.target.result.os.tag) {
+         .macos => "10.14",
++        .ios => "11.0",
+         else => unreachable,
+     };
+ 
 diff --git a/src/font/shaper/coretext.zig b/src/font/shaper/coretext.zig
 index 5172744d8..ec7a2791c 100644
 --- a/src/font/shaper/coretext.zig

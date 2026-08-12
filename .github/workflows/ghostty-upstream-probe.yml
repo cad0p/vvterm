@@ -30,7 +30,7 @@
 #     human PR. No approval, no click, no PAT.
 #   - No direct pushes, no ruleset bypass actors: the bump goes through a
 #     normal PR and the ruleset's required checks (build, unit-tests,
-#     ui-tests *) are the merge gate via auto-merge.
+#     ui-tests-shard-0..3) are the merge gate via auto-merge.
 #   - The app is scoped to this repo only (installed on cad0p/vvterm,
 #     Contents + Pull requests read/write). Setup: see
 #     scripts/patches/ghostty/README.md.
@@ -312,7 +312,7 @@ jobs:
           echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
           # Enable auto-merge (squash). gh-ruleset-main requires the PR CI
-          # checks (build/unit-tests/ui-tests *), so auto-merge only fires
+          # checks (build/unit-tests/ui-tests-shard-0..3), so auto-merge only fires
           # when the full PR CI passes on the new binaries. If auto-merge
           # cannot be enabled (PR not mergeable yet), the watch job's park
           # path covers it — never a probe alarm.
