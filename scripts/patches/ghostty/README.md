@@ -84,9 +84,9 @@ git checkout -- build.zig.zon macos/        # re-exclude demo app + dep URL swap
 Hand-merge the known conflict spots:
 
 1. **`src/Surface.zig`** — "Start our IO implementation" block. Keep upstream's newest env
-   handling (`internal_os.getEnvMap`, `GHOSTTY_SURFACE_ID`, `global_state.resources_dir`)
-   inside the fork's `else` (non-custom-I/O) branch; keep the fork's
-   `Mailbox.initSPSC` + `backend` union + `if (use_custom_io) { Callback } else { Exec }`
+   handling (`global.environMap()`, `_ = env.orderedRemove("GHOSTTY_LOG")`,
+   `GHOSTTY_SURFACE_ID`, `global.resourcesDir()`) inside the fork's `else` (non-custom-I/O)
+   branch; keep the fork's `Mailbox.initSPSC` + `backend` union + `if (use_custom_io) { Callback } else { Exec }`
    structure and `Termio.init(.backend = backend, .mailbox = io_mailbox)`.
 2. **`src/font/shaper/coretext.zig`** — fork makes the CF release thread optional on iOS
    (`?*CFReleaseThread`, spawn skipped when `comptime builtin.os.tag != .ios`, release-pool
@@ -134,6 +134,11 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
 
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr` (skip PR
 creation — useful for validation runs).
+
+Dispatch `ref` restriction: run validation dispatches on a feature branch with
+`create_bump_pr=false` — never on the bump branch itself (`chore/ghostty-upstream-bump-*`)
+and never with `create_bump_pr=true` on a non-main ref (the bump PR would fold that ref's
+commits into the bump).
 
 ### Alarm drill (simulate patch drift)
 

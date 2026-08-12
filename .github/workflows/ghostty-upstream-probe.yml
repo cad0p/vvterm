@@ -64,7 +64,9 @@ concurrency:
 jobs:
   probe:
     runs-on: xcode-27
-    timeout-minutes: 90
+    # From-scratch ghostty ReleaseFast build + xcodebuild on a shared runner;
+    # keep the budget generous so a slow runner never fakes an alarm week.
+    timeout-minutes: 120
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -184,13 +186,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/probe-test.log"
-          # Marker for the alarm step: a failure at/after bump-PR creation
-          # (this marker exists) is NOT an alarm.
-          echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
+      # NOTE: on `schedule` events the `inputs` context is EMPTY (dispatch
+      # defaults do not apply), so the gate must treat empty as true —
+      # otherwise the weekly auto-bump would silently never run.
       - name: Commit artifacts, push bump branch, create or reuse bump PR
         id: bump-pr
-        if: ${{ steps.noop-gate.outputs.noop != 'true' && inputs.create_bump_pr == 'true' }}
+        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true') }}
         env:
           GH_TOKEN: ${{ secrets.VVTERM_BUMP_PAT || github.token }}
           HAS_PAT: ${{ secrets.VVTERM_BUMP_PAT != '' }}
@@ -255,6 +257,11 @@ jobs:
             git push --force-with-lease origin "$BRANCH"
           fi
           echo "Pushed ${BRANCH} @ ${RESOLVED_SHA:0:12}"
+          # Marker for the alarm step: a failure AFTER this point (PR exists
+          # or was reused) is NOT an alarm — the PR stays open for humans.
+          # Written after commit+push succeed, so a push/commit failure (no
+          # PR exists yet) still alarms.
+          echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
           # Reuse an existing open PR on the bump branch (weekly reruns and
           # re-dispatches hit this path) instead of duplicating it.
@@ -469,7 +476,8 @@ jobs:
           # State machine over `gh pr checks --watch` (exit codes):
           #   0   all checks green → merge (squash, delete branch)
           #   1   a check failed/cancelled → alarm, leave PR open
-          #   8   no checks reported → unexpected in PAT mode → park
+          #   8   zero checks reported in watch mode → unexpected in PAT
+          #       mode → park (never alarm on a stall)
           #   124 watch timed out (60m) → stalled → park, never alarm
           # gh --watch treats neutral as success and cancelled as failure.
           set +e
