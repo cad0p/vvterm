@@ -234,7 +234,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         // silently when it does not — the marker documents behavior and never
         // gates CI. The companion @StateObject test is the real guard.
         let markerOptions = XCTExpectedFailure.Options()
-        markerOptions.isNonStrict = true
+        markerOptions.isStrict = false
         XCTExpectFailure(
             "Inline coordinator construction orphans the coordinator that reached .success (production uses @StateObject wrapper instead)",
             options: markerOptions
