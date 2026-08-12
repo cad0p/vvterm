@@ -359,6 +359,11 @@ jobs:
           if-no-files-found: ignore
 
   ui-tests:
+    # Explicit stable name: without it the check-run name is rendered from
+    # ALL matrix values (name, needs-fixture, and the full only-testing
+    # list, truncated at ~79 chars), so it changes on every shard
+    # rebalance. gh-ruleset-main requires these exact names.
+    name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
     timeout-minutes: 45
     needs: build
@@ -801,3 +806,4 @@ jobs:
           name: debug-test-screenshots
           path: ${{ runner.temp }}/screenshots
           if-no-files-found: ignore
+
