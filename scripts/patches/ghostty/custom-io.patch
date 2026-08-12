@@ -719,7 +719,7 @@ index 6b860a0d1..9d0cbe246 100644
      }
  
 diff --git a/src/termio/backend.zig b/src/termio/backend.zig
-index c29009acb..4fe3fb4ac 100644
+index c29009acb..234a3d054 100644
 --- a/src/termio/backend.zig
 +++ b/src/termio/backend.zig
 @@ -11,28 +11,34 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
@@ -810,7 +810,16 @@ index c29009acb..4fe3fb4ac 100644
          }
      }
  
-@@ -115,10 +132,12 @@ pub const Backend = union(Kind) {
+@@ -108,6 +125,8 @@ pub const Backend = union(Kind) {
+     pub fn getProcessInfo(self: *Backend, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
+         return switch (self.*) {
+             .exec => |*exec| exec.getProcessInfo(info),
++            // The callback backend has no child process — no process info.
++            .callback => null,
+         };
+     }
+ };
+@@ -115,10 +134,12 @@ pub const Backend = union(Kind) {
  /// Termio thread data. See termio.ThreadData for docs.
  pub const ThreadData = union(Kind) {
      exec: termio.Exec.ThreadData,

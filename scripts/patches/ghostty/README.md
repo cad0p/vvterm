@@ -92,6 +92,11 @@ Hand-merge the known conflict spots:
    (`?*CFReleaseThread`, spawn skipped when `comptime builtin.os.tag != .ios`, release-pool
    flush wrapped in `if (self.cf_release_thread) |thread|`). Keep upstream's newer
    `setName(global.io(), ...)` signatures.
+3. **New `Backend`/`ThreadData` switch arms** — upstream adds new functions that switch on
+   the backend unions (`Kind = enum { exec, callback }`) over time. Every such switch must
+   gain a `.callback` arm; recent example: `getProcessInfo` in `src/termio/backend.zig`
+   (callback has no process → `return null`). Grep for `switch (self.*)` / `switch (data.backend)`
+   in `src/termio/backend.zig` and `src/termio/Thread.zig` and check every arm.
 
 Then:
 
@@ -104,7 +109,17 @@ git diff <new-upstream-main-sha> -- include/ghostty.h pkg/macos/iosurface/iosurf
 echo <new-upstream-main-sha> > scripts/patches/ghostty/BASE
 ```
 
-Validate before committing:
+Validate before committing (a Linux box can compile-verify the core — see below):
+
+```sh
+# Compile-verify the core on Linux (no macOS needed): install zig 0.16.0 for
+# linux-aarch64/x86_64, then from the patched tree:
+zig build -Dapp-runtime=none -Demit-exe=false -Demit-docs=false -Demit-webdata=false \
+  -Demit-helpgen=false -Demit-terminfo=false -Demit-termcap=false -Demit-themes=false
+# This compiles termio/*, Surface.zig and the renderer core and catches missing
+# .callback switch arms and merge mistakes. macOS-only files (coretext.zig,
+# embedded.zig, Metal/IOSurfaceLayer) are NOT covered — the probe build is.
+```
 
 ```sh
 git apply --check scripts/patches/ghostty/custom-io.patch   # on a pristine <new> checkout
