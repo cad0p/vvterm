@@ -338,6 +338,11 @@ final class TerminalZenModeUITests: XCTestCase {
         let beforeTerminalId = diagnosticValue("terminalId", in: diagnostics)
         let beforeShellId = diagnosticValue("shellId", in: diagnostics)
         let beforeConnectionAttempts = diagnosticIntegerValue("connectionAttempts", in: diagnostics)
+        // Baseline BEFORE the keyboard opens: the open-phase grid round trip
+        // (full-screen zen dips by the bottom container inset before the
+        // preservation pin engages) happens between the Show tap and the
+        // sizePreserved diagnostic, so reading here makes the assertion
+        // catch it.
         let beforeGridResizes = diagnosticIntegerValue("gridResizes", in: diagnostics)
         let beforeGridRows = diagnosticIntegerValue("gridRows", in: diagnostics)
         let windowFrame = app.windows.firstMatch.frame
@@ -358,10 +363,9 @@ final class TerminalZenModeUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(2.5))
 
         // BUG B: preserve-size grid must not change rows when the keyboard
-        // opens, and no resize may occur (open phase is exact — the close
-        // phase allows the benign accessory-transition transient). The label
-        // publishes every 0.15s; re-read until two consecutive reads agree
-        // so a stale AX snapshot cannot masquerade as a resize.
+        // opens, and no resize may occur. The label publishes every 0.15s;
+        // re-read until two consecutive reads agree so a stale AX snapshot
+        // cannot masquerade as a resize.
         func stableInteger(_ name: String, in diagnostics: XCUIElement) -> Int? {
             let deadline = Date().addingTimeInterval(4)
             var last: Int?

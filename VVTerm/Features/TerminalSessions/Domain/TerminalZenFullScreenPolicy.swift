@@ -33,6 +33,21 @@ nonisolated enum TerminalZenFullScreenPolicy {
         )
     }
 
+    /// The one-shot initial reveal shift when full-screen zen engages: the
+    /// obscured region (safe area inset) WITHOUT the extra row. The prompt
+    /// row clears the cutout by itself (the cutout ends above the inset's
+    /// bottom), and the +row would park the prompt a full row lower than the
+    /// app's own chrome (banners sit at the inset), leaving a visible gap
+    /// below the notch. The interactive overscroll limit keeps its +row for
+    /// the peek's discoverability.
+    nonisolated static func initialRevealShift(
+        topInset: CGFloat,
+        cellHeight: CGFloat
+    ) -> CGFloat {
+        let row = max(cellHeight, 1)
+        return max(topInset, row * 2)
+    }
+
     /// Whether the scrollbar is pinned against the start (top) or end
     /// (bottom / live) of the scrollback range.
     nonisolated static func edgeState(

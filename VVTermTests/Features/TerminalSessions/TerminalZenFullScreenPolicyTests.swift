@@ -27,6 +27,25 @@ struct TerminalZenFullScreenPolicyTests {
         #expect(limits.bottom == 2)
     }
 
+    // MARK: - Initial Reveal
+
+    @Test
+    func initialRevealSitsAtTheInsetWithoutTheExtraRow() {
+        // The interactive limit clears the obscured region plus a row (63 on
+        // a notched phone); the one-shot reveal parks the prompt at the inset
+        // itself (47), so it lines up with the app's own chrome (banners)
+        // instead of a full row lower — the notch ends above the inset's
+        // bottom, so the prompt row clears it on its own.
+        #expect(TerminalZenFullScreenPolicy.initialRevealShift(topInset: 47, cellHeight: 16) == 47)
+        #expect(TerminalZenFullScreenPolicy.overscrollLimits(topInset: 47, bottomInset: 34, cellHeight: 16).top == 63)
+    }
+
+    @Test
+    func initialRevealNeverBelowTwoRows() {
+        #expect(TerminalZenFullScreenPolicy.initialRevealShift(topInset: 0, cellHeight: 16) == 32)
+        #expect(TerminalZenFullScreenPolicy.initialRevealShift(topInset: 20, cellHeight: 8) == 20)
+    }
+
     // MARK: - Edge State
 
     @Test

@@ -235,6 +235,17 @@ private final class TerminalKeyboardAvoidanceViewModel: ObservableObject {
         terminal.recordKeyboardAvoidanceLayoutDescription(
             "geom=\(geometry) term=\(baseGeometry.terminalFrame.debugDescription) caret=\(baseCursorFrame.debugDescription) kb=\(keyboardFrameInWindow?.debugDescription ?? "nil") acc=\(accessoryFrameInWindow?.debugDescription ?? "nil") -> inset=\(Int(newLayout.bottomInset.rounded())) offset=\(Int(newLayout.verticalOffset.rounded())) preserve=\(newLayout.preservesTerminalSurfaceSize ? 1 : 0)"
         )
+        // Feed the anchored-lift state to the terminal so pan deltas can
+        // shift the rendered grid (the keyboard-lift viewport shift) instead
+        // of scrolling ghostty while the docked keep-size lift is active.
+        let docked: Bool = {
+            if case .docked = geometry { return true }
+            return false
+        }()
+        terminal.recordKeyboardAvoidanceLift(
+            offset: newLayout.verticalOffset,
+            docked: docked
+        )
         terminal.setKeyboardAvoidanceSizePreservationEnabled(
             newLayout.preservesTerminalSurfaceSize
         )
