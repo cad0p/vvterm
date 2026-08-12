@@ -2344,6 +2344,15 @@ class GhosttyTerminalView: UIView {
             keyboardAvoidanceReleasePending = true
             keyboardAvoidanceReleaseDeadline = CFAbsoluteTimeGetCurrent()
                 + Self.keyboardAvoidanceReleaseDeadlineSeconds
+            // The settle check runs in layoutSubviews, which stops firing
+            // once the view is static (e.g. it settles at a size below the
+            // preserved one and never returns): schedule the deadline check
+            // so the pin can never hold the grid indefinitely.
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + Self.keyboardAvoidanceReleaseDeadlineSeconds
+            ) { [weak self] in
+                self?.settleKeyboardAvoidanceReleaseIfNeeded()
+            }
         }
     }
 

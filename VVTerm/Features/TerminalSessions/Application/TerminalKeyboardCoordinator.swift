@@ -817,6 +817,16 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     private func prePinKeyboardAvoidanceForImpendingKeyboardShow() {
         #if DEBUG
         guard !Self.usesUITestKeyboardFrameSimulation else { return }
+        // The keyboard-test harness drives preservation via its
+        // enabledOverride (--vvterm-ui-test-preserve-terminal-size),
+        // bypassing the stored setting — the pre-pin must follow the harness
+        // flag, not the defaults (a non-preserve harness test would
+        // otherwise get its grid pinned at the pre-keyboard size).
+        let arguments = Foundation.ProcessInfo.processInfo.arguments
+        if arguments.contains("--vvterm-ui-test-terminal-keyboard-harness"),
+           !arguments.contains("--vvterm-ui-test-preserve-terminal-size") {
+            return
+        }
         #endif
         guard TerminalDefaults.storedBool(
             .standard,
