@@ -1,0 +1,509 @@
+# Ghostty upstream probe — weekly probe of upstream ghostty main (issue #127, M4).
+#
+# Every Monday 06:00 UTC (or on workflow_dispatch) the `probe` job:
+#   1. installs zig 0.16.0 (cached),
+#   2. resolves the latest upstream ghostty main SHA,
+#   3. no-ops when the vendored build is already on that SHA (unless
+#      force_rebuild),
+#   4. rebuilds Vendor/libghostty via scripts/build.sh (custom-io.patch,
+#      writes Vendor/libghostty/VERSION),
+#   5. runs the behavioral probe tests (GhosttyCustomIOProbeTests +
+#      GhosttyOSCColorQueryTests) against the NEW binaries,
+#   6. commits the rebuilt artifacts + regenerated terminfo + updated
+#      scripts/patches/ghostty/BASE to chore/ghostty-upstream-bump-<sha7>
+#      and opens (or reuses) a bump PR.
+# Any failure before PR creation files an ALARM issue (deduped by title,
+# label `ghostty-patch`). Failures at/after PR creation are NOT alarms —
+# the PR stays open for human review.
+#
+# The `watch` job (ubuntu, runs only when a bump PR exists) merges the PR
+# on green CI, files an alarm issue on red CI, and parks (never alarms)
+# when CI is silent (draft mode / stalled watch).
+#
+# Constraints honored:
+#   - Single macOS job (probe) + one ubuntu job (watch): fits the repo's
+#     5-concurrent-macOS-job CI cap with zero queueing. NOT wired into
+#     vvterm-pr-ci.yml; scheduled/dispatch-only.
+#   - NO auto-merge ever (main has no branch protection — auto-merge would
+#     merge unvalidated). The watch job merges only after `gh pr checks`
+#     reports all green.
+#   - VVTERM_BUMP_PAT (user-created fine-grained PAT) makes `pull_request`
+#     CI run on the bump PR (GITHUB_TOKEN-created PRs never trigger CI).
+#     Without it the PR is created DRAFT with an explicit human-required
+#     warning. See scripts/patches/ghostty/README.md for the rebase runbook.
+
+name: Ghostty Upstream Probe
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Rebuild + re-probe even when upstream SHA equals the vendored VERSION'
+        type: boolean
+        default: false
+      create_bump_pr:
+        description: 'Open (or reuse) a bump PR when the probe passes'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ghostty-upstream-probe
+  cancel-in-progress: false
+  # A second run (manual dispatch during a Monday run, or a Monday run
+  # during a manual dispatch) queues instead of killing a mid-watch run.
+  # When it eventually runs, the probe finds the bump branch already pushed
+  # and reuses the existing PR (no duplicates, no false alarms).
+
+jobs:
+  probe:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    outputs:
+      bump_pr_number: ${{ steps.bump-pr.outputs.bump_pr_number }}
+      bump_mode: ${{ steps.bump-pr.outputs.bump_mode }}
+      resolved_sha: ${{ steps.resolve-sha.outputs.resolved_sha }}
+
+    steps:
+      # Failing-step tracker: each fallible step records its own name in
+      # $RUNNER_TEMP/ghostty-probe-step BEFORE doing work, so the alarm
+      # step (if: failure()) can report which step failed in the title.
+      - name: Track failing step (checkout)
+        run: echo "checkout" > "$RUNNER_TEMP/ghostty-probe-step"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Track failing step (prepare xcode build)
+        run: echo "prepare-xcode-build" > "$RUNNER_TEMP/ghostty-probe-step"
+
+      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
+        # Same composite as PR CI: restores source mtimes (fetch-depth 0),
+        # caches DerivedData + SPM, clears stale PCMs, and downloads the
+        # Metal toolchain the xcode-27 preview image lacks. Cache is
+        # namespaced to this workflow (xcode27-probe-deriveddata-) so the
+        # probe never reuses PR CI DerivedData built against older binaries.
+        uses: ./.github/actions/prepare-xcode-build
+        with:
+          deriveddata-key-prefix: xcode27-probe-deriveddata
+          deriveddata-restore-keys: xcode27-probe-deriveddata-
+
+      - name: Cache zig 0.16.0
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/zig
+          key: zig-0.16.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install zig 0.16.0
+        run: |
+          set -euo pipefail
+          echo "install-zig" > "$RUNNER_TEMP/ghostty-probe-step"
+          ZIG_DIR="$RUNNER_TEMP/zig"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            # xcode-27 runners are arm64 (macOS 26); aarch64 is the right
+            # build. Fails loudly (set -e) if the download/extract fails.
+            curl -fsSL --retry 3 --connect-timeout 30 \
+              -o "$RUNNER_TEMP/zig.tar.xz" \
+              "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz"
+            mkdir -p "$ZIG_DIR"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$ZIG_DIR" --strip-components=1
+            rm -f "$RUNNER_TEMP/zig.tar.xz"
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+          echo "zig $(zig version)"
+
+      - name: Resolve upstream ghostty main SHA
+        id: resolve-sha
+        run: |
+          set -euo pipefail
+          echo "resolve-upstream-sha" > "$RUNNER_TEMP/ghostty-probe-step"
+          RESOLVED_SHA="$(git ls-remote https://github.com/ghostty-org/ghostty.git refs/heads/main | cut -f1)"
+          if [[ ! "$RESOLVED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Failed to resolve upstream ghostty main SHA (got '$RESOLVED_SHA')"
+            exit 1
+          fi
+          echo "Resolved upstream ghostty main: $RESOLVED_SHA"
+          echo "resolved_sha=$RESOLVED_SHA" >> "$GITHUB_OUTPUT"
+          echo "RESOLVED_SHA=$RESOLVED_SHA" >> "$GITHUB_ENV"
+
+      - name: No-op gate (vendored build already at upstream main)
+        id: noop-gate
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+        run: |
+          set -euo pipefail
+          echo "noop-gate" > "$RUNNER_TEMP/ghostty-probe-step"
+          VERSION="$(cat Vendor/libghostty/VERSION)"
+          echo "Vendored VERSION : $VERSION"
+          echo "Upstream main    : $RESOLVED_SHA"
+          # Persisted for the bump-PR body (the build below overwrites VERSION).
+          echo "OLD_VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$RESOLVED_SHA" == "$VERSION" && "$FORCE_REBUILD" != "true" ]]; then
+            echo "No upstream change since the vendored build — no-op week. No build, no PR, no alarm."
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "noop=false" >> "$GITHUB_OUTPUT"
+
+      - name: Build GhosttyKit @ ${{ steps.resolve-sha.outputs.resolved_sha }}
+        if: ${{ steps.noop-gate.outputs.noop != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "build-ghosttykit" > "$RUNNER_TEMP/ghostty-probe-step"
+          echo "zig $(zig version)"
+          GHOSTTY_REF="$RESOLVED_SHA" ./scripts/build.sh ghostty 2>&1 | tee "$RUNNER_TEMP/build.log"
+          echo "Vendor VERSION now: $(cat Vendor/libghostty/VERSION)"
+
+      - name: Probe tests against new binaries
+        if: ${{ steps.noop-gate.outputs.noop != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "probe-tests" > "$RUNNER_TEMP/ghostty-probe-step"
+          # Mirrors vvterm-pr-ci.yml's unit-tests job (same scheme,
+          # destination, resultBundle, parallel testing, PCM-safe flags).
+          xcodebuild test \
+            -scheme VVTermUnitTests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ProbeResults.xcresult" \
+            -parallel-testing-enabled \
+            -only-testing:VVTermTests/GhosttyCustomIOProbeTests \
+            -only-testing:VVTermTests/GhosttyOSCColorQueryTests \
+            CODE_SIGNING_ALLOWED=NO \
+            IgnoreFileSystemDeviceInodeChanges=YES \
+            | tee "$RUNNER_TEMP/probe-test.log"
+          # Marker for the alarm step: a failure at/after bump-PR creation
+          # (this marker exists) is NOT an alarm.
+          echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
+
+      - name: Commit artifacts, push bump branch, create or reuse bump PR
+        id: bump-pr
+        if: ${{ steps.noop-gate.outputs.noop != 'true' && inputs.create_bump_pr == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.VVTERM_BUMP_PAT || github.token }}
+          HAS_PAT: ${{ secrets.VVTERM_BUMP_PAT != '' }}
+          PR_BODY: |
+            ## Ghostty upstream bump: ${SHA7}
+
+            Weekly probe (issue #127): upstream ghostty main moved from `${OLD_VERSION}` to `${RESOLVED_SHA}` (`${SHA7}`).
+
+            ### What changed in this PR
+            - Rebuilt `Vendor/libghostty` from upstream main at `${RESOLVED_SHA}` with `scripts/patches/ghostty/custom-io.patch` applied (`GhosttyKit.xcframework`, `lib/`, `ios/`, `ios-simulator/`, `include/`, `VERSION`).
+            - Regenerated `VVTerm/Resources/terminfo/`.
+            - Updated `scripts/patches/ghostty/BASE` to `${RESOLVED_SHA}`.
+
+            ### Gate
+            - The probe's behavioral tests (`GhosttyCustomIOProbeTests` + `GhosttyOSCColorQueryTests`) passed against these binaries before this PR was opened.
+            - **CI is the gate**: the full PR CI (build + unit + UI shards, incl. loopback SSH tests) must pass; the probe's `watch` job then merges this PR (squash). A human may review and merge at any time.
+            - Probe run: ${RUN_URL}
+
+            ### Notes
+            - The shipped app is untouched until this PR merges — the vendored build is swapped only by this merge.
+            - No auto-merge ever: merging happens only after CI is green.
+          DRAFT_NOTE: |
+            ### ACTION REQUIRED — draft, CI will not run
+            - This PR was created with GITHUB_TOKEN (no VVTERM_BUMP_PAT secret), so GitHub will NOT run CI on it.
+            - A human must: (1) add the VVTERM_BUMP_PAT fine-grained PAT secret (with pull_request workflow scope), (2) validate and merge this PR — or re-dispatch the probe once the PAT exists.
+        run: |
+          set -euo pipefail
+          echo "create-bump-pr" > "$RUNNER_TEMP/ghostty-probe-step"
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SHA7="${RESOLVED_SHA:0:7}"
+          BRANCH="chore/ghostty-upstream-bump-${SHA7}"
+
+          # The PR_BODY/DRAFT_NOTE env scalars carry ${...} placeholders;
+          # bash never re-expands them, so substitute explicitly.
+          PR_BODY="${PR_BODY//\$\{SHA7\}/$SHA7}"
+          PR_BODY="${PR_BODY//\$\{OLD_VERSION\}/$OLD_VERSION}"
+          PR_BODY="${PR_BODY//\$\{RESOLVED_SHA\}/$RESOLVED_SHA}"
+          PR_BODY="${PR_BODY//\$\{RUN_URL\}/$RUN_URL}"
+
+          git config user.name "vvterm-ghostty-probe[bot]"
+          git config user.email "vvterm-ghostty-probe[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          # BASE (patch base, read by scripts/build.sh by default) tracks
+          # the resolved upstream SHA; VERSION was written by build.sh from
+          # the same SHA. BSD sed on macOS: -i requires the '' extension arg.
+          sed -i '' "s|.*|${RESOLVED_SHA}|" scripts/patches/ghostty/BASE
+          git add Vendor/libghostty VVTerm/Resources/terminfo scripts/patches/ghostty/BASE
+
+          if git diff --cached --quiet; then
+            echo "::notice::No changes to commit (forced rebuild produced identical artifacts) — skipping bump PR."
+            exit 0
+          fi
+
+          git commit -m "chore: ghostty upstream bump to ${SHA7}"
+          # A stale branch from a crashed prior run is force-updated (the
+          # branch is regenerated deterministically each run); --force-with-
+          # lease keeps that safe.
+          if ! git push -u origin "$BRANCH" 2>/dev/null; then
+            echo "Branch exists remotely — force-updating (regenerated from scratch each run)."
+            git push --force-with-lease origin "$BRANCH"
+          fi
+          echo "Pushed ${BRANCH} @ ${RESOLVED_SHA:0:12}"
+
+          # Reuse an existing open PR on the bump branch (weekly reruns and
+          # re-dispatches hit this path) instead of duplicating it.
+          EXISTING="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,isDraft --jq '.[0] // empty' 2>/dev/null || true)"
+          if [[ -n "$EXISTING" ]]; then
+            PR_NUMBER="$(jq -r .number <<<"$EXISTING")"
+            IS_DRAFT="$(jq -r .isDraft <<<"$EXISTING")"
+            echo "Reusing existing bump PR #${PR_NUMBER} on ${BRANCH}"
+            echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              echo "bump_mode=draft" >> "$GITHUB_OUTPUT"
+            else
+              echo "bump_mode=pat" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          if [[ "$HAS_PAT" == "true" ]]; then
+            PR_URL="$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+              --title "chore: ghostty upstream bump to ${SHA7}" \
+              --body "$PR_BODY")"
+            echo "Created bump PR: $PR_URL"
+            echo "bump_mode=pat" >> "$GITHUB_OUTPUT"
+          else
+            PR_URL="$(gh pr create --repo "$REPO" --base main --head "$BRANCH" --draft \
+              --title "chore: ghostty upstream bump to ${SHA7}" \
+              --body "${PR_BODY}"$'\n\n'"${DRAFT_NOTE}")"
+            echo "Created DRAFT bump PR: $PR_URL"
+            echo "bump_mode=draft" >> "$GITHUB_OUTPUT"
+            echo "::warning::VVTERM_BUMP_PAT is NOT set — bump PR created DRAFT with GITHUB_TOKEN. CI will NOT run on it (GITHUB_TOKEN PRs never trigger workflows). A human must add the PAT, validate, and merge — or re-dispatch once the PAT exists and the watch job handles green-CI merging."
+          fi
+          PR_NUMBER="$(sed -E 's#.*/pull/([0-9]+).*#\1#' <<<"$PR_URL")"
+          echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload probe test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ghostty-probe-results
+          path: |
+            ${{ runner.temp }}/probe-test.log
+            ${{ runner.temp }}/ProbeResults.xcresult
+            ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+
+      - name: Alarm issue on probe failure (not on bump-PR failures)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOOP: ${{ steps.noop-gate.outputs.noop }}
+          ALARM_BODY: |
+            ## Ghostty upstream probe alarm
+
+            - **Failing step**: `${STEP}`
+            - **Resolved upstream SHA**: `${SHA}` (`${SHA7}`)
+            - **Workflow run**: ${RUN_URL}
+
+            The weekly probe could not rebuild or validate ghostty at the resolved upstream main SHA.
+
+            ### Likely causes
+            - `scripts/patches/ghostty/custom-io.patch` (or an inline patch in `scripts/build.sh`) no longer applies to `${SHA}` — upstream drift.
+            - zig 0.16.0 build flag drift.
+            - The behavioral probe tests failed against the new binaries.
+
+            ### What to do
+            1. Follow the rebase runbook: `scripts/patches/ghostty/README.md`.
+            2. Rebase `custom-io.patch` onto `${SHA}` (`git apply --3way`; the known conflict spots are documented in the runbook).
+            3. Update `scripts/patches/ghostty/BASE`, then re-dispatch the probe (workflow_dispatch, force_rebuild=true, create_bump_pr=false) to validate before the real bump.
+
+            ### Risk window
+            The **shipped app is untouched**: the vendored build and installed app keep running on the last good core until a bump PR passes CI and merges. No user action required.
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          STEP="$(cat "$RUNNER_TEMP/ghostty-probe-step" 2>/dev/null || echo unknown)"
+          SHA="${RESOLVED_SHA:-unknown}"
+          SHA7="${SHA:0:7}"
+
+          # ALARM_BODY env scalar carries ${...} placeholders; bash never
+          # re-expands them, so substitute explicitly.
+          ALARM_BODY="${ALARM_BODY//\$\{STEP\}/$STEP}"
+          ALARM_BODY="${ALARM_BODY//\$\{SHA\}/$SHA}"
+          ALARM_BODY="${ALARM_BODY//\$\{SHA7\}/$SHA7}"
+          ALARM_BODY="${ALARM_BODY//\$\{RUN_URL\}/$RUN_URL}"
+
+          if [[ "${NOOP:-}" == "true" ]]; then
+            echo "No-op run — nothing to alarm about."
+            exit 0
+          fi
+          if [[ -f "$RUNNER_TEMP/ghostty-probe-ok" ]]; then
+            echo "::error::Failure happened at/after bump-PR creation (step: ${STEP}) — NOT an alarm by design (the PR stays open for human review). Run: ${RUN_URL}"
+            exit 1
+          fi
+
+          TITLE="ghostty probe ALARM: ${STEP} at ${SHA7}"
+          # Dedupe: an OPEN issue with the same title already exists → comment
+          # the run URL instead of creating a duplicate.
+          EXISTING="$(gh issue list --repo "$REPO" --state open --search "in:title \"${TITLE}\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$REPO" --body "Repeat occurrence — probe run: ${RUN_URL}" >/dev/null
+            echo "Updated existing alarm issue #${EXISTING} (${TITLE})"
+          else
+            gh label create ghostty-patch --repo "$REPO" --description "Ghostty upstream probe alarm" --color b60205 >/dev/null 2>&1 || true
+            if gh label view ghostty-patch --repo "$REPO" >/dev/null 2>&1; then
+              gh issue create --repo "$REPO" --title "$TITLE" --label ghostty-patch --body "$ALARM_BODY"
+            else
+              echo "::warning::ghostty-patch label unavailable — creating issue without label."
+              gh issue create --repo "$REPO" --title "$TITLE" --body "$ALARM_BODY"
+            fi
+          fi
+
+  watch:
+    runs-on: ubuntu-latest
+    needs: probe
+    if: ${{ needs.probe.outputs.bump_pr_number != '' && needs.probe.outputs.bump_pr_number != '0' }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.VVTERM_BUMP_PAT || github.token }}
+
+    steps:
+      - name: Watch bump PR CI → merge on green / alarm on red / park on stall
+        env:
+          BUMP_PR: ${{ needs.probe.outputs.bump_pr_number }}
+          BUMP_MODE: ${{ needs.probe.outputs.bump_mode }}
+          SHA_FULL: ${{ needs.probe.outputs.resolved_sha }}
+          ALARM_NO_CHECKS: |
+            ## Ghostty upstream probe alarm: bump PR CI never ran
+
+            - **Bump PR**: #${PR}
+            - **Resolved upstream SHA**: ${SHA_FULL} (${SHA7})
+            - **Workflow run**: ${RUN_URL}
+
+            No CI checks appeared on the bump PR within 15 minutes of creation in PAT mode. Likely causes:
+            - VVTERM_BUMP_PAT is expired, revoked, or missing the pull_request workflow scope — CI never triggered.
+            - The PR was created with GITHUB_TOKEN (token fallback) — CI never runs on GITHUB_TOKEN PRs.
+
+            Action: verify/replace the PAT secret, then re-dispatch the probe (force_rebuild=true) or push a trivial commit to the bump branch to re-trigger CI.
+          ALARM_CI_RED: |
+            ## Ghostty upstream probe alarm: bump PR CI red
+
+            - **Bump PR**: #${PR}
+            - **Resolved upstream SHA**: ${SHA_FULL} (${SHA7})
+            - **Workflow run**: ${RUN_URL}
+
+            CI checks on the bump PR failed (or were cancelled) — the rebuilt core did not pass the full PR test suite. The PR was **left open, not merged**. Investigate the failing checks on the PR, fix, and re-dispatch the probe (force_rebuild=true) or push to the bump branch to re-trigger CI.
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PR="$BUMP_PR"
+          MODE="$BUMP_MODE"
+          SHA7="${SHA_FULL:0:7}"
+          echo "Watching bump PR #${PR} (mode=${MODE}, sha=${SHA7})"
+
+          # The alarm body env scalars carry ${...} placeholders; bash never
+          # re-expands them, so substitute explicitly.
+          ALARM_NO_CHECKS="${ALARM_NO_CHECKS//\$\{PR\}/$PR}"
+          ALARM_NO_CHECKS="${ALARM_NO_CHECKS//\$\{SHA_FULL\}/$SHA_FULL}"
+          ALARM_NO_CHECKS="${ALARM_NO_CHECKS//\$\{SHA7\}/$SHA7}"
+          ALARM_NO_CHECKS="${ALARM_NO_CHECKS//\$\{RUN_URL\}/$RUN_URL}"
+          ALARM_CI_RED="${ALARM_CI_RED//\$\{PR\}/$PR}"
+          ALARM_CI_RED="${ALARM_CI_RED//\$\{SHA_FULL\}/$SHA_FULL}"
+          ALARM_CI_RED="${ALARM_CI_RED//\$\{SHA7\}/$SHA7}"
+          ALARM_CI_RED="${ALARM_CI_RED//\$\{RUN_URL\}/$RUN_URL}"
+
+          alarm() {
+            local title="$1" body="$2"
+            local existing
+            existing="$(gh issue list --repo "$REPO" --state open --search "in:title \"${title}\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+            if [[ -n "$existing" ]]; then
+              gh issue comment "$existing" --repo "$REPO" --body "Repeat occurrence — probe run: ${RUN_URL}" >/dev/null
+              echo "Updated existing alarm issue #${existing} (${title})"
+            else
+              gh label create ghostty-patch --repo "$REPO" --description "Ghostty upstream probe alarm" --color b60205 >/dev/null 2>&1 || true
+              if gh label view ghostty-patch --repo "$REPO" >/dev/null 2>&1; then
+                gh issue create --repo "$REPO" --title "$title" --label ghostty-patch --body "$body"
+              else
+                echo "::warning::ghostty-patch label unavailable — creating issue without label."
+                gh issue create --repo "$REPO" --title "$title" --body "$body"
+              fi
+            fi
+          }
+
+          # Draft mode: zero checks is EXPECTED (GITHUB_TOKEN-created PRs
+          # never trigger CI). Log, park, never alarm on missing checks.
+          if [[ "$MODE" == "draft" ]]; then
+            echo "Draft bump PR — zero checks expected (no VVTERM_BUMP_PAT). Parking for human review — NOT an alarm."
+            gh pr comment "$PR" --repo "$REPO" --body "Probe watch: draft mode (no PAT) — CI will not run on this PR. A human must add VVTERM_BUMP_PAT, validate, and merge (or re-dispatch the probe once the PAT exists)." >/dev/null || true
+            exit 0
+          fi
+
+          # PAT mode: checks must appear. Poll for up to ~15 min; if still
+          # zero, the PAT is broken / CI never ran and the PR would stall
+          # forever → alarm (never park on a silent PAT).
+          checks_seen=0
+          for _ in $(seq 1 30); do
+            n="$(gh pr checks "$PR" --repo "$REPO" --json state --jq 'length' 2>/dev/null || true)"
+            if [[ -n "$n" ]] && (( n > 0 )); then
+              checks_seen=1
+              break
+            fi
+            sleep 30
+          done
+          if (( checks_seen == 0 )); then
+            TITLE="ghostty probe ALARM: bump PR CI never ran at ${SHA7}"
+            echo "::error::No CI checks on bump PR #${PR} after ~15m (PAT mode) — filing alarm."
+            alarm "$TITLE" "$ALARM_NO_CHECKS"
+            exit 1
+          fi
+
+          # State machine over `gh pr checks --watch` (exit codes):
+          #   0   all checks green → merge (squash, delete branch)
+          #   1   a check failed/cancelled → alarm, leave PR open
+          #   8   no checks reported → unexpected in PAT mode → park
+          #   124 watch timed out (60m) → stalled → park, never alarm
+          # gh --watch treats neutral as success and cancelled as failure.
+          set +e
+          timeout 60m gh pr checks "$PR" --repo "$REPO" --watch --interval 60
+          RC=$?
+          set -e
+          case "$RC" in
+            0)
+              echo "All checks green on #${PR} — merging."
+              if gh pr merge "$PR" --repo "$REPO" --squash --delete-branch; then
+                echo "Merged bump PR #${PR}."
+              else
+                # GITHUB_TOKEN merging a PAT-created PR is flaky (token
+                # limits) — merge failure is a HUMAN path, never an alarm.
+                echo "::warning::Checks green but merge failed (likely GITHUB_TOKEN limits on a PAT-created PR). Leaving open for human review — NOT an alarm."
+                gh pr comment "$PR" --repo "$REPO" --body "Probe watch: all checks green but the merge failed (token limits). A human should merge this PR." >/dev/null || true
+              fi
+              ;;
+            1)
+              TITLE="ghostty probe ALARM: bump PR CI red at ${SHA7}"
+              echo "::error::CI red on bump PR #${PR} — filing alarm."
+              alarm "$TITLE" "$ALARM_CI_RED"
+              exit 1
+              ;;
+            8)
+              echo "::warning::gh pr checks exited 8 (no checks) in PAT mode — parking, never alarm on a stall."
+              gh pr comment "$PR" --repo "$REPO" --body "Probe watch: no CI checks reported. Parking for human review." >/dev/null || true
+              ;;
+            124)
+              echo "::warning::60m watch timed out with no terminal check state — parking for human review, never alarm on a stall."
+              gh pr comment "$PR" --repo "$REPO" --body "Probe watch timed out (60m) with no terminal check state — human review needed." >/dev/null || true
+              ;;
+            *)
+              echo "::warning::Unexpected gh pr checks exit code ${RC} — parking."
+              ;;
+          esac
+          exit 0
