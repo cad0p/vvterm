@@ -16,15 +16,16 @@ import XCTest
 /// the fixture is seeded) while skipping them cleanly in CI, so the UI test
 /// suite reports a complete, honest result instead of timing out.
 enum LoopbackSSHFixtureTestSupport {
-    /// Returns `true` when the loopback SSH fixture appears to be seeded
-    /// (non-empty username) **and** we are not running on GitHub Actions.
-    ///
-    /// The UserDefaults check inspects the same suite the harness reads, so a
-    /// developer who has seeded the fixture locally is detected even though
-    /// the test target itself cannot write to that app-group suite.
+    /// Returns `true` when the loopback SSH fixture appears to be seeded:
+    /// either the CI rig injected `VVTERM_REPRO_SSH_*` into the test runner
+    /// environment (see the ui-tests shard in vvterm-pr-ci.yml / the
+    /// repro-zmx.yml rig), or a developer seeded the UserDefaults suite
+    /// locally. When neither is present the tests skip cleanly instead of
+    /// timing out waiting for a connection that can never be made.
     static func isLoopbackFixtureAvailable() -> Bool {
-        if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" {
-            return false
+        let env = ProcessInfo.processInfo.environment
+        if let username = env["VVTERM_REPRO_SSH_USERNAME"], !username.isEmpty {
+            return true
         }
         let suite = UserDefaults(suiteName: "app.vivy.vvterm.dev199-ui-test")
         let username = suite?.string(forKey: "sshUsername") ?? ""
@@ -52,4 +53,18 @@ func skipUnlessLoopbackFixtureAvailable(
     line: UInt = #line
 ) throws {
     try LoopbackSSHFixtureTestSupport.skipUnlessAvailable(file: file, line: line)
+}
+
+/// Seeds the loopback-SSH fixture env vars into the app's launch environment
+/// (the harness reads `VVTERM_REPRO_SSH_*` from the app's ProcessInfo). In CI
+/// the fixture env is injected into the test runner via the xctestrun plist;
+/// XCUIApplication does NOT inherit the runner env into the app, so every
+/// fixture-driven launch must copy the vars explicitly (same pattern as
+/// ZmxScrollbackReloadUITests). Locally (no env), empty values fall through
+/// to the dev-seeded UserDefaults suite.
+func seedLoopbackFixtureEnv(into app: XCUIApplication) {
+    let env = ProcessInfo.processInfo.environment
+    app.launchEnvironment["VVTERM_REPRO_SSH_USERNAME"] = env["VVTERM_REPRO_SSH_USERNAME"] ?? ""
+    app.launchEnvironment["VVTERM_REPRO_SSH_PRIVATE_KEY"] = env["VVTERM_REPRO_SSH_PRIVATE_KEY"] ?? ""
+    app.launchEnvironment["VVTERM_REPRO_SSH_PORT"] = env["VVTERM_REPRO_SSH_PORT"] ?? "22229"
 }

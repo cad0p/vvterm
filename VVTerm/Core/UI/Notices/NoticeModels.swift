@@ -90,4 +90,13 @@ struct NoticeItem: Identifiable {
         self.action = action
         self.dismissAction = dismissAction
     }
+
+    /// Whether the banner carries any interactive element (details, action,
+    /// or dismiss). Non-interactive status banners (e.g. "Connecting…") must
+    /// not consume touches so scroll gestures pass through to the terminal
+    /// underneath — otherwise the first scroll while a status banner is up
+    /// silently does nothing.
+    var isInteractive: Bool {
+        detail != nil || action != nil || dismissAction != nil
+    }
 }

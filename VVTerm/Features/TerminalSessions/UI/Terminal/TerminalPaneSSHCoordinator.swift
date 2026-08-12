@@ -241,6 +241,9 @@ final class TerminalPaneSSHCoordinator {
                 onTitleChange: { title in
                     TerminalTabManager.shared.updatePaneTitle(paneId, rawTitle: title)
                 },
+                onPwdChange: { pwd in
+                    TerminalTabManager.shared.updatePaneWorkingDirectory(paneId, rawDirectory: pwd)
+                },
                 shouldContinueStreaming: { data, terminal in
                     guard TerminalTabManager.shared.isCurrentShellOwner(
                         for: paneId,

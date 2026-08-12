@@ -39,6 +39,9 @@ struct ServerTerminalRoute: View {
     @State private var showingTabLimitAlert = false
     @State private var showingFileTabLimitAlert = false
     @SceneStorage("vvterm.zenMode.ios") private var isZenModeEnabled = false
+    @AppStorage(TerminalDefaults.zenModeFullScreenKey) private var zenModeFullScreenEnabled = TerminalDefaults.defaultZenModeFullScreen
+    @AppStorage(TerminalDefaults.zenModeStartupKey) private var zenModeStartupEnabled = TerminalDefaults.defaultZenModeStartup
+    @State private var didApplyStartupZenForVisit = false
     @AppStorage(PrivacyModeSettings.enabledKey) private var privacyModeEnabled = false
     @AppStorage(TerminalDefaults.keepScreenAwakeKey) private var keepScreenAwakeEnabled = TerminalDefaults.defaultKeepScreenAwake
     @AppStorage("terminalVoiceButtonEnabled") private var terminalVoiceButtonEnabled = true
@@ -153,6 +156,7 @@ struct ServerTerminalRoute: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { navigationToolbar }
             .toolbar(isZenModeEnabled ? .hidden : .visible, for: .navigationBar)
+            .statusBarHidden(isZenModeEnabled && zenModeFullScreenEnabled)
             .limitReachedAlert(.tabs, isPresented: $showingTabLimitAlert)
             .limitReachedAlert(.fileTabs, isPresented: $showingFileTabLimitAlert)
             .sheet(item: $presentedRouteSheet, onDismiss: updateTerminalRouteActivation) { sheet in
@@ -175,6 +179,7 @@ struct ServerTerminalRoute: View {
             }
             .onAppear {
                 isRouteVisible = true
+                didApplyStartupZenForVisit = false
                 dismissIfContextEnded()
                 reconcileZenMode()
                 updateTerminalRouteActivation()
@@ -584,10 +589,29 @@ struct ServerTerminalRoute: View {
     }
 
     private func reconcileZenMode() {
+        applyStartupZenIfNeeded()
+        // Startup zen is one-shot per visit and is never overridden by an
+        // explicit exit; the inverse must also hold — a transient context
+        // drop (e.g. the tab re-registering during connect or an input
+        // session teardown) must not silently exit full-screen zen. Only an
+        // explicit exit (isZenModeEnabled = false) or a real context end
+        // (dismissIfContextEnded -> leaveRoute) turns zen off.
+        if isZenModeEnabled, didApplyStartupZenForVisit, !hasNavigationContext {
+            return
+        }
         isZenModeEnabled = TerminalZenModePolicy.resolvedEnabled(
             requested: isZenModeEnabled,
             hasRouteContext: hasNavigationContext
         )
+    }
+
+    /// Applies the "open in zen mode by default" preference once per route
+    /// visit, when a terminal is actually available. An explicit exit during
+    /// the visit is never overridden.
+    private func applyStartupZenIfNeeded() {
+        guard !didApplyStartupZenForVisit, zenModeStartupEnabled, canEnterZenMode else { return }
+        didApplyStartupZenForVisit = true
+        isZenModeEnabled = true
     }
 
     private func presentRouteSheet(_ sheet: PresentedRouteSheet) {

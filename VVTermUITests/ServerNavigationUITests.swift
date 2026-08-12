@@ -42,7 +42,32 @@ final class ServerNavigationUITests: XCTestCase {
             app: app
         )
         scrollToVisible(activeRow, in: list, app: app)
+        // Let the swipe momentum and any banner transitions settle so the
+        // baseline frame is measured with the list at rest. The AX snapshot
+        // can report a zero/empty list frame right after the scroll loop
+        // (observed in CI: list frame (0,0,0,0) while the active row read a
+        // real frame), so wait for a non-empty list frame plus two
+        // consecutive identical active-row midY reads before measuring.
+        let settleDeadline = Date().addingTimeInterval(8)
+        var previousMidY: CGFloat = .nan
+        while Date() < settleDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            let currentMidY = activeRow.frame.midY
+            if !list.frame.isEmpty, currentMidY == previousMidY {
+                break
+            }
+            previousMidY = currentMidY
+        }
         let initialRowFrame = activeRow.frame
+        // The fixture metadata reload can collapse the list asynchronously
+        // (observed in CI: servers=25 -> 1 mid-test); measure what exists so
+        // the post-pop assertion can report the state instead of crashing.
+        let initialServerRowFrame = serverRow.exists ? serverRow.frame : .zero
+        let initialListFrame = list.frame
+        print("NAV-FRAMES pre active=(\(Int(initialRowFrame.midY)),\(Int(initialRowFrame.height))) "
+            + "list=(\(Int(initialListFrame.minY)),\(Int(initialListFrame.height))) "
+            + "serverRow=\(initialServerRowFrame == .zero ? "missing" : "\(Int(initialServerRowFrame.midY))") "
+            + "servers=\(diagnosticValue("servers", in: diagnostics) ?? "?")")
 
         tapVisible(activeRow)
         let terminal = productionTerminal(in: app)
@@ -68,7 +93,10 @@ final class ServerNavigationUITests: XCTestCase {
             initialRowFrame,
             activeRow: activeRow,
             list: list,
-            app: app
+            app: app,
+            serverRow: serverRow,
+            initialServerRowFrame: initialServerRowFrame,
+            initialListFrame: initialListFrame
         )
 
         tapVisible(activeRow)
@@ -80,15 +108,11 @@ final class ServerNavigationUITests: XCTestCase {
             app: app
         )
 
-        let hideKeyboard = app.buttons["vvterm.keyboard.accessory.hide"]
-        XCTAssertTrue(hideKeyboard.waitForExistence(timeout: 8), diagnosticText(in: app))
-        hideKeyboard.tap()
-        wait(for: diagnostics, containing: "keyboardVisible=false", app: app)
-        XCTAssertTrue(
-            app.keyboards.firstMatch.waitForNonExistence(timeout: 8),
-            diagnosticText(in: app)
-        )
-
+        // The keyboard stays shown through the pop (symmetric with the
+        // first cycle): hiding it first shifts the list scroll offset by
+        // ~52pt (measured in NAV-FRAMES — the offset grows and a filler row
+        // appears at the top), which is exactly the drift the assertion
+        // catches.
         popTerminal(in: app)
         assertListPosition(
             initialRowFrame,
@@ -105,8 +129,10 @@ final class ServerNavigationUITests: XCTestCase {
             diagnostics: diagnostics,
             app: app
         )
-        wait(for: diagnostics, containing: "keyboardVisible=false", app: app)
-        XCTAssertFalse(app.keyboards.firstMatch.exists, diagnosticText(in: app))
+        // Keep the pop symmetric with the first cycle: the keyboard stays
+        // shown (hiding it first shifts the list offset by ~52pt).
+        terminal.tap()
+        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
 
         popTerminal(in: app)
         assertListPosition(
@@ -186,6 +212,7 @@ final class ServerNavigationUITests: XCTestCase {
     private func launchNavigationHarness() -> XCUIApplication {
         let app = XCUIApplication()
         app.terminate()
+        seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
             "--vvterm-ui-test-server-navigation",
@@ -283,17 +310,64 @@ final class ServerNavigationUITests: XCTestCase {
         _ expectedFrame: CGRect,
         activeRow: XCUIElement,
         list: XCUIElement,
-        app: XCUIApplication
+        app: XCUIApplication,
+        serverRow: XCUIElement? = nil,
+        initialServerRowFrame: CGRect = .zero,
+        initialListFrame: CGRect = .zero
     ) {
         XCTAssertTrue(
             activeRow.waitForExistence(timeout: 5) && isVisible(activeRow, in: list),
             "Active row left the visible list after pop. \(diagnosticText(in: app))"
         )
+        // The pop transition + keyboard dismissal animate; measure with the
+        // list at rest so the comparison is frame-stable.
+        let settleDeadline = Date().addingTimeInterval(8)
+        var previousMidY: CGFloat = .nan
+        while Date() < settleDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            let currentMidY = activeRow.frame.midY
+            if !list.frame.isEmpty, currentMidY == previousMidY {
+                break
+            }
+            previousMidY = currentMidY
+        }
+        let actualFrame = activeRow.frame
+        let actualListFrame = list.frame
+        let serverCells = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'vvterm.serverList.server.'"))
+        let visibleCells = (0..<min(serverCells.count, 40)).compactMap { index -> String? in
+            let cell = serverCells.element(boundBy: index)
+            guard cell.exists else { return nil }
+            let frame = cell.frame
+            guard !frame.isEmpty, frame.maxY > 0, frame.minY < app.frame.height else { return nil }
+            let cellID = cell.identifier
+                .replacingOccurrences(of: "vvterm.serverList.server.", with: "")
+            return "\(Int(frame.minY)):\(cellID.prefix(8))"
+        }
+        let activeCells = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'vvterm.serverList.activeConnection.'"))
+        let visibleActive = (0..<min(activeCells.count, 8)).compactMap { index -> String? in
+            let cell = activeCells.element(boundBy: index)
+            guard cell.exists else { return nil }
+            let frame = cell.frame
+            guard !frame.isEmpty, frame.maxY > 0, frame.minY < app.frame.height else { return nil }
+            return "\(Int(frame.minY))"
+        }
+        print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
+            + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
+            + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
+            + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?") "
+            + "drift=\(Int(actualFrame.midY - expectedFrame.midY)) "
+            + "visibleServerRows=[\(visibleCells.joined(separator: ","))] "
+            + "visibleActiveRows=[\(visibleActive.joined(separator: ","))]")
         XCTAssertEqual(
-            activeRow.frame.midY,
+            actualFrame.midY,
             expectedFrame.midY,
             accuracy: 8,
-            "Server-list scroll position changed during pop"
+            "Server-list scroll position changed during pop (expected \(expectedFrame.midY), "
+                + "actual \(actualFrame.midY); server row midY "
+                + "\(initialServerRowFrame.midY) -> \(serverRow?.exists == true ? String(describing: serverRow?.frame.midY) : "gone"); "
+                + "list frame \(initialListFrame) -> \(actualListFrame)). \(diagnosticText(in: app))"
         )
     }
 

@@ -1,6 +1,504 @@
 import XCTest
 
 final class TerminalZenModeUITests: XCTestCase {
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    private static let zenHarnessArguments = [
+        "--vvterm-ui-test-terminal-reconnect-harness",
+        "--vvterm-ui-test-enable-startup-zen",
+        "--vvterm-ui-test-keyboard-toggle-controls",
+        "-AppleLanguages", "(en)",
+        "-AppleLocale", "en_US",
+        "-hasSeenWelcome", "YES",
+        "-iCloudSyncEnabled", "NO",
+        "-sshAutoReconnect", "NO",
+        "-terminalTmuxEnabledDefault", "NO",
+        "-terminalUsePerAppearanceTheme", "NO",
+        "-terminalThemeName", "Aizen Dark",
+        "-security.privacyModeEnabled", "NO",
+        "-security.fullAppLockEnabled", "NO",
+        "-security.lockOnBackground", "NO",
+    ]
+
+    /// Boots the production server route against the loopback SSH fixture
+    /// (skipped in CI unless the rig injected VVTERM_REPRO_SSH_*) and returns
+    /// the terminal surface element.
+    @MainActor
+    private func launchZenRouteHarness(
+        _ app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIElement {
+        app.launchArguments = Self.zenHarnessArguments
+        // Re-export the fixture env into the app launch environment (same
+        // pattern as ZmxScrollbackReloadUITests): the harness reads
+        // VVTERM_REPRO_SSH_* from the app's ProcessInfo.
+        seedLoopbackFixtureEnv(into: app)
+        _ = launchForTest(app, file: file, line: line)
+        // The reconnect harness re-identifies the surface; the zen DEBUG
+        // identifier is only the pre-harness default.
+        let terminal = app.descendants(matching: .any)["vvterm.reconnectTest.terminalSurface"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 45), "Terminal surface never appeared", file: file, line: line)
+        // The loopback shell takes focus on connect; hide the software keyboard
+        // so geometry assertions see the unobstructed terminal frame.
+        let hideKeyboard = app.buttons["vvterm.reconnectTest.keyboard.hide"]
+        if hideKeyboard.waitForExistence(timeout: 5) {
+            hideKeyboard.tap()
+        }
+        return terminal
+    }
+
+    @MainActor
+    private func overscrollShift(of terminal: XCUIElement) -> Int? {
+        guard let value = terminal.value as? String,
+              value.hasPrefix("overscroll="),
+              let raw = value.split(separator: "=").last else {
+            return nil
+        }
+        return Int(raw)
+    }
+
+    // MARK: - Diagnostics helpers (shared label format with the zmx/reconnect rigs)
+
+    @MainActor
+    private func diagnosticsElement(in app: XCUIApplication) -> XCUIElement {
+        app.staticTexts["vvterm.reconnectTest.diagnostics"]
+    }
+
+    @MainActor
+    private func waitForDiagnostics(
+        _ element: XCUIElement,
+        containing expected: String,
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists, element.label.contains(expected) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTFail("Expected diagnostics to contain '\(expected)'. \(diagnosticText(in: app))")
+    }
+
+    @MainActor
+    private func diagnosticValue(_ name: String, in diagnostics: XCUIElement) -> String? {
+        diagnostics.label
+            .split(whereSeparator: \.isWhitespace)
+            .first { $0.hasPrefix("\(name)=") }
+            .map { String($0.dropFirst(name.count + 1)) }
+    }
+
+    @MainActor
+    private func diagnosticIntegerValue(_ name: String, in diagnostics: XCUIElement) -> Int? {
+        diagnosticValue(name, in: diagnostics).flatMap(Int.init)
+    }
+
+    @MainActor
+    private func diagnosticDoubleValue(_ name: String, in diagnostics: XCUIElement) -> Double? {
+        diagnosticValue(name, in: diagnostics).flatMap(Double.init)
+    }
+
+    @MainActor
+    private func diagnosticText(in app: XCUIApplication) -> String {
+        let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
+        return diagnostics.exists
+            ? diagnostics.label
+            : "diagnostics unavailable; app state=\(app.state.rawValue)"
+    }
+
+    /// With "Open in Zen mode by default" on (the default), the production
+    /// route must enter zen automatically once the terminal is active — no
+    /// menu tap — and the full-screen terminal must span the whole screen
+    /// (behind the notch and home indicator).
+    @MainActor
+    func testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        let terminal = launchZenRouteHarness(app)
+
+        let launcher = app.buttons["vvterm.zen.controls"]
+        XCTAssertTrue(
+            launcher.waitForExistence(timeout: 10),
+            "Startup zen should enter zen mode automatically without user action"
+        )
+
+        let screenFrame = app.frame
+        let terminalFrame = terminal.frame
+        XCTAssertEqual(
+            terminalFrame.minY, screenFrame.minY, accuracy: 1,
+            "Full-screen zen terminal should start at the top of the screen"
+        )
+        XCTAssertEqual(
+            terminalFrame.maxY, screenFrame.maxY, accuracy: 1,
+            "Full-screen zen terminal should reach the bottom of the screen"
+        )
+    }
+
+    /// The first shell prompt sits in the rows hidden behind the notch once
+    /// the terminal is truly full screen. Entering full-screen zen must
+    /// automatically apply the top overscroll shift (no user scroll) so the
+    /// prompt is visible.
+    @MainActor
+    func testFullScreenZenAutoShiftsInitialPromptBelowNotch() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        let terminal = launchZenRouteHarness(app)
+        XCTAssertTrue(
+            app.buttons["vvterm.zen.controls"].waitForExistence(timeout: 10)
+        )
+
+        // The one-shot reveal applies at zen entry and may be re-adjusted to
+        // the full top limit once the full-screen layout pass settles; poll
+        // briefly instead of reading a single frame.
+        var shift: Int?
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if let value = overscrollShift(of: terminal), value > 0 {
+                shift = value
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        let engaged = try XCTUnwrap(
+            shift,
+            "Terminal never exposed a positive overscroll shift; auto-shift "
+                + "cannot be verified. \(diagnosticText(in: app))"
+        )
+        XCTAssertGreaterThan(
+            engaged, 0,
+            "Entering full-screen zen should auto-shift the initial prompt below the notch "
+                + "(overscroll=\(engaged)). \(diagnosticText(in: app))"
+        )
+    }
+
+    /// The full-screen terminal hides rows behind the notch; scrolling past
+    /// the top edge must shift the rendered content (overscroll) so those
+    /// rows become visible, and scrolling back must return to normal. The
+    /// auto-shift from entering zen is consumed first so the interactive
+    /// engagement is measured from a zero baseline.
+    @MainActor
+    func testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        let terminal = launchZenRouteHarness(app)
+        XCTAssertTrue(
+            app.buttons["vvterm.zen.controls"].waitForExistence(timeout: 10)
+        )
+
+        // Phase 1: consume the auto-shift by scrolling back (finger up). The
+        // same gesture may legitimately continue past zero into the bottom
+        // edge's overscroll (the scrollbar confirms the edge asynchronously),
+        // so the baseline is "reveal cleared" (<= 0), not exactly zero.
+        let consumeDeadline = Date().addingTimeInterval(20)
+        var consumeSwipes = 0
+        while Date() < consumeDeadline {
+            terminal.swipeUp()
+            consumeSwipes += 1
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            if let value = overscrollShift(of: terminal) {
+                print("ZEN-OVERSCOLL phase1 swipe=\(consumeSwipes) shift=\(value)")
+                if value <= 0 {
+                    break
+                }
+            }
+        }
+        XCTAssertLessThanOrEqual(
+            overscrollShift(of: terminal) ?? 0, 0,
+            "Scrolling back should consume the initial auto-shift. \(diagnosticText(in: app))"
+        )
+
+        // Phase 2: swipe down (toward older content) until the top edge is
+        // reached and the overscroll shift engages interactively.
+        var shift: Int?
+        let deadline = Date().addingTimeInterval(30)
+        var swipeCount = 0
+        while Date() < deadline {
+            terminal.swipeDown()
+            swipeCount += 1
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            if let value = overscrollShift(of: terminal) {
+                print("ZEN-OVERSCOLL phase2 swipe=\(swipeCount) shift=\(value)")
+                if value > 0 {
+                    shift = value
+                    break
+                }
+            } else {
+                print("ZEN-OVERSCOLL phase2 swipe=\(swipeCount) shift=missing")
+            }
+        }
+        let engagedShift = try XCTUnwrap(
+            shift,
+            "Overscroll shift never engaged while swiping past the top edge. \(diagnosticText(in: app))"
+        )
+        XCTAssertGreaterThan(engagedShift, 0)
+
+        // Phase 3: swipe up (toward newer content): the shift must be
+        // consumed and return to zero (or the opposite edge's bounded
+        // overscroll, when the same gesture carries past the edge before the
+        // scrollbar catches up) before normal scrolling resumes.
+        let resetDeadline = Date().addingTimeInterval(20)
+        while Date() < resetDeadline {
+            terminal.swipeUp()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            if let value = overscrollShift(of: terminal), value <= 0 {
+                return
+            }
+        }
+        XCTFail("Overscroll shift did not reset after scrolling back from the top edge")
+    }
+
+    /// OTA regression: while connecting in full-screen zen, the "Connecting…"
+    /// banner rendered at the very top of the screen — behind the notch.
+    /// It must sit below the top safe area. Uses a raw listener socket that
+    /// accepts but never speaks SSH, so the connecting state (and its banner)
+    /// persists long enough to measure.
+    @MainActor
+    func testFullScreenZenConnectionBannerSitsBelowNotch() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        // The UI test process runs on the simulator host; the simulator
+        // shares the host loopback. Accept the SSH TCP connect and then stay
+        // silent so the SSH banner handshake hangs and the connecting state
+        // (with its top banner) persists.
+        let listener = SilentTCPListener()
+        defer { listener.close() }
+
+        app.launchArguments = Self.zenHarnessArguments
+        seedLoopbackFixtureEnv(into: app)
+        // Point the harness at the silent listener instead of the fixture sshd.
+        app.launchEnvironment["VVTERM_REPRO_SSH_PORT"] = String(listener.port)
+        _ = launchForTest(app)
+
+        let launcher = app.buttons["vvterm.zen.controls"]
+        XCTAssertTrue(
+            launcher.waitForExistence(timeout: 20),
+            "Startup zen should engage while connecting"
+        )
+
+        let diagnostics = diagnosticsElement(in: app)
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 20), diagnosticText(in: app))
+        waitForDiagnostics(
+            diagnostics, containing: "state=connecting", timeout: 20, app: app
+        )
+
+        let banner = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.notice.banner")
+            .firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 10), diagnosticText(in: app))
+        // Let the zen safe-area transition settle before measuring.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+
+        // The banner renders at topInset(59pt notch) + 8pt padding. If it
+        // regresses behind the notch it sits at y ≈ 8.
+        let minY = banner.frame.minY
+        XCTAssertGreaterThanOrEqual(
+            minY, 55,
+            "Connection banner must clear the notch in full-screen zen "
+                + "(minY=\(minY), expected >= 55). \(diagnosticText(in: app))"
+        )
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "zen-connecting-banner"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    /// Keyboard regression guard for full-screen zen: opening the software
+    /// keyboard must not reload the terminal surface or the SSH shell, must
+    /// not resize the preserved grid, and must keep the terminal content
+    /// visible above the keyboard (the BUG A / BUG B assertions from the zmx
+    /// repro, applied to the zen full-screen layout).
+    @MainActor
+    func testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible() throws {
+        try skipUnlessLoopbackFixtureAvailable()
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        let terminal = launchZenRouteHarness(app)
+        XCTAssertTrue(
+            app.buttons["vvterm.zen.controls"].waitForExistence(timeout: 10)
+        )
+        let diagnostics = diagnosticsElement(in: app)
+        waitForDiagnostics(
+            diagnostics, containing: "setup=ready state=connected", timeout: 30, app: app
+        )
+        waitForDiagnostics(diagnostics, containing: "shell=true", timeout: 15, app: app)
+
+        let beforeTerminalId = diagnosticValue("terminalId", in: diagnostics)
+        let beforeShellId = diagnosticValue("shellId", in: diagnostics)
+        let beforeConnectionAttempts = diagnosticIntegerValue("connectionAttempts", in: diagnostics)
+        // Baseline BEFORE the keyboard opens: the open-phase grid round trip
+        // (full-screen zen dips by the bottom container inset before the
+        // preservation pin engages) happens between the Show tap and the
+        // sizePreserved diagnostic, so reading here makes the assertion
+        // catch it.
+        let beforeGridResizes = diagnosticIntegerValue("gridResizes", in: diagnostics)
+        let beforeGridRows = diagnosticIntegerValue("gridRows", in: diagnostics)
+        let windowFrame = app.windows.firstMatch.frame
+
+        // The harness hides the keyboard during launch (browse mode). A plain
+        // tap cannot restore it — TerminalKeyboardFocusPolicy browse mode
+        // refuses directTouch refocus by design (production: the user taps
+        // the route's floating Show Keyboard control, which is an explicit
+        // request). Use the harness's Show button, the same explicit path.
+        let showKeyboard = app.buttons["vvterm.reconnectTest.keyboard.show"]
+        XCTAssertTrue(showKeyboard.waitForExistence(timeout: 5), diagnosticText(in: app))
+        showKeyboard.tap()
+        waitForDiagnostics(diagnostics, containing: "keyboardVisible=true", timeout: 10, app: app)
+        waitForDiagnostics(diagnostics, containing: "sizePreserved=true", timeout: 10, app: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8), diagnosticText(in: app))
+
+        // Let the keyboard + avoidance animation settle before measuring.
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+
+        // BUG B: preserve-size grid must not change rows when the keyboard
+        // opens, and no resize may occur. The label publishes every 0.15s;
+        // re-read until two consecutive reads agree so a stale AX snapshot
+        // cannot masquerade as a resize.
+        func stableInteger(_ name: String, in diagnostics: XCUIElement) -> Int? {
+            let deadline = Date().addingTimeInterval(4)
+            var last: Int?
+            while Date() < deadline {
+                let value = diagnosticIntegerValue(name, in: diagnostics)
+                if let value, value == last {
+                    return value
+                }
+                last = value
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            }
+            return last
+        }
+        let openGridResizes = stableInteger("gridResizes", in: diagnostics)
+        let openGridRows = stableInteger("gridRows", in: diagnostics)
+        XCTAssertEqual(
+            openGridRows, beforeGridRows,
+            "Keyboard open resized the preserved grid rows "
+                + "(\(beforeGridRows.map(String.init) ?? "nil") -> "
+                + "\(openGridRows.map(String.init) ?? "nil")). \(diagnosticText(in: app))"
+        )
+        XCTAssertEqual(
+            openGridResizes, beforeGridResizes,
+            "Keyboard open resized the terminal grid. \(diagnosticText(in: app))"
+        )
+
+        // BUG A: no new connection, no surface/shell replacement.
+        XCTAssertEqual(
+            diagnosticIntegerValue("connectionAttempts", in: diagnostics),
+            beforeConnectionAttempts,
+            "Keyboard open started a new SSH connection attempt. \(diagnosticText(in: app))"
+        )
+        XCTAssertEqual(
+            diagnosticValue("terminalId", in: diagnostics),
+            beforeTerminalId,
+            "Keyboard open replaced the terminal surface. \(diagnosticText(in: app))"
+        )
+        XCTAssertEqual(
+            diagnosticValue("shellId", in: diagnostics),
+            beforeShellId,
+            "Keyboard open replaced the SSH shell. \(diagnosticText(in: app))"
+        )
+
+        // BUG B: the terminal content must stay visible above the keyboard.
+        let keyboardHeight = diagnosticDoubleValue("keyboardHeight", in: diagnostics) ?? 0
+        let visibleRect = CGRect(
+            x: windowFrame.minX,
+            y: windowFrame.minY,
+            width: windowFrame.width,
+            height: max(windowFrame.height - keyboardHeight, 0)
+        )
+        let terminalFrame = terminal.frame
+        let intersection = terminalFrame.intersection(visibleRect)
+        let visibleFraction = terminalFrame.height > 0
+            ? intersection.height / terminalFrame.height
+            : 0
+        print("ZEN-KEYBOARD: terminalFrame=\(terminalFrame) keyboardHeight=\(keyboardHeight) "
+            + "visibleRect=\(visibleRect) intersection=\(intersection) "
+            + "visibleFraction=\(visibleFraction)")
+        XCTAssertFalse(
+            intersection.isNull || intersection.isEmpty,
+            "Terminal surface is entirely outside the visible area above the keyboard. "
+                + "\(diagnosticText(in: app))"
+        )
+        XCTAssertGreaterThanOrEqual(
+            visibleFraction, 0.3,
+            "Only \(String(format: "%.0f", visibleFraction * 100))% of the terminal "
+                + "surface remains visible above the keyboard. \(diagnosticText(in: app))"
+        )
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "zen-keyboard-open"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    /// Raw TCP listener that accepts connections and then stays silent, so
+    /// the SSH banner handshake hangs and the app stays in "connecting"
+    /// (the state whose banner must clear the notch). Runs in the test
+    /// process on the simulator host.
+    private final class SilentTCPListener {
+        let port: Int
+        private let serverFD: Int32
+
+        init() {
+            let fd = socket(AF_INET, SOCK_STREAM, 0)
+            assert(fd >= 0, "socket() failed")
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = 0 // kernel-assigned
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let bindResult = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            assert(bindResult == 0, "bind() failed")
+            assert(listen(fd, 4) == 0, "listen() failed")
+
+            var bound = sockaddr_in()
+            var boundLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            withUnsafeMutablePointer(to: &bound) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    getsockname(fd, sa, &boundLen)
+                }
+            }
+            port = Int(CFSwapInt16HostToBig(bound.sin_port))
+            serverFD = fd
+
+            // Accept one connection and hold it open without writing anything.
+            Thread.detachNewThread { [fd] in
+                var client = sockaddr_in()
+                var clientLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let clientFD = withUnsafeMutablePointer(to: &client) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                        accept(fd, sa, &clientLen)
+                    }
+                }
+                if clientFD >= 0 {
+                    // Hold the connection open (no SSH banner) for up to 30s
+                    // so the app stays in "connecting".
+                    Thread.sleep(forTimeInterval: 30)
+                    Darwin.close(clientFD)
+                }
+            }
+        }
+
+        func close() {
+            Darwin.close(serverFD)
+        }
+    }
+
     @MainActor
     func testRealTerminalLauncherOpensZenPanel() {
         let app = XCUIApplication()

@@ -54,6 +54,13 @@ extension ConnectionTerminalContainer {
             }
 
             content
+                .modifier(
+                    TerminalZenFullScreenSafeAreaModifier(
+                        isEnabled: isZenModeEnabled
+                            && zenModeFullScreenEnabled
+                            && selectedView == ConnectionViewTab.terminal.id
+                    )
+                )
         }
         .overlay(alignment: .topTrailing) {
             if isZenModeEnabled {
@@ -101,6 +108,12 @@ extension ConnectionTerminalContainer {
             // representable (and its Ghostty view + SSH coordinator) when the
             // selected tab changes.
             .id(tab.id)
+            .terminalZenFullScreen(
+                enabled: isZenModeEnabled && zenModeFullScreenEnabled,
+                paneIds: tab.allPaneIds,
+                terminalRegistryVersion: tabManager.terminalRegistryVersion,
+                terminalProvider: { tabManager.getTerminal(for: $0) }
+            )
         }
 
         if selectedView == ConnectionViewTab.terminal.id && serverTabs.isEmpty {
@@ -242,6 +255,33 @@ private struct TerminalKeyboardSafeAreaModifier: ViewModifier {
     func body(content: Content) -> some View {
         if isEnabled {
             content.ignoresSafeArea(.keyboard, edges: .bottom)
+        } else {
+            content
+        }
+    }
+}
+
+/// Lets the terminal extend behind the notch, rounded corners, and home
+/// indicator in full-screen zen. Only the terminal content ignores the
+/// container safe area — the zen launcher overlay and the keyboard avoidance
+/// stay in the safe region.
+///
+/// The keyboard region is ignored too: while the software keyboard is up,
+/// SwiftUI re-applies the container bottom inset to the content for the
+/// duration of the keyboard transitions (the frame dips by the home
+/// indicator, 844 -> 810, before the willShow notification and during the
+/// dismissal). The preservation pin keeps the grid size, but the frame dip
+/// itself is a visible 2-row jiggle — ignoring both regions keeps the frame
+/// pinned at the full-screen height. Keyboard avoidance is handled by the
+/// app's own policy (lift + pin), so the automatic avoidance being disabled
+/// is intentional.
+private struct TerminalZenFullScreenSafeAreaModifier: ViewModifier {
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.ignoresSafeArea([.container, .keyboard], edges: .all)
         } else {
             content
         }

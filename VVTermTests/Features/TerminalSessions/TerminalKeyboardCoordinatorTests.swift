@@ -23,6 +23,11 @@ private final class TerminalKeyboardInputSessionSpy: TerminalKeyboardInputSessio
     private(set) var accessorySuppressionRequests: [Bool] = []
     private(set) var accessoryReloadCount = 0
     private(set) var accessoryAppearanceRefreshCount = 0
+    private(set) var prePinCount = 0
+
+    func prePinKeyboardAvoidanceSizePreservation() {
+        prePinCount += 1
+    }
     var acquireResults: [Bool] = []
     var acquireObservedStates: [Bool] = []
     var forceSoftwareKeyboardResults: [Bool] = []

@@ -72,6 +72,19 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
     /// Current scrollbar state from Ghostty core (used by scroll view)
     var scrollbar: Ghostty.Action.Scrollbar?
 
+    /// The scroll container wrapping this surface, when hosted by one. The
+    /// container owns full-screen zen overscroll decisions.
+    weak var scrollContainer: TerminalScrollView?
+
+    /// Full-screen zen overscroll enabled state, forwarded to the wrapping
+    /// scroll container.
+    var zenOverscrollEnabled = false {
+        didSet {
+            guard oldValue != zenOverscrollEnabled else { return }
+            scrollContainer?.zenOverscrollEnabled = zenOverscrollEnabled
+        }
+    }
+
     private static let logger = Logger.forCategory("GhosttyTerminal")
 
     // MARK: - Display Link Rendering (event-driven for SSH)
@@ -851,7 +864,11 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        inputHandler.handleScrollWheel(with: event)
+        if let scrollContainer, scrollContainer.zenOverscrollEnabled {
+            scrollContainer.handleScrollWheel(with: event)
+        } else {
+            inputHandler.handleScrollWheel(with: event)
+        }
     }
 
     override func magnify(with event: NSEvent) {

@@ -38,6 +38,8 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var restoredColumnVisibility: NavigationSplitViewVisibility = .all
     @SceneStorage("vvterm.zenMode.macos") private var isZenModeEnabled = false
+    @AppStorage(TerminalDefaults.zenModeStartupKey) private var zenModeStartupEnabled = TerminalDefaults.defaultZenModeStartup
+    @State private var didApplyStartupZenForSelection = false
     @AppStorage(CloudKitSyncConstants.terminalThemeNameKey) private var terminalThemeName = "Aizen Dark"
     @AppStorage(CloudKitSyncConstants.terminalThemeNameLightKey) private var terminalThemeNameLight = "Aizen Light"
     @AppStorage(CloudKitSyncConstants.terminalUsePerAppearanceThemeKey) private var usePerAppearanceTheme = true
@@ -219,10 +221,23 @@ struct ContentView: View {
                     restoredColumnVisibility = newValue
                 }
             }
+            .onChange(of: selectedServer?.id) { _ in
+                didApplyStartupZenForSelection = false
+            }
             .onChange(of: isZenModeEnabled) { enabled in
                 applyZenPresentation(enabled && canUseZenMode)
             }
             .onChange(of: canUseZenMode) { available in
+                // "Open in Zen mode by default": the first time a connection
+                // surface becomes available for the selected server, enter
+                // zen automatically. An explicit exit is never overridden
+                // until a different server is selected.
+                if available, zenModeStartupEnabled, !didApplyStartupZenForSelection, !isZenModeEnabled {
+                    didApplyStartupZenForSelection = true
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                        setZenMode(true)
+                    }
+                }
                 if !available && isZenModeEnabled {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         setZenMode(false)

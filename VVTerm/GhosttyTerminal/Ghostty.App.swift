@@ -800,6 +800,9 @@ extension Ghostty {
                     let pwd = String(cString: pwdPtr)
                     Ghostty.logger.info("PWD changed: \(pwd)")
                     DispatchQueue.main.async {
+                        #if DEBUG
+                        terminalView?.keyboardUITestLastPwdRaw = pwd
+                        #endif
                         terminalView?.onPwdChange?(pwd)
                     }
                 }

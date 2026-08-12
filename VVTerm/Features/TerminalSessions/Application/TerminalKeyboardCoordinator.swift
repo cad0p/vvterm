@@ -17,9 +17,17 @@ protocol TerminalKeyboardInputSession: AnyObject {
     func releaseTerminalInputForReacquisition(completion: @escaping () -> Void)
     func setTerminalInputAccessorySuppressed(_ suppressed: Bool)
     func refreshTerminalInputAccessoryAppearance()
+    /// Pre-engages the keyboard-avoidance size preservation (called at input
+    /// acquisition and as a willShow backstop, before the safe-area layout
+    /// pass dips the full-screen zen terminal).
+    func prePinKeyboardAvoidanceSizePreservation()
 }
 
-extension GhosttyTerminalView: TerminalKeyboardInputSession {}
+extension GhosttyTerminalView: TerminalKeyboardInputSession {
+    func prePinKeyboardAvoidanceSizePreservation() {
+        setKeyboardAvoidanceSizePreservationEnabled(true)
+    }
+}
 
 /// Owns the terminal text-input session and observes what UIKit actually
 /// does with it. The design rule that keeps this correct: the app CONTROLS
@@ -224,6 +232,14 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         ] {
             keyboardObservers.append(
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    // Pre-engage the size-preservation pin synchronously with
+                    // the notification, BEFORE SwiftUI's keyboard-safe-area
+                    // layout pass dips the full-screen zen terminal by the
+                    // bottom container inset (844 -> 810). The pin then keeps
+                    // the ghostty surface at the reference size, so the grid
+                    // never resizes (no TIOCSWINSZ / remote reflow) during
+                    // keyboard transitions.
+                    self?.prePinKeyboardAvoidanceForImpendingKeyboardShow()
                     let beginFrame = shouldLogLifecycle
                         ? (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue
                         : nil
@@ -785,6 +801,43 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         guard snapshot.windowAttached, snapshot.windowIsKey else { return }
         makeLocalInputOwnershipAvailable()
         markDirty(reason: "explicitLocalInteraction")
+    }
+
+    /// Pre-engages the keyboard-avoidance size preservation before the
+    /// software keyboard appears for the active terminal. Called at input
+    /// acquisition (the decisive point: the keyboard-safe-area layout pass
+    /// that dips the full-screen zen terminal runs BEFORE the willShow
+    /// notification reaches the app, so the willShow observer alone is too
+    /// late) and as a backstop from the willShow/willChangeFrame observer.
+    /// The pin keeps the ghostty surface at the reference size, so the grid
+    /// never resizes (no TIOCSWINSZ / remote reflow) during keyboard
+    /// transitions. Skipped when size preservation is off, when the keyboard
+    /// is not for the terminal, and under UI-test frame simulation (the tests
+    /// assert the model-driven timing exactly).
+    private func prePinKeyboardAvoidanceForImpendingKeyboardShow() {
+        #if DEBUG
+        guard !Self.usesUITestKeyboardFrameSimulation else { return }
+        // The keyboard-test harness drives preservation via its
+        // enabledOverride (--vvterm-ui-test-preserve-terminal-size),
+        // bypassing the stored setting — the pre-pin must follow the harness
+        // flag, not the defaults (a non-preserve harness test would
+        // otherwise get its grid pinned at the pre-keyboard size).
+        let arguments = Foundation.ProcessInfo.processInfo.arguments
+        if arguments.contains("--vvterm-ui-test-terminal-keyboard-harness"),
+           !arguments.contains("--vvterm-ui-test-preserve-terminal-size") {
+            return
+        }
+        #endif
+        guard TerminalDefaults.storedBool(
+            .standard,
+            forKey: TerminalDefaults.preserveTerminalSizeForKeyboardKey,
+            defaultValue: TerminalDefaults.defaultPreserveTerminalSizeForKeyboard
+        ) else { return }
+        guard activeTerminalSceneIsForeground,
+              inputOwnership.allowsLocalAcquisition,
+              viewActive,
+              let terminal = activeTerminal else { return }
+        terminal.prePinKeyboardAvoidanceSizePreservation()
     }
 
     private func noteKeyboardEndFrame(
@@ -1449,8 +1502,10 @@ final class TerminalKeyboardCoordinator: ObservableObject {
 
         switch presentationRequest {
         case .forceSoftwareKeyboard:
+            prePinKeyboardAvoidanceForImpendingKeyboardShow()
             _ = terminal.forceSoftwareKeyboardInput()
         case .none, .automaticRefresh, .contentProtectionRecovery:
+            prePinKeyboardAvoidanceForImpendingKeyboardShow()
             _ = terminal.acquireTerminalInput()
         }
 

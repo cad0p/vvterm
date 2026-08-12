@@ -15,6 +15,7 @@ enum SSHConnectionRunner {
         registerShell: @MainActor @escaping (_ shell: ShellHandle) async -> Bool,
         onBeforeShellStart: @MainActor @escaping (_ cols: Int, _ rows: Int) async -> Void,
         onTitleChange: @MainActor @escaping (_ title: String) -> Void,
+        onPwdChange: @MainActor @escaping (_ pwd: String) -> Void,
         shouldContinueStreaming: @MainActor @escaping (_ data: Data, _ terminal: GhosttyTerminalView) -> Bool,
         shouldResetClient: @escaping (_ error: SSHError) async -> Bool,
         onProcessExit: @MainActor @escaping (_ shellId: UUID, _ reason: TerminalShellEndReason) -> Void,
@@ -23,6 +24,7 @@ enum SSHConnectionRunner {
         let maxAttempts = 3
         var lastError: Error?
         var titleParser = TerminalTitleSequenceParser()
+        var pwdParser = TerminalPwdSequenceParser()
 
         for attempt in 1...maxAttempts {
             guard !Task.isCancelled else { return }
@@ -91,7 +93,16 @@ enum SSHConnectionRunner {
                     }
 
                     for title in titleParser.parse(visibleData) {
+                        #if DEBUG
+                        SSHClientUITestDebug.osc0Hits += 1
+                        #endif
                         onTitleChange(title)
+                    }
+                    for pwd in pwdParser.parse(visibleData) {
+                        #if DEBUG
+                        SSHClientUITestDebug.osc7Hits += 1
+                        #endif
+                        onPwdChange(pwd)
                     }
                     let shouldContinue = shouldContinueStreaming(visibleData, terminal)
                     if !shouldContinue { break }

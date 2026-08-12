@@ -6,6 +6,9 @@ struct TerminalConnectionStatusView: View {
     let connectionAttemptID: UUID
     let surfaceStyle: NoticeSurfaceStyle
     let isActive: Bool
+    /// Extra top padding for the status banner so it clears the display
+    /// notch in full-screen zen (the terminal content extends behind it).
+    var topBannerInset: CGFloat = 0
     let onRetry: () -> Void
     let onTrustNewHostKey: () -> Void
 
@@ -36,7 +39,7 @@ struct TerminalConnectionStatusView: View {
             if let statusNotice {
                 NoticeBannerView(item: statusNotice, surfaceStyle: surfaceStyle)
                     .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                    .padding(.top, 8 + topBannerInset)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }

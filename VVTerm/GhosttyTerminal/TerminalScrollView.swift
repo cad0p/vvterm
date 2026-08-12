@@ -34,6 +34,23 @@ class TerminalScrollView: NSView, NSUserInterfaceValidations {
     private var observers: [NSObjectProtocol] = []
     private var isLiveScrolling = false
 
+    /// Full-screen zen overscroll state: when enabled, wheel deltas that
+    /// ghostty would clamp at the top/bottom edge accumulate into
+    /// ``zenOverscrollShift`` instead, shifting the rendered grid so content
+    /// hidden behind the window chrome stays reachable.
+    var zenOverscrollEnabled = false {
+        didSet {
+            guard oldValue != zenOverscrollEnabled else { return }
+            if !zenOverscrollEnabled {
+                zenOverscrollShift = 0
+                synchronizeSurfaceView()
+            }
+        }
+    }
+
+    /// Current overscroll shift in points (positive = grid shifted down).
+    private var zenOverscrollShift: CGFloat = 0
+
     /// The last row position sent via scroll_to_row action. Used to avoid
     /// sending redundant actions when the user drags the scrollbar but stays
     /// on the same row.
@@ -67,6 +84,11 @@ class TerminalScrollView: NSView, NSUserInterfaceValidations {
         documentView.addSubview(surfaceView)
 
         super.init(frame: .zero)
+
+        // The surface forwards full-screen zen overscroll decisions here;
+        // sync any state already set on the surface (e.g. by a reused pane).
+        surfaceView.scrollContainer = self
+        zenOverscrollEnabled = surfaceView.zenOverscrollEnabled
 
         // CRITICAL: Enable autoresizing so we resize with parent (SwiftUI container)
         autoresizingMask = [.width, .height]
@@ -231,10 +253,14 @@ class TerminalScrollView: NSView, NSUserInterfaceValidations {
         window?.firstResponder === surfaceView
     }
 
-    /// Positions the surface view to fill the currently visible rectangle.
+    /// Positions the surface view to fill the currently visible rectangle,
+    /// plus any full-screen zen overscroll shift.
     private func synchronizeSurfaceView() {
         let visibleRect = scrollView.contentView.documentVisibleRect
-        surfaceView.frame.origin = visibleRect.origin
+        surfaceView.frame.origin = CGPoint(
+            x: visibleRect.origin.x,
+            y: visibleRect.origin.y + zenOverscrollShift
+        )
     }
 
     /// Inform the actual pty of our size change.
@@ -330,6 +356,74 @@ class TerminalScrollView: NSView, NSUserInterfaceValidations {
     }
 
     // MARK: - Mouse events
+
+    /// Handles scroll wheel events, routing deltas through the full-screen zen
+    /// overscroll policy before forwarding the remainder to ghostty.
+    /// Mirrors `GhosttyInputHandler.handleScrollWheel` deltas (2x multiplier
+    /// for precise trackpad scrolling) so behavior matches the normal path.
+    func handleScrollWheel(with event: NSEvent) {
+        guard let surface = surfaceView.surface else { return }
+
+        var x = event.scrollingDeltaX
+        var y = event.scrollingDeltaY
+        let precision = event.hasPreciseScrollingDeltas
+
+        if precision {
+            x *= 2
+            y *= 2
+        }
+
+        let resolved = resolveOverscroll(deltaY: y)
+        if resolved.didChangeShift {
+            synchronizeSurfaceView()
+        }
+
+        // Momentum events (including the trailing zero-delta `.ended`) must
+        // always reach ghostty so its internal momentum state terminates;
+        // only fully-absorbed plain wheel deltas may be dropped.
+        let isMomentumEvent = event.momentumPhase != []
+        guard x != 0 || resolved.forwardedY != 0 || isMomentumEvent else { return }
+        let scrollEvent = Ghostty.Input.MouseScrollEvent(
+            x: x,
+            y: resolved.forwardedY,
+            mods: Ghostty.Input.ScrollMods(
+                precision: precision,
+                momentum: Ghostty.Input.Momentum(event.momentumPhase)
+            )
+        )
+        surface.sendMouseScroll(scrollEvent)
+    }
+
+    /// Routes a vertical scroll delta through the overscroll policy.
+    private func resolveOverscroll(deltaY: CGFloat) -> (forwardedY: CGFloat, didChangeShift: Bool) {
+        guard zenOverscrollEnabled else { return (deltaY, false) }
+        // This view overrides safeAreaInsets to zero (the whole scroll view
+        // is a safe area); the chrome height the terminal extends behind in
+        // full-screen zen is the window content view's top inset.
+        let topInset = window?.contentView?.safeAreaInsets.top ?? 0
+        let bottomInset = window?.contentView?.safeAreaInsets.bottom ?? 0
+        let limits = TerminalZenFullScreenPolicy.overscrollLimits(
+            topInset: topInset,
+            bottomInset: bottomInset,
+            cellHeight: surfaceView.cellSize.height
+        )
+        let edge = TerminalZenFullScreenPolicy.edgeState(
+            offset: surfaceView.scrollbar?.offset ?? 0,
+            total: surfaceView.scrollbar?.total ?? 0,
+            len: surfaceView.scrollbar?.len ?? 0
+        )
+        let resolved = TerminalZenFullScreenPolicy.resolvedShift(
+            shift: zenOverscrollShift,
+            delta: deltaY,
+            atTop: edge.atTop,
+            atBottom: edge.atBottom,
+            maxTop: limits.top,
+            maxBottom: limits.bottom
+        )
+        let didChangeShift = abs(resolved.shift - zenOverscrollShift) >= 0.5
+        zenOverscrollShift = resolved.shift
+        return (resolved.forwarded, didChangeShift)
+    }
 
     override func mouseMoved(with: NSEvent) {
         // When the OS preferred style is .legacy, the user should be able to

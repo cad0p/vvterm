@@ -64,6 +64,9 @@ struct NoticeBannerView: View {
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("vvterm.notice.banner")
+            // Non-interactive status banners (connecting/reconnecting) must
+            // not swallow scroll gestures aimed at the terminal underneath.
+            .allowsHitTesting(item.isInteractive)
         }
         .sheet(isPresented: $isShowingDetail) {
             if let detail = item.detail {

@@ -23,6 +23,53 @@ extension View {
     ) -> some View {
         self
     }
+
+    /// Propagates the full-screen zen state to the pane's registered terminal
+    /// views so their scroll containers enable edge overscroll (and reset it
+    /// when leaving zen).
+    func terminalZenFullScreen(
+        enabled: Bool,
+        paneIds: [UUID],
+        terminalRegistryVersion: Int,
+        terminalProvider: @escaping (UUID) -> GhosttyTerminalView?
+    ) -> some View {
+        modifier(
+            TerminalZenFullScreenModifier(
+                enabled: enabled,
+                paneIds: paneIds,
+                terminalRegistryVersion: terminalRegistryVersion,
+                terminalProvider: terminalProvider
+            )
+        )
+        .environment(\.terminalZenFullScreenEnabled, enabled)
+    }
+}
+
+private struct TerminalZenFullScreenModifier: ViewModifier {
+    let enabled: Bool
+    let paneIds: [UUID]
+    let terminalRegistryVersion: Int
+    let terminalProvider: (UUID) -> GhosttyTerminalView?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { apply() }
+            .onChange(of: enabled) { _ in apply() }
+            .onChange(of: terminalRegistryVersion) { _ in apply() }
+            .onDisappear { clear() }
+    }
+
+    private func apply() {
+        for paneId in paneIds {
+            terminalProvider(paneId)?.zenOverscrollEnabled = enabled
+        }
+    }
+
+    private func clear() {
+        for paneId in paneIds {
+            terminalProvider(paneId)?.zenOverscrollEnabled = false
+        }
+    }
 }
 
 // MARK: - SSH Terminal Pane Wrapper
