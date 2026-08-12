@@ -141,35 +141,40 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
 `.github/workflows/ghostty-upstream-probe.yml` (Mon 06:00 UTC + manual dispatch):
 
 - Resolves latest upstream `main` → no-op week if it equals `Vendor/libghostty/VERSION`
-- Rebuilds (upstream + patch), runs the probe tests
-- Pass → bump PR (`chore/ghostty-upstream-bump-<sha7>`, artifacts + VERSION + BASE) created
-  with GITHUB_TOKEN and **auto-merge enabled**; the full PR CI (build + unit + UI shards
-  incl. loopback SSH) is the merge gate — GitHub's branch protection on `main` requires
-  `build`, `unit-tests`, `ui-tests *` before any merge. The `watch` job files an alarm
-  issue on red CI and parks (never alarms) while the PR waits for the one-time
-  "Approve workflows to run" click or for auto-merge.
-- Fail → alarm issue (label `ghostty-patch`) with this runbook; the shipped app is untouched
+- Rebuilds (upstream + patch), runs the **full VVTermTests unit suite** (incl. the
+  behavioral probe tests) against the NEW binaries — the probe IS the merge gate
+- Pass → commits artifacts + VERSION + BASE and pushes **directly to `main`** over SSH
+  with the repo-scoped `vvterm-ghostty-probe` deploy key. The push is a real push, so it
+  also triggers `ios-testflight` (TestFlight release of the new core).
+- Fail (any step incl. a rejected push) → alarm issue (label `ghostty-patch`) with this
+  runbook; the shipped app is untouched
 
-### The one human step per bump (no PAT secrets)
+### Why direct push, and the deploy key (no PAT, no human, no approval)
 
-Bump PRs are created by the probe with `GITHUB_TOKEN`. GitHub starts their `pull_request`
-workflows in an **approval-required** state — in the PR's merge box, click
-**"Approve workflows to run"** once. That starts the full PR CI against the new binaries;
-when it is green, auto-merge (already enabled by the probe) merges the PR. No PAT is
-needed and no other action is required. The per-PR OTA build (ad-hoc pipeline) is posted
-on the PR after CI runs — install it to validate the new core on a device before merge.
+- A bump PR created with `GITHUB_TOKEN` runs its `pull_request` CI in an
+  **approval-required** state (one human click per bump) — rejected by design.
+- The built-in GitHub Actions app can **never** be a ruleset bypass actor (by design),
+  so `GITHUB_TOKEN` cannot push past the ruleset either.
+- The `gh-ruleset-main` ruleset (Settings → Rules) therefore lists the
+  `vvterm-ghostty-probe` **deploy key** as a bypass actor (`always`): the probe's final
+  push uses the key over SSH and passes the pull_request/signature/checks rules. The
+  key is a repo-scoped service credential — not a PAT — used only for that push.
+- Setup (done 2026-08-12): `ssh-keygen -t ed25519` → public key added under
+  Settings → Deploy keys (write access, title `vvterm-ghostty-probe`) → private key
+  stored as the Actions secret `GHOSTTY_BUMP_DEPLOY_KEY`. Revoke anytime by deleting
+  the deploy key.
 
-Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr` (skip PR
-creation — useful for validation runs).
+Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `push_to_main` (skip the
+push — useful for validation runs). `create_bump_pr` is a deprecated alias kept for
+compat (still honored).
 
-Dispatch `ref` restriction: run validation dispatches on a feature branch with
-`create_bump_pr=false` — never on the bump branch itself (`chore/ghostty-upstream-bump-*`)
-and never with `create_bump_pr=true` on a non-main ref (the bump PR would fold that ref's
-commits into the bump).
+Dispatch `ref` restriction: the workflow file must exist on `main` to be dispatched at
+all (GitHub's dispatch API resolves the workflow against the default branch). Validation
+runs dispatch from `main` with `force_rebuild=true, push_to_main=false`.
 
 ### Alarm drill (simulate patch drift)
 
 1. On a scratch branch, corrupt the patch: `sed -i '' 's/use_custom_io/use_custom_iox/' scripts/patches/ghostty/custom-io.patch`
-2. Push, dispatch the workflow with `ref` = that branch, `create_bump_pr=false`
+2. Push, dispatch the workflow with `ref` = that branch, `push_to_main=false`
 3. Expect: build step fails at patch apply → alarm issue filed with the run URL
 4. Cleanup: delete the alarm issue + the scratch branch
