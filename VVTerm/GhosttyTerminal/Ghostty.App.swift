@@ -1021,14 +1021,17 @@ extension Ghostty {
             }
         }
 
-        static func readClipboard(_ userdata: UnsafeMutableRawPointer?, location: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) {
+        // Upstream changed this callback to return Bool: true when the
+        // clipboard content was provided to libghostty, false when it can't
+        // be read so performable paste bindings fall through to the terminal.
+        static func readClipboard(_ userdata: UnsafeMutableRawPointer?, location: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) -> Bool {
             // userdata is the GhosttyTerminalView instance
-            guard let userdata = userdata else { return }
+            guard let userdata = userdata else { return false }
             let terminalView = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
-            guard let surface = terminalView.surface?.unsafeCValue else { return }
+            guard let surface = terminalView.surface?.unsafeCValue else { return false }
 
             // Read from macOS clipboard
-            let clipboardString = Clipboard.readString() ?? ""
+            guard let clipboardString = Clipboard.readString() else { return false }
 
             // Complete the clipboard request by providing data to Ghostty
             clipboardString.withCString { ptr in
@@ -1036,6 +1039,7 @@ extension Ghostty {
             }
 
             Ghostty.logger.debug("Read clipboard: \(clipboardString.prefix(50))...")
+            return true
         }
 
         static func confirmReadClipboard(
