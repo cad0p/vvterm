@@ -1,6 +1,14 @@
 #!/bin/bash
 # VVTerm vendor build (GhosttyKit + libssh2/OpenSSL)
 
+# Ghostty is built from UPSTREAM (ghostty-org/ghostty) + a repo-owned patch
+# (scripts/patches/ghostty/custom-io.patch) that carries the custom-I/O backend
+# VVTerm depends on. The old floating wiedymi/ghostty@custom-io fork branch is
+# retired (issue #127): M1 pinned the fork tip commit as a stopgap; M2 moves to
+# upstream + patch-queue. Default ref = the BASE commit recorded in
+# scripts/patches/ghostty/BASE; a rebuild without a pin silently changes the
+# vendored core, so the drift guard below enforces reproducibility.
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,8 +29,13 @@ LIBSSH2_SOURCE_URL="https://github.com/cad0p/libssh2/archive/refs/tags/${LIBSSH2
 MACOS_DEPLOYMENT_TARGET="13.3"
 IOS_DEPLOYMENT_TARGET="16.0"
 
-GHOSTTY_REPO="https://github.com/wiedymi/ghostty.git"
-GHOSTTY_REF="${GHOSTTY_REF:-custom-io}"
+GHOSTTY_REPO="https://github.com/ghostty-org/ghostty.git"
+# Capture whether the user explicitly set GHOSTTY_REF BEFORE assigning the
+# default below — the drift guard needs to know (M1 default was the pinned fork
+# commit 268a0a9d; M2 default is the upstream BASE commit).
+GHOSTTY_REF_OVERRIDE="${GHOSTTY_REF:-}"
+# Default ref = the patch-queue BASE commit (an UPSTREAM SHA, not a branch).
+GHOSTTY_REF="${GHOSTTY_REF:-$(cat "${SCRIPT_DIR}/patches/ghostty/BASE")}"
 BUNDLE_ID="app.vivy.VivyTerm"
 
 KEEP_WORKDIR="${KEEP_WORKDIR:-0}"
@@ -53,7 +66,10 @@ Commands:
   help      Show this help message
 
 Env:
-  GHOSTTY_REF=<git-ref>   Build a specific ghostty ref (default: custom-io)
+  GHOSTTY_REF=<git-ref>   Build a specific ghostty ref (an UPSTREAM SHA or tag;
+                          default: the BASE commit in scripts/patches/ghostty/BASE).
+                          custom-io.patch is applied on top automatically.
+  VVTERM_STRICT_BUILD=1   Fail hard if the checked-out ref != vendored VERSION
   KEEP_WORKDIR=1          Keep ghostty build temp dir for debugging
 EOF
 }
@@ -82,6 +98,28 @@ check_deps_ssh() {
     require_cmd xcrun
 }
 
+# Drift guard: verify the checked-out ghostty HEAD matches the vendored
+# VERSION. M1 semantics: hard fail on mismatch (default ref = pinned fork
+# commit; a silent rebuild would change the vendored core). M2 downgrades
+# this: after the upstream swap the default ref (= BASE) intentionally differs
+# from the committed VERSION until the first bump PR merges, so a mismatch is
+# only a loud warning — unless VVTERM_STRICT_BUILD=1. Only enforced when
+# GHOSTTY_REF came from the default, not a user override.
+verify_ghostty_version() {
+    local ghostty_dir="$1"
+    local checked_out
+    checked_out="$(git -C "${ghostty_dir}" rev-parse HEAD)"
+    local vendored
+    vendored="$(cat "${VENDOR_GHOSTTY}/VERSION" 2>/dev/null || true)"
+    if [ -n "${vendored}" ] && [ "${checked_out}" != "${vendored}" ]; then
+        if [ "${VVTERM_STRICT_BUILD:-0}" = "1" ]; then
+            log_error "checked out ghostty ${checked_out} but vendored VERSION records ${vendored} — the vendored build is not reproducible; set GHOSTTY_REF explicitly to rebuild a different core"
+            exit 1
+        fi
+        log_warn "checked out ghostty ${checked_out} but vendored VERSION records ${vendored} — rebuilding a different core than vendored"
+    fi
+}
+
 strip_lib() {
     local lib="$1"
     if command -v xcrun >/dev/null 2>&1; then
@@ -98,7 +136,30 @@ build_ghosttykit() {
     local workdir="$GHOSTTY_WORKDIR"
 
     log_info "Cloning ghostty @ ${GHOSTTY_REF}..."
-    git clone --filter=blob:none --branch "${GHOSTTY_REF}" --depth 1 "${GHOSTTY_REPO}" "${workdir}/ghostty"
+    git clone --filter=blob:none --no-checkout --depth 1 "${GHOSTTY_REPO}" "${workdir}/ghostty"
+    if ! git -C "${workdir}/ghostty" checkout "${GHOSTTY_REF}"; then
+        # A raw SHA may not be reachable in a shallow clone (e.g. an arbitrary
+        # upstream main SHA from the weekly probe); fetch it explicitly.
+        log_warn "ref ${GHOSTTY_REF} not reachable in shallow clone, fetching explicitly..."
+        git -C "${workdir}/ghostty" fetch --depth 1 origin "${GHOSTTY_REF}"
+        git -C "${workdir}/ghostty" checkout FETCH_HEAD
+    fi
+    log_info "Checked out ghostty @ $(git -C "${workdir}/ghostty" rev-parse HEAD)"
+
+    # Drift guard: only enforced for default refs (see verify_ghostty_version).
+    if [ -z "${GHOSTTY_REF_OVERRIDE}" ]; then
+        verify_ghostty_version "${workdir}/ghostty"
+    fi
+
+    # Apply the repo-owned custom-io patch (issue #127). If it no longer
+    # applies, follow the rebase runbook in scripts/patches/ghostty/README.md.
+    local custom_io_patch="${SCRIPT_DIR}/patches/ghostty/custom-io.patch"
+    if ! git -C "${workdir}/ghostty" apply --check "${custom_io_patch}" 2>/dev/null; then
+        log_error "custom-io.patch no longer applies to ghostty @ ${GHOSTTY_REF}; rebase it per scripts/patches/ghostty/README.md (issue #127)"
+        exit 1
+    fi
+    git -C "${workdir}/ghostty" apply "${custom_io_patch}"
+    log_info "Applied custom-io.patch"
 
     local embedded_path="${workdir}/ghostty/src/apprt/embedded.zig"
     if [ -f "${embedded_path}" ]; then
@@ -155,19 +216,15 @@ path.write_text(text.replace(old, new))
 PY
     fi
 
-    # Patch to link Metal frameworks (same as aizen)
-    if [ -f "${workdir}/ghostty/pkg/macos/build.zig" ]; then
-        perl -0pi -e 's/lib\.linkFramework\("IOSurface"\);/lib.linkFramework("IOSurface");\n    lib.linkFramework("Metal");\n    lib.linkFramework("MetalKit");/g' "${workdir}/ghostty/pkg/macos/build.zig"
-        perl -0pi -e 's/module\.linkFramework\("IOSurface", \.\{\}\);/module.linkFramework("IOSurface", .{});\n        module.linkFramework("Metal", .{});\n        module.linkFramework("MetalKit", .{});/g' "${workdir}/ghostty/pkg/macos/build.zig"
-    fi
-
-    # IOSurfaceLayer fixes live in the Ghostty fork; no local patching here.
+    # IOSurfaceLayer fixes are included in custom-io.patch.
 
     # Patch bundle ID to use VVTerm's instead of Ghostty's
     sed -i '' "s/com\\.mitchellh\\.ghostty/${BUNDLE_ID}/g" "${workdir}/ghostty/src/build_config.zig"
 
-    # Lower iOS minimum to match app deployment target
-    perl -0pi -e 's@// iOS [0-9]+ picked arbitrarily@// iOS 16 matches app deployment target@' "${workdir}/ghostty/src/build/Config.zig"
+    # Lower iOS minimum to match app deployment target. The old
+    # "// iOS N picked arbitrarily" comment substitution is dead upstream
+    # (that comment text no longer exists at the BASE commit); only the
+    # semver regex substitution below is kept.
     perl -0pi -e 's/\\.ios => \\.\\{ \\.semver = \\.\\{\\n\\s*\\.major = [0-9]+,\\n\\s*\\.minor = [0-9]+,\\n\\s*\\.patch = [0-9]+,\\n\\s*\\} \\},/\\.ios => .{ .semver = .{\\n            .major = 16,\\n            .minor = 0,\\n            .patch = 0,\\n        } },/s' "${workdir}/ghostty/src/build/Config.zig"
 
     log_info "Building GhosttyKit.xcframework..."
@@ -238,6 +295,8 @@ PY
     rm -rf "${VENDOR_GHOSTTY}/GhosttyKit.xcframework"
     rsync -a "${xcframework}" "${VENDOR_GHOSTTY}/"
 
+    # Record the checked-out upstream base commit (pre-patch HEAD) in VERSION.
+    # This is the drift-guard reference and the probe workflow's no-op gate.
     printf "%s\n" "$(git -C "${workdir}/ghostty" rev-parse HEAD)" > "${VENDOR_GHOSTTY}/VERSION"
 
     strip_lib "${VENDOR_GHOSTTY}/lib/libghostty.a"

@@ -1,0 +1,852 @@
+diff --git a/include/ghostty.h b/include/ghostty.h
+index df9472d21..f7efe4d6f 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -72,6 +72,11 @@ typedef enum {
+   GHOSTTY_PLATFORM_IOS,
+ } ghostty_platform_e;
+ 
++// Callback for custom I/O write handler.
++typedef void (*ghostty_surface_write_fn)(void* userdata,
++                                         const uint8_t* data,
++                                         size_t len);
++
+ typedef enum {
+   GHOSTTY_CLIPBOARD_STANDARD,
+   GHOSTTY_CLIPBOARD_SELECTION,
+@@ -481,6 +486,7 @@ typedef struct {
+   const char* initial_input;
+   bool wait_after_command;
+   ghostty_surface_context_e context;
++  bool use_custom_io;
+ } ghostty_surface_config_s;
+ 
+ typedef struct {
+@@ -1135,6 +1141,10 @@ GHOSTTY_API bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
+ GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
+ GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
++GHOSTTY_API void ghostty_surface_feed_data(ghostty_surface_t, const uint8_t*, size_t);
++GHOSTTY_API void ghostty_surface_set_write_callback(ghostty_surface_t,
++                                                       ghostty_surface_write_fn,
++                                                       void*);
+ GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
+ GHOSTTY_API void ghostty_surface_set_focus(ghostty_surface_t, bool);
+ GHOSTTY_API void ghostty_surface_set_occlusion(ghostty_surface_t, bool);
+diff --git a/pkg/macos/iosurface/iosurface.zig b/pkg/macos/iosurface/iosurface.zig
+index 37f8712ba..6a546f1d8 100644
+--- a/pkg/macos/iosurface/iosurface.zig
++++ b/pkg/macos/iosurface/iosurface.zig
+@@ -20,6 +20,10 @@ pub const IOSurface = opaque {
+     };
+ 
+     pub fn init(properties: Properties) Allocator.Error!*IOSurface {
++        // Metal requires IOSurface row bytes to be aligned (64-byte is safe).
++        const row_bytes: c_int = @intCast(
++            (properties.width * properties.bytes_per_element + 63) & ~@as(c_int, 63),
++        );
+         var w = try foundation.Number.create(.int, &properties.width);
+         defer w.release();
+         var h = try foundation.Number.create(.int, &properties.height);
+@@ -29,14 +33,18 @@ pub const IOSurface = opaque {
+         var bpe = try foundation.Number.create(.int, &properties.bytes_per_element);
+         defer bpe.release();
+ 
++        var rb = try foundation.Number.create(.int, &row_bytes);
++        defer rb.release();
++
+         var properties_dict = try foundation.Dictionary.create(
+             &[_]?*const anyopaque{
+                 c.kIOSurfaceWidth,
+                 c.kIOSurfaceHeight,
+                 c.kIOSurfacePixelFormat,
+                 c.kIOSurfaceBytesPerElement,
++                c.kIOSurfaceBytesPerRow,
+             },
+-            &[_]?*const anyopaque{ w, h, pf, bpe },
++            &[_]?*const anyopaque{ w, h, pf, bpe, rb },
+         );
+         defer properties_dict.release();
+ 
+@@ -84,14 +92,14 @@ pub const IOSurface = opaque {
+     }
+ 
+     pub inline fn lock(self: *IOSurface) void {
+-        c.IOSurfaceLock(
++        _ = c.IOSurfaceLock(
+             @ptrCast(self),
+             0,
+             null,
+         );
+     }
+     pub inline fn unlock(self: *IOSurface) void {
+-        c.IOSurfaceUnlock(
++        _ = c.IOSurfaceUnlock(
+             @ptrCast(self),
+             0,
+             null,
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 3002e9f58..408abe31a 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -634,51 +634,64 @@ pub fn init(
+         break :command config.command;
+     };
+ 
++    const use_custom_io = if (comptime @hasField(apprt.runtime.Surface, "use_custom_io"))
++        rt_surface.use_custom_io
++    else
++        false;
++
+     // Start our IO implementation
+     // This separate block ({}) is important because our errdefers must
+     // be scoped here to be valid.
+     {
+-        var env = rt_surface.defaultTermioEnv() catch |err| env: {
+-            // If an error occurs, we don't want to block surface startup.
+-            log.warn("error getting env map for surface err={}", .{err});
+-            break :env global.environMap() catch std.process.Environ.Map.init(alloc);
+-        };
+-        errdefer env.deinit();
++        var io_mailbox = try termio.Mailbox.initSPSC(alloc);
++        errdefer io_mailbox.deinit(alloc);
+ 
+-        // don't leak GHOSTTY_LOG to any subprocesses
+-        _ = env.orderedRemove("GHOSTTY_LOG");
++        var backend: termio.Backend = undefined;
++        if (use_custom_io) {
++            var io_callback = try termio.Callback.init(alloc, .{});
++            errdefer io_callback.deinit();
++            backend = .{ .callback = io_callback };
++        } else {
++            var env = rt_surface.defaultTermioEnv() catch |err| env: {
++                // If an error occurs, we don't want to block surface startup.
++                log.warn("error getting env map for surface err={}", .{err});
++                break :env global.environMap() catch std.process.Environ.Map.init(alloc);
++            };
++            errdefer env.deinit();
+ 
+-        var buf: [18]u8 = undefined;
+-        try env.put(
+-            "GHOSTTY_SURFACE_ID",
+-            std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
+-        );
++            // don't leak GHOSTTY_LOG to any subprocesses
++            _ = env.orderedRemove("GHOSTTY_LOG");
+ 
+-        // Initialize our IO backend
+-        var io_exec = try termio.Exec.init(alloc, .{
+-            .command = command,
+-            .env = env,
+-            .env_override = config.env,
+-            .shell_integration = config.@"shell-integration",
+-            .shell_integration_features = config.@"shell-integration-features",
+-            .cursor_blink = config.@"cursor-style-blink",
+-            .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
+-            .resources_dir = global.resourcesDir().host(),
+-            .term = config.term,
+-            .rt_pre_exec_info = .init(config),
+-            .rt_post_fork_info = .init(config),
+-        });
+-        errdefer io_exec.deinit();
++            var buf: [18]u8 = undefined;
++            try env.put(
++                "GHOSTTY_SURFACE_ID",
++                std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
++            );
+ 
+-        // Initialize our IO mailbox
+-        var io_mailbox = try termio.Mailbox.initSPSC(alloc);
+-        errdefer io_mailbox.deinit(alloc);
++            // Initialize our IO backend
++            var io_exec = try termio.Exec.init(alloc, .{
++                .command = command,
++                .env = env,
++                .env_override = config.env,
++                .shell_integration = config.@"shell-integration",
++                .shell_integration_features = config.@"shell-integration-features",
++                .cursor_blink = config.@"cursor-style-blink",
++                .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
++                .resources_dir = global.resourcesDir().host(),
++                .term = config.term,
++                .rt_pre_exec_info = .init(config),
++                .rt_post_fork_info = .init(config),
++            });
++            errdefer io_exec.deinit();
++
++            backend = .{ .exec = io_exec };
++        }
+ 
+         try termio.Termio.init(&self.io, alloc, .{
+             .size = size,
+             .full_config = config,
+             .config = try termio.Termio.DerivedConfig.init(alloc, config),
+-            .backend = .{ .exec = io_exec },
++            .backend = backend,
+             .mailbox = io_mailbox,
+             .renderer_state = &self.renderer_state,
+             .renderer_wakeup = render_thread.wakeup,
+@@ -1333,6 +1346,7 @@ fn childExitedAbnormally(
+     // Build up our command for the error message
+     const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
+         .exec => |*exec| exec.subprocess.args,
++        .callback => &[_][]const u8{},
+     });
+     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
+ 
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index a380dc50c..9ba640d2b 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -22,6 +22,7 @@ const CoreSurface = @import("../Surface.zig");
+ const configpkg = @import("../config.zig");
+ const Config = configpkg.Config;
+ const String = @import("../main_c.zig").String;
++const termio = @import("../termio.zig");
+ 
+ const log = std.log.scoped(.embedded_window);
+ 
+@@ -430,6 +431,7 @@ pub const Surface = struct {
+     app: *App,
+     platform: Platform,
+     userdata: ?*anyopaque = null,
++    use_custom_io: bool = false,
+     core_surface: CoreSurface,
+     content_scale: apprt.ContentScale,
+     size: apprt.SurfaceSize,
+@@ -481,6 +483,9 @@ pub const Surface = struct {
+ 
+         /// Context for the new surface
+         context: apprt.surface.NewSurfaceContext = .window,
++
++        /// Use callback-based I/O instead of spawning a child process.
++        use_custom_io: bool = false,
+     };
+ 
+     pub fn init(self: *Surface, app: *App, opts: Options) !void {
+@@ -488,6 +493,7 @@ pub const Surface = struct {
+             .app = app,
+             .platform = try .init(opts.platform_tag, opts.platform),
+             .userdata = opts.userdata,
++            .use_custom_io = opts.use_custom_io,
+             .core_surface = undefined,
+             .content_scale = .{
+                 .x = @floatCast(opts.scale_factor),
+@@ -2241,5 +2247,44 @@ pub const CAPI = struct {
+                 ptr.backend = null;
+             }
+         }
++
++        // =========================================================================
++        // Custom I/O API - For SSH clients and other external I/O sources
++        // =========================================================================
++
++        /// The callback function type for writing data from terminal to external source.
++        pub const WriteFn = termio.Callback.WriteFn;
++
++        /// Feed data into the terminal for display (e.g., SSH channel output).
++        /// This is the "output" from the remote source that should be rendered.
++        export fn ghostty_surface_feed_data(
++            ptr: *Surface,
++            data: [*]const u8,
++            len: usize,
++        ) void {
++            if (len == 0) return;
++            ptr.core_surface.io.processOutput(data[0..len]);
++        }
++
++        /// Set the write callback for custom I/O backend.
++        /// This callback is invoked when the terminal wants to send data
++        /// (e.g., keyboard input that should go to SSH channel).
++        export fn ghostty_surface_set_write_callback(
++            ptr: *Surface,
++            write_fn: ?WriteFn,
++            userdata: ?*anyopaque,
++        ) void {
++            // Access the termio and set callback on its backend thread data
++            // This requires the IO thread to be running
++            const io = &ptr.core_surface.io;
++
++            // Send a message to the IO thread to update the callback
++            io.queueMessage(.{
++                .set_write_callback = .{
++                    .write_fn = write_fn,
++                    .userdata = userdata,
++                },
++            }, .unlocked);
++        }
+     };
+ };
+diff --git a/src/font/shaper/coretext.zig b/src/font/shaper/coretext.zig
+index 5172744d8..ec7a2791c 100644
+--- a/src/font/shaper/coretext.zig
++++ b/src/font/shaper/coretext.zig
+@@ -76,8 +76,8 @@ pub const Shaper = struct {
+     /// Dedicated thread for releasing CoreFoundation objects. Some objects,
+     /// such as those produced by CoreText, have excessively slow release
+     /// callback logic.
+-    cf_release_thread: *CFReleaseThread,
+-    cf_release_thr: std.Thread,
++    cf_release_thread: ?*CFReleaseThread,
++    cf_release_thr: ?std.Thread,
+ 
+     const CellBuf = std.ArrayListUnmanaged(font.shape.Cell);
+     const CodepointList = std.ArrayListUnmanaged(Codepoint);
+@@ -202,19 +202,26 @@ pub const Shaper = struct {
+         };
+         errdefer typesetter_attr_dict.release();
+ 
+-        // Create the CF release thread.
+-        var cf_release_thread = try alloc.create(CFReleaseThread);
+-        errdefer alloc.destroy(cf_release_thread);
+-        cf_release_thread.* = try .init(alloc);
+-        errdefer cf_release_thread.deinit();
+-
+-        // Start the CF release thread.
+-        var cf_release_thr = try std.Thread.spawn(
+-            .{},
+-            CFReleaseThread.threadMain,
+-            .{cf_release_thread},
+-        );
+-        cf_release_thr.setName(global.io(), "cf_release") catch {};
++        var cf_release_thread: ?*CFReleaseThread = null;
++        var cf_release_thr: ?std.Thread = null;
++        if (comptime builtin.os.tag != .ios) {
++            // Create the CF release thread.
++            var cf_thread = try alloc.create(CFReleaseThread);
++            errdefer alloc.destroy(cf_thread);
++            cf_thread.* = try .init(alloc);
++            errdefer cf_thread.deinit();
++
++            // Start the CF release thread.
++            var thread = try std.Thread.spawn(
++                .{},
++                CFReleaseThread.threadMain,
++                .{cf_thread},
++            );
++            thread.setName(global.io(), "cf_release") catch {};
++
++            cf_release_thread = cf_thread;
++            cf_release_thr = thread;
++        }
+ 
+         return .{
+             .alloc = alloc,
+@@ -259,13 +266,13 @@ pub const Shaper = struct {
+         self.cf_release_pool.deinit(self.alloc);
+ 
+         // Stop the CF release thread
+-        {
+-            self.cf_release_thread.stop.notify() catch |err|
++        if (self.cf_release_thread) |thread| {
++            thread.stop.notify() catch |err|
+                 log.err("error notifying cf release thread to stop, may stall err={}", .{err});
+-            self.cf_release_thr.join();
++            self.cf_release_thr.?.join();
++            thread.deinit();
++            self.alloc.destroy(thread);
+         }
+-        self.cf_release_thread.deinit();
+-        self.alloc.destroy(self.cf_release_thread);
+     }
+ 
+     pub fn endFrame(self: *Shaper) void {
+@@ -280,20 +287,22 @@ pub const Shaper = struct {
+             return;
+         };
+ 
+-        // Send the items. If the send succeeds then we wake up the
+-        // thread to process the items. If the send fails then do a manual
+-        // cleanup.
+-        if (self.cf_release_thread.mailbox.push(global.io(), .{ .release = .{
+-            .refs = items,
+-            .alloc = self.alloc,
+-        } }, .{ .forever = {} }) != 0) {
+-            self.cf_release_thread.wakeup.notify() catch |err| {
+-                log.warn(
+-                    "error notifying cf release thread to wake up, may stall err={}",
+-                    .{err},
+-                );
+-            };
+-            return;
++        if (self.cf_release_thread) |thread| {
++            // Send the items. If the send succeeds then we wake up the
++            // thread to process the items. If the send fails then do a manual
++            // cleanup.
++            if (thread.mailbox.push(global.io(), .{ .release = .{
++                .refs = items,
++                .alloc = self.alloc,
++            } }, .{ .forever = {} }) != 0) {
++                thread.wakeup.notify() catch |err| {
++                    log.warn(
++                        "error notifying cf release thread to wake up, may stall err={}",
++                        .{err},
++                    );
++                };
++                return;
++            }
+         }
+ 
+         for (items) |ref| macos.foundation.CFRelease(ref);
+diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+index 9247454db..093b218ef 100644
+--- a/src/renderer/Metal.zig
++++ b/src/renderer/Metal.zig
+@@ -167,6 +167,14 @@ pub fn loopEnter(self: *Metal) void {
+         @ptrCast(&displayCallback),
+         @ptrCast(renderer),
+     );
++
++    // On iOS, the layer is added as a sublayer rather than being the view's
++    // backing layer. This means we need to explicitly trigger the first
++    // display after setting up the callback, since the bounds were already
++    // set before the callback was registered.
++    if (comptime builtin.os.tag == .ios) {
++        self.layer.layer.msgSend(void, objc.sel("setNeedsDisplay"), .{});
++    }
+ }
+ 
+ fn displayCallback(renderer: *Renderer) align(8) void {
+@@ -251,6 +259,13 @@ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
+ 
+ /// Present the provided target.
+ pub inline fn present(self: *Metal, target: Target, sync: bool) !void {
++    // On iOS, always go through setSurface so we stay on the main thread.
++    // setSurface will synchronously update if already on the main thread.
++    if (comptime builtin.os.tag == .ios) {
++        try self.layer.setSurface(target.surface);
++        return;
++    }
++
+     if (sync) {
+         self.layer.setSurfaceSync(target.surface);
+     } else {
+diff --git a/src/renderer/metal/IOSurfaceLayer.zig b/src/renderer/metal/IOSurfaceLayer.zig
+index cd97126a4..0d0c2b9e5 100644
+--- a/src/renderer/metal/IOSurfaceLayer.zig
++++ b/src/renderer/metal/IOSurfaceLayer.zig
+@@ -3,14 +3,13 @@
+ const IOSurfaceLayer = @This();
+ 
+ const std = @import("std");
++const builtin = @import("builtin");
+ const Allocator = std.mem.Allocator;
+ const objc = @import("objc");
+ const macos = @import("macos");
+ 
+ const IOSurface = macos.iosurface.IOSurface;
+ 
+-const log = std.log.scoped(.IOSurfaceLayer);
+-
+ /// We subclass CALayer with a custom display handler, we only need
+ /// to make the subclass once, and then we can use it as a singleton.
+ var Subclass: ?objc.Class = null;
+@@ -32,6 +31,7 @@ pub fn init() !IOSurfaceLayer {
+     // The layer gravity is set to top-left so that the contents aren't
+     // stretched during resize operations before a new frame has been drawn.
+     layer.setProperty("contentsGravity", macos.animation.kCAGravityTopLeft);
++    layer.setProperty("opaque", true);
+ 
+     layer.setInstanceVariable("display_cb", .{ .value = null });
+     layer.setInstanceVariable("display_ctx", .{ .value = null });
+@@ -111,12 +111,27 @@ fn setSurfaceCallback(
+     const scale = layer.getProperty(f64, "contentsScale");
+     const width: usize = @intFromFloat(bounds.size.width * scale);
+     const height: usize = @intFromFloat(bounds.size.height * scale);
+-    if (width != surface.getWidth() or height != surface.getHeight()) {
+-        log.debug(
+-            "setSurfaceCallback(): surface is wrong size for layer, discarding. surface = {d}x{d}, layer = {d}x{d}",
+-            .{ surface.getWidth(), surface.getHeight(), width, height },
+-        );
+-        return;
++    const surface_width = surface.getWidth();
++    const surface_height = surface.getHeight();
++    const diff_w: usize = if (width > surface_width) width - surface_width else surface_width - width;
++    const diff_h: usize = if (height > surface_height) height - surface_height else surface_height - height;
++    const tolerance: usize = if (comptime builtin.os.tag == .ios) 1 else 0;
++    if (diff_w > tolerance or diff_h > tolerance) {
++        // On iOS, try to correct the contentsScale instead of discarding.
++        if (comptime builtin.os.tag == .ios) {
++            const bw = bounds.size.width;
++            const bh = bounds.size.height;
++            if (bw > 0 and bh > 0) {
++                const sx: f64 = @as(f64, @floatFromInt(surface_width)) / bw;
++                const sy: f64 = @as(f64, @floatFromInt(surface_height)) / bh;
++                const new_scale: f64 = if (sx > sy) sx else sy;
++                if (@abs(new_scale - scale) > 0.01) {
++                    layer.setProperty("contentsScale", new_scale);
++                }
++            }
++        } else {
++            return;
++        }
+     }
+ 
+     layer.setProperty("contents", surface);
+@@ -142,11 +157,15 @@ pub fn setDisplayCallback(
+ fn getSubclass() error{ObjCFailed}!objc.Class {
+     if (Subclass) |c| return c;
+ 
+-    const CALayer =
+-        objc.getClass("CALayer") orelse return error.ObjCFailed;
++    // On iOS, use CAIOSurfaceLayer as base class for better IOSurface integration
++    const base_layer = switch (comptime builtin.os.tag) {
++        .ios => objc.getClass("CAIOSurfaceLayer") orelse
++            objc.getClass("CALayer") orelse return error.ObjCFailed,
++        else => objc.getClass("CALayer") orelse return error.ObjCFailed,
++    };
+ 
+     var subclass =
+-        objc.allocateClassPair(CALayer, "IOSurfaceLayer") orelse return error.ObjCFailed;
++        objc.allocateClassPair(base_layer, "IOSurfaceLayer") orelse return error.ObjCFailed;
+     errdefer objc.disposeClassPair(subclass);
+ 
+     if (!subclass.addIvar("display_cb")) return error.ObjCFailed;
+diff --git a/src/termio.zig b/src/termio.zig
+index b16885109..7950fb111 100644
+--- a/src/termio.zig
++++ b/src/termio.zig
+@@ -22,6 +22,7 @@ const stream_handler = @import("termio/stream_handler.zig");
+ const message = @import("termio/message.zig");
+ pub const backend = @import("termio/backend.zig");
+ pub const mailbox = @import("termio/mailbox.zig");
++pub const Callback = @import("termio/Callback.zig");
+ pub const Exec = @import("termio/Exec.zig");
+ pub const Options = @import("termio/Options.zig");
+ pub const Termio = @import("termio/Termio.zig");
+diff --git a/src/termio/Callback.zig b/src/termio/Callback.zig
+new file mode 100644
+index 000000000..446d7660a
+--- /dev/null
++++ b/src/termio/Callback.zig
+@@ -0,0 +1,177 @@
++//! Callback implements a termio backend that uses external callbacks for I/O.
++//! This is useful for environments that don't have a pty, such as SSH clients
++//! or web-based terminals where the I/O is handled externally.
++const Callback = @This();
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++const renderer = @import("../renderer.zig");
++const terminal = @import("../terminal/main.zig");
++const termio = @import("../termio.zig");
++
++const log = std.log.scoped(.io_callback);
++
++/// The callback function type for writing data.
++/// This is called when the terminal wants to send data (e.g., keyboard input).
++///
++/// IMPORTANT: The userdata pointer must remain valid for the lifetime of the
++/// surface. The caller is responsible for ensuring userdata outlives the
++/// surface and is not freed while the callback may still be invoked.
++pub const WriteFn = *const fn (
++    userdata: ?*anyopaque,
++    data: [*]const u8,
++    len: usize,
++) callconv(.c) void;
++
++/// The current grid size for resize notifications.
++grid_size: renderer.GridSize = .{ .columns = 80, .rows = 24 },
++screen_size: renderer.ScreenSize = .{ .width = 800, .height = 600 },
++
++/// Initialize the callback backend.
++pub fn init(
++    alloc: Allocator,
++    cfg: Config,
++) !Callback {
++    _ = alloc;
++    _ = cfg;
++    return .{};
++}
++
++pub fn deinit(self: *Callback) void {
++    _ = self;
++}
++
++/// Initialize terminal state as necessary for this backend.
++pub fn initTerminal(self: *Callback, term: *terminal.Terminal) void {
++    // Callback backend doesn't need to initialize terminal state
++    // since it doesn't have a subprocess with a specific CWD or initial state.
++    _ = self;
++    _ = term;
++}
++
++pub fn threadEnter(
++    self: *Callback,
++    alloc: Allocator,
++    io: *termio.Termio,
++    td: *termio.Termio.ThreadData,
++) !void {
++    _ = self;
++    _ = alloc;
++    _ = io;
++
++    // Initialize our thread data
++    td.backend = .{ .callback = .{} };
++}
++
++pub fn threadExit(self: *Callback, td: *termio.Termio.ThreadData) void {
++    _ = self;
++    _ = td;
++}
++
++pub fn focusGained(
++    self: *Callback,
++    td: *termio.Termio.ThreadData,
++    focused: bool,
++) !void {
++    _ = self;
++    _ = td;
++    _ = focused;
++    // Focus changes don't need special handling for callback backend
++}
++
++pub fn resize(
++    self: *Callback,
++    grid_size: renderer.GridSize,
++    screen_size: renderer.ScreenSize,
++) !void {
++    self.grid_size = grid_size;
++    self.screen_size = screen_size;
++}
++
++/// Queue a write to the external handler via callback.
++pub fn queueWrite(
++    self: *Callback,
++    alloc: Allocator,
++    td: *termio.Termio.ThreadData,
++    data: []const u8,
++    linefeed: bool,
++) !void {
++    _ = self;
++    _ = alloc;
++
++    const cb = &td.backend.callback;
++
++    // Get the write callback from thread data
++    const write_fn = cb.write_fn orelse {
++        log.warn("no write callback set, dropping {} bytes", .{data.len});
++        return;
++    };
++
++    if (!linefeed) {
++        // Fast path: no linefeed conversion needed
++        write_fn(cb.userdata, data.ptr, data.len);
++        return;
++    }
++
++    // Slow path: need to convert \r to \r\n by iterating and
++    // making multiple callback invocations.
++    var i: usize = 0;
++    while (i < data.len) {
++        // Find the next \r or end of data
++        var j = i;
++        while (j < data.len and data[j] != '\r') : (j += 1) {}
++
++        // Write the chunk before \r
++        if (j > i) {
++            write_fn(cb.userdata, data.ptr + i, j - i);
++        }
++
++        // If we found a \r, write \r\n
++        if (j < data.len and data[j] == '\r') {
++            const crlf = "\r\n";
++            write_fn(cb.userdata, crlf.ptr, crlf.len);
++            j += 1;
++        }
++
++        i = j;
++    }
++}
++
++/// Handle abnormal child exit - not applicable for callback backend
++pub fn childExitedAbnormally(
++    self: *Callback,
++    gpa: Allocator,
++    t: *terminal.Terminal,
++    exit_code: u32,
++    runtime_ms: u64,
++) !void {
++    _ = self;
++    _ = gpa;
++    _ = t;
++    _ = exit_code;
++    _ = runtime_ms;
++    // Callback backend doesn't have a child process
++}
++
++/// Thread-local data for the callback implementation.
++pub const ThreadData = struct {
++    /// The write callback function.
++    write_fn: ?WriteFn = null,
++
++    /// Userdata passed to callbacks.
++    userdata: ?*anyopaque = null,
++
++    pub fn deinit(self: *ThreadData, alloc: Allocator) void {
++        _ = self;
++        _ = alloc;
++    }
++};
++
++/// Configuration for the callback backend.
++pub const Config = struct {
++    /// Initial write callback (can be set later via setWriteCallback).
++    write_fn: ?WriteFn = null,
++
++    /// Userdata passed to callbacks.
++    userdata: ?*anyopaque = null,
++};
+diff --git a/src/termio/Thread.zig b/src/termio/Thread.zig
+index 6b860a0d1..9d0cbe246 100644
+--- a/src/termio/Thread.zig
++++ b/src/termio/Thread.zig
+@@ -357,6 +357,16 @@ fn drainMailbox(
+                     self.flags.linefeed_mode,
+                 );
+             },
++            .set_write_callback => |v| {
++                // Only applies to callback backend
++                switch (data.backend) {
++                    .callback => |*callback_data| {
++                        callback_data.write_fn = v.write_fn;
++                        callback_data.userdata = v.userdata;
++                    },
++                    else => {},
++                }
++            },
+         }
+     }
+ 
+diff --git a/src/termio/backend.zig b/src/termio/backend.zig
+index c29009acb..4fe3fb4ac 100644
+--- a/src/termio/backend.zig
++++ b/src/termio/backend.zig
+@@ -11,28 +11,34 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
+ const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
+ 
+ /// The kinds of backends.
+-pub const Kind = enum { exec };
++pub const Kind = enum { exec, callback };
+ 
+ /// Configuration for the various backend types.
+ pub const Config = union(Kind) {
+     /// Exec uses posix exec to run a command with a pty.
+     exec: termio.Exec.Config,
++
++    /// Callback uses external callbacks for I/O (e.g., SSH clients).
++    callback: termio.Callback.Config,
+ };
+ 
+ /// Backend implementations. A backend is responsible for owning the pty
+ /// behavior and providing read/write capabilities.
+ pub const Backend = union(Kind) {
+     exec: termio.Exec,
++    callback: termio.Callback,
+ 
+     pub fn deinit(self: *Backend) void {
+         switch (self.*) {
+             .exec => |*exec| exec.deinit(),
++            .callback => |*cb| cb.deinit(),
+         }
+     }
+ 
+     pub fn initTerminal(self: *Backend, t: *terminal.Terminal) void {
+         switch (self.*) {
+             .exec => |*exec| exec.initTerminal(t),
++            .callback => |*cb| cb.initTerminal(t),
+         }
+     }
+ 
+@@ -44,12 +50,14 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.threadEnter(alloc, io, td),
++            .callback => |*cb| try cb.threadEnter(alloc, io, td),
+         }
+     }
+ 
+     pub fn threadExit(self: *Backend, td: *termio.Termio.ThreadData) void {
+         switch (self.*) {
+             .exec => |*exec| exec.threadExit(td),
++            .callback => |*cb| cb.threadExit(td),
+         }
+     }
+ 
+@@ -60,6 +68,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.focusGained(td, focused),
++            .callback => |*cb| try cb.focusGained(td, focused),
+         }
+     }
+ 
+@@ -70,6 +79,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.resize(grid_size, screen_size),
++            .callback => |*cb| try cb.resize(grid_size, screen_size),
+         }
+     }
+ 
+@@ -82,6 +92,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
++            .callback => |*cb| try cb.queueWrite(alloc, td, data, linefeed),
+         }
+     }
+ 
+@@ -99,6 +110,12 @@ pub const Backend = union(Kind) {
+                 exit_code,
+                 runtime_ms,
+             ),
++            .callback => |*cb| try cb.childExitedAbnormally(
++                gpa,
++                t,
++                exit_code,
++                runtime_ms,
++            ),
+         }
+     }
+ 
+@@ -115,10 +132,12 @@ pub const Backend = union(Kind) {
+ /// Termio thread data. See termio.ThreadData for docs.
+ pub const ThreadData = union(Kind) {
+     exec: termio.Exec.ThreadData,
++    callback: termio.Callback.ThreadData,
+ 
+     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
+         switch (self.*) {
+             .exec => |*exec| exec.deinit(alloc),
++            .callback => |*cb| cb.deinit(alloc),
+         }
+     }
+ 
+diff --git a/src/termio/message.zig b/src/termio/message.zig
+index e51865e39..03bf2265a 100644
+--- a/src/termio/message.zig
++++ b/src/termio/message.zig
+@@ -91,6 +91,9 @@ pub const Message = union(enum) {
+     /// Write where the data is allocated and must be freed.
+     write_alloc: WriteReq.Alloc,
+ 
++    /// Set the write callback for the callback backend.
++    set_write_callback: SetWriteCallback,
++
+     /// Return a write request for the given data. This will use
+     /// write_small if it fits or write_alloc otherwise. This should NOT
+     /// be used for stable pointers which can be manually set to write_stable.
+@@ -117,6 +120,12 @@ pub const Message = union(enum) {
+ 
+     /// The types of size reports that we support.
+     pub const SizeReport = terminal.size_report.Style;
++
++    /// Payload for setting the write callback on callback backend.
++    pub const SetWriteCallback = struct {
++        write_fn: ?termio.Callback.WriteFn,
++        userdata: ?*anyopaque,
++    };
+ };
+ 
+ test {
