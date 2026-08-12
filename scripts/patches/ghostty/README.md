@@ -23,8 +23,9 @@ There is no runtime substitute: the backend is Zig code compiled into the librar
 
 ## Contents
 
-`custom-io.patch` — the fork's 7-commit custom-I/O delta (2026-01-06 → 03-08), **rebased
-onto the upstream commit recorded in `BASE`**:
+`custom-io.patch` — the fork's 7-commit custom-I/O delta (2026-01-06 → 03-08) **rebased
+onto the upstream commit recorded in `BASE`**, plus the **iOS full-build restoration**
+(carried since 2026-08-12 — see below):
 
 - `src/termio/Callback.zig` — the callback I/O backend (~180 lines)
 - `src/termio.zig`, `src/termio/backend.zig`, `src/termio/Thread.zig`, `src/termio/message.zig` — backend wiring
@@ -32,6 +33,7 @@ onto the upstream commit recorded in `BASE`**:
 - `src/Surface.zig` — `use_custom_io` config plumbing (IO-init branching)
 - `include/ghostty.h` — the 4 C symbols the app compiles against
 - `pkg/macos/iosurface/iosurface.zig`, `src/renderer/Metal.zig`, `src/renderer/metal/IOSurfaceLayer.zig`, `src/font/shaper/coretext.zig` — iOS renderer fixes the app relies on (row-bytes alignment, iOS present path, CFReleaseThread disabled on iOS)
+- `src/build/GhosttyXCFramework.zig`, `src/build/MetallibStep.zig`, `src/build/Config.zig`, `pkg/macos/iosurface/iosurface.zig`, `macos/build.nu`, `HACKING.md`, `nix/devShell.nix` — **iOS build restoration**: upstream commit `7a171895d` ("build: stop building Ghostty.xcframework for iOS", 2026-08-12) deleted the iOS/iOS-simulator slices from the xcframework, the MetallibStep iOS branch, and `osVersionMin(.ios)`. VVTerm needs all three slices, so the patch carries the reverse of that commit. If a future upstream build refactor conflicts here, the probe alarms — re-reverse `7a171895d` or hand-merge
 
 Excluded deliberately (do not re-add):
 
@@ -105,8 +107,16 @@ git diff <new-upstream-main-sha> -- include/ghostty.h pkg/macos/iosurface/iosurf
   src/Surface.zig src/apprt/embedded.zig src/font/shaper/coretext.zig src/renderer/Metal.zig \
   src/renderer/metal/IOSurfaceLayer.zig src/termio.zig src/termio/Callback.zig \
   src/termio/Thread.zig src/termio/backend.zig src/termio/message.zig \
+  src/build/Config.zig src/build/GhosttyXCFramework.zig src/build/MetallibStep.zig \
+  HACKING.md macos/build.nu nix/devShell.nix \
   > scripts/patches/ghostty/custom-io.patch
 echo <new-upstream-main-sha> > scripts/patches/ghostty/BASE
+
+**Regeneration gotcha**: `src/termio/Callback.zig` is a NEW file (not in upstream) —
+`git apply` leaves it untracked and `git diff` silently skips untracked files, so a
+regenerated patch will DROP it and the build fails with `unable to load
+'termio/Callback.zig'`. Run `git add -N src/termio/Callback.zig` (intent-to-add)
+before `git diff` and verify the output contains `new file mode` for it.
 ```
 
 Validate before committing (a Linux box can compile-verify the core — see below):
@@ -115,10 +125,14 @@ Validate before committing (a Linux box can compile-verify the core — see belo
 # Compile-verify the core on Linux (no macOS needed): install zig 0.16.0 for
 # linux-aarch64/x86_64, then from the patched tree:
 zig build -Dapp-runtime=none -Demit-exe=false -Demit-docs=false -Demit-webdata=false \
-  -Demit-helpgen=false -Demit-terminfo=false -Demit-termcap=false -Demit-themes=false
-# This compiles termio/*, Surface.zig and the renderer core and catches missing
-# .callback switch arms and merge mistakes. macOS-only files (coretext.zig,
-# embedded.zig, Metal/IOSurfaceLayer) are NOT covered — the probe build is.
+  -Demit-helpgen=false -Demit-terminfo=false -Demit-termcap=false -Demit-themes=false \
+  -Di18n=false -Doptimize=Debug -p /tmp/zig-out-host
+# Compiles termio/*, Surface.zig and the renderer core and catches missing .callback
+# switch arms and merge mistakes. Use Debug on small boxes (ReleaseFast OOMs a 2GB
+# machine); run `zig build --fetch=all` once first (the Darwin lazy deps like
+# zig_objc are NOT fetched by a plain build). macOS-only files (coretext.zig,
+# embedded.zig, Metal/IOSurfaceLayer) and the iOS slices are NOT covered — the
+# probe build on the macOS runner is the real validator.
 ```
 
 ```sh
@@ -147,7 +161,8 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
   created with the **vvterm-ghostty-bump GitHub App token**, auto-merge enabled
 - The bump PR's own `pull_request` CI runs **automatically** (app-created PRs are
   first-class actors — no approval, no click) and is the **merge gate**: the
-  `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests *`) must pass;
+  `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests-shard-0..3`,
+  stable job names — no wildcards; rulesets don't support them) must pass;
   auto-merge then merges. The `watch` job exits 0 on merge, files an alarm issue on
   red CI, and parks (never alarms) on stalls.
 - Fail before PR creation → alarm issue (label `ghostty-patch`) with this runbook; the
@@ -167,6 +182,22 @@ grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon 
   `GHOSTTY_BUMP_CLIENT_ID`; the app's **private key** must be stored as the Actions
   secret `GHOSTTY_BUMP_PRIVATE_KEY` (full PEM). Revoke anytime by deleting the app
   or uninstalling it.
+
+### Ruleset constraint (learned the hard way, 2026-08-12)
+
+`gh-ruleset-all` must NOT contain `required_linear_history` or `required_signatures`:
+
+- `required_linear_history` on a ruleset evaluates the **entire branch history**,
+  not just new commits ([known GitHub bug — GH community #80952](https://github.com/orgs/community/discussions/80952)).
+  This repo's `main` contains historical merge commits, so **every new-branch push
+  fails** — including the probe's bump branch. The rule only works on the default
+  branch (delta-only evaluation), where `gh-ruleset-main` keeps it.
+- `required_signatures` rejects the probe runner's unsigned bump commit (a GitHub App
+  cannot sign commits; no bypass actors allowed by design).
+
+`gh-ruleset-all` currently has `non_fast_forward` only; `gh-ruleset-main` keeps
+`deletion`, `non_fast_forward`, `pull_request` (squash), `required_signatures`,
+`required_linear_history`, `required_status_checks`, `code_quality`.
 
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr`
 (skip PR creation — useful for validation runs).
