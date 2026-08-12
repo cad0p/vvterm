@@ -178,6 +178,6 @@ Validation runs dispatch from `main` with `force_rebuild=true, create_bump_pr=fa
 ### Alarm drill (simulate patch drift)
 
 1. On a scratch branch, corrupt the patch: `sed -i '' 's/use_custom_io/use_custom_iox/' scripts/patches/ghostty/custom-io.patch`
-2. Push, dispatch the workflow with `ref` = that branch, `push_to_main=false`
+2. Push, dispatch the workflow with `ref` = that branch, `create_bump_pr=false`
 3. Expect: build step fails at patch apply → alarm issue filed with the run URL
 4. Cleanup: delete the alarm issue + the scratch branch
