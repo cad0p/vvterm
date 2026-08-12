@@ -58,9 +58,10 @@ on:
         default: true
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
+  actions: write   # DerivedData/SPM cache save + failure artifact upload
+  issues: write    # alarm issues
+  pull-requests: read
 
 concurrency:
   group: ghostty-upstream-probe
@@ -198,6 +199,9 @@ jobs:
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/probe-test.log"
 
+      - name: Track failing step (create app token)
+        run: echo "create-app-token" > "$RUNNER_TEMP/ghostty-probe-step"
+
       - name: Create GitHub App token (vvterm-ghostty-bump)
         id: app-token
         if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true') }}
@@ -274,10 +278,6 @@ jobs:
             git push --force-with-lease origin "$BRANCH"
           fi
           echo "Pushed ${BRANCH} @ ${RESOLVED_SHA:0:12}"
-          # Marker for the alarm step: a failure AFTER this point (PR exists
-          # or was reused) is NOT a probe alarm — the PR stays open and the
-          # watch job owns the outcome. Written after commit+push succeed.
-          echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
           # Reuse an existing open PR on the bump branch (weekly reruns and
           # re-dispatches hit this path) instead of duplicating it.
@@ -290,6 +290,11 @@ jobs:
             # failures are handled below — never a probe alarm.
             gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null || true
             echo "Auto-merge (re)enabled on #${PR_NUMBER}"
+            # Marker for the alarm step: written ONLY after the bump PR
+            # exists (created or reused). A failure before this point
+            # (incl. PR creation itself) still alarms; after this point
+            # the PR stays open and the watch job owns the outcome.
+            echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
             exit 0
           fi
 
@@ -299,6 +304,12 @@ jobs:
           echo "Created bump PR: $PR_URL"
           PR_NUMBER="$(sed -E 's#.*/pull/([0-9]+).*#\1#' <<<"$PR_URL")"
           echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          # Marker for the alarm step: the bump PR now exists. Any failure
+          # after this point is NOT a probe alarm — the PR stays open and
+          # the watch job owns the outcome (auto-merge enable failure is
+          # already non-fatal below). A failure BEFORE this point — e.g.
+          # gh pr create itself — still files the alarm.
+          echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
           # Enable auto-merge (squash). gh-ruleset-main requires the PR CI
           # checks (build/unit-tests/ui-tests *), so auto-merge only fires
@@ -502,10 +513,17 @@ jobs:
               park "All checks green on #${PR} but auto-merge did not merge within 10m (possible: a merge rule conflict or stale check state). Parking for human review — NOT an alarm."
               ;;
             1)
-              TITLE="ghostty probe ALARM: bump PR CI red at ${SHA7}"
-              echo "::error::CI red on bump PR #${PR} — filing alarm."
-              alarm "$TITLE" "$ALARM_CI_RED"
-              exit 1
+              # gh pr checks exits 1 for a failed check AND for gh CLI
+              # errors (rate limit, transient network blip) — double-check
+              # before alarming so a transient error never fakes a red week.
+              FAILED="$(gh pr checks "$PR" --repo "$REPO" --json conclusion --jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED")] | length' 2>/dev/null || echo 0)"
+              if (( FAILED > 0 )); then
+                TITLE="ghostty probe ALARM: bump PR CI red at ${SHA7}"
+                echo "::error::CI red on bump PR #${PR} (${FAILED} failed/cancelled checks) — filing alarm."
+                alarm "$TITLE" "$ALARM_CI_RED"
+                exit 1
+              fi
+              park "gh pr checks exited 1 but no check is failed/cancelled (transient gh error?) — parking, never alarm on a blip."
               ;;
             8)
               park "gh pr checks exited 8 (no checks) — parking, never alarm on a stall."

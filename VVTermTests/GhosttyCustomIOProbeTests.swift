@@ -3,8 +3,8 @@ import CoreGraphics
 import Testing
 @testable import VVTerm
 
-/// Probe tests for the vendored ghostty fork's custom-I/O termio backend
-/// (wiedymi/ghostty@custom-io, issue #127 / ADR
+/// Probe tests for the ghostty custom-I/O termio backend carried by
+/// `scripts/patches/ghostty/custom-io.patch` (issue #127 / ADR
 /// `2026-08-11-ghostty-upstream-patchqueue-weekly-probe`). These tests prove
 /// the vendored xcframework engages its `use_custom_io` path at runtime, and
 /// pin the no-pty contract the SSH integration relies on.
