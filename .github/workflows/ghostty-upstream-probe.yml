@@ -212,10 +212,13 @@ jobs:
 
       # NOTE: on `schedule` events the `inputs` context is EMPTY (dispatch
       # defaults do not apply), so the gate must treat empty as true —
-      # otherwise the weekly auto-bump would silently never run.
+      # otherwise the weekly auto-bump would silently never run. For manual
+      # validation runs pass create_bump_pr=false via the REST API with a
+      # REAL JSON boolean (gh workflow run -f create_bump_pr=false is
+      # unreliable — the input is dropped/coerced and the step runs).
       - name: Commit artifacts, push bump branch, create or reuse bump PR
         id: bump-pr
-        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true') }}
+        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true' || inputs.create_bump_pr == true) }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: |
@@ -239,6 +242,7 @@ jobs:
           echo "create-bump-pr" > "$RUNNER_TEMP/ghostty-probe-step"
           REPO="${{ github.repository }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'"
           SHA7="${RESOLVED_SHA:0:7}"
           BRANCH="chore/ghostty-upstream-bump-${SHA7}"
 
@@ -256,6 +260,12 @@ jobs:
 
           git config user.name "vvterm-ghostty-bump[bot]"
           git config user.email "vvterm-ghostty-bump[bot]@users.noreply.github.com"
+
+          # actions/checkout injects an Authorization extraheader (the
+          # built-in GITHUB_TOKEN) that takes precedence over the app token
+          # embedded in the push URL — without stripping it, the push is
+          # rejected as github-actions[bot] (403).
+          git config --unset-all http.https://github.com/.extraheader || true
 
           git checkout -b "$BRANCH"
           # BASE (patch base, read by scripts/build.sh by default) tracks
