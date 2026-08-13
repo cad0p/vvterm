@@ -265,9 +265,13 @@ jobs:
 
           # actions/checkout injects an Authorization extraheader (the
           # built-in GITHUB_TOKEN) that takes precedence over the app token
-          # embedded in the push URL — without stripping it, the push is
-          # rejected as github-actions[bot] (403).
+          # embedded in the push URL. `git config --unset-all` is NOT enough:
+          # the runner provides the header via env-level config, which
+          # overrides repo config — only a command-line -c override beats it.
+          # Set the extraheader to the app token's basic auth explicitly.
           git config --unset-all http.https://github.com/.extraheader || true
+          APP_BASIC="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          PUSH_AUTH=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${APP_BASIC}")
 
           git checkout -b "$BRANCH"
           # BASE (patch base, read by scripts/build.sh by default) tracks
@@ -285,9 +289,21 @@ jobs:
           # Push the bump branch with the APP token (first-class actor —
           # the resulting PR's CI runs automatically, no approval).
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          if ! git push -u origin "$BRANCH" 2>/dev/null; then
-            echo "Branch exists remotely — force-updating (regenerated from scratch each run)."
-            git push --force-with-lease origin "$BRANCH"
+          PUSH_OUTPUT="$(git "${PUSH_AUTH[@]}" push -u origin "$BRANCH" 2>&1)" || true
+          if [[ -z "$PUSH_OUTPUT" || "$PUSH_OUTPUT" == *"Everything up-to-date"* || "$PUSH_OUTPUT" == *"up to date"* ]]; then
+            echo "${PUSH_OUTPUT}"
+            if [[ -n "$PUSH_OUTPUT" && "$PUSH_OUTPUT" != *"up to date"* ]]; then
+              echo "::warning::Push reported nothing to do."
+            fi
+          elif [[ "$PUSH_OUTPUT" == *"rejected"* || "$PUSH_OUTPUT" == *"denied"* || "$PUSH_OUTPUT" == *"403"* || "$PUSH_OUTPUT" == *"fatal"* ]]; then
+            echo "${PUSH_OUTPUT}"
+            echo "Branch exists remotely or push failed — force-updating (regenerated from scratch each run)."
+            if ! git "${PUSH_AUTH[@]}" push --force-with-lease origin "$BRANCH" 2>&1; then
+              echo "::error::Force push also failed — check the app token permissions (vvterm-ghostty-bump: Contents read/write on cad0p/vvterm) and the gh-ruleset-all non_fast_forward rule."
+              exit 1
+            fi
+          else
+            echo "${PUSH_OUTPUT}"
           fi
           echo "Pushed ${BRANCH} @ ${RESOLVED_SHA:0:12}"
 
