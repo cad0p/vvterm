@@ -8,7 +8,6 @@ final class NoticePresentationUITests: XCTestCase {
     @MainActor
     func testConnectionFailureUsesBottomSheetWithLargePrimaryAction() throws {
         let app = launchNoticeHarness()
-        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let retry = app.buttons["Retry"]
         let close = app.buttons["vvterm.connectionStatus.close"]
@@ -23,9 +22,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testConnectionFailureCloseExposesNavigationWithoutRetrying() throws {
-        // Resurrected via single-launch harness (see #43 #125 #138 #143)
+        // [A/B test arm: quarantine skip REMOVED — per-test-launch harness, #138 test active]
         let app = launchNoticeHarness()
-        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -57,7 +55,6 @@ final class NoticePresentationUITests: XCTestCase {
             throw XCTSkip("Host-degraded notice presentation flake — quarantined (#119)")
         }
         let app = launchNoticeHarness()
-        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -73,7 +70,6 @@ final class NoticePresentationUITests: XCTestCase {
     @MainActor
     func testRetryFromDismissedBannerCanPresentANewFailure() throws {
         let app = launchNoticeHarness()
-        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -89,8 +85,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect() throws {
-        let app = launchNoticeHarness()
-        selectScenario("disconnected", in: app)
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-notice-disconnected"]
+        )
         let title = app.staticTexts["Disconnected"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -105,8 +102,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testHostKeyFailureRetainsCloseAndTrustActions() throws {
-        let app = launchNoticeHarness()
-        selectScenario("hostKeyFailure", in: app)
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-notice-host-key"]
+        )
 
         XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["vvterm.connectionStatus.close"].waitForExistence(timeout: 5))
@@ -115,8 +113,7 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInitialConnectionUsesNonBlockingTopBanner() throws {
-        let app = launchNoticeHarness()
-        selectScenario("connecting", in: app)
+        let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-connecting"])
         let title = app.staticTexts["Connecting to production..."]
         let close = app.buttons["vvterm.connectionStatus.close"]
         let terminal = app.staticTexts["$ ssh production"]
@@ -133,28 +130,23 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInitialConnectionBannerYieldsToTmuxSelectionSheet() throws {
-        // Resurrected via single-launch harness (see #43 #125 #138 #143)
-        let app = launchNoticeHarness()
-        selectScenario("bannerHandoff", in: app)
+        // [A/B test arm: quarantine skip REMOVED — per-test-launch harness, #43 test active]
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-connection-banner-handoff"]
+        )
         let connecting = app.staticTexts["Connecting to production..."]
         let tmuxTitle = app.navigationBars["Choose tmux session"]
 
-        // The connecting banner stays up until the harness trigger yields it
-        // (the original 3s auto-handoff made the banner transient — the stale
-        // AX tree could miss its brief life under runner load). Every assert
-        // below targets a persistent state.
         XCTAssertTrue(connecting.waitForExistence(timeout: 20))
-        let present = app.buttons["vvterm.noticeTest.bannerHandoff.present"]
-        XCTAssertTrue(present.waitForExistence(timeout: 5))
-        present.tap()
         XCTAssertTrue(tmuxTitle.waitForExistence(timeout: 20))
-        XCTAssertTrue(connecting.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(connecting.exists)
     }
 
     @MainActor
     func testInactiveSplitPaneCannotPresentConnectionBanner() throws {
-        let app = launchNoticeHarness()
-        selectScenario("inactiveBanner", in: app)
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-inactive-connection-banner"]
+        )
         let terminal = app.staticTexts["$ ssh production"]
         let inactiveConnecting = app.staticTexts["Connecting to inactive split..."]
 
@@ -164,9 +156,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testFilesOperationNoticeRemainsVisibleOnPushedPreview() throws {
-        // Resurrected via single-launch harness (see #43 #125 #138 #143)
-        let app = launchNoticeHarness()
-        selectScenario("filesPreview", in: app)
+        // [A/B test arm: quarantine skip REMOVED — per-test-launch harness, #125 test active]
+        let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-files-preview"])
         let previewNavigationBar = app.navigationBars["report.pdf"]
         let operationTitle = app.staticTexts["Downloading"]
 
@@ -177,9 +168,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testConcurrentOperationsStackAboveBottomToolbar() throws {
-        // Resurrected via single-launch harness (see #43 #125 #138 #143)
-        let app = launchNoticeHarness()
-        selectScenario("operationStack", in: app)
+        // [A/B test arm: quarantine skip REMOVED — per-test-launch harness, #143 test active]
+        let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-operation-stack"])
         let first = app.staticTexts["Upload 1"]
         let second = app.staticTexts["Upload 2"]
         let third = app.staticTexts["Upload 3"]
@@ -199,9 +189,10 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testDiagnosticBannerExpandsCopiesScrollsAndDismisses() throws {
-        // Resurrected via single-launch harness (see #43 #125 #138 #143)
-        let app = launchNoticeHarness()
-        selectScenario("diagnostics", in: app)
+        // [A/B test arm: quarantine skip REMOVED — per-test-launch harness, #143 test active]
+        let app = launchNoticeHarness(
+            additionalArguments: ["--vvterm-ui-test-notice-diagnostics"]
+        )
         let details = app.descendants(matching: .any)
             .matching(identifier: "vvterm.notice.details")
             .firstMatch
@@ -239,74 +230,18 @@ final class NoticePresentationUITests: XCTestCase {
     }
 
     @MainActor
-    private func selectScenario(_ name: String, in app: XCUIApplication) {
-        // Single-launch cleanup: the connection-status bottom sheet (and the
-        // diagnostics detail sheet) can outlive their test. Dismiss any
-        // presented sheet before opening the scenario menu, or the tap lands
-        // on the sheet scrim and the menu never opens (deterministic cascade
-        // with the single-launch harness). Both sheets support interactive
-        // dismissal (no interactiveDismissDisabled; the connection-status
-        // sheet sits at its .height detent, the detail sheet at .large).
-        let sheet = app.sheets.firstMatch
-        if sheet.exists {
-            // The sheet can exist in AX while still animating in (tests may
-            // end mid-presentation); wait for it to be hittable first, then
-            // swipe to dismiss. Bounded, fall-through.
-            let sheetDeadline = Date().addingTimeInterval(5)
-            while Date() < sheetDeadline, !sheet.isHittable {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            }
-            if sheet.isHittable { sheet.swipeDown() }
-            XCTAssertTrue(
-                sheet.waitForNonExistence(timeout: 5),
-                "Leftover sheet did not dismiss before scenario switch"
-            )
-        }
-        let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 5))
-        // A sheet dismissal animation can still intercept hits for a moment
-        // after the sheet leaves the AX tree; wait for the menu to be hittable
-        // before tapping (bounded, fall-through — the item wait below reports
-        // the real state on timeout).
-        let menuDeadline = Date().addingTimeInterval(5)
-        while Date() < menuDeadline, !menu.isHittable {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        menu.tap()
-        var item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
-        if !item.waitForExistence(timeout: 5) {
-            // Context-menu presentation can be dropped under runner load (the
-            // tap lands but no items appear). A second tap re-presents the
-            // menu — but only when the menu is not covered by its own open
-            // popover (isHittable false = the popover is up and items may
-            // still be coming; the final wait below then gets the open menu).
-            // Bounded single retry, then the assert reports the real state.
-            if menu.isHittable {
-                menu.tap()
-            }
-            item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
-        }
-        XCTAssertTrue(item.waitForExistence(timeout: 5))
-        item.tap()
-        let current = app.staticTexts["vvterm.noticeTest.scenario.current"]
-        let predicate = NSPredicate(format: "label == %@", name)
-        let exp = XCTNSPredicateExpectation(predicate: predicate, object: current)
-        XCTAssertEqual(XCTWaiter.wait(for: [exp], timeout: 5), .completed)
-    }
-
-    private static var app: XCUIApplication?
-
-    @MainActor
-    private func launchNoticeHarness() -> XCUIApplication {
-        if let app = Self.app { return app }
+    private func launchNoticeHarness(additionalArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
+        // Terminate any stale instance from the previous test before
+        // launching: a leftover app process is the recurring cause of the
+        // "Failed to launch" wedge on the CI runners.
+        app.terminate()
         app.launchArguments = [
             "--vvterm-ui-test-notice-harness",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US"
-        ]
+        ] + additionalArguments
         _ = launchForTest(app)
-        Self.app = app
         return app
     }
 }
