@@ -207,18 +207,18 @@ final class TerminalKeyboardUITests: XCTestCase {
         terminal.tap()
         assertKeyboardAndAccessoryVisible(in: app)
 
-        // #85: same control-panel stale-frame guard as the reconstruction
-        // test — the mode buttons can report off-screen frames right after a
-        // keyboard transition.
-        tapWhenHittable(app.buttons["vvterm.keyboardTest.mode.other"], in: app)
-        XCTAssertTrue(
-            app.buttons["vvterm.keyboardTest.nonTerminalSurface"].waitForExistence(timeout: 5),
-            diagnosticsText(in: app)
+        tapModeSwitchAndWaitForSurface(
+            "vvterm.keyboardTest.mode.other",
+            surfaceID: "vvterm.keyboardTest.nonTerminalSurface",
+            in: app
         )
         assertKeyboardAndAccessoryHidden(in: app)
 
-        tapWhenHittable(app.buttons["vvterm.keyboardTest.mode.terminal"], in: app)
-        _ = waitForTerminal(in: app)
+        tapModeSwitchAndWaitForSurface(
+            "vvterm.keyboardTest.mode.terminal",
+            surfaceID: "vvterm.keyboardTest.terminalSurface",
+            in: app
+        )
         assertKeyboardAndAccessoryVisible(in: app)
     }
 
@@ -2726,6 +2726,35 @@ final class TerminalKeyboardUITests: XCTestCase {
     ) {
         waitForHittable(element, in: app, timeout: timeout)
         element.tap()
+    }
+
+    /// Taps a harness mode button and verifies the expected surface appeared;
+    /// under runner load the tap can land on a stale AX frame and the mode
+    /// switch never fires (observed: inputViewMode=system after mode.other),
+    /// so a single bounded re-tap absorbs the miss. #85 family.
+    @MainActor
+    private func tapModeSwitchAndWaitForSurface(
+        _ buttonID: String,
+        surfaceID: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) {
+        let button = app.buttons[buttonID]
+        // Element-agnostic like waitForTerminal: the terminal surface is a
+        // plain UIView, so it never matches under app.buttons[...].
+        let surface = app.descendants(matching: .any)
+            .matching(identifier: surfaceID)
+            .firstMatch
+        for _ in 1...2 {
+            tapWhenHittable(button, in: app)
+            if surface.waitForExistence(timeout: timeout) {
+                return
+            }
+        }
+        XCTAssertTrue(
+            surface.exists,
+            "Mode switch to \(surfaceID) never landed. \(diagnosticsText(in: app))"
+        )
     }
 
     @MainActor
