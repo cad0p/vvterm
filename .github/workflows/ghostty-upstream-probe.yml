@@ -287,8 +287,11 @@ jobs:
 
           git commit -m "chore: ghostty upstream bump to ${SHA7}"
           # Push the bump branch with the APP token (first-class actor —
-          # the resulting PR's CI runs automatically, no approval).
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          # the resulting PR's CI runs automatically, no approval). The
+          # -c extraheader above carries the auth, so the URL must NOT
+          # embed credentials too (that would send a duplicate
+          # Authorization header → HTTP 400).
+          git remote set-url origin "https://github.com/${REPO}.git"
           PUSH_OUTPUT="$(git "${PUSH_AUTH[@]}" push -u origin "$BRANCH" 2>&1)" || true
           if [[ -z "$PUSH_OUTPUT" || "$PUSH_OUTPUT" == *"Everything up-to-date"* || "$PUSH_OUTPUT" == *"up to date"* ]]; then
             echo "${PUSH_OUTPUT}"
