@@ -95,6 +95,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
           # No persisted GITHUB_TOKEN credentials: checkout writes an
           # http.<url>.extraheader into .git/config (and the runner may
           # inject a second one via GIT_CONFIG_* env). http.<url>.extraheader
