@@ -204,7 +204,9 @@ jobs:
 
       - name: Create GitHub App token (vvterm-ghostty-bump)
         id: app-token
-        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true') }}
+        # Same gate as the bump step: schedule (''), string 'true', or real
+        # JSON boolean true (REST-API dispatch) must all enable the token.
+        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true' || inputs.create_bump_pr == true) }}
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.GHOSTTY_BUMP_CLIENT_ID }}
