@@ -9,6 +9,7 @@
 #   - starts /usr/sbin/sshd -D -f <config> via passwordless sudo
 #   - runs a pubkey-auth smoke test (login shell must be /bin/zsh)
 #   - writes $REPRO_DIR/vvterm-repro.env (fixture vars for the test step)
+#   --restart   kill any running rig sshd/dropbear and re-provision from scratch
 #
 # Env:
 #   REPRO_DIR   fixture directory (default $RUNNER_TEMP/vvterm-repro)
@@ -17,6 +18,17 @@ set -euo pipefail
 
 REPRO_DIR="${REPRO_DIR:-${RUNNER_TEMP:-/tmp}/vvterm-repro}"
 SSH_PORT="${SSH_PORT:-22232}"
+
+# --restart: kill any existing rig sshd/dropbear and re-provision from
+# scratch (used by the PR CI shard retry loop so each attempt gets a fresh
+# fixture; sshd can stall under host load mid-shard).
+RESTART=0
+for ARG in "$@"; do
+  case "$ARG" in
+    --restart) RESTART=1 ;;
+    *) echo "::warning::unknown arg $ARG (only --restart is supported)" ;;
+  esac
+done
 mkdir -p "$REPRO_DIR"
 
 SSHD=/usr/sbin/sshd
@@ -61,6 +73,38 @@ LogLevel DEBUG3
 PermitRootLogin no
 X11Forwarding no
 EOF
+
+# --- restart --------------------------------------------------------------
+if [ "$RESTART" -eq 1 ]; then
+  echo "== restart mode: killing existing rig sshd/dropbear =="
+  # sshd is started via sudo and stays root-owned; plain pkill gets EPERM.
+  sudo pkill -f "sshd.*$REPRO_DIR/sshd_config" 2>/dev/null || true
+  sudo pkill -f "dropbear.*$SSH_PORT" 2>/dev/null || true
+  # Wait for the port to free up (connect-refused = free). On timeout,
+  # warn and continue — a listener that survives the kill will fail the
+  # start probe below anyway.
+  PORT_FREE=0
+  for _ in $(seq 1 20); do
+    if python3 - "$SSH_PORT" <<'PY' >/dev/null 2>&1
+import socket, sys
+try:
+    socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1)
+except ConnectionRefusedError:
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+sys.exit(1)
+PY
+    then
+      PORT_FREE=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$PORT_FREE" -ne 1 ]; then
+    echo "::warning::port $SSH_PORT still accepting connections after restart kill; continuing (start probe will surface a real conflict)"
+  fi
+fi
 
 # --- start ----------------------------------------------------------------
 if pgrep -f "sshd.*$REPRO_DIR/sshd_config" >/dev/null; then

@@ -74,6 +74,7 @@ final class TerminalReconnectUITests: XCTestCase {
 
     @MainActor
     func testProductionSSHBackgroundPreservesSessionKeyboardAndTyping() throws {
+        // Resurrected via hittability-aware Return taps + 2nd retype round (see #144).
         let app = XCUIApplication()
         app.terminate()
         seedLoopbackFixtureEnv(into: app)
@@ -215,7 +216,7 @@ final class TerminalReconnectUITests: XCTestCase {
                 timeout: 8,
                 app: app
             )
-            if !cwdAdvanced {
+            for _ in 0..<2 where !cwdAdvanced {
                 // The keystroke reached the IME model but the shell never
                 // processed it (observed in CI after a foreground return);
                 // clear the buffer and retype once before failing.
@@ -333,6 +334,7 @@ final class TerminalReconnectUITests: XCTestCase {
 
     @MainActor
     func testProductionCodexFindKeyboardMenuRestoresPTYTyping() throws {
+        // Resurrected via hittability-aware Return taps (see #144).
         let (app, diagnostics) = launchProductionSSHTestHarness(
             exposesKeyboardLossControl: true
         )
@@ -370,6 +372,17 @@ final class TerminalReconnectUITests: XCTestCase {
         findItem.tap()
 
         let searchField = app.searchFields.firstMatch
+        if !searchField.waitForExistence(timeout: 5) {
+            // The native Find presentation can be dropped under runner load
+            // (find=true app-side but no search field in AX). Re-open the
+            // production menu and tap Find again; bounded single retry, then
+            // the assert reports the real state.
+            openProductionTerminalMenu(in: app)
+            let findRetry = app.buttons["Find"]
+            if findRetry.waitForExistence(timeout: 3) {
+                findRetry.tap()
+            }
+        }
         XCTAssertTrue(
             searchField.waitForExistence(timeout: 8),
             "Native Find search field did not appear. \(diagnosticText(in: app))"
@@ -833,6 +846,21 @@ final class TerminalReconnectUITests: XCTestCase {
         )
     }
 
+    /// Waits (bounded) for the element to be hittable; falls through to the
+    /// caller's tap on timeout. #144: the Return key can exist in AX while
+    /// not hittable under load — a bare tap then misses and enterSent stays 0.
+    @MainActor
+    private func waitForHittable(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 3
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.isHittable { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
     /// Types a command's argument digits followed by Enter: the fixture's
     /// x/z markers are real commands (bind -x readline handlers never fire
     /// in the CI login shell), so the tests type "x<N>" / "z" + Enter.
@@ -872,6 +900,7 @@ final class TerminalReconnectUITests: XCTestCase {
         let returnKeyElement = app.keys["Return"]
         let returnButton = app.buttons["Return"]
         if returnKeyElement.waitForExistence(timeout: 3) {
+            waitForHittable(returnKeyElement)
             tapPromptly(returnKeyElement, diagnostics: diagnostics, app: app)
             if waitForDiagnosticsReturningBool(
                 diagnostics,
@@ -883,6 +912,7 @@ final class TerminalReconnectUITests: XCTestCase {
             }
         }
         if returnButton.waitForExistence(timeout: 3) {
+            waitForHittable(returnButton)
             tapPromptly(returnButton, diagnostics: diagnostics, app: app)
             if waitForDiagnosticsReturningBool(
                 diagnostics,

@@ -215,13 +215,30 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     /// `XCTExpectFailure` documents that this test is EXPECTED to fail with
     /// the inline pattern and prevents it from red CI noise; if someone ever
     /// reverts production back to inline construction, this test's expectation
-    /// will need to be re-evaluated.
+    /// will need to be re-evaluated. The expectation is NON-STRICT (see issue
+    /// #130): reproducing the inline bug requires a timing race (the parent's
+    /// periodic re-eval must land during the POST), so when the race misses,
+    /// strict mode reports a spurious "but none recorded" failure. Non-strict
+    /// records the expected failure when the bug reproduces and never fails CI
+    /// when the race misses.
     func testBootstrapSuccess_firesOnSuccess_whenParentReEvaluatesDuringPost() {
         // The inline pattern (fresh coordinator per body eval) is known-buggy:
         // a parent re-eval during the POST recreates the coordinator and
         // orphans the one that reaches `.success`. Production no longer uses
         // this pattern; this test keeps it as a documented regression marker.
-        XCTExpectFailure("Inline coordinator construction orphans the coordinator that reached .success (production uses @StateObject wrapper instead)")
+        // Non-strict: the inline bug's reproduction is a timing race (the
+        // parent's periodic re-eval must land during the POST). When the race
+        // misses, strict XCTExpectFailure reports a spurious "but none
+        // recorded" failure and turns the marker red (issue #130). Non-strict
+        // records the expected failure when the bug reproduces and passes
+        // silently when it does not — the marker documents behavior and never
+        // gates CI. The companion @StateObject test is the real guard.
+        let markerOptions = XCTExpectedFailure.Options()
+        markerOptions.isStrict = false
+        XCTExpectFailure(
+            "Inline coordinator construction orphans the coordinator that reached .success (production uses @StateObject wrapper instead)",
+            options: markerOptions
+        )
 
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()

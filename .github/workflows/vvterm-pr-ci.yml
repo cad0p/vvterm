@@ -572,6 +572,26 @@ jobs:
           # attempt 2 of a shard passed a test that attempt 3 then failed 15
           # minutes later with a slow launch (10s) and a notice title that
           # never appeared (both #43-family launch/notice wedges).
+          # Pre-boot the destination simulator so the test session never
+          # starts against a still-initializing boot (4 shards boot sims
+          # simultaneously; a boot that is not ready when xcodebuild starts
+          # is a recurring source of "Failed to initialize for UI testing:
+          # Timed out waiting for AX loaded notification" and hard
+          # app-launch timeouts, #43 family). Bounded poll — do NOT use
+          # `bootstatus -b` here (it can block forever on a wedged
+          # CoreSimulator).
+          xcrun simctl boot "iPhone 17" >/dev/null 2>&1 || true
+          BOOTED=0
+          for _ in $(seq 1 60); do
+            if xcrun simctl list devices booted 2>/dev/null | grep -q "iPhone 17"; then
+              BOOTED=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$BOOTED" -ne 1 ]; then
+            echo "::warning::iPhone 17 did not report Booted within 120s; continuing (xcodebuild will retry its own boot)."
+          fi
           XC_EXIT=0
           for ATTEMPT in 1 2 3; do
             rm -rf "$RUNNER_TEMP/TestResults.xcresult"
@@ -598,6 +618,14 @@ jobs:
               xcrun simctl shutdown all >/dev/null 2>&1 || true
               xcrun simctl boot "iPhone 17" >/dev/null 2>&1 || true
               xcrun simctl bootstatus "iPhone 17" -b >/dev/null 2>&1 || true
+              # The loopback sshd can stall under host load mid-shard (#144
+              # family: "Shell cwd never advanced" with healthy app-side
+              # transport counters). Restart the fixture on EVERY retry so
+              # each attempt gets a fresh sshd.
+              if [ "${{ matrix.shard.needs-fixture }}" == "true" ]; then
+                echo "Restarting loopback sshd fixture for retry environment..."
+                bash scripts/ci/repro-sshd-setup.sh --restart
+              fi
               # Case 1 — runner died before ANY test executed (zero "Test
               # Case" lines). Message varies: "Failed to initialize for UI
               # testing" (AX timeout), "Early unexpected exit ... signal abrt

@@ -86,14 +86,24 @@ final class StatsCardsLayoutUITests: XCTestCase {
     @MainActor
     private func rotate(to orientation: UIDeviceOrientation) throws {
         let oldWidth = container.frame.width
-        XCUIDevice.shared.orientation = orientation
 
         let expectsWiderLayout = orientation == .landscapeLeft || orientation == .landscapeRight
-        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            let newWidth = self.container.frame.width
-            return expectsWiderLayout ? newWidth > oldWidth : newWidth < oldWidth
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
+        // Issue #126: on loaded xcode-27 runners the simulator can drop or stall an
+        // orientation change, so frame propagation can lag past the 5s waiter timeout.
+        // Re-asserting the orientation re-drives the rotation; retry up to 3 times.
+        for attempt in 1...3 {
+            XCUIDevice.shared.orientation = orientation
+
+            let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let newWidth = self.container.frame.width
+                return expectsWiderLayout ? newWidth > oldWidth : newWidth < oldWidth
+            }, object: nil)
+            if XCTWaiter.wait(for: [changed], timeout: 5) == .completed {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        XCTFail("Container width never \(expectsWiderLayout ? "grew" : "shrank") after 3 rotation attempts to \(orientation.rawValue)")
     }
 
     @MainActor
