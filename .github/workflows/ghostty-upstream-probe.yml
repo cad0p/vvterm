@@ -271,7 +271,14 @@ jobs:
           # Set the extraheader to the app token's basic auth explicitly.
           git config --unset-all http.https://github.com/.extraheader || true
           APP_BASIC="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-          PUSH_AUTH=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${APP_BASIC}")
+          # The -c overrides beat the runner's env config (GIT_CONFIG_*,
+          # GIT_ASKPASS echoing the built-in token, credential helpers) so
+          # the extraheader below is the ONLY Authorization sent.
+          PUSH_AUTH=(
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${APP_BASIC}"
+            -c credential.helper=
+            -c core.askpass=
+          )
 
           git checkout -b "$BRANCH"
           # BASE (patch base, read by scripts/build.sh by default) tracks
