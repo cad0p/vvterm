@@ -178,7 +178,12 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests-shard-0..3`,
   stable job names — no wildcards; rulesets don't support them) must pass;
   auto-merge then merges. The `watch` job exits 0 on merge, files an alarm issue on
-  red CI, and parks (never alarms) on stalls.
+  red CI, and parks (never alarms) on stalls — with one self-heal before parking:
+  if every check is green but auto-merge hasn't fired within 10m, the watch
+  **re-enables auto-merge once** (observed 2026-08-13 on the first live bump: after
+  check reruns the mergeability evaluation can go stale — `BLOCKED` with all
+  required checks green — and auto-merge never fires; re-enabling forces a fresh
+  evaluation) before parking.
 - Fail before PR creation → alarm issue (label `ghostty-patch`) with this runbook; the
   shipped app is untouched
 
