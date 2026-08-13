@@ -220,6 +220,15 @@ Dispatch `ref` restriction: the workflow file must exist on `main` to be dispatc
 at all (GitHub's dispatch API resolves the workflow against the default branch).
 Validation runs dispatch from `main` with `force_rebuild=true, create_bump_pr=false`.
 
+**Dispatch booleans**: use the REST API with real JSON booleans —
+`gh workflow run -f create_bump_pr=false` is unreliable (gh CLI drops/coerces the
+value and the step still runs; observed 2026-08-12):
+
+```sh
+gh api -X POST repos/cad0p/vvterm/actions/workflows/ghostty-upstream-probe.yml/dispatches \
+  --input '{"ref":"main","inputs":{"force_rebuild":true,"create_bump_pr":false}}'
+```
+
 ### Alarm drill (simulate patch drift)
 
 1. On a scratch branch, corrupt the patch: `sed -i '' 's/use_custom_io/use_custom_iox/' scripts/patches/ghostty/custom-io.patch`
