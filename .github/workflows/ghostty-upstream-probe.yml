@@ -95,6 +95,15 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
+          # No persisted GITHUB_TOKEN credentials: checkout writes an
+          # http.<url>.extraheader into .git/config (and the runner may
+          # inject a second one via GIT_CONFIG_* env). http.<url>.extraheader
+          # is MULTI-VALUED, so a later push with the app token sends TWO
+          # Authorization headers → HTTP 400 'Duplicate header'. With
+          # persist-credentials: false, the app token in the push URL is the
+          # single auth source (canonical fix — actions/checkout docs,
+          # github/gh-aw#40280).
 
       - name: Track failing step (prepare xcode build)
         run: echo "prepare-xcode-build" > "$RUNNER_TEMP/ghostty-probe-step"
@@ -263,15 +272,7 @@ jobs:
           git config user.name "vvterm-ghostty-bump[bot]"
           git config user.email "vvterm-ghostty-bump[bot]@users.noreply.github.com"
 
-          # actions/checkout injects an Authorization extraheader (the
-          # built-in GITHUB_TOKEN) that takes precedence over the app token
-          # embedded in the push URL. `git config --unset-all` is NOT enough:
-          # the runner provides the header via env-level config, which
-          # overrides repo config — only a command-line -c override beats it.
-          # Set the extraheader to the app token's basic auth explicitly.
-          git config --unset-all http.https://github.com/.extraheader || true
-          APP_BASIC="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-          PUSH_AUTH=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${APP_BASIC}")
+          git checkout -b "$BRANCH"
 
           git checkout -b "$BRANCH"
           # BASE (patch base, read by scripts/build.sh by default) tracks
@@ -288,11 +289,10 @@ jobs:
           git commit -m "chore: ghostty upstream bump to ${SHA7}"
           # Push the bump branch with the APP token (first-class actor —
           # the resulting PR's CI runs automatically, no approval). The
-          # -c extraheader above carries the auth, so the URL must NOT
-          # embed credentials too (that would send a duplicate
-          # Authorization header → HTTP 400).
-          git remote set-url origin "https://github.com/${REPO}.git"
-          PUSH_OUTPUT="$(git "${PUSH_AUTH[@]}" push -u origin "$BRANCH" 2>&1)" || true
+          # checkout persisted no credentials (persist-credentials: false),
+          # so the URL-embedded token is the single Authorization sent.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          PUSH_OUTPUT="$(git push -u origin "$BRANCH" 2>&1)" || true
           if [[ -z "$PUSH_OUTPUT" || "$PUSH_OUTPUT" == *"Everything up-to-date"* || "$PUSH_OUTPUT" == *"up to date"* ]]; then
             echo "${PUSH_OUTPUT}"
             if [[ -n "$PUSH_OUTPUT" && "$PUSH_OUTPUT" != *"up to date"* ]]; then
@@ -301,7 +301,7 @@ jobs:
           elif [[ "$PUSH_OUTPUT" == *"rejected"* || "$PUSH_OUTPUT" == *"denied"* || "$PUSH_OUTPUT" == *"403"* || "$PUSH_OUTPUT" == *"fatal"* ]]; then
             echo "${PUSH_OUTPUT}"
             echo "Branch exists remotely or push failed — force-updating (regenerated from scratch each run)."
-            if ! git "${PUSH_AUTH[@]}" push --force-with-lease origin "$BRANCH" 2>&1; then
+            if ! git push --force-with-lease origin "$BRANCH" 2>&1; then
               echo "::error::Force push also failed — check the app token permissions (vvterm-ghostty-bump: Contents read/write on cad0p/vvterm) and the gh-ruleset-all non_fast_forward rule."
               exit 1
             fi
