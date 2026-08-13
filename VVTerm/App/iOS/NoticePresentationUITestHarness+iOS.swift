@@ -1,65 +1,126 @@
 #if os(iOS) && DEBUG
 import SwiftUI
 
+/// Notice presentation scenarios that UI tests can switch between at runtime.
+/// The raw value doubles as the scenario-menu item id suffix and the
+/// current-scenario label value.
+enum HarnessScenario: String, CaseIterable {
+    case connectionFailure
+    case disconnected
+    case hostKeyFailure
+    case connecting
+    case reconnectBanner
+    case operationStack
+    case diagnostics
+    case filesPreview
+    case bannerHandoff
+    case inactiveBanner
+}
+
 struct NoticePresentationUITestHarness: View {
-    private var connectionStatusScenario: NoticeConnectionStatusHarness.Scenario {
+    /// Initial scenario derived from launch arguments (launch-arg compatibility
+    /// kept so nothing outside this file changes); unknown/absent → .connectionFailure.
+    private static var initialScenario: HarnessScenario {
         let arguments = Foundation.ProcessInfo.processInfo.arguments
+        if arguments.contains("--vvterm-ui-test-notice-files-preview") {
+            return .filesPreview
+        }
+        if arguments.contains("--vvterm-ui-test-notice-diagnostics") {
+            return .diagnostics
+        }
+        if arguments.contains("--vvterm-ui-test-notice-connecting") {
+            return .connecting
+        }
+        if arguments.contains("--vvterm-ui-test-notice-reconnect-banner") {
+            return .reconnectBanner
+        }
+        if arguments.contains("--vvterm-ui-test-notice-operation-stack") {
+            return .operationStack
+        }
+        if arguments.contains("--vvterm-ui-test-connection-banner-handoff") {
+            return .bannerHandoff
+        }
+        if arguments.contains("--vvterm-ui-test-inactive-connection-banner") {
+            return .inactiveBanner
+        }
         if arguments.contains("--vvterm-ui-test-notice-disconnected") {
             return .disconnected
         }
         if arguments.contains("--vvterm-ui-test-notice-host-key") {
             return .hostKeyFailure
         }
-        return .failure
+        return .connectionFailure
     }
 
-    private var showsFilesPreviewScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-files-preview")
-    }
+    @State private var scenario: HarnessScenario = NoticePresentationUITestHarness.initialScenario
+    @State private var resetToken = 0
 
-    private var showsConnectingScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-connecting")
-    }
-
-    private var showsReconnectBannerScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-reconnect-banner")
-    }
-
-    private var showsOperationStackScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-operation-stack")
-    }
-
-    private var showsDiagnosticDetailScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-notice-diagnostics")
-    }
-
-    private var showsConnectionBannerHandoffScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-connection-banner-handoff")
-    }
-
-    private var showsInactiveConnectionBannerScenario: Bool {
-        Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-inactive-connection-banner")
+    var body: some View {
+        ZStack(alignment: .top) {
+            scenarioView(for: scenario)
+                .id(resetToken)
+            scenarioCapsule
+        }
     }
 
     @ViewBuilder
-    var body: some View {
-        if showsFilesPreviewScenario {
-            NoticeFilesPreviewHarness()
-        } else if showsDiagnosticDetailScenario {
-            NoticeDiagnosticDetailHarness()
-        } else if showsConnectingScenario {
+    private func scenarioView(for scenario: HarnessScenario) -> some View {
+        switch scenario {
+        case .connectionFailure:
+            NoticeConnectionStatusHarness(scenario: .failure)
+        case .disconnected:
+            NoticeConnectionStatusHarness(scenario: .disconnected)
+        case .hostKeyFailure:
+            NoticeConnectionStatusHarness(scenario: .hostKeyFailure)
+        case .connecting:
             NoticeConnectingHarness()
-        } else if showsReconnectBannerScenario {
+        case .reconnectBanner:
             NoticeReconnectBannerHarness()
-        } else if showsOperationStackScenario {
+        case .operationStack:
             NoticeOperationStackHarness()
-        } else if showsConnectionBannerHandoffScenario {
+        case .diagnostics:
+            NoticeDiagnosticDetailHarness()
+        case .filesPreview:
+            NoticeFilesPreviewHarness()
+        case .bannerHandoff:
             ConnectionBannerHandoffHarness()
-        } else if showsInactiveConnectionBannerScenario {
+        case .inactiveBanner:
             InactiveConnectionBannerHarness()
-        } else {
-            NoticeConnectionStatusHarness(scenario: connectionStatusScenario)
         }
+    }
+
+    /// Compact scenario-switch capsule centered at the top (nav-bar title
+    /// strip). Kept small (~44pt) and above content (.zIndex(10)) so it never
+    /// intercepts the leading back button, nav titles, or sheet content.
+    private var scenarioCapsule: some View {
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(HarnessScenario.allCases, id: \.self) { option in
+                    Button(option.rawValue) {
+                        scenario = option
+                        // Always bump the token — even re-selecting the same
+                        // scenario must recreate the scenario view so every
+                        // test starts fresh.
+                        resetToken &+= 1
+                    }
+                    .accessibilityIdentifier("vvterm.noticeTest.scenarioMenu.\(option.rawValue)")
+                }
+            } label: {
+                Text("Scenario")
+                    .font(.caption.weight(.semibold))
+            }
+            .accessibilityIdentifier("vvterm.noticeTest.scenarioMenu")
+
+            Text(scenario.rawValue)
+                .font(.caption2.monospaced())
+                .accessibilityIdentifier("vvterm.noticeTest.scenario.current")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+        .padding(.top, 4)
+        .zIndex(10)
     }
 }
 
@@ -126,23 +187,29 @@ private struct ConnectionBannerHandoffHarness: View {
     private let connectionAttemptID = UUID()
 
     var body: some View {
-        terminalBackdrop {
-            TerminalConnectionStatusView(
-                presentation: tmuxPrompt == nil
-                    ? .connecting(serverName: "production")
-                    : .hidden,
-                connectionAttemptID: connectionAttemptID,
-                surfaceStyle: terminalSurfaceStyle,
-                isActive: true,
-                onRetry: {},
-                onTrustNewHostKey: {}
-            )
-        }
-        .sheet(item: $tmuxPrompt) { prompt in
-            NavigationStack {
-                Text("Choose how to continue the connection.")
-                    .navigationTitle("Choose tmux session")
-                    .navigationBarTitleDisplayMode(.inline)
+        ZStack {
+            terminalBackdrop {
+                TerminalConnectionStatusView(
+                    presentation: tmuxPrompt == nil
+                        ? .connecting(serverName: "production")
+                        : .hidden,
+                    connectionAttemptID: connectionAttemptID,
+                    surfaceStyle: terminalSurfaceStyle,
+                    isActive: true,
+                    onRetry: {},
+                    onTrustNewHostKey: {}
+                )
+            }
+
+            if tmuxPrompt != nil {
+                // In-layout overlay instead of a real sheet: an in-layout
+                // NavigationStack still renders the nav bar, and no presented
+                // sheet can outlive a test and block the scenario capsule.
+                NavigationStack {
+                    Text("Choose how to continue the connection.")
+                        .navigationTitle("Choose tmux session")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
             }
         }
         .task {

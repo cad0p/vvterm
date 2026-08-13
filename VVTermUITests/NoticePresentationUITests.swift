@@ -8,6 +8,7 @@ final class NoticePresentationUITests: XCTestCase {
     @MainActor
     func testConnectionFailureUsesBottomSheetWithLargePrimaryAction() throws {
         let app = launchNoticeHarness()
+        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let retry = app.buttons["Retry"]
         let close = app.buttons["vvterm.connectionStatus.close"]
@@ -22,15 +23,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testConnectionFailureCloseExposesNavigationWithoutRetrying() throws {
-        // #138: recurring flake on host-degraded xcode-27 runners — the harness
-        // never finishes launching (hard "Failed to launch ... via Xcode: Timed
-        // out while launching" timeout); failed 3 consecutive PR attempts on
-        // PR #137 plus 2 more runs. Quarantined per CI policy until the runner
-        // pool stabilizes or a real fix lands.
-        if ProcessInfo.processInfo.environment["CI"] != nil {
-            throw XCTSkip("Host-degraded notice presentation flake — quarantined (#138)")
-        }
+        // Resurrected via single-launch harness (see #43 #125 #138 #143)
         let app = launchNoticeHarness()
+        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -62,6 +57,7 @@ final class NoticePresentationUITests: XCTestCase {
             throw XCTSkip("Host-degraded notice presentation flake — quarantined (#119)")
         }
         let app = launchNoticeHarness()
+        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -77,6 +73,7 @@ final class NoticePresentationUITests: XCTestCase {
     @MainActor
     func testRetryFromDismissedBannerCanPresentANewFailure() throws {
         let app = launchNoticeHarness()
+        selectScenario("connectionFailure", in: app)
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -92,9 +89,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect() throws {
-        let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-notice-disconnected"]
-        )
+        let app = launchNoticeHarness()
+        selectScenario("disconnected", in: app)
         let title = app.staticTexts["Disconnected"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
@@ -109,9 +105,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testHostKeyFailureRetainsCloseAndTrustActions() throws {
-        let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-notice-host-key"]
-        )
+        let app = launchNoticeHarness()
+        selectScenario("hostKeyFailure", in: app)
 
         XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["vvterm.connectionStatus.close"].waitForExistence(timeout: 5))
@@ -120,7 +115,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInitialConnectionUsesNonBlockingTopBanner() throws {
-        let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-connecting"])
+        let app = launchNoticeHarness()
+        selectScenario("connecting", in: app)
         let title = app.staticTexts["Connecting to production..."]
         let close = app.buttons["vvterm.connectionStatus.close"]
         let terminal = app.staticTexts["$ ssh production"]
@@ -137,17 +133,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInitialConnectionBannerYieldsToTmuxSelectionSheet() throws {
-        // #43: the "Choose tmux session" sheet never presents on host-degraded
-        // xcode-27 runners (the tmuxTitle XCTAssertTrue failed in 2 runs; the
-        // #118 launch-retry helper is already in place — the residual is the
-        // presentation wedge). Quarantined per CI policy until the runner pool
-        // stabilizes or a real fix lands.
-        if ProcessInfo.processInfo.environment["CI"] != nil {
-            throw XCTSkip("Host-degraded notice presentation flake — quarantined (#43)")
-        }
-        let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-connection-banner-handoff"]
-        )
+        // Resurrected via single-launch harness (see #43 #125 #138 #143)
+        let app = launchNoticeHarness()
+        selectScenario("bannerHandoff", in: app)
         let connecting = app.staticTexts["Connecting to production..."]
         let tmuxTitle = app.navigationBars["Choose tmux session"]
 
@@ -158,9 +146,8 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testInactiveSplitPaneCannotPresentConnectionBanner() throws {
-        let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-inactive-connection-banner"]
-        )
+        let app = launchNoticeHarness()
+        selectScenario("inactiveBanner", in: app)
         let terminal = app.staticTexts["$ ssh production"]
         let inactiveConnecting = app.staticTexts["Connecting to inactive split..."]
 
@@ -170,14 +157,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testFilesOperationNoticeRemainsVisibleOnPushedPreview() throws {
-        // #125: the pushed-preview operation notice never presents on
-        // host-degraded runners and the test hangs past the 180s execution
-        // allowance (failed 2x on two unrelated branches). Quarantined per CI
-        // policy until the runner pool stabilizes or a real fix lands.
-        if ProcessInfo.processInfo.environment["CI"] != nil {
-            throw XCTSkip("Host-degraded notice presentation flake — quarantined (#125)")
-        }
-        let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-files-preview"])
+        // Resurrected via single-launch harness (see #43 #125 #138 #143)
+        let app = launchNoticeHarness()
+        selectScenario("filesPreview", in: app)
         let previewNavigationBar = app.navigationBars["report.pdf"]
         let operationTitle = app.staticTexts["Downloading"]
 
@@ -188,13 +170,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testConcurrentOperationsStackAboveBottomToolbar() throws {
-        // #143: hard XCTest launch timeout on host-degraded xcode-27 runners
-        // (failed 4 runs). Quarantined per CI policy until the runner pool
-        // stabilizes or a real fix lands.
-        if ProcessInfo.processInfo.environment["CI"] != nil {
-            throw XCTSkip("Host-degraded notice presentation flake — quarantined (#143)")
-        }
-        let app = launchNoticeHarness(additionalArguments: ["--vvterm-ui-test-notice-operation-stack"])
+        // Resurrected via single-launch harness (see #43 #125 #138 #143)
+        let app = launchNoticeHarness()
+        selectScenario("operationStack", in: app)
         let first = app.staticTexts["Upload 1"]
         let second = app.staticTexts["Upload 2"]
         let third = app.staticTexts["Upload 3"]
@@ -214,15 +192,9 @@ final class NoticePresentationUITests: XCTestCase {
 
     @MainActor
     func testDiagnosticBannerExpandsCopiesScrollsAndDismisses() throws {
-        // #143: hard XCTest launch timeout on host-degraded xcode-27 runners
-        // (failed 2 runs). Quarantined per CI policy until the runner pool
-        // stabilizes or a real fix lands.
-        if ProcessInfo.processInfo.environment["CI"] != nil {
-            throw XCTSkip("Host-degraded notice presentation flake — quarantined (#143)")
-        }
-        let app = launchNoticeHarness(
-            additionalArguments: ["--vvterm-ui-test-notice-diagnostics"]
-        )
+        // Resurrected via single-launch harness (see #43 #125 #138 #143)
+        let app = launchNoticeHarness()
+        selectScenario("diagnostics", in: app)
         let details = app.descendants(matching: .any)
             .matching(identifier: "vvterm.notice.details")
             .firstMatch
@@ -260,18 +232,47 @@ final class NoticePresentationUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchNoticeHarness(additionalArguments: [String] = []) -> XCUIApplication {
+    private func selectScenario(_ name: String, in app: XCUIApplication) {
+        // Single-launch cleanup: the connection-status bottom sheet (and the
+        // diagnostics detail sheet) can outlive their test. Dismiss any
+        // presented sheet before opening the scenario menu, or the tap lands
+        // on the sheet scrim and the menu never opens (deterministic cascade
+        // with the single-launch harness). Both sheets support interactive
+        // dismissal (no interactiveDismissDisabled; the connection-status
+        // sheet sits at its .height detent, the detail sheet at .large).
+        let sheet = app.sheets.firstMatch
+        if sheet.exists {
+            if sheet.isHittable { sheet.swipeDown() }
+            XCTAssertTrue(
+                sheet.waitForNonExistence(timeout: 5),
+                "Leftover sheet did not dismiss before scenario switch"
+            )
+        }
+        let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        menu.tap()
+        let item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        item.tap()
+        let current = app.staticTexts["vvterm.noticeTest.scenario.current"]
+        let predicate = NSPredicate(format: "label == %@", name)
+        let exp = XCTNSPredicateExpectation(predicate: predicate, object: current)
+        XCTAssertEqual(XCTWaiter.wait(for: [exp], timeout: 5), .completed)
+    }
+
+    private static var app: XCUIApplication?
+
+    @MainActor
+    private func launchNoticeHarness() -> XCUIApplication {
+        if let app = Self.app { return app }
         let app = XCUIApplication()
-        // Terminate any stale instance from the previous test before
-        // launching: a leftover app process is the recurring cause of the
-        // "Failed to launch" wedge on the CI runners.
-        app.terminate()
         app.launchArguments = [
             "--vvterm-ui-test-notice-harness",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US"
-        ] + additionalArguments
+        ]
         _ = launchForTest(app)
+        Self.app = app
         return app
     }
 }
