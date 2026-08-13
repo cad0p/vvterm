@@ -2384,11 +2384,10 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat() throws {
-        // Resurrected via frame-settle recovery tap (see #138).
+        // [A/B test arm: quarantine skip REMOVED — plain terminal.tap(), #138 test active]
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
-        waitForTerminalFrameOnscreen(terminal, in: app)
         terminal.tap()
         app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
         wait(
@@ -2626,41 +2625,6 @@ final class TerminalKeyboardUITests: XCTestCase {
         XCTAssertTrue(terminal.waitForExistence(timeout: existenceTimeout), diagnosticsText(in: app))
         waitForHittable(terminal, in: app, timeout: hittableTimeout)
         return terminal
-    }
-
-    /// #138: the AX daemon can serve a stale offscreen frame for the terminal
-    /// surface (y=-139) on loaded runners; a tap then fails with
-    /// kAXErrorFailure performing kAXScrollToVisibleAction. Recovery-only:
-    /// wait (bounded) for an onscreen + stable frame and tap as soon as it
-    /// appears. On timeout, fall through to the caller's tap — no new
-    /// assertion line, so the workflow's zero-assert + kAXErrorFailure retry
-    /// predicate still absorbs the residual host-wedged case.
-    @MainActor
-    private func waitForTerminalFrameOnscreen(
-        _ terminal: XCUIElement,
-        in app: XCUIApplication,
-        timeout: TimeInterval = 8
-    ) {
-        let appFrame = app.frame
-        let deadline = Date().addingTimeInterval(timeout)
-        var previousMidY: CGFloat = .nan
-        var stableReadings = 0
-        while Date() < deadline {
-            let frame = terminal.frame
-            let onscreen = !frame.isEmpty
-                && frame.maxY > 0
-                && frame.minY < appFrame.height
-            if onscreen && frame.midY == previousMidY {
-                stableReadings += 1
-                if stableReadings >= 2 {
-                    return
-                }
-            } else {
-                stableReadings = 0
-            }
-            previousMidY = frame.midY
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
     }
 
     /// Polls `isHittable` until the element's frame settles on-screen or the
