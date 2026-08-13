@@ -539,12 +539,16 @@ jobs:
                 fi
                 sleep 30
               done
-              # Checks green but no merge within 10m. Observed 2026-08-13:
-              # after check RERUNS the mergeability evaluation can go stale
-              # ('blocked' with everything green) and auto-merge never fires.
-              # Re-enabling auto-merge forces a fresh evaluation — the
-              # cheapest self-heal before parking.
-              echo "All checks green on #${PR} but auto-merge did not fire — re-enabling auto-merge to force a fresh mergeability evaluation."
+              # Checks green but no merge within 10m. Observed 2026-08-13
+              # (first live bump, PR #159): after check RERUNS the
+              # mergeability evaluation can go stale — 'BLOCKED' with every
+              # required check green, while the merge rule-suite
+              # (3672279891: all 8 rule evaluations pass, bypass_actors=[])
+              # proves no requirement is actually unmet. Auto-merge never
+              # fires on the stale state. Re-enabling auto-merge does NOT
+              # force a re-evaluation (no-op when already enabled) — only a
+              # head push, close/reopen, or a direct merge attempt does.
+              echo "All checks green on #${PR} but auto-merge did not fire — re-enabling auto-merge and waiting for a fresh evaluation."
               gh pr merge "$PR" --repo "$REPO" --auto --squash >/dev/null 2>&1 || true
               for _ in $(seq 1 10); do
                 state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
@@ -554,7 +558,20 @@ jobs:
                 fi
                 sleep 30
               done
-              park "All checks green on #${PR} but auto-merge did not merge within ~15m (even after re-enabling auto-merge). Parking for human review — NOT an alarm."
+              # Last resort: attempt the merge directly. The ruleset still
+              # gates it — the app token is NOT a bypass actor
+              # (bypass_actors=[]) — so a genuinely unmet requirement fails
+              # the merge cleanly and we park; a stale evaluation passes
+              # instantly (fresh synchronous evaluation, as observed).
+              echo "Auto-merge still stuck — attempting a direct ruleset-gated merge."
+              for _ in 1 2 3; do
+                if gh pr merge "$PR" --repo "$REPO" --squash >/dev/null 2>&1; then
+                  echo "Bump PR #${PR} merged (direct ruleset-gated merge)."
+                  exit 0
+                fi
+                sleep 15
+              done
+              park "All checks green on #${PR} but the merge did not land (auto-merge stuck AND the direct ruleset-gated merge failed) — parking for human review — NOT an alarm."
               ;;
             1)
               # gh pr checks exits 1 for a failed check AND for gh CLI

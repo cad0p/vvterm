@@ -178,12 +178,22 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests-shard-0..3`,
   stable job names — no wildcards; rulesets don't support them) must pass;
   auto-merge then merges. The `watch` job exits 0 on merge, files an alarm issue on
-  red CI, and parks (never alarms) on stalls — with one self-heal before parking:
+  red CI, and parks (never alarms) on stalls — with self-heal before parking:
   if every check is green but auto-merge hasn't fired within 10m, the watch
-  **re-enables auto-merge once** (observed 2026-08-13 on the first live bump: after
-  check reruns the mergeability evaluation can go stale — `BLOCKED` with all
-  required checks green — and auto-merge never fires; re-enabling forces a fresh
-  evaluation) before parking.
+  re-enables auto-merge, waits ~5m, then attempts a **direct ruleset-gated
+  merge** (`gh pr merge --squash`, no `--auto`) before parking.
+
+  Why the direct-merge fallback is safe and needed (observed 2026-08-13, first
+  live bump PR #159): after check reruns the mergeability evaluation can go
+  stale — `BLOCKED` with every required check green, for 30+ minutes. The
+  merge rule-suite (`3672279891`, refs/heads/main) shows **all 8 rule
+  evaluations pass** at merge time and `bypass_actors` is empty, so no
+  requirement is actually unmet and no one can bypass — the block is false.
+  Re-enabling auto-merge is a no-op (does not force re-evaluation); only a
+  head push, close/reopen, or a **direct merge attempt** (fresh synchronous
+  evaluation) unsticks it. The watch's direct attempt is still fully
+  ruleset-gated (the app token is not a bypass actor), so a genuinely red
+  PR fails the merge cleanly and the watch parks.
 - Fail before PR creation → alarm issue (label `ghostty-patch`) with this runbook; the
   shipped app is untouched
 
