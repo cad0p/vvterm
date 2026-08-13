@@ -221,16 +221,35 @@ private struct ConnectionBannerHandoffHarness: View {
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
-        }
-        .task {
-            try? await Task.sleep(for: .seconds(3))
-            tmuxPrompt = TmuxAttachPrompt(
-                id: UUID(),
-                paneId: paneId,
-                serverId: UUID(),
-                serverName: "production",
-                existingSessions: []
-            )
+
+            // Deterministic handoff trigger (top-trailing, below the scenario
+            // capsule): the original 3s auto-timer made the connecting banner
+            // transient — under runner load the stale AX tree could miss the
+            // banner's brief life entirely (#43 residual). With the trigger,
+            // the banner stays up until the test taps, and every assertion
+            // in the test targets a persistent state.
+            VStack {
+                HStack {
+                    Spacer()
+                    Button("Present tmux") {
+                        tmuxPrompt = TmuxAttachPrompt(
+                            id: UUID(),
+                            paneId: paneId,
+                            serverId: UUID(),
+                            serverName: "production",
+                            existingSessions: []
+                        )
+                    }
+                    .accessibilityIdentifier("vvterm.noticeTest.bannerHandoff.present")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .frame(height: 36)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.top, 56)
+                    .padding(.trailing, 12)
+                }
+                Spacer()
+            }
         }
         .preferredColorScheme(.dark)
     }

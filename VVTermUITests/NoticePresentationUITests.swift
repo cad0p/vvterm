@@ -139,9 +139,16 @@ final class NoticePresentationUITests: XCTestCase {
         let connecting = app.staticTexts["Connecting to production..."]
         let tmuxTitle = app.navigationBars["Choose tmux session"]
 
+        // The connecting banner stays up until the harness trigger yields it
+        // (the original 3s auto-handoff made the banner transient — the stale
+        // AX tree could miss its brief life under runner load). Every assert
+        // below targets a persistent state.
         XCTAssertTrue(connecting.waitForExistence(timeout: 20))
+        let present = app.buttons["vvterm.noticeTest.bannerHandoff.present"]
+        XCTAssertTrue(present.waitForExistence(timeout: 5))
+        present.tap()
         XCTAssertTrue(tmuxTitle.waitForExistence(timeout: 20))
-        XCTAssertFalse(connecting.exists)
+        XCTAssertTrue(connecting.waitForNonExistence(timeout: 5))
     }
 
     @MainActor
