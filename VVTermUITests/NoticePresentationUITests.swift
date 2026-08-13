@@ -266,7 +266,19 @@ final class NoticePresentationUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         menu.tap()
-        let item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
+        var item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
+        if !item.waitForExistence(timeout: 5) {
+            // Context-menu presentation can be dropped under runner load (the
+            // tap lands but no items appear). A second tap re-presents the
+            // menu — but only when the menu is not covered by its own open
+            // popover (isHittable false = the popover is up and items may
+            // still be coming; the final wait below then gets the open menu).
+            // Bounded single retry, then the assert reports the real state.
+            if menu.isHittable {
+                menu.tap()
+            }
+            item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
+        }
         XCTAssertTrue(item.waitForExistence(timeout: 5))
         item.tap()
         let current = app.staticTexts["vvterm.noticeTest.scenario.current"]

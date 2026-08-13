@@ -372,6 +372,17 @@ final class TerminalReconnectUITests: XCTestCase {
         findItem.tap()
 
         let searchField = app.searchFields.firstMatch
+        if !searchField.waitForExistence(timeout: 5) {
+            // The native Find presentation can be dropped under runner load
+            // (find=true app-side but no search field in AX). Re-open the
+            // production menu and tap Find again; bounded single retry, then
+            // the assert reports the real state.
+            openProductionTerminalMenu(in: app)
+            let findRetry = app.buttons["Find"]
+            if findRetry.waitForExistence(timeout: 3) {
+                findRetry.tap()
+            }
+        }
         XCTAssertTrue(
             searchField.waitForExistence(timeout: 8),
             "Native Find search field did not appear. \(diagnosticText(in: app))"
