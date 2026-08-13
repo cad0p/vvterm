@@ -2390,7 +2390,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
         waitForTerminalFrameOnscreen(terminal, in: app)
         terminal.tap()
-        app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
+        tapWhenHittable(app.buttons["vvterm.keyboardTest.hardware.attach"], in: app)
         wait(
             for: diagnostics,
             labelContaining: "hardware=true",
@@ -2398,8 +2398,8 @@ final class TerminalKeyboardUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        app.buttons["vvterm.keyboardTest.hardwareRepeat.begin.h"].tap()
-        app.buttons["vvterm.keyboardTest.hardwareRepeat.tick"].tap()
+        tapWhenHittable(app.buttons["vvterm.keyboardTest.hardwareRepeat.begin.h"], in: app)
+        tapWhenHittable(app.buttons["vvterm.keyboardTest.hardwareRepeat.tick"], in: app)
         waitForHardwareRepeat(
             phase: "repeating",
             lowercaseHInputs: 2,
@@ -2407,7 +2407,7 @@ final class TerminalKeyboardUITests: XCTestCase {
             in: app
         )
 
-        app.buttons["vvterm.keyboardTest.hardware.detach"].tap()
+        tapWhenHittable(app.buttons["vvterm.keyboardTest.hardware.detach"], in: app)
         wait(
             for: diagnostics,
             labelContaining: "hardware=false",
@@ -2427,7 +2427,7 @@ final class TerminalKeyboardUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
-        app.buttons["vvterm.keyboardTest.hardwareRepeat.tick"].tap()
+        tapWhenHittable(app.buttons["vvterm.keyboardTest.hardwareRepeat.tick"], in: app)
         assertHardwareRepeatInputCountsRemain(
             lowercaseHInputs: 2,
             uppercaseHInputs: 0,
