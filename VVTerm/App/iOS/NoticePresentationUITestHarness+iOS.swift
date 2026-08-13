@@ -5,6 +5,7 @@ import SwiftUI
 /// The raw value doubles as the scenario-menu item id suffix and the
 /// current-scenario label value.
 enum HarnessScenario: String, CaseIterable {
+    case idle
     case connectionFailure
     case disconnected
     case hostKeyFailure
@@ -19,7 +20,10 @@ enum HarnessScenario: String, CaseIterable {
 
 struct NoticePresentationUITestHarness: View {
     /// Initial scenario derived from launch arguments (launch-arg compatibility
-    /// kept so nothing outside this file changes); unknown/absent → .connectionFailure.
+    /// kept so nothing outside this file changes); no scenario args → .idle so
+    /// the harness launches WITHOUT the connection-status sheet (a launch-time
+    /// sheet racing the first test's scenario-menu tap was the M2 CI failure:
+    /// the tap landed on the sheet scrim instead of the menu).
     private static var initialScenario: HarnessScenario {
         let arguments = Foundation.ProcessInfo.processInfo.arguments
         if arguments.contains("--vvterm-ui-test-notice-files-preview") {
@@ -49,7 +53,7 @@ struct NoticePresentationUITestHarness: View {
         if arguments.contains("--vvterm-ui-test-notice-host-key") {
             return .hostKeyFailure
         }
-        return .connectionFailure
+        return .idle
     }
 
     @State private var scenario: HarnessScenario = NoticePresentationUITestHarness.initialScenario
@@ -66,6 +70,12 @@ struct NoticePresentationUITestHarness: View {
     @ViewBuilder
     private func scenarioView(for scenario: HarnessScenario) -> some View {
         switch scenario {
+        case .idle:
+            terminalBackdrop {
+                Text("Select a scenario from the menu")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         case .connectionFailure:
             NoticeConnectionStatusHarness(scenario: .failure)
         case .disconnected:
@@ -95,7 +105,7 @@ struct NoticePresentationUITestHarness: View {
     private var scenarioCapsule: some View {
         HStack(spacing: 8) {
             Menu {
-                ForEach(HarnessScenario.allCases, id: \.self) { option in
+                ForEach(HarnessScenario.allCases.filter { $0 != .idle }, id: \.self) { option in
                     Button(option.rawValue) {
                         scenario = option
                         // Always bump the token — even re-selecting the same

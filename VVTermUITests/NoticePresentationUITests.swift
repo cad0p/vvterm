@@ -242,6 +242,13 @@ final class NoticePresentationUITests: XCTestCase {
         // sheet sits at its .height detent, the detail sheet at .large).
         let sheet = app.sheets.firstMatch
         if sheet.exists {
+            // The sheet can exist in AX while still animating in (tests may
+            // end mid-presentation); wait for it to be hittable first, then
+            // swipe to dismiss. Bounded, fall-through.
+            let sheetDeadline = Date().addingTimeInterval(5)
+            while Date() < sheetDeadline, !sheet.isHittable {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
             if sheet.isHittable { sheet.swipeDown() }
             XCTAssertTrue(
                 sheet.waitForNonExistence(timeout: 5),
@@ -250,6 +257,14 @@ final class NoticePresentationUITests: XCTestCase {
         }
         let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        // A sheet dismissal animation can still intercept hits for a moment
+        // after the sheet leaves the AX tree; wait for the menu to be hittable
+        // before tapping (bounded, fall-through — the item wait below reports
+        // the real state on timeout).
+        let menuDeadline = Date().addingTimeInterval(5)
+        while Date() < menuDeadline, !menu.isHittable {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
         menu.tap()
         let item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
         XCTAssertTrue(item.waitForExistence(timeout: 5))
