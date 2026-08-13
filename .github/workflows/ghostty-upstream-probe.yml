@@ -539,7 +539,22 @@ jobs:
                 fi
                 sleep 30
               done
-              park "All checks green on #${PR} but auto-merge did not merge within 10m (possible: a merge rule conflict or stale check state). Parking for human review — NOT an alarm."
+              # Checks green but no merge within 10m. Observed 2026-08-13:
+              # after check RERUNS the mergeability evaluation can go stale
+              # ('blocked' with everything green) and auto-merge never fires.
+              # Re-enabling auto-merge forces a fresh evaluation — the
+              # cheapest self-heal before parking.
+              echo "All checks green on #${PR} but auto-merge did not fire — re-enabling auto-merge to force a fresh mergeability evaluation."
+              gh pr merge "$PR" --repo "$REPO" --auto --squash >/dev/null 2>&1 || true
+              for _ in $(seq 1 10); do
+                state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
+                if [[ "$state" == "MERGED" ]]; then
+                  echo "Bump PR #${PR} merged after auto-merge re-enable."
+                  exit 0
+                fi
+                sleep 30
+              done
+              park "All checks green on #${PR} but auto-merge did not merge within ~15m (even after re-enabling auto-merge). Parking for human review — NOT an alarm."
               ;;
             1)
               # gh pr checks exits 1 for a failed check AND for gh CLI
