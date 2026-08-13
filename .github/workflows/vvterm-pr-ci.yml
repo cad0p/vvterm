@@ -618,14 +618,7 @@ jobs:
               xcrun simctl shutdown all >/dev/null 2>&1 || true
               xcrun simctl boot "iPhone 17" >/dev/null 2>&1 || true
               xcrun simctl bootstatus "iPhone 17" -b >/dev/null 2>&1 || true
-              # The loopback sshd can stall under host load mid-shard (#144
-              # family: "Shell cwd never advanced" with healthy app-side
-              # transport counters). Restart the fixture on EVERY retry so
-              # each attempt gets a fresh sshd.
-              if [ "${{ matrix.shard.needs-fixture }}" == "true" ]; then
-                echo "Restarting loopback sshd fixture for retry environment..."
-                bash scripts/ci/repro-sshd-setup.sh --restart
-              fi
+              # [A/B test arm: loopback-sshd fixture restart on retry REMOVED — see ab/no-fixture-restart]
               # Case 1 — runner died before ANY test executed (zero "Test
               # Case" lines). Message varies: "Failed to initialize for UI
               # testing" (AX timeout), "Early unexpected exit ... signal abrt
