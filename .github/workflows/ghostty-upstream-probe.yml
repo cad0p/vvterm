@@ -314,6 +314,7 @@ jobs:
           VERIFIED="$(gh api "repos/${REPO}/commits/${NEW_COMMIT}" --jq '.commit.verification.verified')"
           if [[ "$VERIFIED" != "true" ]]; then
             echo "::error::API-created commit ${NEW_COMMIT} is NOT verified (verification=${VERIFIED}) — required_signatures would block the PR. Aborting."
+            gh api -X DELETE "repos/${REPO}/git/refs/heads/${SCRATCH}" >/dev/null 2>&1 || true
             exit 1
           fi
           # A stale bump branch from a previous attempt carries UNSIGNED
@@ -334,8 +335,10 @@ jobs:
           gh api -X DELETE "repos/${REPO}/git/refs/heads/${SCRATCH}" >/dev/null 2>&1 || true
           echo "Pushed ${BRANCH} @ ${NEW_COMMIT} (verified, signed by GitHub)"
 
-          # Reuse an existing open PR on the bump branch (weekly reruns and
-          # re-dispatches hit this path) instead of duplicating it.
+          # Reuse an existing open PR on the bump branch — safety net only:
+          # the stale-branch delete above closes any prior open PR on this
+          # branch (GitHub does not re-link deleted branches), so a fresh PR
+          # is created below on every run.
           EXISTING="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,state --jq '.[0] // empty' 2>/dev/null || true)"
           if [[ -n "$EXISTING" ]]; then
             PR_NUMBER="$(jq -r .number <<<"$EXISTING")"
