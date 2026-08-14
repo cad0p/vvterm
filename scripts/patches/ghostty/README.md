@@ -255,21 +255,29 @@ Mechanics (all in the `bump-pr` step):
 5. Reuse/create PR + enable auto-merge (squash) as before, with a small retry
    loop on the auto-merge enable.
 
-### Ruleset constraint (learned the hard way, 2026-08-12)
+### Ruleset constraint (learned the hard way, 2026-08-12; updated 2026-08-14)
 
-`gh-ruleset-all` must NOT contain `required_linear_history` or `required_signatures`:
+`gh-ruleset-all` must NOT contain `required_linear_history`; `required_signatures` was
+restored 2026-08-14 (pi-napkin + vvterm):
 
-- `required_linear_history` on a ruleset evaluates the **entire branch history**,
-  not just new commits ([known GitHub bug — GH community #80952](https://github.com/orgs/community/discussions/80952)).
+- `required_linear_history` on a ruleset evaluates the **entire branch history**, not
+  just new commits ([known GitHub bug — GH community #80952](https://github.com/orgs/community/discussions/80952)).
   This repo's `main` contains historical merge commits, so **every new-branch push
   fails** — including the probe's bump branch. The rule only works on the default
   branch (delta-only evaluation), where `gh-ruleset-main` keeps it.
-- `required_signatures` rejects the probe runner's unsigned bump commit (a GitHub App
-  cannot sign commits; no bypass actors allowed by design).
+- `required_signatures` was removed on 2026-08-12 because the bump commit was an
+  unsigned local `git commit` as the app. Since 2026-08-13 the probe creates the
+  bump commit via `POST /git/commits` (app token, NO custom author/committer/
+  signature), which makes **GitHub sign it with its web-flow key and mark it
+  Verified** (dependabot mechanism), satisfying `required_signatures` — see the
+  verification gate + stale-branch delete/recreate in `ghostty-upstream-probe.yml`
+  (the "Verified commit via the Git API" step). So the restore is compatible with
+  the live probe; no bypass actors needed.
 
-`gh-ruleset-all` currently has `non_fast_forward` only; `gh-ruleset-main` keeps
-`deletion`, `non_fast_forward`, `pull_request` (squash), `required_signatures`,
-`required_linear_history`, `required_status_checks`, `code_quality`.
+`gh-ruleset-all` currently has `non_fast_forward` + `required_signatures`;
+`gh-ruleset-main` keeps `deletion`, `non_fast_forward`, `pull_request` (squash),
+`required_signatures`, `required_linear_history`, `required_status_checks`,
+`code_quality`.
 
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr`
 (skip PR creation — useful for validation runs).
