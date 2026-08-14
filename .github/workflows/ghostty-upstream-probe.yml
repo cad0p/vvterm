@@ -61,7 +61,7 @@ permissions:
   contents: read
   actions: write   # DerivedData/SPM cache save + failure artifact upload
   issues: write    # alarm issues
-  pull-requests: read
+  pull-requests: write  # park comments + the watch's REST-PUT merge fallback on the bump PR (was read — both failed silently with 403, observed 2026-08-14: no park comment on #162)
 
 concurrency:
   group: ghostty-upstream-probe
