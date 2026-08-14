@@ -232,6 +232,12 @@ Safe refactor expectation:
   - targeted safety fix
 - Before committing, verify the diff matches a single intent.
 
+### Merging PRs with `gh` (issue auto-close hygiene)
+
+- Reference issues with **one keyword per issue** — `Closes #A, closes #B` — never `Closes #A #B` (GitHub honors only the first number of a single keyword list; the rest become plain references).
+- Before `gh pr merge --squash`, fetch the PR body and pass it into the squash commit: `gh pr merge <n> --squash --body-file <(gh pr view <n> --json body -q .body)`. (Repo default now embeds the body, but pass it explicitly so the merge works regardless of settings.)
+- After merging, verify each referenced issue actually closed (`gh issue view <n> --json state`); if not, close it explicitly with a comment naming the merge. Do not rely on auto-close keywords alone — the `close-linked-issues` workflow is the safety net, not the expectation.
+
 ## Key Components
 
 ### Terminal

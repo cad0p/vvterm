@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Safety net for issue auto-close on merge. GitHub closes linked issues from
+# closing keywords ("Closes #N") in the PR description and/or the merge commit
+# message — but `gh pr merge --squash` (API) historically created title-only
+# commits (repo default squash_merge_commit_message=BLANK), and a single
+# keyword with multiple numbers (`Closes #A #B #C`) only honors the first.
+# Both gaps are fixed at the source (repo settings + AGENTS.md rule), but this
+# workflow guarantees the behavior regardless of merge method, commit message,
+# or agent behavior: on any merged PR, close every issue its body references
+# via (closes|fixes|resolves) #N, one keyword per issue.
+name: Close linked issues on merge
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close-linked:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Close issues referenced by the merged PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # One keyword per issue: "Closes #1, fixes #2" — GitHub only honors
+          # the FIRST number of a single keyword list, so match each pair.
+          ISSUES=$(echo "$PR_BODY" | grep -oiE '(closes|fixes|resolves)[[:space:]]+#[0-9]+' \
+            | grep -oE '#[0-9]+' | tr -d '#' | sort -un)
+          if [ -z "$ISSUES" ]; then
+            echo "No closing-keyword references in PR body; nothing to do."
+            exit 0
+          fi
+          for n in $ISSUES; do
+            state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "missing")
+            if [ "$state" = "closed" ]; then
+              echo "#$n already closed"
+            elif [ "$state" = "missing" ]; then
+              echo "::warning::PR references #$n but no such issue exists"
+            else
+              gh issue close "$n" --reason completed \
+                --comment "Auto-closed on merge of #${{ github.event.pull_request.number }} (${{ github.event.pull_request.title }})."
+              echo "#$n closed"
+            fi
+          done
