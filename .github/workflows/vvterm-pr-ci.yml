@@ -298,7 +298,12 @@ jobs:
 
   unit-tests:
     runs-on: xcode-27
-    timeout-minutes: 20
+    # Keep comfortably above the measured 19-21m runtime (compile + full
+    # suite + pool contention). timeout-minutes: 20 was killing the job at
+    # the 20m mark exactly when the runner was slow (observed 2026-08-14:
+    # every run >20m was cancelled, every run <20m passed — perfect
+    # correlation, three consecutive failures on PR #167).
+    timeout-minutes: 30
     needs: [build, wait-for-ota-publish]
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
