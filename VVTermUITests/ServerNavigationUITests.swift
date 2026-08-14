@@ -1,6 +1,13 @@
 import XCTest
 
 final class ServerNavigationUITests: XCTestCase {
+    /// One app instance per test-class run (both tests share identical
+    /// harness launch args). Saves a full app launch + fixture reconnect
+    /// per shard run; the reset guard below returns each test to the
+    /// server list regardless of the previous test's end state.
+    @MainActor
+    private static var sharedApp: XCUIApplication?
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         // These tests boot the TerminalReconnectUITestHarness against a real
@@ -17,7 +24,7 @@ final class ServerNavigationUITests: XCTestCase {
 
     @MainActor
     func testActiveTerminalPushPopPreservesListPositionAndSession() throws {
-        let app = launchNavigationHarness()
+        let app = resetToServerList(in: launchNavigationHarness())
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
         wait(for: diagnostics, containing: "setup=ready", app: app)
@@ -155,7 +162,7 @@ final class ServerNavigationUITests: XCTestCase {
 
     @MainActor
     func testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness() throws {
-        let app = launchNavigationHarness()
+        let app = resetToServerList(in: launchNavigationHarness())
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
         wait(for: diagnostics, containing: "setup=ready", app: app)
@@ -210,8 +217,13 @@ final class ServerNavigationUITests: XCTestCase {
 
     @MainActor
     private func launchNavigationHarness() -> XCUIApplication {
+        // Early return: XCUIApplication.launch() on an already-running app
+        // would silently relaunch it, so the whole seed+launch+retry block
+        // is gated on the shared instance.
+        if let app = Self.sharedApp {
+            return app
+        }
         let app = XCUIApplication()
-        app.terminate()
         seedLoopbackFixtureEnv(into: app)
         app.launchArguments = [
             "--vvterm-ui-test-terminal-reconnect-harness",
@@ -234,6 +246,49 @@ final class ServerNavigationUITests: XCTestCase {
            app.state == .runningForeground {
             app.terminate()
             _ = launchForTest(app)
+        }
+        Self.sharedApp = app
+        return app
+    }
+
+    /// Returns both tests to a known state (server list, foreground)
+    /// regardless of the previous test's end state: the push/pop test ends
+    /// at the list (popped), the background test ends backgrounded, and a
+    /// failed test can leave the terminal pushed. Tapping the harness back
+    /// button pops to the list; a wedged app is relaunched once (the shared
+    /// instance is cleared first so the relaunch reuses the seed/args path).
+    @discardableResult
+    @MainActor
+    private func resetToServerList(in app: XCUIApplication) -> XCUIApplication {
+        // A crashed app cannot be activated back into the harness; relaunch
+        // through the shared path (clearing the gate first so the seed/args
+        // block re-runs) instead of activate()'s arg-less fresh launch.
+        if app.state == .notRunning {
+            Self.sharedApp = nil
+            return launchNavigationHarness()
+        }
+        if app.state != .runningForeground {
+            app.activate()
+            XCTAssertTrue(
+                app.wait(for: .runningForeground, timeout: 8),
+                diagnosticText(in: app)
+            )
+        }
+        let back = app.buttons["vvterm.terminal.back"]
+        if back.waitForExistence(timeout: 3) {
+            // Production pop budget (8s wait + 15s settle + 5s final) — pops
+            // can exceed 8s under runner load (#129 family).
+            popTerminal(in: app)
+        }
+        // Wedged fallback: the shared instance cannot be restored -> relaunch
+        // once and keep using the new instance.
+        if !app.descendants(matching: .any)
+            .matching(identifier: "vvterm.serverList.list")
+            .firstMatch
+            .waitForExistence(timeout: 3) {
+            app.terminate()
+            Self.sharedApp = nil
+            return launchNavigationHarness()
         }
         return app
     }
