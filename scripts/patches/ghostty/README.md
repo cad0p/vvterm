@@ -173,27 +173,30 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   (incl. the behavioral probe tests) against the NEW binaries
 - Pass → bump PR (`chore/ghostty-upstream-bump-<sha7>`, artifacts + VERSION + BASE)
   created with the **vvterm-ghostty-bump GitHub App token**, auto-merge enabled
+- The bump commit is created via the **REST Git Commits API** (not `git commit`)
+  so it is **web-flow signed and marked Verified** — see "Why the bump commit is
+  created via the Git API" below. This is what makes auto-merge able to fire at
+  all: `gh-ruleset-main`'s `required_signatures` blocks PRs whose head commits
+  are unsigned (`mergeStateStatus: BLOCKED`, auto-merge never fires).
 - The bump PR's own `pull_request` CI runs **automatically** (app-created PRs are
   first-class actors — no approval, no click) and is the **merge gate**: the
   `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests-shard-0..3`,
   stable job names — no wildcards; rulesets don't support them) must pass;
   auto-merge then merges. The `watch` job exits 0 on merge, files an alarm issue on
-  red CI, and parks (never alarms) on stalls — with self-heal before parking:
-  if every check is green but auto-merge hasn't fired within 10m, the watch
-  re-enables auto-merge, waits ~5m, then attempts a **direct ruleset-gated
-  merge** (`gh pr merge --squash`, no `--auto`) before parking.
+  red CI, and parks (never alarms) on stalls — with one last-resort self-heal
+  before parking: if every check is green but auto-merge hasn't fired within
+  10m, the watch attempts a **raw REST merge**
+  (`PUT /repos/{owner}/{repo}/pulls/{n}/merge` — NOT `gh pr merge`, whose CLI
+  pre-checks the mergeability state and cannot rescue a stuck `BLOCKED`).
 
-  Why the direct-merge fallback is safe and needed (observed 2026-08-13, first
-  live bump PR #159): after check reruns the mergeability evaluation can go
-  stale — `BLOCKED` with every required check green, for 30+ minutes. The
-  merge rule-suite (`3672279891`, refs/heads/main) shows **all 8 rule
-  evaluations pass** at merge time and `bypass_actors` is empty, so no
-  requirement is actually unmet and no one can bypass — the block is false.
-  Re-enabling auto-merge is a no-op (does not force re-evaluation); only a
-  head push, close/reopen, or a **direct merge attempt** (fresh synchronous
-  evaluation) unsticks it. The watch's direct attempt is still fully
-  ruleset-gated (the app token is not a bypass actor), so a genuinely red
-  PR fails the merge cleanly and the watch parks.
+  Why the raw-REST fallback is safe and needed (observed 2026-08-13, live
+  bumps #159/#162): the mergeability evaluation can go stale — `BLOCKED` with
+  every required check green, for 30+ minutes — while the merge rule-suite
+  (`3672279891`, refs/heads/main) shows **all 8 rule evaluations pass** at
+  merge time and `bypass_actors` is empty, so no requirement is actually unmet
+  and no one can bypass. The raw PUT forces a fresh synchronous evaluation and
+  is still fully ruleset-gated (the app token is not a bypass actor), so a
+  genuinely red PR fails the merge cleanly and the watch parks.
 - Fail before PR creation → alarm issue (label `ghostty-patch`) with this runbook; the
   shipped app is untouched
 
@@ -211,6 +214,46 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   `GHOSTTY_BUMP_CLIENT_ID`; the app's **private key** must be stored as the Actions
   secret `GHOSTTY_BUMP_PRIVATE_KEY` (full PEM). Revoke anytime by deleting the app
   or uninstalling it.
+
+### Why the bump commit is created via the Git API (required_signatures, 2026-08-14)
+
+`gh-ruleset-main` includes `required_signatures` (commits must have verified
+signatures). GitHub Apps have no signing key for local `git commit`, so a
+locally-created bump commit is **unsigned** — and GitHub's PR mergeability
+evaluation flags PRs with unsigned head commits against that rule:
+`mergeStateStatus: BLOCKED`, auto-merge never fires. Proven 2026-08-13/14:
+
+| PR | Author | Head commit signature | Mergeability | Outcome |
+|---|---|---|---|---|
+| #159 | app | unsigned | BLOCKED 30+ min | merged only via raw REST PUT (merge-time eval checks only the GitHub-signed squash commit) |
+| #160 | human | verified | CLEAN | auto-merge fired |
+| #162 | app | unsigned | BLOCKED | watch fallback also refused → parked |
+
+Fix: the probe creates the commit with `POST /repos/{owner}/{repo}/git/commits`
+using the app token and **no custom author/committer/signature fields** — GitHub
+signs it with its web-flow key and marks it Verified (the dependabot mechanism;
+docs.github.com "About commit signature verification" → "Signature verification
+for bots"). The step aborts if the response commit is not `verification.verified`.
+
+Mechanics (all in the `bump-pr` step):
+
+1. `git write-tree` after `git add` (the no-op check stays on the index).
+2. Upload tree+blobs: `git commit-tree` a temp commit and push it to a scratch
+   ref `ci/ghostty-bump-upload-<run_id>` (`POST /git/commits` validates the tree
+   exists; this is the only practical way to upload the xcframework blobs). The
+   scratch ref triggers no CI and is deleted best-effort right after.
+3. `POST /git/commits` → new verified commit, parented on current main tip.
+4. **Delete any existing bump branch, then `POST /git/refs` (create)** — never
+   force-update. Reasons: `required_signatures` checks **ALL commits in the PR
+   range** (community #183848: appending a signed commit on top of an unsigned
+   one does not unblock — the unsigned commit must be rewritten); GitHub does
+   NOT re-link a deleted branch to its PR (community #4453 — the old PR closes,
+   which is the desired outcome; a fresh PR replaces it); and `non_fast_forward`
+   (gh-ruleset-all) blocks force-updates, so delete + create is the only clean
+   path. The `probe-passed` marker + `bump_pr_number` output are written only
+   AFTER the ref create, so a mid-flow failure still files a probe alarm.
+5. Reuse/create PR + enable auto-merge (squash) as before, with a small retry
+   loop on the auto-merge enable.
 
 ### Ruleset constraint (learned the hard way, 2026-08-12)
 

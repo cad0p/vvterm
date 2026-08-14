@@ -284,41 +284,76 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: ghostty upstream bump to ${SHA7}"
-          # Push the bump branch with the APP token (first-class actor —
-          # the resulting PR's CI runs automatically, no approval). The
-          # checkout persisted no credentials (persist-credentials: false),
-          # so the URL-embedded token is the single Authorization sent.
+          # --- Verified commit via the Git API ---
+          # gh-ruleset-main requires verified signatures (required_signatures)
+          # and checks ALL commits in the PR range. A local `git commit` as
+          # the app is unsigned → mergeability BLOCKED → auto-merge never
+          # fires (observed 2026-08-13: PRs #159/#162 stalled, control #160
+          # with a signed commit auto-merged). POST /git/commits with the
+          # app token and NO custom author/committer/signature makes GitHub
+          # sign the commit with its web-flow key and mark it Verified (the
+          # dependabot mechanism — docs.github.com "Signature verification
+          # for bots"), satisfying required_signatures.
+          TREE="$(git write-tree)"
+          PARENT="$(git rev-parse HEAD)"   # current main tip
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          PUSH_OUTPUT="$(git push -u origin "$BRANCH" 2>&1)" || true
-          if [[ -z "$PUSH_OUTPUT" || "$PUSH_OUTPUT" == *"Everything up-to-date"* || "$PUSH_OUTPUT" == *"up to date"* ]]; then
-            echo "${PUSH_OUTPUT}"
-            if [[ -n "$PUSH_OUTPUT" && "$PUSH_OUTPUT" != *"up to date"* ]]; then
-              echo "::warning::Push reported nothing to do."
-            fi
-          elif [[ "$PUSH_OUTPUT" == *"rejected"* || "$PUSH_OUTPUT" == *"denied"* || "$PUSH_OUTPUT" == *"403"* || "$PUSH_OUTPUT" == *"fatal"* ]]; then
-            echo "${PUSH_OUTPUT}"
-            echo "Branch exists remotely or push failed — force-updating (regenerated from scratch each run)."
-            if ! git push --force-with-lease origin "$BRANCH" 2>&1; then
-              echo "::error::Force push also failed — check the app token permissions (vvterm-ghostty-bump: Contents read/write on cad0p/vvterm) and the gh-ruleset-all non_fast_forward rule."
-              exit 1
-            fi
-          else
-            echo "${PUSH_OUTPUT}"
+          # Upload the tree+blobs server-side (POST /git/commits validates
+          # the tree exists; pushing a temp commit to a scratch ref is the
+          # only practical way to upload the xcframework blobs). The scratch
+          # ref triggers no CI (workflows listen on pull_request only).
+          SCRATCH="ci/ghostty-bump-upload-${GITHUB_RUN_ID}"
+          TMP_COMMIT="$(git commit-tree "$TREE" -p "$PARENT" -m "scratch upload ${GITHUB_RUN_ID}")"
+          git push -q origin "${TMP_COMMIT}:refs/heads/${SCRATCH}"
+          NEW_COMMIT="$(gh api -X POST "repos/${REPO}/git/commits" --input - <<JSON | jq -r .sha
+          {"message": "chore: ghostty upstream bump to ${SHA7}", "tree": "${TREE}", "parents": ["${PARENT}"]}
+          JSON
+          )"
+          # Sanity: the API-created commit MUST be verified, else the PR
+          # would be mergeability-BLOCKED again. Failure here happens
+          # before the probe-passed marker → the alarm path still fires.
+          VERIFIED="$(gh api "repos/${REPO}/commits/${NEW_COMMIT}" --jq '.commit.verification.verified')"
+          if [[ "$VERIFIED" != "true" ]]; then
+            echo "::error::API-created commit ${NEW_COMMIT} is NOT verified (verification=${VERIFIED}) — required_signatures would block the PR. Aborting."
+            gh api -X DELETE "repos/${REPO}/git/refs/heads/${SCRATCH}" >/dev/null 2>&1 || true
+            exit 1
           fi
-          echo "Pushed ${BRANCH} @ ${RESOLVED_SHA:0:12}"
+          # A stale bump branch from a previous attempt carries UNSIGNED
+          # commits; required_signatures checks ALL commits in the PR range,
+          # so the branch must be recreated with exactly one verified
+          # commit. Deleting the ref also closes any open PR on it (GitHub
+          # does NOT re-link deleted branches) — the new PR replaces it.
+          # non_fast_forward (gh-ruleset-all) blocks force-updates, so
+          # delete + create is the only clean path.
+          if gh api "repos/${REPO}/git/refs/heads/${BRANCH}" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/${REPO}/git/refs/heads/${BRANCH}" >/dev/null \
+              || { echo "::error::Could not delete stale bump branch ${BRANCH} (unsigned commits must be replaced)."; exit 1; }
+            echo "Deleted stale bump branch ${BRANCH} (previous attempt's commits were unsigned)."
+          fi
+          gh api -X POST "repos/${REPO}/git/refs" \
+            -f ref="refs/heads/${BRANCH}" -f sha="$NEW_COMMIT" >/dev/null
+          # Scratch ref cleanup is best-effort; a leftover ref is harmless.
+          gh api -X DELETE "repos/${REPO}/git/refs/heads/${SCRATCH}" >/dev/null 2>&1 || true
+          echo "Pushed ${BRANCH} @ ${NEW_COMMIT} (verified, signed by GitHub)"
 
-          # Reuse an existing open PR on the bump branch (weekly reruns and
-          # re-dispatches hit this path) instead of duplicating it.
+          # Reuse an existing open PR on the bump branch — safety net only:
+          # the stale-branch delete above closes any prior open PR on this
+          # branch (GitHub does not re-link deleted branches), so a fresh PR
+          # is created below on every run.
           EXISTING="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,state --jq '.[0] // empty' 2>/dev/null || true)"
           if [[ -n "$EXISTING" ]]; then
             PR_NUMBER="$(jq -r .number <<<"$EXISTING")"
             echo "Reusing existing bump PR #${PR_NUMBER} on ${BRANCH}"
             echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-            # (Re-)enable auto-merge; already-merged or mergeable-state
-            # failures are handled below — never a probe alarm.
-            gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null || true
-            echo "Auto-merge (re)enabled on #${PR_NUMBER}"
+            # (Re-)enable auto-merge with retries: after a branch
+            # recreation GitHub can take a moment to re-evaluate
+            # mergeability. Failures are never a probe alarm.
+            for _ in 1 2 3; do
+              if gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null; then
+                echo "Auto-merge (re)enabled on #${PR_NUMBER}"
+                break
+              fi
+              sleep 10
+            done
             # Marker for the alarm step: written ONLY after the bump PR
             # exists (created or reused). A failure before this point
             # (incl. PR creation itself) still alarms; after this point
@@ -340,14 +375,21 @@ jobs:
           # gh pr create itself — still files the alarm.
           echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
-          # Enable auto-merge (squash). gh-ruleset-main requires the PR CI
-          # checks (build/unit-tests/ui-tests-shard-0..3), so auto-merge only fires
-          # when the full PR CI passes on the new binaries. If auto-merge
-          # cannot be enabled (PR not mergeable yet), the watch job's park
-          # path covers it — never a probe alarm.
-          if gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null; then
-            echo "Auto-merge enabled on bump PR #${PR_NUMBER}"
-          else
+          # Enable auto-merge (squash) with retries. gh-ruleset-main
+          # requires the PR CI checks (build/unit-tests/ui-tests-shard-0..3),
+          # so auto-merge only fires when the full PR CI passes on the new
+          # binaries. If auto-merge cannot be enabled (PR not mergeable
+          # yet), the watch job's park path covers it — never a probe alarm.
+          AUTO_MERGED=0
+          for _ in 1 2 3; do
+            if gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null; then
+              echo "Auto-merge enabled on bump PR #${PR_NUMBER}"
+              AUTO_MERGED=1
+              break
+            fi
+            sleep 10
+          done
+          if (( AUTO_MERGED == 0 )); then
             echo "::warning::Could not enable auto-merge on #${PR_NUMBER} (PR may already be merged or not yet mergeable). The watch job will park for human review — NOT an alarm."
           fi
 
@@ -539,33 +581,22 @@ jobs:
                 fi
                 sleep 30
               done
-              # Checks green but no merge within 10m. Observed 2026-08-13
-              # (first live bump, PR #159): after check RERUNS the
-              # mergeability evaluation can go stale — 'BLOCKED' with every
-              # required check green, while the merge rule-suite
-              # (3672279891: all 8 rule evaluations pass, bypass_actors=[])
-              # proves no requirement is actually unmet. Auto-merge never
-              # fires on the stale state. Re-enabling auto-merge does NOT
-              # force a re-evaluation (no-op when already enabled) — only a
-              # head push, close/reopen, or a direct merge attempt does.
-              echo "All checks green on #${PR} but auto-merge did not fire — re-enabling auto-merge and waiting for a fresh evaluation."
-              gh pr merge "$PR" --repo "$REPO" --auto --squash >/dev/null 2>&1 || true
-              for _ in $(seq 1 10); do
-                state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
-                if [[ "$state" == "MERGED" ]]; then
-                  echo "Bump PR #${PR} merged after auto-merge re-enable."
-                  exit 0
-                fi
-                sleep 30
-              done
-              # Last resort: attempt the merge directly. The ruleset still
-              # gates it — the app token is NOT a bypass actor
-              # (bypass_actors=[]) — so a genuinely unmet requirement fails
-              # the merge cleanly and we park; a stale evaluation passes
-              # instantly (fresh synchronous evaluation, as observed).
-              echo "Auto-merge still stuck — attempting a direct ruleset-gated merge."
+              # Checks green but no merge within 10m. Residual GitHub-side
+              # failure modes that survive the verified-commit fix: (a) a
+              # stale mergeability evaluation after check reruns (observed
+              # 2026-08-13 PR #159 — BLOCKED with every required check green
+              # while the merge rule-suite passed and bypass_actors=[] proves
+              # no requirement unmet); (b) the documented "auto-merge does
+              # not fire" bug class (github.com/orgs/community/discussions/
+              # 178345, ruleset-only repos). Re-enabling auto-merge is a
+              # no-op, and `gh pr merge` pre-checks the mergeability state
+              # (cannot rescue a stuck BLOCKED), so the last resort is a raw
+              # REST merge: it forces a fresh synchronous evaluation and is
+              # still fully ruleset-gated (the app token is not a bypass
+              # actor — a genuinely red PR fails the merge cleanly).
+              echo "All checks green on #${PR} but auto-merge did not fire — attempting a direct ruleset-gated merge."
               for _ in 1 2 3; do
-                if gh pr merge "$PR" --repo "$REPO" --squash >/dev/null 2>&1; then
+                if gh api -X PUT "repos/${REPO}/pulls/${PR}/merge" -f merge_method=squash >/dev/null 2>&1; then
                   echo "Bump PR #${PR} merged (direct ruleset-gated merge)."
                   exit 0
                 fi
