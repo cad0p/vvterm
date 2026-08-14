@@ -298,7 +298,9 @@ jobs:
 
   unit-tests:
     runs-on: xcode-27
-    timeout-minutes: 20
+    # (30m: the 20m timeout killed the job at its own limit on slow
+    # runners — same fix as #168, applied to this branch's CI)
+    timeout-minutes: 30
     needs: [build, wait-for-ota-publish]
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
