@@ -299,8 +299,17 @@ final class ServerNavigationUITests: XCTestCase {
         let back = app.buttons["vvterm.terminal.back"]
         XCTAssertTrue(back.waitForExistence(timeout: 8), diagnosticText(in: app))
         back.tap()
+        // The pop transition can take >8s under runner load (observed:
+        // #129 family, ServerNavigationUITests.swift:300). Settle-wait
+        // bounded to 15s so the precondition absorbs load without
+        // masking a genuinely stuck pop.
+        let popDeadline = Date().addingTimeInterval(15)
+        while Date() < popDeadline,
+              !app.navigationBars["Servers"].exists {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
         XCTAssertTrue(
-            app.navigationBars["Servers"].waitForExistence(timeout: 8),
+            app.navigationBars["Servers"].waitForExistence(timeout: 5),
             diagnosticText(in: app)
         )
     }
