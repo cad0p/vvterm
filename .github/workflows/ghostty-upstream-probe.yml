@@ -300,10 +300,19 @@ jobs:
           # Upload the tree+blobs server-side (POST /git/commits validates
           # the tree exists; pushing a temp commit to a scratch ref is the
           # only practical way to upload the xcframework blobs). The scratch
-          # ref triggers no CI (workflows listen on pull_request only).
+          # ref must be a TAG, not a branch: the scratch commit is unsigned
+          # (Apps have no local signing key) and gh-ruleset-all enforces
+          # required_signatures on ALL branches (2026-08-14) — branch pushes
+          # of it were rejected (alarm issue #173, run 32004444535). Tags are
+          # outside the branch rulesets' scope, and the only push-triggered
+          # workflows (ios-testflight, sep-webauthn-fixtures) filter to
+          # branches: [main], so the tag triggers nothing. The `+` force
+          # refspec makes a re-run of the same workflow run id (re-runs reuse
+          # GITHUB_RUN_ID) replace any leftover tag instead of erroring;
+          # non_fast_forward does not apply to tags.
           SCRATCH="ci/ghostty-bump-upload-${GITHUB_RUN_ID}"
           TMP_COMMIT="$(git commit-tree "$TREE" -p "$PARENT" -m "scratch upload ${GITHUB_RUN_ID}")"
-          git push -q origin "${TMP_COMMIT}:refs/heads/${SCRATCH}"
+          git push -q origin "+${TMP_COMMIT}:refs/tags/${SCRATCH}"
           NEW_COMMIT="$(gh api -X POST "repos/${REPO}/git/commits" --input - <<JSON | jq -r .sha
           {"message": "chore: ghostty upstream bump to ${SHA7}", "tree": "${TREE}", "parents": ["${PARENT}"]}
           JSON
@@ -314,7 +323,7 @@ jobs:
           VERIFIED="$(gh api "repos/${REPO}/commits/${NEW_COMMIT}" --jq '.commit.verification.verified')"
           if [[ "$VERIFIED" != "true" ]]; then
             echo "::error::API-created commit ${NEW_COMMIT} is NOT verified (verification=${VERIFIED}) — required_signatures would block the PR. Aborting."
-            gh api -X DELETE "repos/${REPO}/git/refs/heads/${SCRATCH}" >/dev/null 2>&1 || true
+            gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true
             exit 1
           fi
           # A stale bump branch from a previous attempt carries UNSIGNED
@@ -331,8 +340,8 @@ jobs:
           fi
           gh api -X POST "repos/${REPO}/git/refs" \
             -f ref="refs/heads/${BRANCH}" -f sha="$NEW_COMMIT" >/dev/null
-          # Scratch ref cleanup is best-effort; a leftover ref is harmless.
-          gh api -X DELETE "repos/${REPO}/git/refs/heads/${SCRATCH}" >/dev/null 2>&1 || true
+          # Scratch tag cleanup is best-effort; a leftover tag is harmless.
+          gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true
           echo "Pushed ${BRANCH} @ ${NEW_COMMIT} (verified, signed by GitHub)"
 
           # Reuse an existing open PR on the bump branch — safety net only:
