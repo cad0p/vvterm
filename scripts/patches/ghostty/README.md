@@ -239,9 +239,15 @@ Mechanics (all in the `bump-pr` step):
 
 1. `git write-tree` after `git add` (the no-op check stays on the index).
 2. Upload tree+blobs: `git commit-tree` a temp commit and push it to a scratch
-   ref `ci/ghostty-bump-upload-<run_id>` (`POST /git/commits` validates the tree
-   exists; this is the only practical way to upload the xcframework blobs). The
-   scratch ref triggers no CI and is deleted best-effort right after.
+   **tag** `ci/ghostty-bump-upload-<run_id>` (`POST /git/commits` validates the
+   tree exists; this is the only practical way to upload the xcframework
+   blobs). The scratch ref must be a tag, not a branch: the commit is unsigned
+   and `gh-ruleset-all` enforces `required_signatures` on all branches
+   (2026-08-14) — a branch push of it is rejected (alarm issue #173). Tags are
+   outside the branch rulesets' scope and the only push-triggered workflows
+   filter to `branches: [main]`. A `+` force refspec replaces any leftover tag
+   on a workflow re-run (re-runs reuse `GITHUB_RUN_ID`; `non_fast_forward`
+   does not apply to tags). The tag is deleted best-effort right after.
 3. `POST /git/commits` → new verified commit, parented on current main tip.
 4. **Delete any existing bump branch, then `POST /git/refs` (create)** — never
    force-update. Reasons: `required_signatures` checks **ALL commits in the PR
@@ -272,7 +278,22 @@ restored 2026-08-14 (pi-napkin + vvterm):
   Verified** (dependabot mechanism), satisfying `required_signatures` — see the
   verification gate + stale-branch delete/recreate in `ghostty-upstream-probe.yml`
   (the "Verified commit via the Git API" step). So the restore is compatible with
-  the live probe; no bypass actors needed.
+  the live probe; no bypass actors needed. *(Superseded for the bump-completion
+  path — see the 2026-08-17 correction below: the scratch blob-upload push was
+  broken by the restore.)*
+
+- **2026-08-17 correction:** restoring `required_signatures` on all branches
+  broke the probe's **scratch blob-upload push** — the temp upload commit
+  (`git commit-tree`) is unsigned, and `gh-ruleset-all` (target: branch, `~ALL`)
+  rejected the `refs/heads/ci/ghostty-bump-upload-<run_id>` push (alarm issue
+  #173, run 32004444535). Fix: the scratch ref became a **tag**
+  (`refs/tags/ci/ghostty-bump-upload-<run_id>`, `+` force refspec): branch rulesets
+  do not cover tags, so the unsigned upload commit is accepted while the
+  necessarily-unsigned restriction stays intact everywhere branches are
+  concerned. The "compatible with the live probe" claim above only considered
+  the bump commit path (`POST /git/commits`); it overlooked the scratch push
+  (which cannot go through `POST /git/commits` — chicken-and-egg: the commit
+  API validates the tree exists, and the scratch push IS the blob upload).
 
 `gh-ruleset-all` currently has `non_fast_forward` + `required_signatures`;
 `gh-ruleset-main` keeps `deletion`, `non_fast_forward`, `pull_request` (squash),
