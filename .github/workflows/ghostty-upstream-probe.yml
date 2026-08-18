@@ -232,6 +232,7 @@ jobs:
         if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true' || inputs.create_bump_pr == true) }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           PR_BODY: |
             ## Ghostty upstream bump: ${SHA7}
 
