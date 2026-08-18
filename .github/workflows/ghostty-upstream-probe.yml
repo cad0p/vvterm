@@ -10,17 +10,22 @@
 #   5. pre-validates with the FULL VVTermTests unit suite (incl. the
 #      behavioral probe tests GhosttyCustomIOProbeTests +
 #      GhosttyOSCColorQueryTests) against the NEW binaries,
-#   6. commits the rebuilt artifacts + regenerated terminfo + updated
-#      scripts/patches/ghostty/BASE to chore/ghostty-upstream-bump-<sha7>
-#      and opens (or reuses) a bump PR — created with the
-#      vvterm-ghostty-bump GitHub App token, with auto-merge enabled.
+#   6. appends the rebuilt artifacts + regenerated terminfo + updated
+#      scripts/patches/ghostty/BASE to the single EVERGREEN bump branch
+#      chore/ghostty-upstream-bump (constant name, no sha suffix — renaming
+#      would break the PR link) and updates its PR — created with the
+#      vvterm-ghostty-bump GitHub App token, with auto-merge (re)enabled.
+#      Every movement appends ONE API-verified commit to the same branch
+#      (fast-forward PATCH) and edits the PR title/body to the new sha;
+#      there is NEVER a second PR and never a close.
 # Any failure before PR creation files an ALARM issue (deduped by title,
 # label `ghostty-patch`). Failures at/after PR creation are NOT probe
-# alarms — the PR stays open and the `watch` job owns the outcome.
+# alarms — the evergreen PR + the canary issue own the outcome.
 #
-# The `watch` job (ubuntu, runs only when a bump PR exists) exits 0 when
-# auto-merge merges, files an alarm issue on red CI, and parks (never
-# alarms) on stalls.
+# The canary issue is the alarm/lead: open = the bump has not landed, and
+# it auto-closes via the squash-subject closing keyword when the PR
+# auto-merges. A red bump self-heals by the next run appending a newer
+# build to the same PR.
 #
 # Why a GitHub App token for the PR (no PAT, no human, no bypass actor):
 #   - A PR created with GITHUB_TOKEN runs its pull_request CI in an
@@ -36,9 +41,9 @@
 #     scripts/patches/ghostty/README.md.
 #
 # Constraints honored:
-#   - Single macOS job (probe) + one ubuntu job (watch): fits the repo's
-#     5-concurrent-macOS-job CI cap with zero queueing. NOT wired into
-#     vvterm-pr-ci.yml; scheduled/dispatch-only.
+#   - Single macOS job (probe): fits the repo's 5-concurrent-macOS-job CI
+#     cap with zero queueing. NOT wired into vvterm-pr-ci.yml;
+#     scheduled/dispatch-only.
 #   - See scripts/patches/ghostty/README.md for the rebase runbook.
 
 name: Ghostty Upstream Probe
@@ -60,16 +65,16 @@ on:
 permissions:
   contents: read
   actions: write   # DerivedData/SPM cache save + failure artifact upload
-  issues: write    # alarm issues
-  pull-requests: write  # park comments + the watch's REST-PUT merge fallback on the bump PR (was read — both failed silently with 403, observed 2026-08-14: no park comment on #162)
+  issues: write    # alarm issues + the canary issue
+  pull-requests: read  # PR reads via the default token; probe PR/ref operations use the app token (the job that needed PR write is gone)
 
 concurrency:
   group: ghostty-upstream-probe
   cancel-in-progress: false
   # A second run (manual dispatch during a Monday run, or a Monday run
-  # during a manual dispatch) queues instead of killing a mid-watch run.
-  # When it eventually runs, the probe finds the bump branch already pushed
-  # and reuses the existing PR (no duplicates, no false alarms).
+  # during a manual dispatch) queues instead of killing a mid-probe run.
+  # When it eventually runs, the probe finds the evergreen bump branch
+  # already pushed and fast-forwards it (no duplicates, no false alarms).
 
 jobs:
   probe:
@@ -261,10 +266,11 @@ jobs:
             auto-merge.
 
             **If this issue stays open, the bump has NOT landed — investigate:**
-            - Bump PR: look for `chore/ghostty-upstream-bump-${SHA7}` under Pull requests.
+            - Bump PR: look for `chore/ghostty-upstream-bump` (evergreen branch) under Pull requests — its title shows the current sha.
             - Probe run: ${RUN_URL}
-            - Alarm issues (label `ghostty-patch`) may explain a pre-PR failure; a
-              parked watch means CI green but merge stalled — merge it manually.
+            - Alarm issues (label `ghostty-patch`) may explain a pre-PR failure; if
+              CI is green but the PR has not merged: merge it manually (auto-merge
+              re-enables each run).
             - The shipped app is untouched either way: it runs the last good core
               until a bump merges.
         run: |
@@ -274,7 +280,7 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'"
           SHA7="${RESOLVED_SHA:0:7}"
-          BRANCH="chore/ghostty-upstream-bump-${SHA7}"
+          BRANCH="chore/ghostty-upstream-bump"
 
           if [[ -z "$GH_TOKEN" ]]; then
             echo "::error::App token is empty — check the GHOSTTY_BUMP_CLIENT_ID variable and GHOSTTY_BUMP_PRIVATE_KEY secret (see scripts/patches/ghostty/README.md)."
@@ -294,7 +300,18 @@ jobs:
           git config user.name "vvterm-ghostty-bump[bot]"
           git config user.email "vvterm-ghostty-bump[bot]@users.noreply.github.com"
 
-          git checkout -b "$BRANCH"
+          # Fresh parent for the create path (design NIT 5): the checkout
+          # step fetched main hours ago and a long probe run can take 1-2h —
+          # re-fetch keeps the create-path parent fresh.
+          git fetch -q origin main
+          MAIN_TIP="$(git rev-parse origin/main)"
+
+          # Works whether a local branch of this name exists or not (fresh
+          # runner per run — none does); the local branch is only a worktree
+          # for the artifact commit, the server-side ref is the source of
+          # truth. No local branch is created at all — the worktree stays on
+          # the checkout's main tip; index-only ops (add/write-tree) below
+          # don't care, and the ref write happens via the Git API.
           # BASE (patch base, read by scripts/build.sh by default) tracks
           # the resolved upstream SHA; VERSION was written by build.sh from
           # the same SHA. BSD sed on macOS: -i requires the '' extension arg.
@@ -304,6 +321,27 @@ jobs:
           if git diff --cached --quiet; then
             echo "::notice::No changes to commit (forced rebuild produced identical artifacts) — skipping bump PR."
             exit 0
+          fi
+
+          # --- Discover the evergreen bump state (alarm-invariant ordering) ---
+          BRANCH_SHA="$(gh api "repos/${REPO}/git/refs/heads/${BRANCH}" --jq '.object.sha' 2>/dev/null || true)"
+          # Create path: the ref does not exist and gh api 404s — on a
+          # non-TTY runner the raw error body lands on stdout, so validate
+          # the shape before trusting it as a parent sha.
+          [[ "$BRANCH_SHA" =~ ^[0-9a-f]{40}$ ]] || BRANCH_SHA=""
+          PR_NUMBER=""
+          for _ in 1 2; do
+            PR_JSON="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,state --jq '.[0] // empty' 2>/dev/null || true)"
+            PR_NUMBER="$(jq -r '.number // empty' <<<"$PR_JSON")"
+            [[ -n "$PR_NUMBER" ]] && break
+            sleep 5
+          done
+          if [[ -n "$PR_NUMBER" ]]; then
+            # Post-PR ownership: with an evergreen PR, any later failure in
+            # this step warns/reds the run but must NEVER file a pre-PR alarm
+            # (the open PR + canary issue are the signal).
+            echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
+            echo "Evergreen bump PR #${PR_NUMBER} exists — updating in place."
           fi
 
           # --- Verified commit via the Git API ---
@@ -317,55 +355,50 @@ jobs:
           # dependabot mechanism — docs.github.com "Signature verification
           # for bots"), satisfying required_signatures.
           TREE="$(git write-tree)"
-          PARENT="$(git rev-parse HEAD)"   # current main tip
+          # Update path: parent on the existing evergreen branch head (so the
+          # new commit fast-forwards it); create path: fresh main tip.
+          PARENT="${BRANCH_SHA:-$MAIN_TIP}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           # Upload the tree+blobs server-side (POST /git/commits validates
           # the tree exists; pushing a temp commit to a scratch ref is the
           # only practical way to upload the xcframework blobs). The scratch
-          # ref must be a TAG, not a branch: the scratch commit is unsigned
-          # (Apps have no local signing key) and gh-ruleset-all enforces
-          # required_signatures on ALL branches (2026-08-14) — branch pushes
-          # of it were rejected (alarm issue #173, run 32004444535). Tags are
-          # outside the branch rulesets' scope, and the only push-triggered
-          # workflows (ios-testflight, sep-webauthn-fixtures) filter to
-          # branches: [main], so the tag triggers nothing. The `+` force
-          # refspec makes a re-run of the same workflow run id (re-runs reuse
-          # GITHUB_RUN_ID) replace any leftover tag instead of erroring;
-          # non_fast_forward does not apply to tags.
+          # commit is ALWAYS parented on local HEAD (main tip) — never on
+          # the evergreen branch head (design FIX-NOW 1): the branch head
+          # exists only server-side and is NOT a local object on the fresh
+          # runner checkout, so `git commit-tree -p <branch-head>` dies
+          # `fatal: <sha> is not a valid object`. The scratch commit is
+          # only a blob-upload vehicle; its parents are irrelevant — the
+          # server-side API commit below carries the real parents. The
+          # scratch ref must be a TAG, not a branch: the scratch commit is
+          # unsigned (Apps have no local signing key) and gh-ruleset-all
+          # enforces required_signatures on ALL branches (2026-08-14) —
+          # branch pushes of it were rejected (alarm issue #173, run
+          # 32004444535). Tags are outside the branch rulesets' scope, and
+          # the only push-triggered workflows (ios-testflight,
+          # sep-webauthn-fixtures) filter to branches: [main], so the tag
+          # triggers nothing. The `+` force refspec makes a re-run of the
+          # same workflow run id (re-runs reuse GITHUB_RUN_ID) replace any
+          # leftover tag instead of erroring; non_fast_forward does not
+          # apply to tags.
           SCRATCH="ci/ghostty-bump-upload-${GITHUB_RUN_ID}"
-          TMP_COMMIT="$(git commit-tree "$TREE" -p "$PARENT" -m "scratch upload ${GITHUB_RUN_ID}")"
+          TMP_COMMIT="$(git commit-tree "$TREE" -p "$MAIN_TIP" -m "scratch upload ${GITHUB_RUN_ID}")"
           git push -q origin "+${TMP_COMMIT}:refs/tags/${SCRATCH}"
           NEW_COMMIT="$(gh api -X POST "repos/${REPO}/git/commits" --input - <<JSON | jq -r .sha
           {"message": "chore: ghostty upstream bump to ${SHA7}", "tree": "${TREE}", "parents": ["${PARENT}"]}
           JSON
           )"
           # Sanity: the API-created commit MUST be verified, else the PR
-          # would be mergeability-BLOCKED again. Failure here happens
-          # before the probe-passed marker → the alarm path still fires.
+          # would be mergeability-BLOCKED again. Abort on failure (exit 1):
+          # on the create path no marker exists yet, so the pre-PR alarm
+          # still fires; on the update path the marker was already written
+          # at discovery, so the run just reds with no alarm — correct (the
+          # evergreen PR + canary issue own the outcome).
           VERIFIED="$(gh api "repos/${REPO}/commits/${NEW_COMMIT}" --jq '.commit.verification.verified')"
           if [[ "$VERIFIED" != "true" ]]; then
             echo "::error::API-created commit ${NEW_COMMIT} is NOT verified (verification=${VERIFIED}) — required_signatures would block the PR. Aborting."
             gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true
             exit 1
           fi
-          # A stale bump branch from a previous attempt carries UNSIGNED
-          # commits; required_signatures checks ALL commits in the PR range,
-          # so the branch must be recreated with exactly one verified
-          # commit. Deleting the ref also closes any open PR on it (GitHub
-          # does NOT re-link deleted branches) — the new PR replaces it.
-          # non_fast_forward (gh-ruleset-all) blocks force-updates, so
-          # delete + create is the only clean path.
-          if gh api "repos/${REPO}/git/refs/heads/${BRANCH}" >/dev/null 2>&1; then
-            gh api -X DELETE "repos/${REPO}/git/refs/heads/${BRANCH}" >/dev/null \
-              || { echo "::error::Could not delete stale bump branch ${BRANCH} (unsigned commits must be replaced)."; exit 1; }
-            echo "Deleted stale bump branch ${BRANCH} (previous attempt's commits were unsigned)."
-          fi
-          gh api -X POST "repos/${REPO}/git/refs" \
-            -f ref="refs/heads/${BRANCH}" -f sha="$NEW_COMMIT" >/dev/null
-          # Scratch tag cleanup is best-effort; a leftover tag is harmless.
-          gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true
-          echo "Pushed ${BRANCH} @ ${NEW_COMMIT} (verified, signed by GitHub)"
-
           # Canary issue: a single visible "bump hasn't landed" lead that
           # tracks the LATEST in-flight sha and auto-closes when the bump PR
           # merges. Closing channel: the PR title carries "(closes #N)" →
@@ -377,94 +410,130 @@ jobs:
           # a weekly "now tracking" comment keeps the trail. Non-fatal: on
           # any failure we warn and continue WITHOUT the canary. Issue calls
           # must use GITHUB_TOKEN (the app token has Contents+Pull-requests
-          # only, no Issues permission).
+          # only, no Issues permission). The NUMBER is RESOLVED here (needed
+          # for the PR title) but CREATION + title edit + comments are
+          # deferred until AFTER the ref write succeeds (design FIX-NOW 3) —
+          # a pre-ref failure can never leave a canary claiming to track a
+          # sha that has no bump.
           CANARY_TITLE="ghostty bump in-flight: ${SHA7}"
           CANARY_ISSUE="$(GH_TOKEN="$GITHUB_TOKEN" gh issue list --repo "$REPO" --state open --search 'in:title "ghostty bump in-flight:"' --json number --jq '.[0].number // empty' 2>/dev/null || true)"
           if [[ -n "$CANARY_ISSUE" ]]; then
-            GH_TOKEN="$GITHUB_TOKEN" gh issue edit "$CANARY_ISSUE" --repo "$REPO" --title "$CANARY_TITLE" >/dev/null 2>&1 || true
-            GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Now tracking ${SHA7} — probe run: ${RUN_URL}" >/dev/null 2>&1 || true
-            echo "Reusing canary issue #${CANARY_ISSUE} (now tracking ${SHA7})"
+            echo "Reusing canary issue #${CANARY_ISSUE}"
+          fi
+          if [[ -z "$CANARY_ISSUE" ]]; then
+            echo "No open canary issue yet — creation deferred to after the ref write."
+          fi
+
+          # Ref write: fast-forward the evergreen branch (non_fast_forward
+          # permits FF updates under gh-ruleset-all; required_signatures is
+          # satisfied because the new commit is API-verified and the whole
+          # range stays verified — no unsigned commits ever exist, so the old
+          # delete+recreate dance is obsolete). The PR title is only edited
+          # AFTER this succeeds so a title never claims a sha the branch
+          # doesn't point at.
+          if [[ -n "$BRANCH_SHA" ]]; then
+            gh api -X PATCH "repos/${REPO}/git/refs/heads/${BRANCH}" -f sha="$NEW_COMMIT" >/dev/null \
+              || { echo "::error::Could not fast-forward bump branch ${BRANCH} to ${NEW_COMMIT}."; gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true; exit 1; }
           else
+            gh api -X POST "repos/${REPO}/git/refs" \
+              -f ref="refs/heads/${BRANCH}" -f sha="$NEW_COMMIT" >/dev/null
+          fi
+          # Scratch tag cleanup is best-effort; a leftover tag is harmless.
+          gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true
+          echo "Bump branch ${BRANCH} @ ${NEW_COMMIT} (verified, signed by GitHub)"
+
+          # Canary mutations, gated on ref success (FIX-NOW 3): CREATION
+          # (first bump) also happens here — only once the branch actually
+          # points at the new sha — then the "now tracking" title edit +
+          # trail comment. Pre-ref failures therefore never leave canary
+          # state behind. Non-fatal throughout.
+          if [[ -z "$CANARY_ISSUE" ]]; then
             CANARY_URL="$(GH_TOKEN="$GITHUB_TOKEN" gh issue create --repo "$REPO" --title "$CANARY_TITLE" --body "$CANARY_BODY" 2>/dev/null || true)"
             CANARY_ISSUE="$(sed -E 's#.*/issues/([0-9]+).*#\1#' <<<"$CANARY_URL")"
             [[ -n "$CANARY_ISSUE" ]] && echo "Created canary issue #${CANARY_ISSUE} (${CANARY_TITLE})"
           fi
-          if [[ -z "$CANARY_ISSUE" ]]; then
-            echo "::warning::Could not create canary issue (${CANARY_TITLE}) — continuing without it."
+          if [[ -n "$CANARY_ISSUE" ]]; then
+            GH_TOKEN="$GITHUB_TOKEN" gh issue edit "$CANARY_ISSUE" --repo "$REPO" --title "$CANARY_TITLE" >/dev/null 2>&1 || true
+            GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Now tracking ${SHA7} — probe run: ${RUN_URL}" >/dev/null 2>&1 || true
+            echo "Canary issue #${CANARY_ISSUE} now tracking ${SHA7}"
           else
-            # Invariant: at most ONE open canary. Close any other open canary
-            # (legacy duplicates or a race) — the one resolved above supersedes
-            # them. Non-fatal.
-            for OTHER in $(GH_TOKEN="$GITHUB_TOKEN" gh issue list --repo "$REPO" --state open --search 'in:title "ghostty bump in-flight:"' --json number --jq '.[].number' 2>/dev/null || true); do
-              if [[ "$OTHER" != "$CANARY_ISSUE" ]]; then
-                GH_TOKEN="$GITHUB_TOKEN" gh issue close "$OTHER" --repo "$REPO" --comment "Superseded by canary #${CANARY_ISSUE} (${SHA7}) — this issue tracks only the latest in-flight bump." >/dev/null 2>&1 || true
-                echo "Closed superseded canary #${OTHER}"
-              fi
-            done
+            echo "::warning::Could not create canary issue (${CANARY_TITLE}) — continuing without it."
           fi
 
-          # Never merge an older ghostty core: when a bump PR for the latest
-          # sha exists, close any OTHER open bump PR (different sha). Old PRs
-          # could otherwise auto-merge later and roll main backwards to an
-          # older upstream version. DRY helper, called from both PR paths.
-          supersede_stale_bump_prs() {
-            local current="$1"
-            local all
-            all="$(gh pr list --repo "$REPO" --state open --json number,headRefName 2>/dev/null || echo '[]')"
-            for N in $(jq -r '.[] | select(.headRefName | startswith("chore/ghostty-upstream-bump-")) | .number' <<<"$all"); do
-              if [[ "$N" != "$current" ]]; then
-                gh pr close "$N" --repo "$REPO" --reason not_planned --comment "Superseded by bump PR #${current} — tracking the latest upstream SHA (${SHA7}); the app never merges an older ghostty core." >/dev/null 2>&1 || true
-                echo "Closed superseded bump PR #${N}"
-              fi
-            done
-          }
+          # "Never merge an older ghostty core" holds by construction: there
+          # is exactly ONE evergreen bump branch+PR, always tracking the
+          # latest build — no other PR can exist to close.
 
-          # Reuse an existing open PR on the bump branch — safety net only:
-          # the stale-branch delete above closes any prior open PR on this
-          # branch (GitHub does not re-link deleted branches), so a fresh PR
-          # is created below on every run.
-          EXISTING="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,state --jq '.[0] // empty' 2>/dev/null || true)"
-          if [[ -n "$EXISTING" ]]; then
-            PR_NUMBER="$(jq -r .number <<<"$EXISTING")"
-            echo "Reusing existing bump PR #${PR_NUMBER} on ${BRANCH}"
-            # Canary feature guard: never rewrite the title when there is no
-            # canary (creation is non-fatal). Title may predate the canary
-            # feature — ensure the closing keyword is present so auto-close
-            # still fires on merge.
-            if [[ -n "$CANARY_ISSUE" ]]; then
-              if ! gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq .title | grep -q "closes #${CANARY_ISSUE}"; then
-                gh pr edit "$PR_NUMBER" --repo "$REPO" --title "chore: ghostty upstream bump to ${SHA7} (closes #${CANARY_ISSUE})" >/dev/null 2>&1 || true
-                echo "Updated bump PR #${PR_NUMBER} title with closing keyword"
+          PR_TITLE="chore: ghostty upstream bump to ${SHA7}"
+          [[ -n "$CANARY_ISSUE" ]] && PR_TITLE="${PR_TITLE} (closes #${CANARY_ISSUE})"
+
+          # Update path: the evergreen PR already exists (discovered above).
+          # The PR discovery + probe-passed marker happened BEFORE the ref
+          # write, so any failure in this branch warns/reds the run but is
+          # NOT a pre-PR alarm — the open PR + canary issue own the outcome.
+          # Shared with the create-fallback below (a transient discovery miss
+          # must never fall through to a failed create that would file a
+          # false pre-PR alarm).
+          update_existing_pr() {
+            local n="$1"
+            echo "Updating evergreen bump PR #${n} to ${SHA7}"
+            # Title keyword is the ONLY canary-close channel — failures here
+            # must be LOUD, not swallowed (retry once for transient blips).
+            local edited=0
+            for _ in 1 2; do
+              if gh pr edit "$n" --repo "$REPO" --title "$PR_TITLE" --body "$PR_BODY"; then
+                edited=1
+                break
               fi
-              # Issue comments need Issues write → GITHUB_TOKEN override (the
-              # step's app token has Contents+Pull-requests only).
-              GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Bump PR: https://github.com/${REPO}/pull/${PR_NUMBER}" >/dev/null 2>&1 || true
+              sleep 5
+            done
+            if (( edited == 0 )); then
+              echo "::warning::Could not edit bump PR #${n} title/body — the closing keyword may be missing on merge; investigate."
             fi
-            supersede_stale_bump_prs "$PR_NUMBER"
-            echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-            # (Re-)enable auto-merge with retries: after a branch
-            # recreation GitHub can take a moment to re-evaluate
-            # mergeability. Failures are never a probe alarm.
+            # Issue comments need Issues write → GITHUB_TOKEN override (the
+            # step's app token has Contents+Pull-requests only).
+            if [[ -n "$CANARY_ISSUE" ]]; then
+              GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Bump PR: https://github.com/${REPO}/pull/${n} (updated to ${SHA7})" >/dev/null 2>&1 || true
+            fi
+            echo "bump_pr_number=${n}" >> "$GITHUB_OUTPUT"
+            # (Re-)enable auto-merge with retries: after the fast-forward
+            # GitHub can take a moment to re-evaluate mergeability. Failures
+            # are never a probe alarm.
             for _ in 1 2 3; do
-              if gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null; then
-                echo "Auto-merge (re)enabled on #${PR_NUMBER}"
+              if gh pr merge "$n" --repo "$REPO" --auto --squash 2>/dev/null; then
+                echo "Auto-merge (re)enabled on #${n}"
                 break
               fi
               sleep 10
             done
-            # Marker for the alarm step: written ONLY after the bump PR
-            # exists (created or reused). A failure before this point
-            # (incl. PR creation itself) still alarms; after this point
-            # the PR stays open and the watch job owns the outcome.
+            # Marker: the evergreen PR owns the outcome from here on (a no-op
+            # on the discovery path where it was already written).
             echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
+          }
+
+          if [[ -n "$PR_NUMBER" ]]; then
+            update_existing_pr "$PR_NUMBER"
             exit 0
           fi
 
-          PR_TITLE="chore: ghostty upstream bump to ${SHA7}"
-          [[ -n "$CANARY_ISSUE" ]] && PR_TITLE="${PR_TITLE} (closes #${CANARY_ISSUE})"
+          # Create path: first-ever bump — the evergreen branch + PR are born
+          # here (no PR existed at discovery time).
           PR_URL="$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
             --title "$PR_TITLE" \
-            --body "$PR_BODY")"
+            --body "$PR_BODY" 2>/dev/null || true)"
+          if [[ -z "$PR_URL" ]]; then
+            # Transient discovery miss? Re-discover before alerting — a live
+            # evergreen PR plus a failed create must never file a pre-PR
+            # alarm.
+            RECOVERED="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+            if [[ -n "$RECOVERED" ]]; then
+              echo "PR #${RECOVERED} existed after all — switching to update path."
+              update_existing_pr "$RECOVERED"
+              exit 0
+            fi
+            echo "::error::gh pr create failed and no evergreen PR was found — pre-PR alarm will fire."
+            exit 1
+          fi
           echo "Created bump PR: $PR_URL"
           PR_NUMBER="$(sed -E 's#.*/pull/([0-9]+).*#\1#' <<<"$PR_URL")"
           # Link the canary to the PR so it is traceable before auto-close.
@@ -472,20 +541,19 @@ jobs:
           if [[ -n "$CANARY_ISSUE" ]]; then
             GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Bump PR: $PR_URL" >/dev/null 2>&1 || true
           fi
-          [[ -n "$PR_NUMBER" ]] && supersede_stale_bump_prs "$PR_NUMBER"
           echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-          # Marker for the alarm step: the bump PR now exists. Any failure
-          # after this point is NOT a probe alarm — the PR stays open and
-          # the watch job owns the outcome (auto-merge enable failure is
-          # already non-fatal below). A failure BEFORE this point — e.g.
-          # gh pr create itself — still files the alarm.
+          # Marker for the alarm step: ONLY now that the bump PR exists
+          # (create path). Any failure after this point is NOT a probe alarm
+          # — the open PR + canary issue own the outcome. A failure BEFORE
+          # this point — e.g. gh pr create itself — still files the alarm.
           echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
           # Enable auto-merge (squash) with retries. gh-ruleset-main
           # requires the PR CI checks (build/unit-tests/ui-tests-shard-0..3),
           # so auto-merge only fires when the full PR CI passes on the new
           # binaries. If auto-merge cannot be enabled (PR not mergeable
-          # yet), the watch job's park path covers it — never a probe alarm.
+          # yet), the evergreen PR stays open; the open canary is the signal
+          # — never a probe alarm.
           AUTO_MERGED=0
           for _ in 1 2 3; do
             if gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash 2>/dev/null; then
@@ -496,7 +564,7 @@ jobs:
             sleep 10
           done
           if (( AUTO_MERGED == 0 )); then
-            echo "::warning::Could not enable auto-merge on #${PR_NUMBER} (PR may already be merged or not yet mergeable). The watch job will park for human review — NOT an alarm."
+            echo "::warning::Could not enable auto-merge on #${PR_NUMBER} (PR may already be merged or not yet mergeable). The evergreen PR stays open; the open canary is the signal — never a probe alarm."
           fi
 
       - name: Upload probe test results on failure
@@ -557,7 +625,7 @@ jobs:
             exit 0
           fi
           if [[ -f "$RUNNER_TEMP/ghostty-probe-ok" ]]; then
-            echo "::error::Failure happened at/after bump-PR creation (step: ${STEP}) — NOT a probe alarm by design (the PR stays open; the watch job owns the outcome). Run: ${RUN_URL}"
+            echo "::error::Failure happened at/after bump-PR creation (step: ${STEP}) — NOT a probe alarm by design (the evergreen PR + canary issue own the outcome). Run: ${RUN_URL}"
             exit 1
           fi
 
@@ -578,174 +646,3 @@ jobs:
             fi
           fi
 
-  watch:
-    runs-on: ubuntu-latest
-    needs: probe
-    if: ${{ needs.probe.outputs.bump_pr_number != '' && needs.probe.outputs.bump_pr_number != '0' }}
-    # CI starts automatically on the app-created PR (no approval wait);
-    # 15m grace for checks to appear + 45m watch + 10m auto-merge wait.
-    timeout-minutes: 80
-    env:
-      GH_TOKEN: ${{ github.token }}
-
-    steps:
-      - name: Watch bump PR CI → done on merge / alarm on red / park on stall
-        env:
-          BUMP_PR: ${{ needs.probe.outputs.bump_pr_number }}
-          SHA_FULL: ${{ needs.probe.outputs.resolved_sha }}
-          ALARM_CI_RED: |
-            ## Ghostty upstream probe alarm: bump PR CI red
-
-            - **Bump PR**: #${PR}
-            - **Resolved upstream SHA**: ${SHA_FULL} (${SHA7})
-            - **Workflow run**: ${RUN_URL}
-
-            CI checks on the bump PR failed (or were cancelled) — the rebuilt core did not pass the full PR test suite. The PR was **left open, not merged**. Investigate the failing checks on the PR, fix, and re-dispatch the probe (force_rebuild=true) or push to the bump branch to re-trigger CI.
-          PARK_MSG: |
-            **Probe watch — parked, not broken.**
-            This bump PR is waiting on something outside the probe's control (checks never appeared, or CI green but auto-merge did not fire — e.g. a required check that is not on the PR, or a merge rule conflict). Auto-merge is enabled on the PR. Please check the merge box; a human may merge at any time. The shipped app is untouched either way.
-        run: |
-          set -euo pipefail
-          REPO="${{ github.repository }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          PR="$BUMP_PR"
-          SHA7="${SHA_FULL:0:7}"
-          echo "Watching bump PR #${PR} (sha=${SHA7}); auto-merge enabled — the watch job only alarms on red and parks on stalls."
-
-          # Verify-after-merge safety net: close the canary issue (if still
-          # open) once the bump lands — belt-and-suspenders on top of the
-          # title-keyword auto-close. Uses github.token (issues: write).
-          close_canary_if_open() {
-            local n
-            n="$(gh issue list --repo "$REPO" --state open --search 'in:title "ghostty bump in-flight:"' --json number --jq '.[0].number // empty' 2>/dev/null || true)"
-            if [[ -n "$n" ]]; then
-              gh issue close "$n" --repo "$REPO" --comment "Bump PR #${PR} merged — closing canary (verify-after-merge)." >/dev/null 2>&1 || true
-              echo "Closed canary issue #${n}"
-            fi
-          }
-
-          # The alarm/comment body env scalars carry ${...} placeholders;
-          # bash never re-expands them, so substitute explicitly.
-          ALARM_CI_RED="${ALARM_CI_RED//\$\{PR\}/$PR}"
-          ALARM_CI_RED="${ALARM_CI_RED//\$\{SHA_FULL\}/$SHA_FULL}"
-          ALARM_CI_RED="${ALARM_CI_RED//\$\{SHA7\}/$SHA7}"
-          ALARM_CI_RED="${ALARM_CI_RED//\$\{RUN_URL\}/$RUN_URL}"
-          PARK_MSG="${PARK_MSG//\$\{PR\}/$PR}"
-          PARK_MSG="${PARK_MSG//\$\{SHA_FULL\}/$SHA_FULL}"
-          PARK_MSG="${PARK_MSG//\$\{SHA7\}/$SHA7}"
-          PARK_MSG="${PARK_MSG//\$\{RUN_URL\}/$RUN_URL}"
-
-          park() {
-            echo "::warning::$1"
-            gh pr comment "$PR" --repo "$REPO" --body "$PARK_MSG" >/dev/null 2>&1 || true
-          }
-
-          alarm() {
-            local title="$1" body="$2"
-            local existing
-            existing="$(gh issue list --repo "$REPO" --state open --search "in:title \"${title}\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
-            if [[ -n "$existing" ]]; then
-              gh issue comment "$existing" --repo "$REPO" --body "Repeat occurrence — probe run: ${RUN_URL}" >/dev/null
-              echo "Updated existing alarm issue #${existing} (${title})"
-            else
-              gh label create ghostty-patch --repo "$REPO" --description "Ghostty upstream probe alarm" --color b60205 >/dev/null 2>&1 || true
-              if gh label view ghostty-patch --repo "$REPO" >/dev/null 2>&1; then
-                gh issue create --repo "$REPO" --title "$title" --label ghostty-patch --body "$body"
-              else
-                echo "::warning::ghostty-patch label unavailable — creating issue without label."
-                gh issue create --repo "$REPO" --title "$title" --body "$body"
-              fi
-            fi
-          }
-
-          # Phase 1 — wait for CI checks to appear (they start automatically
-          # on the app-created PR; allow shared-runner queueing slack).
-          checks_seen=0
-          for _ in $(seq 1 30); do
-            state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
-            if [[ "$state" == "MERGED" ]]; then
-              echo "Bump PR #${PR} already merged — done."
-              close_canary_if_open
-              exit 0
-            fi
-            n="$(gh pr checks "$PR" --repo "$REPO" --json state --jq 'length' 2>/dev/null || true)"
-            if [[ -n "$n" ]] && (( n > 0 )); then
-              checks_seen=1
-              break
-            fi
-            sleep 30
-          done
-          if (( checks_seen == 0 )); then
-            park "No CI checks on #${PR} after ~15m — parking (never alarm on a stall)."
-            exit 0
-          fi
-
-          # Phase 2 — watch to a terminal state.
-          # gh pr checks --watch exit codes:
-          #   0   all checks green → auto-merge should fire; wait for MERGED
-          #   1   a check failed/cancelled → alarm, leave PR open
-          #   8   zero checks reported in watch mode → park (never alarm)
-          #   124 watch timed out (45m) → stalled → park (never alarm)
-          set +e
-          timeout 45m gh pr checks "$PR" --repo "$REPO" --watch --interval 60
-          RC=$?
-          set -e
-          case "$RC" in
-            0)
-              for _ in $(seq 1 20); do
-                state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
-                if [[ "$state" == "MERGED" ]]; then
-                  echo "Bump PR #${PR} merged by auto-merge."
-                  close_canary_if_open
-                  exit 0
-                fi
-                sleep 30
-              done
-              # Checks green but no merge within 10m. Residual GitHub-side
-              # failure modes that survive the verified-commit fix: (a) a
-              # stale mergeability evaluation after check reruns (observed
-              # 2026-08-13 PR #159 — BLOCKED with every required check green
-              # while the merge rule-suite passed and bypass_actors=[] proves
-              # no requirement unmet); (b) the documented "auto-merge does
-              # not fire" bug class (github.com/orgs/community/discussions/
-              # 178345, ruleset-only repos). Re-enabling auto-merge is a
-              # no-op, and `gh pr merge` pre-checks the mergeability state
-              # (cannot rescue a stuck BLOCKED), so the last resort is a raw
-              # REST merge: it forces a fresh synchronous evaluation and is
-              # still fully ruleset-gated (the app token is not a bypass
-              # actor — a genuinely red PR fails the merge cleanly).
-              echo "All checks green on #${PR} but auto-merge did not fire — attempting a direct ruleset-gated merge."
-              for _ in 1 2 3; do
-                if gh api -X PUT "repos/${REPO}/pulls/${PR}/merge" -f merge_method=squash >/dev/null 2>&1; then
-                  echo "Bump PR #${PR} merged (direct ruleset-gated merge)."
-                  close_canary_if_open
-                  exit 0
-                fi
-                sleep 15
-              done
-              park "All checks green on #${PR} but the merge did not land (auto-merge stuck AND the direct ruleset-gated merge failed) — parking for human review — NOT an alarm."
-              ;;
-            1)
-              # gh pr checks exits 1 for a failed check AND for gh CLI
-              # errors (rate limit, transient network blip) — double-check
-              # before alarming so a transient error never fakes a red week.
-              FAILED="$(gh pr checks "$PR" --repo "$REPO" --json conclusion --jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED")] | length' 2>/dev/null || echo 0)"
-              if (( FAILED > 0 )); then
-                TITLE="ghostty probe ALARM: bump PR CI red at ${SHA7}"
-                echo "::error::CI red on bump PR #${PR} (${FAILED} failed/cancelled checks) — filing alarm."
-                alarm "$TITLE" "$ALARM_CI_RED"
-                exit 1
-              fi
-              park "gh pr checks exited 1 but no check is failed/cancelled (transient gh error?) — parking, never alarm on a blip."
-              ;;
-            8)
-              park "gh pr checks exited 8 (no checks) — parking, never alarm on a stall."
-              ;;
-            124)
-              park "45m watch timed out with no terminal check state — parking for human review, never alarm on a stall."
-              ;;
-            *)
-              park "Unexpected gh pr checks exit code ${RC} — parking."
-              ;;
-          esac
-          exit 0

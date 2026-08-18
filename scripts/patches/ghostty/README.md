@@ -171,8 +171,12 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
 - Resolves latest upstream `main` → no-op week if it equals `Vendor/libghostty/VERSION`
 - Rebuilds (upstream + patch), pre-validates with the **full VVTermTests unit suite**
   (incl. the behavioral probe tests) against the NEW binaries
-- Pass → bump PR (`chore/ghostty-upstream-bump-<sha7>`, artifacts + VERSION + BASE)
-  created with the **vvterm-ghostty-bump GitHub App token**, auto-merge enabled
+- Pass → the single EVERGREEN bump branch `chore/ghostty-upstream-bump`
+  (constant, sha-less — renaming would break the PR link, community #4453)
+  gets a new API-verified commit appended (fast-forward) and its PR is
+  updated in place — artifacts + VERSION + BASE — using the **vvterm-ghostty-bump
+  GitHub App token**, with auto-merge (re)enabled. The FIRST pass creates the
+  branch + PR; every later pass updates them. There is never a second PR.
 - The bump commit is created via the **REST Git Commits API** (not `git commit`)
   so it is **web-flow signed and marked Verified** — see "Why the bump commit is
   created via the Git API" below. This is what makes auto-merge able to fire at
@@ -182,21 +186,11 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   first-class actors — no approval, no click) and is the **merge gate**: the
   `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests-shard-0..3`,
   stable job names — no wildcards; rulesets don't support them) must pass;
-  auto-merge then merges. The `watch` job exits 0 on merge, files an alarm issue on
-  red CI, and parks (never alarms) on stalls — with one last-resort self-heal
-  before parking: if every check is green but auto-merge hasn't fired within
-  10m, the watch attempts a **raw REST merge**
-  (`PUT /repos/{owner}/{repo}/pulls/{n}/merge` — NOT `gh pr merge`, whose CLI
-  pre-checks the mergeability state and cannot rescue a stuck `BLOCKED`).
-
-  Why the raw-REST fallback is safe and needed (observed 2026-08-13, live
-  bumps #159/#162): the mergeability evaluation can go stale — `BLOCKED` with
-  every required check green, for 30+ minutes — while the merge rule-suite
-  (`3672279891`, refs/heads/main) shows **all 8 rule evaluations pass** at
-  merge time and `bypass_actors` is empty, so no requirement is actually unmet
-  and no one can bypass. The raw PUT forces a fresh synchronous evaluation and
-  is still fully ruleset-gated (the app token is not a bypass actor), so a
-  genuinely red PR fails the merge cleanly and the watch parks.
+  auto-merge then merges. The open canary issue is the signal that the bump
+  has not landed, and it auto-closes on the squash auto-merge via the title's
+  `(closes #N)` subject. A red bump is not abandoned —
+  the next weekly run appends the newest build to the SAME PR and re-runs CI;
+  if green, the auto-merge lands it.
 - Fail before PR creation → alarm issue (label `ghostty-patch`) with this runbook; the
   shipped app is untouched
 
@@ -225,9 +219,9 @@ evaluation flags PRs with unsigned head commits against that rule:
 
 | PR | Author | Head commit signature | Mergeability | Outcome |
 |---|---|---|---|---|
-| #159 | app | unsigned | BLOCKED 30+ min | merged only via raw REST PUT (merge-time eval checks only the GitHub-signed squash commit) |
+| #159 | app | unsigned | BLOCKED 30+ min | merged eventually (merge-time eval checks only the GitHub-signed squash commit) |
 | #160 | human | verified | CLEAN | auto-merge fired |
-| #162 | app | unsigned | BLOCKED | watch fallback also refused → parked |
+| #162 | app | unsigned | BLOCKED | left open — never auto-merged |
 
 Fix: the probe creates the commit with `POST /repos/{owner}/{repo}/git/commits`
 using the app token and **no custom author/committer/signature fields** — GitHub
@@ -237,49 +231,62 @@ for bots"). The step aborts if the response commit is not `verification.verified
 
 Mechanics (all in the `bump-pr` step):
 
-1. `git write-tree` after `git add` (the no-op check stays on the index).
-2. Upload tree+blobs: `git commit-tree` a temp commit and push it to a scratch
-   **tag** `ci/ghostty-bump-upload-<run_id>` (`POST /git/commits` validates the
-   tree exists; this is the only practical way to upload the xcframework
-   blobs). The scratch ref must be a tag, not a branch: the commit is unsigned
-   and `gh-ruleset-all` enforces `required_signatures` on all branches
-   (2026-08-14) — a branch push of it is rejected (alarm issue #173). Tags are
-   outside the branch rulesets' scope and the only push-triggered workflows
-   filter to `branches: [main]`. A `+` force refspec replaces any leftover tag
-   on a workflow re-run (re-runs reuse `GITHUB_RUN_ID`; `non_fast_forward`
-   does not apply to tags). The tag is deleted best-effort right after.
-3. `POST /git/commits` → new verified commit, parented on current main tip.
-4. **Delete any existing bump branch, then `POST /git/refs` (create)** — never
-   force-update. Reasons: `required_signatures` checks **ALL commits in the PR
-   range** (community #183848: appending a signed commit on top of an unsigned
-   one does not unblock — the unsigned commit must be rewritten); GitHub does
-   NOT re-link a deleted branch to its PR (community #4453 — the old PR closes,
-   which is the desired outcome; a fresh PR replaces it); and `non_fast_forward`
-   (gh-ruleset-all) blocks force-updates, so delete + create is the only clean
-   path. The `probe-passed` marker + `bump_pr_number` output are written only
-   AFTER the ref create, so a mid-flow failure still files a probe alarm.
-5. Reuse/create PR + enable auto-merge (squash) as before, with a small retry
-   loop on the auto-merge enable.
-6. Create a **canary issue** (`ghostty bump in-flight: <sha7>`) — a single
-   evergreen tracker reused while open: its title is edited to the current
-   sha each run (dedupe by prefix, so at most ONE open canary exists; any
-   extra open canary is closed as superseded). Set the PR title to
-   `chore: ghostty upstream bump to <sha7> (closes #<N>)` (title only, when
-   a canary exists). Closing channel: vvterm's squash config is
-   `squash_merge_commit_title=PR_TITLE`, so the title becomes the squash
-   commit subject and GitHub's commit-message closing-keyword channel
-   auto-closes the canary on auto-merge (subject-only doctrine — the PR
-   body stays keyword-free; the description link channel is empirically
-   unreliable here, 2026-08-14 #139 zero-of-8). Canary creation is
-   non-fatal (warning + continue); issue calls in this step override the
-   app token with `GH_TOKEN="$GITHUB_TOKEN"` (the app has no Issues
-   permission). The watch job closes the canary as a verify-after-merge
-   safety net. Open canary = the bump has not landed — the visible lead for
-   parked/stalled bumps (which never alarm by design).
-7. **Never merge an older core**: when the bump PR for the latest sha
-   exists, close any OTHER open `chore/ghostty-upstream-bump-*` PR
-   (superseded comment) so an old bump can never auto-merge after a newer
-   one exists (`supersede_stale_bump_prs`).
+1. No-op gate: after `git add`, `git diff --cached --quiet` exits 0 when the
+   rebuild produced identical artifacts (no commit, no PR, no alarm).
+2. Refetch `origin/main` and record `MAIN_TIP`, then `git write-tree` the
+   index. The scratch **blob-upload commit is always parented on local HEAD
+   (main tip)** — never on the evergreen branch head: the branch head exists
+   only server-side and is not a local object on the fresh runner checkout,
+   so `git commit-tree -p <branch-head>` dies `fatal: <sha> is not a valid
+   object`. The scratch commit is only a blob-upload vehicle — its parents
+   are irrelevant; the server-side API commit (item 3) carries the real
+   parents. The scratch ref is a **tag** `ci/ghostty-bump-upload-<run_id>`
+   pushed with a `+` force refspec — see the scratch-TAG rationale below
+   (issue #173). The tag is deleted best-effort right after.
+3. `POST /git/commits` → new verified commit, parented on the evergreen
+   branch head (update path) or freshly-fetched `origin/main` (create path).
+   The step aborts unless `verification.verified` — the `required_signatures`
+   gate (an unverified commit would leave the PR mergeability-BLOCKED).
+4. Early PR discovery (before the ref write): if the evergreen PR already
+   exists, the `probe-passed` marker is written IMMEDIATELY — post-PR
+   ownership means any later failure in the step warns/reds the run but
+   NEVER files a pre-PR alarm (the open PR + canary issue are the signal;
+   the run's `::error::` is still visible in the logs). Create path: the
+   marker is written only after `gh pr create`.
+5. Canary: the open `ghostty bump in-flight:` issue's number is resolved
+   early (issue calls override the app token with
+   `GH_TOKEN="$GITHUB_TOKEN"` — the app has no Issues permission); creation
+   is non-fatal and may run before the ref write. The title edit ("now
+   tracking") + trail comment run only AFTER the ref write — a pre-ref
+   failure must never leave the canary claiming to track a sha that has no
+   bump.
+6. Ref write: branch exists → fast-forward
+   `PATCH /git/refs/heads/chore/ghostty-upstream-bump` (`non_fast_forward`
+   on gh-ruleset-all restricts force-updates only, so an FF PATCH is
+   allowed); first ever → `POST /git/refs` (create). Every new commit is
+   API-verified, so the whole range stays Verified and the old
+   delete+recreate dance is obsolete. The PR title is only edited after this
+   succeeds.
+7. PR: existing → `gh pr edit` title/body (the title's `(closes #<canary>)`
+   keyword is the ONLY canary-close channel — failures are LOUD warnings,
+   never swallowed) + canary "Bump PR:" comment + re-enable auto-merge
+   (squash, retry loop); first ever → `gh pr create` with the same
+   title/body + canary comment + auto-merge enabled. There is NEVER a second
+   PR and never a close — **"never merge an older core" holds by
+   construction**: one PR, always tracking the latest build.
+
+### Evergreen bump branch
+
+There is exactly ONE bump branch+PR, named `chore/ghostty-upstream-bump`
+(constant, sha-less — renaming would break the PR link, community #4453, so
+that the first-created name sticks). Update-vs-create is decided per run: PR
+open on the branch → update in place (append commit via FF PATCH + edit
+ title/body + re-enable auto-merge); no PR → create. The canary auto-closes
+on the squash auto-merge via the PR title's `(closes #N)` becoming the squash
+subject. A red bump self-heals by the next run appending a newer build and
+re-running CI. History growth is by design (one commit per bump): the squash
+merge collapses it at merge time, and a periodic force-collapse is blocked by
+`non_fast_forward`.
 
 ### Ruleset constraint (learned the hard way, 2026-08-12; updated 2026-08-14)
 
@@ -296,8 +303,8 @@ restored 2026-08-14 (pi-napkin + vvterm):
   bump commit via `POST /git/commits` (app token, NO custom author/committer/
   signature), which makes **GitHub sign it with its web-flow key and mark it
   Verified** (dependabot mechanism), satisfying `required_signatures` — see the
-  verification gate + stale-branch delete/recreate in `ghostty-upstream-probe.yml`
-  (the "Verified commit via the Git API" step). So the restore is compatible with
+  verification gate in `ghostty-upstream-probe.yml` (the "Verified commit via
+  the Git API" step). So the restore is compatible with
   the live probe; no bypass actors needed. *(Superseded for the bump-completion
   path — see the 2026-08-17 correction below: the scratch blob-upload push was
   broken by the restore.)*
