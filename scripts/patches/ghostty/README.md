@@ -260,6 +260,18 @@ Mechanics (all in the `bump-pr` step):
    AFTER the ref create, so a mid-flow failure still files a probe alarm.
 5. Reuse/create PR + enable auto-merge (squash) as before, with a small retry
    loop on the auto-merge enable.
+6. Create a **canary issue** (`ghostty bump in-flight: <sha7>`, deduped by title)
+   and set the PR title to `chore: ghostty upstream bump to <sha7> (closes #<N>)`
+   (title only, when a canary exists). Closing channel: vvterm's squash config is
+   `squash_merge_commit_title=PR_TITLE`, so the title becomes the squash commit
+   subject and GitHub's commit-message closing-keyword channel auto-closes the
+   canary on auto-merge (subject-only doctrine — the PR body stays keyword-free;
+   the description link channel is empirically unreliable here, 2026-08-14 #139
+   zero-of-8). Canary creation is non-fatal (warning + continue); issue calls in
+   this step override the app token with `GH_TOKEN="$GITHUB_TOKEN"` (the app has
+   no Issues permission). The watch job closes the canary as a verify-after-merge
+   safety net. Open canary = the bump has not landed — the visible lead for
+   parked/stalled bumps (which never alarm by design).
 
 ### Ruleset constraint (learned the hard way, 2026-08-12; updated 2026-08-14)
 
