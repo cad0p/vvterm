@@ -370,7 +370,14 @@ jobs:
     # rebalance. gh-ruleset-main requires these exact names.
     name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
-    timeout-minutes: 45
+    # Kill cap for wedged shards, not expected runtime: measured shard
+    # runtimes are 13-21m (2026-08-17/18); a hang must be killed fast so a
+    # wedged simulator/xcodebuild session doesn't burn 45m of wall-clock.
+    # The per-test 180s allowance (-test-timeouts-enabled YES) already
+    # catches single hanging tests; this cap catches whole-session wedges.
+    # Raised 20→45 in ff3905b for a one-off spike; lowered 45→30 (still
+    # ~40% headroom over the observed 21.3m max) 2026-08-18.
+    timeout-minutes: 30
     needs: build
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
