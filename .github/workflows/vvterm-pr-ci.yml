@@ -370,7 +370,15 @@ jobs:
     # rebalance. gh-ruleset-main requires these exact names.
     name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
-    timeout-minutes: 45
+    # Kill cap for wedged shards, not expected runtime: measured shard
+    # runtimes are 13-21m clean (2026-08-17/18); a failing run with in-step
+    # retry passes reached 32m21s on 2026-08-18 (PR #181 shard-2, 4 flaky
+    # failures) — so 35m keeps headroom over the observed worst while
+    # killing a true whole-session wedge ~10m sooner than the old 45m cap.
+    # The per-test 180s allowance (-test-timeouts-enabled YES) already
+    # catches single hanging tests; this cap catches session-level wedges.
+    # Raised 20→45 in ff3905b for a one-off spike; lowered 45→35 2026-08-18.
+    timeout-minutes: 35
     needs: build
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
