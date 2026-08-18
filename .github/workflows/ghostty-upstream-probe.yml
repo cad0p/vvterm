@@ -248,6 +248,25 @@ jobs:
             - **Full PR CI (build + unit + UI shards incl. loopback SSH) is the merge gate**; auto-merge is enabled and merges on green.
             - The per-PR OTA build is posted by the ad-hoc pipeline for device validation before merge.
             - Probe run: ${RUN_URL}
+          CANARY_BODY: |
+            ## Ghostty upstream bump canary: ${SHA7}
+
+            The probe is bumping the vendored ghostty core to `${RESOLVED_SHA}` (`${SHA7}`).
+
+            **This issue tracks the LATEST in-flight bump** — its title is updated
+            as the upstream SHA moves (at most one canary issue exists at a time).
+            It **auto-closes when the bump PR merges** — the PR title carries
+            `(closes #N)` which becomes the squash commit subject, and GitHub's
+            commit-message closing-keyword channel closes this issue on the squash
+            auto-merge.
+
+            **If this issue stays open, the bump has NOT landed — investigate:**
+            - Bump PR: look for `chore/ghostty-upstream-bump-${SHA7}` under Pull requests.
+            - Probe run: ${RUN_URL}
+            - Alarm issues (label `ghostty-patch`) may explain a pre-PR failure; a
+              parked watch means CI green but merge stalled — merge it manually.
+            - The shipped app is untouched either way: it runs the last good core
+              until a bump merges.
         run: |
           set -euo pipefail
           echo "create-bump-pr" > "$RUNNER_TEMP/ghostty-probe-step"
@@ -268,6 +287,9 @@ jobs:
           PR_BODY="${PR_BODY//\$\{OLD_VERSION\}/$OLD_VERSION}"
           PR_BODY="${PR_BODY//\$\{RESOLVED_SHA\}/$RESOLVED_SHA}"
           PR_BODY="${PR_BODY//\$\{RUN_URL\}/$RUN_URL}"
+          CANARY_BODY="${CANARY_BODY//\$\{SHA7\}/$SHA7}"
+          CANARY_BODY="${CANARY_BODY//\$\{RESOLVED_SHA\}/$RESOLVED_SHA}"
+          CANARY_BODY="${CANARY_BODY//\$\{RUN_URL\}/$RUN_URL}"
 
           git config user.name "vvterm-ghostty-bump[bot]"
           git config user.email "vvterm-ghostty-bump[bot]@users.noreply.github.com"
@@ -344,6 +366,59 @@ jobs:
           gh api -X DELETE "repos/${REPO}/git/refs/tags/${SCRATCH}" >/dev/null 2>&1 || true
           echo "Pushed ${BRANCH} @ ${NEW_COMMIT} (verified, signed by GitHub)"
 
+          # Canary issue: a single visible "bump hasn't landed" lead that
+          # tracks the LATEST in-flight sha and auto-closes when the bump PR
+          # merges. Closing channel: the PR title carries "(closes #N)" →
+          # with squash_merge_commit_title=PR_TITLE the title becomes the
+          # squash commit subject → GitHub commit-message keyword close on
+          # auto-merge (subject-only doctrine; the PR body stays
+          # keyword-free). The canary is REUSED while open (title edited to
+          # the current sha) so at most ONE canary issue exists at a time;
+          # a weekly "now tracking" comment keeps the trail. Non-fatal: on
+          # any failure we warn and continue WITHOUT the canary. Issue calls
+          # must use GITHUB_TOKEN (the app token has Contents+Pull-requests
+          # only, no Issues permission).
+          CANARY_TITLE="ghostty bump in-flight: ${SHA7}"
+          CANARY_ISSUE="$(GH_TOKEN="$GITHUB_TOKEN" gh issue list --repo "$REPO" --state open --search 'in:title "ghostty bump in-flight:"' --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [[ -n "$CANARY_ISSUE" ]]; then
+            GH_TOKEN="$GITHUB_TOKEN" gh issue edit "$CANARY_ISSUE" --repo "$REPO" --title "$CANARY_TITLE" >/dev/null 2>&1 || true
+            GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Now tracking ${SHA7} — probe run: ${RUN_URL}" >/dev/null 2>&1 || true
+            echo "Reusing canary issue #${CANARY_ISSUE} (now tracking ${SHA7})"
+          else
+            CANARY_URL="$(GH_TOKEN="$GITHUB_TOKEN" gh issue create --repo "$REPO" --title "$CANARY_TITLE" --body "$CANARY_BODY" 2>/dev/null || true)"
+            CANARY_ISSUE="$(sed -E 's#.*/issues/([0-9]+).*#\1#' <<<"$CANARY_URL")"
+            [[ -n "$CANARY_ISSUE" ]] && echo "Created canary issue #${CANARY_ISSUE} (${CANARY_TITLE})"
+          fi
+          if [[ -z "$CANARY_ISSUE" ]]; then
+            echo "::warning::Could not create canary issue (${CANARY_TITLE}) — continuing without it."
+          else
+            # Invariant: at most ONE open canary. Close any other open canary
+            # (legacy duplicates or a race) — the one resolved above supersedes
+            # them. Non-fatal.
+            for OTHER in $(GH_TOKEN="$GITHUB_TOKEN" gh issue list --repo "$REPO" --state open --search 'in:title "ghostty bump in-flight:"' --json number --jq '.[].number' 2>/dev/null || true); do
+              if [[ "$OTHER" != "$CANARY_ISSUE" ]]; then
+                GH_TOKEN="$GITHUB_TOKEN" gh issue close "$OTHER" --repo "$REPO" --comment "Superseded by canary #${CANARY_ISSUE} (${SHA7}) — this issue tracks only the latest in-flight bump." >/dev/null 2>&1 || true
+                echo "Closed superseded canary #${OTHER}"
+              fi
+            done
+          fi
+
+          # Never merge an older ghostty core: when a bump PR for the latest
+          # sha exists, close any OTHER open bump PR (different sha). Old PRs
+          # could otherwise auto-merge later and roll main backwards to an
+          # older upstream version. DRY helper, called from both PR paths.
+          supersede_stale_bump_prs() {
+            local current="$1"
+            local all
+            all="$(gh pr list --repo "$REPO" --state open --json number,headRefName 2>/dev/null || echo '[]')"
+            for N in $(jq -r '.[] | select(.headRefName | startswith("chore/ghostty-upstream-bump-")) | .number' <<<"$all"); do
+              if [[ "$N" != "$current" ]]; then
+                gh pr close "$N" --repo "$REPO" --reason not_planned --comment "Superseded by bump PR #${current} — tracking the latest upstream SHA (${SHA7}); the app never merges an older ghostty core." >/dev/null 2>&1 || true
+                echo "Closed superseded bump PR #${N}"
+              fi
+            done
+          }
+
           # Reuse an existing open PR on the bump branch — safety net only:
           # the stale-branch delete above closes any prior open PR on this
           # branch (GitHub does not re-link deleted branches), so a fresh PR
@@ -352,6 +427,20 @@ jobs:
           if [[ -n "$EXISTING" ]]; then
             PR_NUMBER="$(jq -r .number <<<"$EXISTING")"
             echo "Reusing existing bump PR #${PR_NUMBER} on ${BRANCH}"
+            # Canary feature guard: never rewrite the title when there is no
+            # canary (creation is non-fatal). Title may predate the canary
+            # feature — ensure the closing keyword is present so auto-close
+            # still fires on merge.
+            if [[ -n "$CANARY_ISSUE" ]]; then
+              if ! gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq .title | grep -q "closes #${CANARY_ISSUE}"; then
+                gh pr edit "$PR_NUMBER" --repo "$REPO" --title "chore: ghostty upstream bump to ${SHA7} (closes #${CANARY_ISSUE})" >/dev/null 2>&1 || true
+                echo "Updated bump PR #${PR_NUMBER} title with closing keyword"
+              fi
+              # Issue comments need Issues write → GITHUB_TOKEN override (the
+              # step's app token has Contents+Pull-requests only).
+              GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Bump PR: https://github.com/${REPO}/pull/${PR_NUMBER}" >/dev/null 2>&1 || true
+            fi
+            supersede_stale_bump_prs "$PR_NUMBER"
             echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
             # (Re-)enable auto-merge with retries: after a branch
             # recreation GitHub can take a moment to re-evaluate
@@ -371,11 +460,19 @@ jobs:
             exit 0
           fi
 
+          PR_TITLE="chore: ghostty upstream bump to ${SHA7}"
+          [[ -n "$CANARY_ISSUE" ]] && PR_TITLE="${PR_TITLE} (closes #${CANARY_ISSUE})"
           PR_URL="$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
-            --title "chore: ghostty upstream bump to ${SHA7}" \
+            --title "$PR_TITLE" \
             --body "$PR_BODY")"
           echo "Created bump PR: $PR_URL"
           PR_NUMBER="$(sed -E 's#.*/pull/([0-9]+).*#\1#' <<<"$PR_URL")"
+          # Link the canary to the PR so it is traceable before auto-close.
+          # Issue comments need Issues write → GITHUB_TOKEN override.
+          if [[ -n "$CANARY_ISSUE" ]]; then
+            GH_TOKEN="$GITHUB_TOKEN" gh issue comment "$CANARY_ISSUE" --repo "$REPO" --body "Bump PR: $PR_URL" >/dev/null 2>&1 || true
+          fi
+          [[ -n "$PR_NUMBER" ]] && supersede_stale_bump_prs "$PR_NUMBER"
           echo "bump_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           # Marker for the alarm step: the bump PR now exists. Any failure
           # after this point is NOT a probe alarm — the PR stays open and
@@ -515,6 +612,18 @@ jobs:
           SHA7="${SHA_FULL:0:7}"
           echo "Watching bump PR #${PR} (sha=${SHA7}); auto-merge enabled — the watch job only alarms on red and parks on stalls."
 
+          # Verify-after-merge safety net: close the canary issue (if still
+          # open) once the bump lands — belt-and-suspenders on top of the
+          # title-keyword auto-close. Uses github.token (issues: write).
+          close_canary_if_open() {
+            local n
+            n="$(gh issue list --repo "$REPO" --state open --search 'in:title "ghostty bump in-flight:"' --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+            if [[ -n "$n" ]]; then
+              gh issue close "$n" --repo "$REPO" --comment "Bump PR #${PR} merged — closing canary (verify-after-merge)." >/dev/null 2>&1 || true
+              echo "Closed canary issue #${n}"
+            fi
+          }
+
           # The alarm/comment body env scalars carry ${...} placeholders;
           # bash never re-expands them, so substitute explicitly.
           ALARM_CI_RED="${ALARM_CI_RED//\$\{PR\}/$PR}"
@@ -556,6 +665,7 @@ jobs:
             state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
             if [[ "$state" == "MERGED" ]]; then
               echo "Bump PR #${PR} already merged — done."
+              close_canary_if_open
               exit 0
             fi
             n="$(gh pr checks "$PR" --repo "$REPO" --json state --jq 'length' 2>/dev/null || true)"
@@ -586,6 +696,7 @@ jobs:
                 state="$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo OPEN)"
                 if [[ "$state" == "MERGED" ]]; then
                   echo "Bump PR #${PR} merged by auto-merge."
+                  close_canary_if_open
                   exit 0
                 fi
                 sleep 30
@@ -607,6 +718,7 @@ jobs:
               for _ in 1 2 3; do
                 if gh api -X PUT "repos/${REPO}/pulls/${PR}/merge" -f merge_method=squash >/dev/null 2>&1; then
                   echo "Bump PR #${PR} merged (direct ruleset-gated merge)."
+                  close_canary_if_open
                   exit 0
                 fi
                 sleep 15
