@@ -260,18 +260,26 @@ Mechanics (all in the `bump-pr` step):
    AFTER the ref create, so a mid-flow failure still files a probe alarm.
 5. Reuse/create PR + enable auto-merge (squash) as before, with a small retry
    loop on the auto-merge enable.
-6. Create a **canary issue** (`ghostty bump in-flight: <sha7>`, deduped by title)
-   and set the PR title to `chore: ghostty upstream bump to <sha7> (closes #<N>)`
-   (title only, when a canary exists). Closing channel: vvterm's squash config is
-   `squash_merge_commit_title=PR_TITLE`, so the title becomes the squash commit
-   subject and GitHub's commit-message closing-keyword channel auto-closes the
-   canary on auto-merge (subject-only doctrine — the PR body stays keyword-free;
-   the description link channel is empirically unreliable here, 2026-08-14 #139
-   zero-of-8). Canary creation is non-fatal (warning + continue); issue calls in
-   this step override the app token with `GH_TOKEN="$GITHUB_TOKEN"` (the app has
-   no Issues permission). The watch job closes the canary as a verify-after-merge
+6. Create a **canary issue** (`ghostty bump in-flight: <sha7>`) — a single
+   evergreen tracker reused while open: its title is edited to the current
+   sha each run (dedupe by prefix, so at most ONE open canary exists; any
+   extra open canary is closed as superseded). Set the PR title to
+   `chore: ghostty upstream bump to <sha7> (closes #<N>)` (title only, when
+   a canary exists). Closing channel: vvterm's squash config is
+   `squash_merge_commit_title=PR_TITLE`, so the title becomes the squash
+   commit subject and GitHub's commit-message closing-keyword channel
+   auto-closes the canary on auto-merge (subject-only doctrine — the PR
+   body stays keyword-free; the description link channel is empirically
+   unreliable here, 2026-08-14 #139 zero-of-8). Canary creation is
+   non-fatal (warning + continue); issue calls in this step override the
+   app token with `GH_TOKEN="$GITHUB_TOKEN"` (the app has no Issues
+   permission). The watch job closes the canary as a verify-after-merge
    safety net. Open canary = the bump has not landed — the visible lead for
    parked/stalled bumps (which never alarm by design).
+7. **Never merge an older core**: when the bump PR for the latest sha
+   exists, close any OTHER open `chore/ghostty-upstream-bump-*` PR
+   (superseded comment) so an old bump can never auto-merge after a newer
+   one exists (`supersede_stale_bump_prs`).
 
 ### Ruleset constraint (learned the hard way, 2026-08-12; updated 2026-08-14)
 
