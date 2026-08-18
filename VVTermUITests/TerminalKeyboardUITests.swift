@@ -2,6 +2,8 @@
 // 13 tests are quarantined under #92 (https://github.com/cad0p/vvterm/issues/92):
 // upstream's new harness is coupled to upstream's TerminalTabManager wiring and
 // fails on the fork's app (harness control-panel geometry + keyboard state machine).
+// Plus one CI-only quarantine under #184: testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel
+// (marginal IME-proxy handoff timeout that misfires the shard retry — see the test body).
 import XCTest
 
 final class TerminalKeyboardUITests: XCTestCase {
@@ -2205,6 +2207,19 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel() throws {
+        // #184: marginal 5s IME-proxy first-responder handoff timeout under CI
+        // host load. Failed once on PR #181 shard-2 (29.974s, "Timed out waiting
+        // for imeProxyFirstResponder=true") and passed the in-step retry
+        // (31.383s — same duration, a hair over the 5s wait, not a product bug).
+        // The wait helper's XCTFail message matches the shard retry predicate's
+        // AX-wedge signature, so the flake rebooted the sim and reran the whole
+        // shard; the rerun landed on a still-degraded host and the
+        // NoticePresentation suite cascaded 4 failures 15 minutes later (issue
+        // #184). Quarantined from CI until the handoff wait is made
+        // load-tolerant; kept for local runs.
+        if ProcessInfo.processInfo.environment["CI"] != nil {
+            throw XCTSkip("Marginal IME-proxy handoff timeout under CI host load — quarantined (#184)")
+        }
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
