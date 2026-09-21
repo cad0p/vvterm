@@ -162,6 +162,51 @@ struct OpenSSHHostCertVerifierTests {
         #expect(result == .badSignature)
     }
 
+    /// An authorized_keys CA blob is exactly string(type) + string(material):
+    /// trailing bytes must not be ignored (another parser could read them), so
+    /// the mutated CA must not match the cert's signature key.
+    @Test
+    func rejectsCheckingKeyBlobWithTrailingBytes() throws {
+        let parts = Self.caEd25519.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+        let mutatedBlob = try Self.blob(Self.caEd25519) + Data([0xAB])
+        let mutatedLine = "\(parts[0]) \(mutatedBlob.base64EncodedString())"
+        let result = OpenSSHHostCertVerifier.verify(
+            hostKeyBlob: try Self.blob(Self.ed25519HostCert),
+            expectedPrincipals: ["testhost"],
+            checkingKeys: [mutatedLine],
+            now: Self.validNow
+        )
+        #expect(result == .noMatchingCAKey)
+    }
+
+    /// A signature blob is exactly string(type) + string(signature): trailing
+    /// bytes must invalidate the signature instead of being ignored.
+    @Test
+    func rejectsSignatureBlobWithTrailingBytes() throws {
+        let parsed = try #require(OpenSSHCertificate.parse(blob: try Self.blob(Self.ed25519HostCert)))
+        let tampered = parsed.signedData + OpenSSHCertificate.sshString(parsed.signatureBlob + Data([0x00]))
+        let result = OpenSSHHostCertVerifier.verify(
+            hostKeyBlob: tampered,
+            expectedPrincipals: ["testhost"],
+            checkingKeys: [Self.caEd25519],
+            now: Self.validNow
+        )
+        #expect(result == .badSignature)
+    }
+
+    /// Empty expected principals are ignored, not treated as a wildcard: a
+    /// real principal alongside one still matches.
+    @Test
+    func emptyExpectedPrincipalsAreIgnored() throws {
+        let result = OpenSSHHostCertVerifier.verify(
+            hostKeyBlob: try Self.blob(Self.ed25519HostCert),
+            expectedPrincipals: ["", "testhost"],
+            checkingKeys: [Self.caEd25519],
+            now: Self.validNow
+        )
+        #expect(result == .verified)
+    }
+
     @Test
     func rejectsNonCertificateBlob() throws {
         let plain = TeleportFixtureSupport

@@ -68,8 +68,11 @@ enum OpenSSHHostCertVerifier {
         guard validAfterOK, validBeforeOK else {
             return .expired
         }
-        guard !expectedPrincipals.isEmpty,
-              cert.validPrincipals.contains(where: { expectedPrincipals.contains($0) }) else {
+        // Drop empty expectations: a zero-length principal in the
+        // certificate must never satisfy the principal check.
+        let expected = expectedPrincipals.filter { !$0.isEmpty }
+        guard !expected.isEmpty,
+              cert.validPrincipals.contains(where: { expected.contains($0) }) else {
             return .principalMismatch
         }
 
@@ -110,14 +113,20 @@ private struct HostCAKey {
     init?(blob: Data) {
         var reader = SSHBlobReader(data: blob)
         guard let typeData = reader.readString(),
-              let keyType = String(data: typeData, encoding: .utf8),
-              let material = reader.readString() else {
+              let keyType = String(data: typeData, encoding: .utf8) else {
             return nil
         }
+        // The key-type-specific material follows the type string:
+        //   ssh-ed25519         → the raw 32-byte public key
+        //   ecdsa-sha2-nistp256 → string(curve) + string(point)
+        //   ssh-rsa/rsa-sha2-*  → mpint(e) + mpint(n)
+        // Keep the remaining blob intact and validate the exact layout per
+        // key type at verification time, so trailing bytes cannot be
+        // silently ignored (and RSA's two-string layout is not rejected).
+        let material = reader.remainingData
+        guard !material.isEmpty else { return nil }
         self.blob = blob
         self.keyType = keyType
-        // The key material after the type string (curve+Q for ECDSA, the raw
-        // public key for ed25519).
         self.keyMaterial = material
     }
 
@@ -128,13 +137,20 @@ private struct HostCAKey {
               let sigData = reader.readString() else {
             return .invalid
         }
+        // A signature blob is exactly string(type) + string(signature);
+        // trailing garbage must not be ignored.
+        guard reader.remainingData.isEmpty else { return .invalid }
 
         switch keyType {
         case "ssh-ed25519":
             guard sigType == "ssh-ed25519" else { return .invalid }
-            // ed25519 key material is the raw 32-byte public key.
-            guard keyMaterial.count == 32,
-                  let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: keyMaterial) else {
+            var keyReader = SSHBlobReader(data: keyMaterial)
+            // The material is exactly string(32-byte public key): trailing
+            // bytes must not be ignored.
+            guard let key = keyReader.readString(),
+                  keyReader.remainingData.isEmpty,
+                  key.count == 32,
+                  let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: key) else {
                 return .invalid
             }
             return publicKey.isValidSignature(sigData, for: signedData) ? .valid : .invalid
@@ -146,6 +162,9 @@ private struct HostCAKey {
                   let curve = String(data: curveData, encoding: .utf8),
                   curve == "nistp256",
                   let point = keyReader.readString(),
+                  // The material is exactly string(curve) + string(point):
+                  // trailing bytes must not be ignored.
+                  keyReader.remainingData.isEmpty,
                   let publicKey = try? P256.Signing.PublicKey(x963Representation: point) else {
                 return .invalid
             }
@@ -188,6 +207,7 @@ enum OpenSSHECDSASignature {
               let r32 = normalized32(r), let s32 = normalized32(s) else {
             return nil
         }
+        guard reader.remainingData.isEmpty else { return nil }
         return r32 + s32
     }
 
