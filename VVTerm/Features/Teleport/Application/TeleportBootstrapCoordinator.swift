@@ -232,7 +232,9 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // the ID that identifies the headless request on both the POST
         // (/webapi/headless/login) and the web approval page (/web/headless/<id>).
         headlessID = HeadlessID.compute(sshAuthorizedKey: sshPubKey)
-        logger.info("headlessAuthenticationID=\(self.headlessID, privacy: .public)")
+        // The headless authentication ID is a bearer-equivalent identifier
+        // for the pending approval page — log only a hashed form.
+        logger.info("headlessAuthenticationID=\(self.headlessID, privacy: .private(mask: .hash))")
 
         // ── Step 3: start the blocking POST (async, doesn't await yet) ──
         // We start the POST, THEN open Safari. The POST blocks until the
@@ -278,7 +280,8 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // The headless web UI is at /web/headless/<id>. The user logs in
         // with their iCloud passkey (Face ID in Safari) and approves.
         let approvalURL = URL(string: "\(baseURL.absoluteString)/web/headless/\(headlessID)")!
-        logger.info("opening Safari to \(approvalURL.absoluteString, privacy: .public)")
+        // The approval URL embeds the headless authentication ID.
+        logger.info("opening Safari to \(approvalURL.absoluteString, privacy: .private(mask: .hash))")
 
         let safariOK: Bool
         if let presenter = safariPresenter {
