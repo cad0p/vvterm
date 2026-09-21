@@ -13,11 +13,21 @@ extension TerminalDisconnectReason {
     }
 }
 
+/// Which host-key trust affordance the failure banner offers.
+enum TerminalHostKeyTrustDisposition: Hashable {
+    /// No host-key action (ordinary failure).
+    case none
+    /// A saved pin mismatched the presented key — confirm, replace, retry.
+    case replaceTrustedHost
+    /// First use — confirm the new key, save it, retry.
+    case trustNewHost
+}
+
 enum TerminalConnectionStatusPresentation: Hashable {
     case hidden
     case connecting(serverName: String)
     case disconnected(message: String?)
-    case failed(message: String, allowsHostKeyReplacement: Bool)
+    case failed(message: String, hostKeyTrust: TerminalHostKeyTrustDisposition)
 
     static func resolve(
         credentialLoadErrorMessage: String?,
@@ -30,12 +40,12 @@ enum TerminalConnectionStatusPresentation: Hashable {
         terminalExists: Bool,
         isReady: Bool,
         disconnectedMessage: String?,
-        isHostKeyVerificationFailure: Bool
+        hostKeyTrust: TerminalHostKeyTrustDisposition
     ) -> Self {
         if let credentialLoadErrorMessage {
             return .failed(
                 message: credentialLoadErrorMessage,
-                allowsHostKeyReplacement: false
+                hostKeyTrust: .none
             )
         }
 
@@ -62,7 +72,7 @@ enum TerminalConnectionStatusPresentation: Hashable {
         case .failed(let error):
             return .failed(
                 message: error,
-                allowsHostKeyReplacement: isHostKeyVerificationFailure
+                hostKeyTrust: hostKeyTrust
             )
         case .connected, .idle:
             return !isReady && !terminalExists ? .connecting(serverName: serverName) : .hidden

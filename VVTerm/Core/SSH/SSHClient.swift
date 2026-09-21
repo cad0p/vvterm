@@ -2312,10 +2312,33 @@ actor SSHSession {
             )
             throw SSHError.teleportCertMissing
 
+        case .unknownHost(let presentedFingerprint, let presentedKeyType):
+            // First use: record the key as pending and prompt. The pin is
+            // persisted only after the user confirms the trust affordance.
+            let entry = KnownHostsManager.Entry(
+                host: host,
+                port: port,
+                fingerprint: presentedFingerprint,
+                keyType: presentedKeyType,
+                addedAt: Date(),
+                lastSeenAt: Date()
+            )
+            KnownHostsManager.shared.recordPending(entry: entry)
+            logger.info(
+                "Host key for \(host, privacy: .private(mask: .hash)):\(port) is not trusted yet (\(presentedFingerprint, privacy: .private(mask: .hash))) — awaiting user confirmation"
+            )
+            throw SSHError.hostKeyUnknown(
+                host: host,
+                port: port,
+                fingerprint: presentedFingerprint,
+                keyType: presentedKeyType
+            )
         }
     }
 
-    private func hostKeyFingerprint(for session: OpaquePointer) throws -> (String, Int) {
+    /// Read the host key fingerprint, libssh2 key type, and raw host key blob
+    /// (the full certificate blob for certificate host keys).
+    private func hostKeyInfo(for session: OpaquePointer) throws -> (fingerprint: String, keyType: Int, blob: Data) {
         guard let hashPtr = libssh2_hostkey_hash(session, Int32(LIBSSH2_HOSTKEY_HASH_SHA256)) else {
             throw SSHError.hostKeyVerificationFailed
         }
@@ -5707,9 +5730,15 @@ enum SSHError: LocalizedError {
     case channelOpenFailed
     case shellRequestFailed
     case hostKeyVerificationFailed
+    case hostKeyUnknown(host: String, port: Int, fingerprint: String, keyType: Int)
     case socketError(String)
     case teleportCertMissing
     case unknown(String)
+
+    /// Marker prefix for `hostKeyUnknown`'s message. `ConnectionState.failed`
+    /// only stores the localized string, so the terminal UI matches on it to
+    /// decide which host-key trust affordance to show.
+    static let hostKeyUnknownMessageMarker = "Host key is not trusted yet"
 
     var allowsAutomaticReconnectRetry: Bool {
         switch self {
@@ -5733,6 +5762,7 @@ enum SSHError: LocalizedError {
              .moshBootstrapFailed,
              .moshInvalidEndpoint,
              .hostKeyVerificationFailed,
+             .hostKeyUnknown,
              .teleportCertMissing,
              .unknown:
             return false
@@ -5771,6 +5801,8 @@ enum SSHError: LocalizedError {
         case .shellRequestFailed: return "Failed to request shell"
         case .hostKeyVerificationFailed:
             return "Host key verification failed. The saved SSH host fingerprint does not match the server's current key."
+        case .hostKeyUnknown(let host, let port, let fingerprint, _):
+            return "\(Self.hostKeyUnknownMessageMarker) for \(host):\(port) (\(fingerprint)). Verify the fingerprint with the server owner before continuing."
         case .socketError(let msg): return "Socket error: \(msg)"
         case .teleportCertMissing:
             return String(localized: "Teleport certificate is missing or expired. Sign in with Face ID to refresh it.")

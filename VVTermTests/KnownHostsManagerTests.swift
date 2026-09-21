@@ -55,4 +55,60 @@ struct KnownHostsManagerTests {
 
         #expect(manager.entries().isEmpty)
     }
+
+    // MARK: - Pending first-use entries
+
+    @Test
+    func pendingEntryIsNotPersistedUntilConfirmed() {
+        let manager = KnownHostsManager.shared
+        manager.removeAll()
+        defer { manager.removeAll() }
+
+        manager.recordPending(entry: KnownHostsManager.Entry(
+            host: "new.example.com",
+            port: 22,
+            fingerprint: "SHA256:new",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        ))
+
+        // The first-use key must not be trusted before the user confirms it.
+        #expect(manager.entry(for: "new.example.com", port: 22) == nil)
+        #expect(manager.pendingEntry(for: "new.example.com", port: 22)?.fingerprint == "SHA256:new")
+
+        #expect(manager.confirmPending(host: "new.example.com", port: 22))
+        #expect(manager.entry(for: "new.example.com", port: 22)?.fingerprint == "SHA256:new")
+        #expect(manager.pendingEntry(for: "new.example.com", port: 22) == nil)
+    }
+
+    @Test
+    func confirmingWithoutAPendingEntryDoesNothing() {
+        let manager = KnownHostsManager.shared
+        manager.removeAll()
+        defer { manager.removeAll() }
+
+        #expect(!manager.confirmPending(host: "missing.example.com", port: 22))
+        #expect(manager.entry(for: "missing.example.com", port: 22) == nil)
+    }
+
+    @Test
+    func discardPendingDropsTheFirstUseKey() {
+        let manager = KnownHostsManager.shared
+        manager.removeAll()
+        defer { manager.removeAll() }
+
+        manager.recordPending(entry: KnownHostsManager.Entry(
+            host: "discard.example.com",
+            port: 22,
+            fingerprint: "SHA256:discard",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        ))
+        manager.discardPending(host: "discard.example.com", port: 22)
+
+        #expect(manager.pendingEntry(for: "discard.example.com", port: 22) == nil)
+        #expect(manager.entry(for: "discard.example.com", port: 22) == nil)
+    }
 }

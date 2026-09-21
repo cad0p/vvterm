@@ -570,18 +570,41 @@ struct TerminalPaneView: View {
         reconnectPreparation.isRunning
     }
 
-    private var isHostKeyVerificationFailure: Bool {
-        guard case .failed(let error) = connectionState else { return false }
-        return error == SSHError.hostKeyVerificationFailed.localizedDescription
-            || error.contains("Host key verification failed")
+    private var hostKeyTrustDisposition: TerminalHostKeyTrustDisposition {
+        guard case .failed(let error) = connectionState else { return .none }
+        if error == SSHError.hostKeyVerificationFailed.localizedDescription
+            || error.contains("Host key verification failed") {
+            return .replaceTrustedHost
+        }
+        if error.contains(SSHError.hostKeyUnknownMessageMarker) {
+            return .trustNewHost
+        }
+        return .none
+    }
+
+    private var hostKeyTrustAlertTitle: String {
+        switch hostKeyTrustDisposition {
+        case .trustNewHost:
+            return String(localized: "Trust New Host Key?")
+        case .replaceTrustedHost, .none:
+            return String(localized: "Replace Trusted Host?")
+        }
     }
 
     private var retrustHostConfirmationMessage: String {
         let endpoint = "\(server.host):\(server.port)"
-        return String(
-            format: String(localized: "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host."),
-            endpoint
-        )
+        switch hostKeyTrustDisposition {
+        case .trustNewHost:
+            return String(
+                format: String(localized: "VVTerm does not have a saved SSH host key for %@. Verify the fingerprint with the server owner before continuing."),
+                endpoint
+            )
+        case .replaceTrustedHost, .none:
+            return String(
+                format: String(localized: "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host."),
+                endpoint
+            )
+        }
     }
 
     /// Should this pane actually have focus (both tab selected AND pane focused)
@@ -690,7 +713,7 @@ struct TerminalPaneView: View {
             terminalExists: terminalExists,
             isReady: isReady,
             disconnectedMessage: disconnectedStatusMessage,
-            isHostKeyVerificationFailure: isHostKeyVerificationFailure
+            hostKeyTrust: hostKeyTrustDisposition
         )
     }
 
@@ -926,9 +949,14 @@ struct TerminalPaneView: View {
         } message: {
             Text(moshServerPromptMessage)
         }
-        .alert("Replace Trusted Host?", isPresented: $showingRetrustHostConfirmation) {
+        .alert(hostKeyTrustAlertTitle, isPresented: $showingRetrustHostConfirmation) {
             Button("Cancel", role: .cancel) { }
-            Button("Replace and Reconnect", role: .destructive) {
+            Button(
+                hostKeyTrustDisposition == .trustNewHost
+                    ? String(localized: "Trust and Reconnect")
+                    : String(localized: "Replace and Reconnect"),
+                role: .destructive
+            ) {
                 retrustHostAndRetry()
             }
         } message: {
@@ -998,7 +1026,16 @@ struct TerminalPaneView: View {
     }
 
     private func retrustHostAndRetry() {
-        KnownHostsManager.shared.remove(host: server.host, port: server.port)
+        switch hostKeyTrustDisposition {
+        case .replaceTrustedHost:
+            KnownHostsManager.shared.remove(host: server.host, port: server.port)
+        case .trustNewHost:
+            // Persist the pending first-use key only now that the user has
+            // confirmed it.
+            KnownHostsManager.shared.confirmPending(host: server.host, port: server.port)
+        case .none:
+            break
+        }
         retryConnection()
     }
 

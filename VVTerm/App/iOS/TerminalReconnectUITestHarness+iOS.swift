@@ -298,6 +298,24 @@ struct TerminalReconnectUITestHarness: View {
         }
     }
 
+    /// Pre-seed the fixture sshd's host key pin. The production path now
+    /// prompts on first use (W4c); the fixture rig exports the fingerprint +
+    /// libssh2 key type so the existing fixture-driven UI tests stay green.
+    private func seedKnownHostPinIfProvided() {
+        let environment = Foundation.ProcessInfo.processInfo.environment
+        guard let fingerprint = environment["VVTERM_REPRO_SSH_HOST_KEY_FINGERPRINT"],
+              !fingerprint.isEmpty else { return }
+        let keyType = Int(environment["VVTERM_REPRO_SSH_HOST_KEY_TYPE"] ?? "") ?? 6
+        KnownHostsManager.shared.save(entry: KnownHostsManager.Entry(
+            host: Self.sshHost,
+            port: Self.sshPort,
+            fingerprint: fingerprint,
+            keyType: keyType,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        ))
+    }
+
     private func prepareFixture() async {
         guard case .preparing = fixtureState else { return }
 
@@ -343,6 +361,7 @@ struct TerminalReconnectUITestHarness: View {
                 await tabManager.resetForTesting()
             }
             KnownHostsManager.shared.remove(host: Self.sshHost, port: Self.sshPort)
+            seedKnownHostPinIfProvided()
             if !usesColdRelaunchHarness || seedsColdRelaunchHarness {
                 try KeychainManager.shared.deleteCredentials(for: server.id)
             }

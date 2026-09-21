@@ -370,15 +370,45 @@ struct TerminalConnectionStatusPresentationTests {
     func hostKeyFailureEnablesReplacementAction() {
         let presentation = resolve(
             connectionState: .failed("Host key verification failed"),
-            isHostKeyVerificationFailure: true
+            hostKeyTrust: .replaceTrustedHost
         )
 
         #expect(
             presentation == .failed(
                 message: "Host key verification failed",
-                allowsHostKeyReplacement: true
+                hostKeyTrust: .replaceTrustedHost
             )
         )
+    }
+
+    @Test
+    func firstUseHostKeyFailureEnablesTrustAction() {
+        let presentation = resolve(
+            connectionState: .failed("Host key is not trusted yet for example.com:22 (SHA256:abc)."),
+            hostKeyTrust: .trustNewHost
+        )
+
+        #expect(
+            presentation == .failed(
+                message: "Host key is not trusted yet for example.com:22 (SHA256:abc).",
+                hostKeyTrust: .trustNewHost
+            )
+        )
+    }
+
+    @Test
+    func hostKeyUnknownErrorCarriesTheUiMarkerAndDoesNotAutoRetry() {
+        // The terminal UI only has the localized string; the marker prefix is
+        // what routes it to the first-use trust affordance.
+        #expect(SSHError.hostKeyUnknownMessageMarker == "Host key is not trusted yet")
+        let message = SSHError.hostKeyUnknown(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:abc",
+            keyType: 0
+        ).localizedDescription
+        #expect(message.contains(SSHError.hostKeyUnknownMessageMarker))
+        #expect(!SSHError.hostKeyUnknown(host: "h", port: 22, fingerprint: "f", keyType: 0).allowsAutomaticReconnectRetry)
     }
 
     @Test
@@ -393,7 +423,7 @@ struct TerminalConnectionStatusPresentationTests {
         #expect(
             presentation == .failed(
                 message: "Failed to load credentials",
-                allowsHostKeyReplacement: false
+                hostKeyTrust: .none
             )
         )
     }
@@ -402,7 +432,7 @@ struct TerminalConnectionStatusPresentationTests {
     func dismissedStatusIdentityDoesNotImmediatelyPresentAgain() throws {
         let attemptID = UUID()
         let identity = try #require(TerminalConnectionStatusDismissalPolicy.identity(
-            for: .failed(message: "Connection timed out", allowsHostKeyReplacement: false),
+            for: .failed(message: "Connection timed out", hostKeyTrust: .none),
             connectionAttemptID: attemptID
         ))
 
@@ -430,7 +460,7 @@ struct TerminalConnectionStatusPresentationTests {
     func changedStatusPresentsAfterPreviousIdentityWasDismissed() throws {
         let attemptID = UUID()
         let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
-            for: .failed(message: "Timed out", allowsHostKeyReplacement: false),
+            for: .failed(message: "Timed out", hostKeyTrust: .none),
             connectionAttemptID: attemptID
         ))
         let changed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
@@ -449,7 +479,7 @@ struct TerminalConnectionStatusPresentationTests {
     func newAttemptPresentsEvenWhenFailureTextIsUnchanged() throws {
         let presentation = TerminalConnectionStatusPresentation.failed(
             message: "Connection timed out",
-            allowsHostKeyReplacement: false
+            hostKeyTrust: .none
         )
         let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
             for: presentation,
@@ -470,7 +500,7 @@ struct TerminalConnectionStatusPresentationTests {
     @Test
     func hiddenOrChangedStatusClearsTheRetainedDismissal() throws {
         let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
-            for: .failed(message: "Connection timed out", allowsHostKeyReplacement: false),
+            for: .failed(message: "Connection timed out", hostKeyTrust: .none),
             connectionAttemptID: UUID()
         ))
 
@@ -499,7 +529,7 @@ struct TerminalConnectionStatusPresentationTests {
         #expect(TerminalConnectionStatusDismissalPolicy.identity(
             for: .failed(
                 message: "Authentication failed",
-                allowsHostKeyReplacement: false
+                hostKeyTrust: .none
             ),
             connectionAttemptID: attemptID
         ) != nil)
@@ -515,7 +545,7 @@ struct TerminalConnectionStatusPresentationTests {
         terminalExists: Bool = true,
         isReady: Bool = true,
         disconnectedMessage: String? = nil,
-        isHostKeyVerificationFailure: Bool = false
+        hostKeyTrust: TerminalHostKeyTrustDisposition = .none
     ) -> TerminalConnectionStatusPresentation {
         .resolve(
             credentialLoadErrorMessage: credentialLoadErrorMessage,
@@ -528,7 +558,7 @@ struct TerminalConnectionStatusPresentationTests {
             terminalExists: terminalExists,
             isReady: isReady,
             disconnectedMessage: disconnectedMessage,
-            isHostKeyVerificationFailure: isHostKeyVerificationFailure
+            hostKeyTrust: hostKeyTrust
         )
     }
 }

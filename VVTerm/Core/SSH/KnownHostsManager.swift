@@ -19,7 +19,47 @@ final class KnownHostsManager: @unchecked Sendable {
     private let logger = Logger.forCategory("KnownHosts")
     private let lock = NSLock()
 
+    /// Pending (unconfirmed) first-use keys, keyed like the persistent store.
+    /// They are written only after the user confirms the trust affordance.
+    private var pendingEntries: [String: Entry] = [:]
+
     private init() {}
+
+    // MARK: - Pending (first-use) entries
+
+    /// Record the key presented by a host that has no saved pin. Nothing is
+    /// persisted until `confirmPending` is called.
+    func recordPending(entry: Entry) {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingEntries[hostKey(host: entry.host, port: entry.port)] = entry
+        logger.info("Recorded pending host key for \(entry.host):\(entry.port) — awaiting user confirmation")
+    }
+
+    func pendingEntry(for host: String, port: Int) -> Entry? {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingEntries[hostKey(host: host, port: port)]
+    }
+
+    /// Persist the pending key (the user confirmed the first-use prompt).
+    @discardableResult
+    func confirmPending(host: String, port: Int) -> Bool {
+        lock.lock()
+        let key = hostKey(host: host, port: port)
+        let pending = pendingEntries.removeValue(forKey: key)
+        lock.unlock()
+        guard let pending else { return false }
+        save(entry: pending)
+        logger.info("User confirmed new host key for \(host):\(port)")
+        return true
+    }
+
+    func discardPending(host: String, port: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingEntries.removeValue(forKey: hostKey(host: host, port: port))
+    }
 
     func entry(for host: String, port: Int) -> Entry? {
         lock.lock()
@@ -61,6 +101,7 @@ final class KnownHostsManager: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         UserDefaults.standard.removeObject(forKey: storageKey)
+        pendingEntries.removeAll()
         logger.info("Removed all known host entries")
     }
 
