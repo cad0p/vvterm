@@ -250,21 +250,19 @@ enum SSHCertExpiryParser {
             return nil
         }
 
-        // SecCertificateCopyValues returns the cert's attributes. The
-        // kSecOIDX509V1ValidityNotAfter key holds the expiry.
-        // On macOS this returns a CFArray of dictionaries.
-        guard let values = SecCertificateCopyValues(cert, nil, nil) as? [[String: Any]] else {
+        // SecCertificateCopyValues returns a dictionary keyed by OID. The
+        // kSecOIDX509V1ValidityNotAfter entry holds the expiry under
+        // kSecPropertyKeyValue.
+        guard let values = SecCertificateCopyValues(
+            cert,
+            [kSecOIDX509V1ValidityNotAfter] as CFArray,
+            nil
+        ) as? [CFString: Any],
+              let entry = values[kSecOIDX509V1ValidityNotAfter] as? [CFString: Any],
+              let date = entry[kSecPropertyKeyValue] as? Date else {
             return nil
         }
-        for entry in values {
-            if let oids = entry[kSecPropertyOID as String] as? String,
-               oids == "2.5.29.1" || oids == kSecOIDX509V1ValidityNotAfter as String {
-                if let date = entry[kSecPropertyKeyValue as String] as? Date {
-                    return date
-                }
-            }
-        }
-        return nil
+        return date
     }
     #else
     private static func parseX509CertValidBefore(pem: String) -> Date? {

@@ -30,7 +30,11 @@
 import Foundation
 import os.log
 import AuthenticationServices
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 #if canImport(Network)
 import Network
 #endif
@@ -209,6 +213,9 @@ final class BrowserMFACeremony: NSObject {
 extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
     @MainActor
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if os(macOS)
+        return NSApp.keyWindow ?? ASPresentationAnchor()
+        #else
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }),
@@ -216,6 +223,7 @@ extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
             return ASPresentationAnchor()
         }
         return window
+        #endif
     }
 }
 

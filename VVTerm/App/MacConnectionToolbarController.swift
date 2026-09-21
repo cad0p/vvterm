@@ -193,7 +193,7 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
     }
 
     @objc private func zenControlsTapped(_ sender: NSToolbarItem) {
-        zenLogger.notice("zenControlsTapped: invoked, isShown=\(zenPopover?.isShown ?? false)")
+        zenLogger.notice("zenControlsTapped: invoked, isShown=\(self.zenPopover?.isShown ?? false)")
         if let popover = zenPopover, popover.isShown {
             popover.performClose(nil)
             return
