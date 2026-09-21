@@ -55,6 +55,98 @@ struct TeleportCertBindingCoordinatorTests {
         )
     }
 
+    // MARK: - Host CA refresh from the login response
+
+    private static let pinnedHostCA = TeleportFixtureSupport
+        .fixtureString("OpenSSH/ca_ed25519.pub")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    private static let rotatedHostCA = TeleportFixtureSupport
+        .fixtureString("OpenSSH/ca_foreign.pub")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    private func makeLoginFinishResponse(
+        domainName: String,
+        checkingKeys: [String]
+    ) -> LoginFinishResponse {
+        LoginFinishResponse(
+            cert: Data(TeleportFixtureSupport.fixedIssuedUserCert.utf8).base64EncodedString(),
+            hostSigners: [
+                LoginFinishResponse.HostSigner(domainName: domainName, checkingKeys: checkingKeys)
+            ]
+        )
+    }
+
+    /// A matching `domain_name` lets the additions-only refresh grow the
+    /// pinned checking-key set; the outer TLS anchors stay byte-identical.
+    @Test
+    func loginRefreshAppliesAdditionsForThePinnedCluster() async throws {
+        let cluster = makeCluster()
+        let credentialID = Data([1, 2, 3, 4])
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
+        keyRing.storeClusterTLSState(
+            TeleportClusterTLSState(
+                clusterName: "teleport.pcad.it",
+                clusterCAPEMs: ["pinned-pem"],
+                hostCACheckingKeys: [Self.pinnedHostCA]
+            ),
+            for: cluster.id
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = makeLoginFinishResponse(
+            domainName: "teleport.pcad.it",
+            checkingKeys: [Self.pinnedHostCA, Self.rotatedHostCA]
+        )
+
+        let coordinator = try makeLoginCoordinator(
+            http: http,
+            keyRing: keyRing,
+            credentialID: credentialID,
+            publicKey: TeleportFixtureSupport.fixedSSHPublicKey,
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: cluster)
+
+        #expect(keyRing.clusterTLSState(for: cluster.id)?.hostCACheckingKeys == [Self.pinnedHostCA, Self.rotatedHostCA])
+        #expect(keyRing.clusterTLSState(for: cluster.id)?.clusterCAPEMs == ["pinned-pem"])
+    }
+
+    /// A login response whose `domain_name` does not name the pinned cluster
+    /// must skip the refresh entirely: the pinned keys and the outer TLS
+    /// anchors stay as captured at bootstrap.
+    @Test
+    func loginRefreshSkipsAMismatchedDomainName() async throws {
+        let cluster = makeCluster()
+        let credentialID = Data([1, 2, 3, 4])
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
+        keyRing.storeClusterTLSState(
+            TeleportClusterTLSState(
+                clusterName: "teleport.pcad.it",
+                clusterCAPEMs: ["pinned-pem"],
+                hostCACheckingKeys: [Self.pinnedHostCA]
+            ),
+            for: cluster.id
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = makeLoginFinishResponse(
+            domainName: "other.example.com",
+            checkingKeys: [Self.pinnedHostCA, Self.rotatedHostCA]
+        )
+
+        let coordinator = try makeLoginCoordinator(
+            http: http,
+            keyRing: keyRing,
+            credentialID: credentialID,
+            publicKey: TeleportFixtureSupport.fixedSSHPublicKey,
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: cluster)
+
+        #expect(keyRing.clusterTLSState(for: cluster.id)?.hostCACheckingKeys == [Self.pinnedHostCA])
+        #expect(keyRing.clusterTLSState(for: cluster.id)?.clusterCAPEMs == ["pinned-pem"])
+    }
+
     // MARK: - Phase 3 login
 
     @Test

@@ -117,6 +117,20 @@ enum TeleportHostCACheckingKeysDecoder {
 /// The additions-only rule for refreshing the pinned Host CA checking keys.
 /// Shared by the live + mock keyrings so the security rule has one
 /// implementation.
+///
+/// The refresh source is the login response, which is unauthenticated until
+/// the cert checks pass; the rule is what keeps that channel from evicting an
+/// already-pinned anchor. A refresh may only add key blobs: any response that
+/// would drop a currently pinned blob (a replacement, a rotation that has not
+/// gone additions-first, or an attacker-supplied set) is rejected and the
+/// pinned anchors are kept.
+///
+/// The refresh is bounded on every other axis too. It only runs when the
+/// response's `domain_name` names the cluster that owns the pinned state
+/// (see `matchesPinnedCluster`), and it can never touch `clusterCAPEMs` —
+/// the outer TLS anchors used by `TeleportTLSTrust`. An accepted refresh
+/// therefore only grows the SSH host-cert verifier's pinned key set; it
+/// cannot change the TLS-leg trust anchors that gate every connection.
 enum TeleportHostKeyUpdatePolicy {
 
     /// Apply a refresh to a cluster's TLS state.
@@ -147,5 +161,25 @@ enum TeleportHostKeyUpdatePolicy {
             hostCACheckingKeys: normalized
         )
         return (.updated, updated)
+    }
+
+    /// Whether a login response's `domain_name` names the cluster that owns
+    /// the pinned TLS state. The pinned name was captured at bootstrap and is
+    /// the label bound to the pinned key blobs; a missing, empty, or
+    /// mismatched name must not trigger a refresh (the pinned anchors stay in
+    /// place and readiness surfaces re-bootstrap).
+    static func matchesPinnedCluster(domainName: String?, pinnedClusterName: String?) -> Bool {
+        guard let pinned = pinnedClusterName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !pinned.isEmpty else {
+            return false
+        }
+        guard let domain = domainName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !domain.isEmpty else {
+            return false
+        }
+        // Exact match only; the comparison is case-insensitive so a
+        // legitimately cased rotation response is not skipped and cannot
+        // select a different cluster.
+        return domain.caseInsensitiveCompare(pinned) == .orderedSame
     }
 }

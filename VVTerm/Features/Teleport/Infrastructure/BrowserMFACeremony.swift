@@ -103,6 +103,14 @@ final class BrowserMFACeremony: NSObject {
         // ── 1. Start the loopback listener ────────────────────────────────
         let listener = BrowserMFAListener()
         self.listener = listener
+        // Every early exit (start failure, challenge failure, missing
+        // challenge, wait error) must tear the loopback listener down.
+        // `cancel()` is idempotent, so the explicit cancel on the success
+        // path stays as-is.
+        defer {
+            listener.cancel()
+            self.listener = nil
+        }
         let clientCallbackURL: String
         do {
             clientCallbackURL = try await listener.start()

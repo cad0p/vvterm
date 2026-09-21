@@ -217,12 +217,46 @@ struct OpenSSHHostCertVerifierTests {
         #expect(result == .unsupportedCAKeyType("ssh-rsa"))
     }
 
+    /// OpenSSH's "no expiry" encoding (`validBefore == 0`) is not acceptable
+    /// for a host certificate: it must always be time-bounded.
+    @Test
+    func rejectsHostCertificateWithoutAnExpiry() throws {
+        let certBlob = Self.syntheticHostCert(
+            signatureKeyBlob: try Self.blob(Self.caEd25519),
+            validBefore: 0
+        )
+        let result = OpenSSHHostCertVerifier.verify(
+            hostKeyBlob: certBlob,
+            expectedPrincipals: ["testhost"],
+            checkingKeys: [Self.caEd25519],
+            now: Self.validNow
+        )
+        #expect(result == .expired)
+    }
+
+    /// Oversized ECDSA signature components must be rejected, never truncated
+    /// to 32 bytes; a legitimate leading zero byte still normalizes.
+    @Test
+    func ecdsaSignatureEncodingRejectsOversizedComponentsWithoutTruncating() {
+        let oversizedR = Data([0x01]) + Data(repeating: 0x00, count: 31) + Data([0x01])
+        let s = Data(repeating: 0x01, count: 32)
+        let oversized = OpenSSHCertificate.sshString(oversizedR) + OpenSSHCertificate.sshString(s)
+        #expect(OpenSSHECDSASignature.rawSignature(from: oversized) == nil)
+
+        let paddedR = Data([0x00]) + Data(repeating: 0x01, count: 32)
+        let padded = OpenSSHCertificate.sshString(paddedR) + OpenSSHCertificate.sshString(s)
+        #expect(OpenSSHECDSASignature.rawSignature(from: padded)?.count == 64)
+    }
+
     // MARK: - Synthetic cert helper
 
     /// Build a structurally valid ed25519 host certificate with a chosen
-    /// signature key blob and dummy signature (used for the unsupported-CA
-    /// and no-principal paths).
-    static func syntheticHostCert(signatureKeyBlob: Data) -> Data {
+    /// signature key blob, validity end, and dummy signature (used for the
+    /// unsupported-CA, no-expiry, and no-principal paths).
+    static func syntheticHostCert(
+        signatureKeyBlob: Data,
+        validBefore: UInt64 = 2_082_758_400
+    ) -> Data {
         func string(_ value: String) -> Data { OpenSSHCertificate.sshString(Data(value.utf8)) }
         func string(_ value: Data) -> Data { OpenSSHCertificate.sshString(value) }
         func uint32(_ value: UInt32) -> Data {
@@ -252,7 +286,7 @@ struct OpenSSHHostCertVerifierTests {
         // sequence of SSH strings (OpenSSH PROTOCOL.certkeys).
         blob.append(string(string("testhost")))
         blob.append(uint64(1_767_225_600))  // 2026-01-01
-        blob.append(uint64(2_082_758_400))  // 2036-01-01
+        blob.append(uint64(validBefore))    // 2036-01-01 by default
         blob.append(string(""))
         blob.append(string(""))
         blob.append(string(""))

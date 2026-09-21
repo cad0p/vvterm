@@ -109,8 +109,16 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 onCancel: {}
             )
             .id(tick)  // force view recreation on tick to amplify the race
-            .onReceive(Timer.publish(every: 0.01, on: .main, in: .common).autoconnect()) { _ in
-                tick &+= 1
+            .task {
+                // Bounded re-evaluation driver: enough ticks (~0.5s) to race
+                // the 0.15s mock POST. A repeating Timer publisher here would
+                // outlive the test and keep starting bootstraps after the
+                // suite finishes (the CI diagnostics-hang class).
+                for _ in 0..<50 {
+                    try? await Task.sleep(for: .milliseconds(10))
+                    guard !Task.isCancelled else { return }
+                    tick &+= 1
+                }
             }
         }
 
@@ -169,8 +177,13 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 },
                 onCancel: {}
             )
-            .onReceive(Timer.publish(every: 0.01, on: .main, in: .common).autoconnect()) { _ in
-                tick &+= 1
+            .task {
+                // See InlineCoordinatorParent: bounded, cancellable ticks.
+                for _ in 0..<50 {
+                    try? await Task.sleep(for: .milliseconds(10))
+                    guard !Task.isCancelled else { return }
+                    tick &+= 1
+                }
             }
         }
     }
@@ -268,7 +281,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 onSuccessResult: onSuccessResult
             )
         )
-        // Force the hosted view into a window so `.task` + `.onReceive` fire.
+        // Force the hosted view into a window so `.task` fires.
         installInWindow(host)
 
         let expectation = expectation(description: "onSuccess fired with bootstrap result")
@@ -372,8 +385,18 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     // MARK: - Hosting helpers
 
     /// Install a `UIHostingController`'s view in a live window so SwiftUI's
-    /// `.task` / `.onReceive` modifiers actually run (a hosted view with no
-    /// window never starts its `.task`).
+    /// `.task` modifiers actually run (a hosted view with no window never
+    /// starts its `.task`).
+    ///
+    /// The host/window pair is intentionally retained for the process
+    /// lifetime (the associated object retains the window and the window
+    /// retains the host). Forcing the view tree to deallocate here hits a
+    /// pre-existing local simulator-runtime bug in the MainActor deinit
+    /// back-deployment path (`libmalloc: pointer being freed was not
+    /// allocated`), which is environment-specific. The re-evaluation work the
+    /// views drive is bounded and cancellable instead (see the `.task` loops),
+    /// so a retained view cannot keep the test process busy after the suite
+    /// finishes.
     private func installInWindow(_ host: UIHostingController<some View>) {
         #if canImport(UIKit)
         let window = UIWindow(frame: UIScreen.main.bounds)

@@ -276,11 +276,9 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
         // The cert's ValidBefore. The HTTP response doesn't include it
         // directly — it's embedded in the PEM cert. Parse it from the SSH
-        // cert blob (OpenSSH cert format). Additionally, bind the cert to
-        // the generated keypair: the passwordless webapi issue path has no
-        // server-side binding between the WebAuthn assertion and the SSH
-        // public key that rides along in the same request, so the client
-        // verifies before storing anything.
+        // cert blob (OpenSSH cert format). The client contract is to store
+        // only a certificate bound to the keypair it generated, so the
+        // binding is verified before anything is persisted.
         guard let sshKeyBlob = OpenSSHCertificate.parseAuthorizedKeysLine(sshPubKey)?.blob else {
             logger.error("failed to parse the generated ssh public key")
             state = .failed(.unknown("generated ssh key parse failed"))
@@ -307,12 +305,27 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // Refresh the pinned Host CA checking keys from the login response.
         // The update is additions-only (the keyring rejects a refresh that
         // would drop a pinned key); a rejected refresh keeps the existing
-        // anchors and requires re-bootstrap.
+        // anchors and requires re-bootstrap. `domain_name` must name the
+        // cluster that owns the pinned state, and an accepted refresh can
+        // only add key blobs: `clusterCAPEMs` (the outer TLS anchors) are
+        // never touched, so this unauthenticated channel cannot change the
+        // TLS-leg trust anchors. Additions cannot evict a pinned key; first
+        // capture remains TOFU, an accepted risk.
         if let hostSigners = finishResp.hostSigners, let first = hostSigners.first {
-            let update = keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
-            if update == .rejectedWouldDropPinnedKeys {
+            let pinnedClusterName = keyRing.clusterTLSState(for: cluster.id)?.clusterName
+            if TeleportHostKeyUpdatePolicy.matchesPinnedCluster(
+                domainName: first.domainName,
+                pinnedClusterName: pinnedClusterName
+            ) {
+                let update = keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
+                if update == .rejectedWouldDropPinnedKeys {
+                    logger.error(
+                        "Host CA key refresh rejected for cluster \(cluster.id.uuidString, privacy: .public) — pinned anchors kept; re-bootstrap required"
+                    )
+                }
+            } else {
                 logger.error(
-                    "Host CA key refresh rejected for cluster \(cluster.id.uuidString, privacy: .public) — pinned anchors kept; re-bootstrap required"
+                    "Host CA key refresh skipped for cluster \(cluster.id.uuidString, privacy: .public) — login response domain_name does not match the pinned cluster name"
                 )
             }
         }

@@ -64,15 +64,17 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     /// An empty client cert (Phase 1 returned no `tls_cert`) must throw
     /// `.tls` BEFORE the NWConnection dial. This surfaces an actionable
     /// error instead of a TLS handshake failure.
-    func testConnect_rejectsEmptyClientCert() async {
+    func testConnect_rejectsEmptyClientCert() async throws {
         let client = LiveTeleportGRPCClient()
-        let key = SecKeyCreateRandomKey(
+        guard let key = SecKeyCreateRandomKey(
             [
                 kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
                 kSecAttrKeySizeInBits as String: 256
             ] as CFDictionary,
             nil
-        )!
+        ) else {
+            throw XCTSkip("the unit host cannot create an ephemeral P-256 key")
+        }
         do {
             try await client.connect(
                 host: "teleport.pcad.it",
@@ -97,15 +99,17 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     /// must throw `.transport` BEFORE the dial — the ALPN SNI auth route is
     /// `teleport-auth@<hex(clusterName)>.teleport.cluster.local`, so an empty
     /// cluster name produces a malformed ALPN token that NWConnection rejects.
-    func testConnect_rejectsEmptyClusterName() async {
+    func testConnect_rejectsEmptyClusterName() async throws {
         let client = LiveTeleportGRPCClient()
-        let key = SecKeyCreateRandomKey(
+        guard let key = SecKeyCreateRandomKey(
             [
                 kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
                 kSecAttrKeySizeInBits as String: 256
             ] as CFDictionary,
             nil
-        )!
+        ) else {
+            throw XCTSkip("the unit host cannot create an ephemeral P-256 key")
+        }
         do {
             try await client.connect(
                 host: "teleport.pcad.it",
@@ -169,8 +173,8 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     }
 
     /// A foreign CA (the real pcad.it Host CA against the loopback leaf) must
-    /// be rejected — this is the deterministic guard against the removed
-    /// `complete(true)` accept-anyway behavior.
+    /// be rejected — this is the deterministic guard against the previous
+    /// unconditional acceptance.
     func testVerify_foreignCAIsRejected() throws {
         let leaf = try Self.loopbackLeaf()
         let foreignCA = try Self.certificate("hostca-x509.pem")
@@ -221,6 +225,200 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     /// throw, no crash, no entitlement dependency).
     func testGRPCIdentityDeletionOfAbsentItemsIsSafe() {
         GRPCClientIdentity.deleteKeychainItems(label: GRPCClientIdentity.makeLabel())
+    }
+
+    /// The startup sweep runs before a new registration client does any
+    /// work; it must be safe when the keychain holds no vvterm identities.
+    func testGRPCIdentitySweepIsSafe() {
+        GRPCClientIdentity.deleteStaleIdentities()
+    }
+
+    /// The sweep is a full keychain query triggered by SwiftUI state
+    /// initialization, so it must run at most once per process.
+    func testGRPCIdentitySweepRunsAtMostOncePerProcess() {
+        GRPCClientIdentity.resetSweepGateForTesting()
+        GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in [] }
+        defer {
+            GRPCClientIdentity.sweepEnumerationOverrideForTesting = nil
+            GRPCClientIdentity.resetSweepGateForTesting()
+        }
+
+        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting())
+        XCTAssertFalse(
+            GRPCClientIdentity.deleteStaleIdentities(),
+            "a second sweep in the same process must be skipped"
+        )
+    }
+
+    /// A transient keychain error must not latch the once-per-process gate:
+    /// the process has to retry the sweep once the keychain is available.
+    func testFailedSweepEnumerationDoesNotLatchTheGate() {
+        GRPCClientIdentity.resetSweepGateForTesting()
+        defer {
+            GRPCClientIdentity.sweepEnumerationOverrideForTesting = nil
+            GRPCClientIdentity.resetSweepGateForTesting()
+        }
+
+        GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in nil }
+        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting())
+
+        GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in [] }
+        XCTAssertTrue(
+            GRPCClientIdentity.deleteStaleIdentities(),
+            "a failed enumeration must leave the gate open for a later retry"
+        )
+    }
+
+    /// The sweep may only delete prefixed identities that no in-flight
+    /// connection owns: a second client construction must never delete the
+    /// identity a concurrent handshake is using, and unrelated keychain
+    /// items must survive.
+    func testStaleIdentitySweepDeletesOnlyUnreferencedPrefixedItems() throws {
+        let staleLabel = GRPCClientIdentity.makeLabel() + "-stale"
+        let liveLabel = GRPCClientIdentity.makeLabel() + "-live"
+        let foreignLabel = "vvterm-unrelated-\(UUID().uuidString)"
+        defer {
+            GRPCClientIdentity.deleteKeychainItems(label: staleLabel)
+            GRPCClientIdentity.deleteKeychainItems(label: liveLabel)
+            GRPCClientIdentity.deleteKeychainItems(label: foreignLabel)
+        }
+
+        try Self.insertKey(label: staleLabel)
+        try Self.insertKey(label: liveLabel)
+        try Self.insertKey(label: foreignLabel)
+        GRPCClientIdentity.registerLiveLabel(liveLabel)
+
+        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting())
+
+        XCTAssertEqual(Self.keyStatus(label: staleLabel), errSecItemNotFound)
+        XCTAssertEqual(Self.keyStatus(label: liveLabel), errSecSuccess)
+        XCTAssertEqual(Self.keyStatus(label: foreignLabel), errSecSuccess)
+    }
+
+    /// Deleting an identity unregisters its live label so a later sweep can
+    /// collect it.
+    func testDeletingAnIdentityUnregistersItsLiveLabel() {
+        let label = GRPCClientIdentity.makeLabel()
+        GRPCClientIdentity.registerLiveLabel(label)
+        XCTAssertTrue(GRPCClientIdentity.isLiveLabel(label))
+
+        GRPCClientIdentity.deleteKeychainItems(label: label)
+
+        XCTAssertFalse(GRPCClientIdentity.isLiveLabel(label))
+    }
+
+    /// A dial with no usable trust anchors must fail closed BEFORE the
+    /// per-connection keychain identity is built. The identity handle owns the
+    /// deletion of its cert/key items, so an identity built before a later
+    /// throw would leak (the empty-anchor path is reachable: bootstrap stores
+    /// no anchors when `host_signers` is nil). The injected builder records
+    /// whether it ran.
+    func testMake_rejectsEmptyAnchorsBeforeBuildingTheKeychainIdentity() throws {
+        guard let key = SecKeyCreateRandomKey(
+            [
+                kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+                kSecAttrKeySizeInBits as String: 256
+            ] as CFDictionary,
+            nil
+        ) else {
+            throw XCTSkip("the unit host cannot create an ephemeral P-256 key")
+        }
+        var builderInvocations = 0
+        do {
+            _ = try GRPCTLSOptions.make(
+                clientCertPEM: "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+                privateKey: key,
+                clusterName: "ci-cluster",
+                clusterCAPEMs: [],
+                identityBuilder: { _, _ in
+                    builderInvocations += 1
+                    throw GRPCError.tls("identity builder must not run")
+                }
+            )
+            XCTFail("make should have thrown for empty anchors")
+        } catch let error as GRPCError {
+            guard case .tls(let message) = error else {
+                return XCTFail("expected .tls for empty anchors; got \(error)")
+            }
+            XCTAssertTrue(
+                message.contains("no usable cluster CA trust anchors"),
+                "unexpected error message: \(message)"
+            )
+        }
+        XCTAssertEqual(
+            builderInvocations,
+            0,
+            "the keychain identity must not be built when anchor validation fails"
+        )
+    }
+
+    /// With usable anchors the same seam proves the builder runs only after
+    /// anchor validation (the sentinel error round-trips).
+    func testMake_buildsTheKeychainIdentityAfterAnchorValidation() throws {
+        guard let key = SecKeyCreateRandomKey(
+            [
+                kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+                kSecAttrKeySizeInBits as String: 256
+            ] as CFDictionary,
+            nil
+        ) else {
+            throw XCTSkip("the unit host cannot create an ephemeral P-256 key")
+        }
+        let caPEM = try String(
+            contentsOf: Self.fixtureURL("loopback-tls/loopback-ca.pem"),
+            encoding: .utf8
+        )
+        do {
+            _ = try GRPCTLSOptions.make(
+                clientCertPEM: "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+                privateKey: key,
+                clusterName: "ci-cluster",
+                clusterCAPEMs: [caPEM],
+                identityBuilder: { _, _ in throw GRPCError.tls("builder-ran") }
+            )
+            XCTFail("make should have thrown from the injected builder")
+        } catch let error as GRPCError {
+            guard case .tls(let message) = error, message == "builder-ran" else {
+                return XCTFail("expected the builder sentinel after anchor validation; got \(error)")
+            }
+        }
+    }
+
+    // MARK: - Keychain test helpers
+
+    /// Insert a labeled test key. Skips (rather than fails) when the unit
+    /// host has no usable keychain, so the suite stays entitlement-free.
+    private static func insertKey(label: String) throws {
+        guard let key = SecKeyCreateRandomKey(
+            [
+                kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+                kSecAttrKeySizeInBits as String: 256
+            ] as CFDictionary,
+            nil
+        ) else {
+            throw XCTSkip("the unit host cannot create an ephemeral P-256 key")
+        }
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecValueRef as String: key,
+            kSecAttrLabel as String: label,
+            kSecAttrIsPermanent as String: true,
+        ]
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw XCTSkip("keychain item insertion unavailable (OSStatus \(status))")
+        }
+    }
+
+    private static func keyStatus(label: String) -> OSStatus {
+        SecItemCopyMatching(
+            [
+                kSecClass as String: kSecClassKey,
+                kSecAttrLabel as String: label,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ] as CFDictionary,
+            nil
+        )
     }
 
     // MARK: - Trust test helpers

@@ -5,19 +5,13 @@
 //
 //  Post-issuance binding checks for Teleport certificates.
 //
-//  The WebAuthn assertion covers the challenge + origin, not the SSH / TLS
-//  public keys that ride along in the same `login/finish` /
-//  `headless/login` request. The headless server path binds the issued
-//  certs to the request keypair (`lib/auth/methods.go`), but the passwordless
-//  webapi path historically did not, so the client verifies after issuance:
-//
-//    - the returned SSH certificate is a USER certificate;
-//    - its public key is byte-identical to the key we generated and sent;
-//    - its validity window is sane for the requested TTL;
-//    - it carries at least one principal.
-//
-//  The bootstrap additionally binds the returned `tls_cert` to the
-//  generated TLS keypair. Nothing is stored when any check fails.
+//  The validator enforces the client-side contract for issued certificates:
+//  the returned SSH certificate must be a USER certificate whose public key
+//  is byte-identical to the key that was requested, whose validity window is
+//  sane for the requested TTL, and whose principal set is non-empty. The
+//  bootstrap additionally binds the returned `tls_cert` to the generated TLS
+//  keypair. Nothing is stored when any check fails; the issued certificate is
+//  only ever evaluated after it has arrived over a verified TLS channel.
 //
 
 import Foundation

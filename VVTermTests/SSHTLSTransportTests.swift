@@ -127,7 +127,8 @@ struct SSHTLSTransportTests {
     @Test
     func loopbackHandshakeFailsForSelfSignedIdentity() async throws {
         // The listener presents a self-signed cert; the client only anchors
-        // the fixture CA — the handshake must fail (no accept-anyway).
+        // the fixture CA — the handshake must fail (the certificate is
+        // evaluated, never skipped).
         let identity = try LoopbackTLSServerTestSupport.identity(named: "self-signed.p12")
         let server = try LoopbackTLSServer(
             identity: identity,

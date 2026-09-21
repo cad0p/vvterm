@@ -36,7 +36,7 @@ Documentation-only changes can skip this.
 
 ## 3. Run the narrowest reliable tests
 
-- Unit: `xcodebuild test -scheme VVTerm -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" -only-testing:VVTermTests/<Suite>`
+- Unit: `xcodebuild test -scheme VVTermUnitTests -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" -only-testing:VVTermTests/<Suite>`
 - UI (`VVTermUITests`): required when keyboard/terminal input, focus, navigation, sheets, accessibility, or platform integration changed. Run the affected class locally; CI runs the shards.
 - Integration/E2E: when behavior crosses SSH/session/terminal boundaries, dispatch `teleport-e2e.yml` (real-Teleport tests are env-gated and skip locally).
 - Bug/regression fixes: add a deterministic failing test first when feasible; if coverage is not possible, state the blocker and the manual validation in the PR.

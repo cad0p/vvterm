@@ -1532,6 +1532,11 @@ final class TerminalTabManager: ObservableObject {
         if connectionState.isConnected {
             paneStates[paneId]?.markConnectionEstablished()
         }
+        if connectionState.isConnecting {
+            // A new attempt supersedes the previous failure's retryability;
+            // the attempt records its own failure if it fails.
+            paneStates[paneId]?.markConnectionAttemptStarted()
+        }
         #if os(iOS)
         publishTerminalInputAvailability(for: paneId)
         #endif
@@ -1570,14 +1575,23 @@ final class TerminalTabManager: ObservableObject {
     }
 
     func handleConnectionFailure(for paneId: UUID, error: Error) {
-        let requiresUserAction = (error as? SSHError).map {
-            !$0.allowsAutomaticReconnectRetry
-        } ?? false
-        if requiresUserAction, paneStates[paneId]?.disconnectReason != nil {
+        recordConnectionFailure(for: paneId, error: error)
+        updatePaneState(paneId, connectionState: .failed(error.localizedDescription))
+    }
+
+    /// Record whether the failure may be retried automatically, without
+    /// publishing a connection state. Producers that present their own
+    /// failure copy (the Eternal Terminal runtime) call this so the retry
+    /// loop and a pending trust prompt do not fight over the pane state.
+    func recordConnectionFailure(for paneId: UUID, error: Error) {
+        let allowsAutomaticReconnectRetry = (error as? SSHError)?.allowsAutomaticReconnectRetry ?? true
+        paneStates[paneId]?.recordConnectionFailure(
+            allowsAutomaticReconnectRetry: allowsAutomaticReconnectRetry
+        )
+        if !allowsAutomaticReconnectRetry, paneStates[paneId]?.disconnectReason != nil {
             paneStates[paneId]?.disconnectReason = nil
             schedulePersist()
         }
-        updatePaneState(paneId, connectionState: .failed(error.localizedDescription))
     }
 
     func handleShellEnd(

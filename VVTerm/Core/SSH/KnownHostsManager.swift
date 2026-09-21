@@ -42,14 +42,32 @@ final class KnownHostsManager: @unchecked Sendable {
         return pendingEntries[hostKey(host: host, port: port)]
     }
 
-    /// Persist the pending key (the user confirmed the first-use prompt).
+    /// Persist the pending first-use key, but only when it still matches the
+    /// fingerprint the user reviewed in the prompt.
+    ///
+    /// The prompt can race: another pane can overwrite the single pending
+    /// entry between the failure and the confirmation. Saving only on a match
+    /// means a stale entry is never pinned; a mismatch discards the pending
+    /// entry and the caller fails closed (the next attempt re-records the
+    /// currently presented key and prompts again).
     @discardableResult
-    func confirmPending(host: String, port: Int) -> Bool {
+    func confirmPending(host: String, port: Int, expectedFingerprint: String) -> Bool {
         lock.lock()
         let key = hostKey(host: host, port: port)
-        let pending = pendingEntries.removeValue(forKey: key)
+        guard let pending = pendingEntries[key] else {
+            lock.unlock()
+            return false
+        }
+        guard pending.fingerprint == expectedFingerprint else {
+            pendingEntries.removeValue(forKey: key)
+            lock.unlock()
+            logger.error(
+                "Refusing to save host key for \(host):\(port) — pending fingerprint does not match the reviewed fingerprint"
+            )
+            return false
+        }
+        pendingEntries.removeValue(forKey: key)
         lock.unlock()
-        guard let pending else { return false }
         save(entry: pending)
         logger.info("User confirmed new host key for \(host):\(port)")
         return true

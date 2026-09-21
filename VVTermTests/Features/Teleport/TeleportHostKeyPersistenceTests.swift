@@ -25,6 +25,9 @@ struct TeleportHostKeyPersistenceTests {
     private static let otherHostCA = TeleportFixtureSupport
         .fixtureString("OpenSSH/ca_foreign.pub")
         .trimmingCharacters(in: .whitespacesAndNewlines)
+    private static let thirdHostCA = TeleportFixtureSupport
+        .fixtureString("OpenSSH/hostkey_ed25519.pub")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 
     // MARK: - Wire decoding
 
@@ -114,6 +117,23 @@ struct TeleportHostKeyPersistenceTests {
         #expect(outcome.updatedState == nil)
     }
 
+    /// A refresh that both adds and drops a key must be rejected: the
+    /// unauthenticated login response can add anchors, never evict one.
+    @Test
+    func mixedRefreshThatAddsAndDropsAPinnedKeyIsRejected() {
+        let state = TeleportClusterTLSState(
+            clusterName: "c",
+            clusterCAPEMs: ["pem"],
+            hostCACheckingKeys: [Self.hostCA]
+        )
+        let outcome = TeleportHostKeyUpdatePolicy.apply(
+            checkingKeys: [Self.otherHostCA, Self.thirdHostCA],
+            to: state
+        )
+        #expect(outcome.result == .rejectedWouldDropPinnedKeys)
+        #expect(outcome.updatedState == nil)
+    }
+
     @Test
     func identicalRefreshIsANoOp() {
         let state = TeleportClusterTLSState(
@@ -153,6 +173,27 @@ struct TeleportHostKeyPersistenceTests {
         #expect(TeleportHostKeyUpdatePolicy.apply(checkingKeys: ["garbage"], to: state).result == .noChange)
     }
 
+    // MARK: - Login-response anchor policy
+
+    /// The refresh only runs for the cluster whose name is bound to the
+    /// pinned state. A missing, empty, or mismatched `domain_name` must skip
+    /// the refresh and leave the pinned anchors in place.
+    @Test
+    func refreshMatchesOnlyThePinnedClusterName() {
+        #expect(TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "c", pinnedClusterName: "c"))
+        #expect(TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: " c ", pinnedClusterName: "c"))
+        // Case is normalized so a legitimately cased rotation response is
+        // not skipped; the match is still exact on the name itself.
+        #expect(TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "TELEPORT.PCAD.IT", pinnedClusterName: "teleport.pcad.it"))
+        #expect(TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: " teleport.pcad.it ", pinnedClusterName: "TELEPORT.PCAD.IT"))
+        #expect(!TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "other", pinnedClusterName: "c"))
+        #expect(!TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "teleport.pcad.it.evil.com", pinnedClusterName: "teleport.pcad.it"))
+        #expect(!TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: nil, pinnedClusterName: "c"))
+        #expect(!TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "c", pinnedClusterName: nil))
+        #expect(!TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "c", pinnedClusterName: ""))
+        #expect(!TeleportHostKeyUpdatePolicy.matchesPinnedCluster(domainName: "   ", pinnedClusterName: "   "))
+    }
+
     // MARK: - Mock keyring conformance
 
     @MainActor
@@ -171,9 +212,13 @@ struct TeleportHostKeyPersistenceTests {
 
         #expect(keyRing.updateClusterHostKeys([Self.hostCA, Self.otherHostCA], for: clusterId) == .updated)
         #expect(keyRing.clusterTLSState(for: clusterId)?.hostCACheckingKeys.count == 2)
+        // The refresh only grows the pinned checking keys; the outer TLS
+        // anchors must be byte-identical after an accepted refresh.
+        #expect(keyRing.clusterTLSState(for: clusterId)?.clusterCAPEMs == ["pem"])
 
         #expect(keyRing.updateClusterHostKeys([Self.hostCA], for: clusterId) == .rejectedWouldDropPinnedKeys)
         #expect(keyRing.clusterTLSState(for: clusterId)?.hostCACheckingKeys.count == 2)
+        #expect(keyRing.clusterTLSState(for: clusterId)?.clusterCAPEMs == ["pem"])
     }
 }
 

@@ -35,9 +35,9 @@
 //  This chain validates against the real cluster: `SecTrustEvaluateWithError`
 //  succeeds with the Host CA anchored (verified against teleport.pcad.it,
 //  2026-09-21), and `TeleportTLSTrust` evaluates an explicit SSL policy per
-//  candidate name. Earlier revisions accepted the certificate unconditionally
-//  on the incorrect premise that proxy certs cannot validate; that bypass is
-//  gone — a self-signed or foreign-CA leaf now fails the handshake.
+//  candidate name. Earlier revisions did not evaluate the certificate chain
+//  on this leg; that gap is closed — a self-signed or foreign-CA leaf now
+//  fails the handshake.
 //
 
 #if canImport(Network)
@@ -63,10 +63,10 @@ actor SSHTLSTransport {
     /// See Teleport RFD 39 (TLS Routing).
     static let alpnProtocol = "teleport-proxy-ssh"
 
-    /// The full list of ALPN protocols offered to the TLS listener.
-    /// `teleport-proxy-ssh` is the SSH route; `h2` is offered as a fallback
-    /// (the proxy listener serves h2 too, mirroring the gRPC path).
-    static let offeredALPNProtocols: [String] = [alpnProtocol, "h2"]
+    /// The ALPN protocols offered to the TLS listener. Only the SSH route is
+    /// offered: the verify block requires `teleport-proxy-ssh`, so an `h2`
+    /// fallback could only ever negotiate into a rejection.
+    static let offeredALPNProtocols: [String] = [alpnProtocol]
 
     /// The result of creating the socketpair bridge.
     struct SocketPair: Sendable {
@@ -100,7 +100,7 @@ actor SSHTLSTransport {
 
     /// Build `NWProtocolTLS.Options` for the Teleport proxy SSH ALPN route.
     ///
-    /// - ALPN: `teleport-proxy-ssh` (+ `h2` fallback)
+    /// - ALPN: `teleport-proxy-ssh` only
     /// - SNI: the dial host
     /// - Server verification: the cluster Host CA certs as the only trust
     ///   anchors, the cert evaluated against the dial host /
@@ -125,7 +125,7 @@ actor SSHTLSTransport {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
-        // ALPN: offer teleport-proxy-ssh + h2 fallback.
+        // ALPN: offer teleport-proxy-ssh (the verify block requires it).
         for proto in offeredALPNProtocols {
             proto.withCString { cStr in
                 sec_protocol_options_add_tls_application_protocol(secOpts, cStr)

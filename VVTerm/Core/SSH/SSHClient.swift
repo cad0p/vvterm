@@ -2313,6 +2313,16 @@ actor SSHSession {
             throw SSHError.teleportCertMissing
 
         case .unknownHost(let presentedFingerprint, let presentedKeyType):
+            // Defense in depth: the policy only returns this for non-Teleport
+            // hosts (a Teleport host either verifies against the Host CA or
+            // fails closed with missing anchors). A Teleport host must never
+            // be offered a first-use trust prompt — fail closed instead.
+            guard config.authMethod != .faceIDTeleport else {
+                logger.error(
+                    "teleport host key reached the first-use path for \(host, privacy: .private(mask: .hash)):\(port) — failing closed"
+                )
+                throw SSHError.hostKeyVerificationFailed
+            }
             // First use: record the key as pending and prompt. The pin is
             // persisted only after the user confirms the trust affordance.
             let entry = KnownHostsManager.Entry(
@@ -5739,6 +5749,21 @@ enum SSHError: LocalizedError {
     /// only stores the localized string, so the terminal UI matches on it to
     /// decide which host-key trust affordance to show.
     static let hostKeyUnknownMessageMarker = "Host key is not trusted yet"
+
+    /// The fingerprint embedded in a `hostKeyUnknown` failure message.
+    ///
+    /// The trust affordance re-reads the presented fingerprint from the
+    /// message the banner is showing, so the prompt can be refused when the
+    /// pending entry no longer describes that failure.
+    static func fingerprint(inFailureMessage message: String) -> String? {
+        guard let marker = message.range(of: hostKeyUnknownMessageMarker),
+              let open = message[marker.upperBound...].firstIndex(of: "("),
+              let close = message[message.index(after: open)...].firstIndex(of: ")") else {
+            return nil
+        }
+        let fingerprint = message[message.index(after: open)..<close]
+        return fingerprint.isEmpty ? nil : String(fingerprint)
+    }
 
     var allowsAutomaticReconnectRetry: Bool {
         switch self {

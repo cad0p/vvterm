@@ -550,6 +550,7 @@ struct TerminalPaneView: View {
     @State private var terminalBackgroundColor: Color = Self.initialTerminalBackgroundColor()
     @State private var connectWatchdogToken = UUID()
     @State private var showingRetrustHostConfirmation = false
+    @State private var hostKeyReview = HostKeyTrustReviewState()
     @StateObject private var richPasteUI = TerminalRichPasteUIModel()
     @ObservedObject private var networkMonitor: NetworkMonitor = .shared
 
@@ -572,36 +573,80 @@ struct TerminalPaneView: View {
 
     private var hostKeyTrustDisposition: TerminalHostKeyTrustDisposition {
         guard case .failed(let error) = connectionState else { return .none }
-        if error == SSHError.hostKeyVerificationFailed.localizedDescription
-            || error.contains("Host key verification failed") {
-            return .replaceTrustedHost
+        return .resolve(failureMessage: error, authMethod: server.authMethod)
+    }
+
+    /// The host-key affordance the presented alert describes. The alert copy
+    /// and the confirmation read only the captured review: a live state flip
+    /// (a first-use prompt becoming a replace prompt) must not re-render the
+    /// alert into a different decision than the one the user reviewed. The
+    /// alert is dismissed on any connection-state change, so `.none` here
+    /// means the review was invalidated while the alert was still up; the
+    /// call sites render neutral, non-destructive copy for that case.
+    private var reviewedHostKeyTrustDisposition: TerminalHostKeyTrustDisposition {
+        hostKeyReview.reviewedDisposition
+    }
+
+    private var currentFailureMessage: String? {
+        if case .failed(let message) = connectionState { return message }
+        return nil
+    }
+
+    /// Present the host-key review alert for the current failure.
+    ///
+    /// The capture is refused when the pending key no longer matches the
+    /// failure the banner is showing (a parallel attempt can replace the
+    /// single pending slot): the reconnect re-reads the presented key and
+    /// re-prompts instead of showing two different fingerprints.
+    private func presentHostKeyTrustPrompt() {
+        let disposition = hostKeyTrustDisposition
+        guard disposition != .none else { return }
+        let captured = hostKeyReview.capture(
+            disposition: disposition,
+            failureMessage: currentFailureMessage,
+            pendingEntry: KnownHostsManager.shared.pendingEntry(for: server.host, port: server.port)
+        )
+        guard captured else {
+            retryConnection()
+            return
         }
-        if error.contains(SSHError.hostKeyUnknownMessageMarker) {
-            return .trustNewHost
-        }
-        return .none
+        showingRetrustHostConfirmation = true
     }
 
     private var hostKeyTrustAlertTitle: String {
-        switch hostKeyTrustDisposition {
+        switch reviewedHostKeyTrustDisposition {
         case .trustNewHost:
             return String(localized: "Trust New Host Key?")
-        case .replaceTrustedHost, .none:
+        case .replaceTrustedHost:
             return String(localized: "Replace Trusted Host?")
+        case .none:
+            return String(localized: "Host Key Review")
         }
     }
 
     private var retrustHostConfirmationMessage: String {
         let endpoint = "\(server.host):\(server.port)"
-        switch hostKeyTrustDisposition {
+        switch reviewedHostKeyTrustDisposition {
         case .trustNewHost:
-            return String(
+            let message = String(
                 format: String(localized: "VVTerm does not have a saved SSH host key for %@. Verify the fingerprint with the server owner before continuing."),
                 endpoint
             )
-        case .replaceTrustedHost, .none:
+            guard let reviewed = hostKeyReview.reviewedEntry else { return message }
+            return message + "\n\n" + String(
+                format: String(localized: "Fingerprint: %@"),
+                reviewed.fingerprint
+            )
+        case .replaceTrustedHost:
             return String(
                 format: String(localized: "VVTerm saved a different SSH host key for %@. Only continue if you recreated this server or trust the new host."),
+                endpoint
+            )
+        case .none:
+            // The review was invalidated while the alert was up (the alert
+            // is dismissed on any state change). Offer no trust decision.
+            return String(
+                format: String(localized: "The host key review for %@ is no longer current. Reconnect to review the key again."),
                 endpoint
             )
         }
@@ -669,6 +714,7 @@ struct TerminalPaneView: View {
     private var automaticReconnectAllowed: Bool {
         guard autoReconnectEnabled else { return false }
         if case .failed = connectionState {
+            guard paneState?.lastFailureAllowsAutomaticReconnectRetry ?? true else { return false }
             return paneState?.disconnectReason?.allowsAutomaticReconnect == true
         }
         return paneState?.disconnectReason?.allowsAutomaticReconnect ?? true
@@ -826,7 +872,9 @@ struct TerminalPaneView: View {
                     isActive: shouldFocus,
                     topBannerInset: zenTopBannerInset,
                     onRetry: retryConnection,
-                    onTrustNewHostKey: { showingRetrustHostConfirmation = true }
+                    onTrustNewHostKey: {
+                        presentHostKeyTrustPrompt()
+                    }
                 )
 
                 if shouldShowFloatingVoiceButton {
@@ -882,6 +930,16 @@ struct TerminalPaneView: View {
             startConnectWatchdog()
         }
         .onChange(of: connectionState) { state in
+            // The failure the prompt describes is no longer the live state:
+            // drop the captured review (and the stale alert) so the
+            // confirmation can never pin a key that replaced the reviewed
+            // one. This must not depend on the captured entry: the replace
+            // flow captures nil and its alert would otherwise stay up while
+            // its copy re-renders from the live state.
+            if showingRetrustHostConfirmation {
+                hostKeyReview.connectionStateChanged()
+                showingRetrustHostConfirmation = false
+            }
             if state.isConnecting || state.isConnected {
                 cancelScheduledAutomaticReconnect()
                 connectWatchdogToken = UUID()
@@ -951,13 +1009,15 @@ struct TerminalPaneView: View {
         }
         .alert(hostKeyTrustAlertTitle, isPresented: $showingRetrustHostConfirmation) {
             Button("Cancel", role: .cancel) { }
-            Button(
-                hostKeyTrustDisposition == .trustNewHost
-                    ? String(localized: "Trust and Reconnect")
-                    : String(localized: "Replace and Reconnect"),
-                role: .destructive
-            ) {
-                retrustHostAndRetry()
+            if reviewedHostKeyTrustDisposition != .none {
+                Button(
+                    reviewedHostKeyTrustDisposition == .trustNewHost
+                        ? String(localized: "Trust and Reconnect")
+                        : String(localized: "Replace and Reconnect"),
+                    role: .destructive
+                ) {
+                    retrustHostAndRetry()
+                }
             }
         } message: {
             Text(retrustHostConfirmationMessage)
@@ -1026,16 +1086,30 @@ struct TerminalPaneView: View {
     }
 
     private func retrustHostAndRetry() {
-        switch hostKeyTrustDisposition {
+        // Act on the disposition captured when the prompt was presented, not
+        // the live state: a first-use alert that re-rendered as a replace
+        // prompt would otherwise delete the saved pin on confirm.
+        switch hostKeyReview.reviewedDisposition {
         case .replaceTrustedHost:
             KnownHostsManager.shared.remove(host: server.host, port: server.port)
         case .trustNewHost:
-            // Persist the pending first-use key only now that the user has
-            // confirmed it.
-            KnownHostsManager.shared.confirmPending(host: server.host, port: server.port)
+            // Persist the pending first-use key only when it still matches
+            // the fingerprint captured when the prompt was opened. A racing
+            // pane can replace the single pending entry; a mismatch discards
+            // it and the reconnect re-prompts with the current key.
+            if let reviewed = hostKeyReview.reviewedEntry {
+                _ = KnownHostsManager.shared.confirmPending(
+                    host: reviewed.host,
+                    port: reviewed.port,
+                    expectedFingerprint: reviewed.fingerprint
+                )
+            } else {
+                KnownHostsManager.shared.discardPending(host: server.host, port: server.port)
+            }
         case .none:
             break
         }
+        hostKeyReview.connectionStateChanged()
         retryConnection()
     }
 
@@ -1137,7 +1211,8 @@ struct TerminalPaneView: View {
         guard TerminalAutoReconnectPolicy.shouldScheduleRetry(
             automaticReconnectAllowed: automaticReconnectAllowed,
             hasEstablishedConnection: paneState?.hasEstablishedConnection == true,
-            connectionState: connectionState
+            connectionState: connectionState,
+            lastFailureAllowsAutomaticReconnectRetry: paneState?.lastFailureAllowsAutomaticReconnectRetry ?? true
         ) else { return }
 
         automaticReconnectRetryTask = Task { @MainActor in

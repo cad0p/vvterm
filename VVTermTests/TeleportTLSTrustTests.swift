@@ -186,6 +186,487 @@ struct TeleportTLSTrustTests {
         #expect(!result.ok)
     }
 
+    // MARK: - Long-lived-cert fallback: EKU / keyUsage enforcement
+
+    /// The long-lived fallback is the production path for the real cluster
+    /// leaf, so its BasicX509 re-evaluation must still enforce the leaf's key
+    /// purpose. A clientAuth-only leaf signed by the pinned CA must not be
+    /// accepted for a TLS server role.
+    @Test
+    func longLivedClientAuthOnlyLeafIsRejected() throws {
+        let leaf = try Self.certificate("longlived-clientauth.pem")
+        let ca = try Self.certificate("longlived-ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(!result.ok, "a clientAuth-only leaf must not be accepted as a TLS server")
+    }
+
+    /// Same fallback path, but the leaf's keyUsage excludes digitalSignature.
+    @Test
+    func longLivedKeyEnciphermentOnlyLeafIsRejected() throws {
+        let leaf = try Self.certificate("longlived-keyenc.pem")
+        let ca = try Self.certificate("longlived-ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(!result.ok, "a keyEncipherment-only leaf must not be accepted as a TLS server")
+    }
+
+    /// Positive control: the same CA + a long-lived serverAuth leaf with
+    /// digitalSignature still verifies, so the rejections above are the EKU /
+    /// keyUsage rule, not the anchor or the fallback itself.
+    @Test
+    func longLivedServerAuthLeafStillVerifies() throws {
+        let leaf = try Self.certificate("longlived-serverauth.pem")
+        let ca = try Self.certificate("longlived-ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(result.ok, "a long-lived serverAuth leaf must still verify: \(String(describing: result.error))")
+    }
+
+    /// A CA certificate must not be accepted as the TLS server leaf, even
+    /// when it carries a matching SAN and serverAuth EKU. The fixture is
+    /// long-lived, so the BasicX509 + explicit-SAN fallback (the production
+    /// path for the real cluster leaf) is the deciding evaluation.
+    @Test
+    func longLivedCAPresentedAsLeafIsRejected() throws {
+        let leaf = try Self.certificate("longlived-ca-as-leaf.pem")
+        let trust = try Self.trust(leaf: leaf)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [leaf],
+            serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(!result.ok, "a CA certificate must not be accepted as a TLS leaf")
+    }
+
+    /// Precondition for the rejection above: the CA-as-leaf fixture is
+    /// long-lived, so the SSL policy fails on the validity cap and `verify`
+    /// reaches the BasicX509 + explicit-SAN fallback. Without the
+    /// basicConstraints rule, that fallback would accept the certificate
+    /// (matching SAN, serverAuth EKU, digitalSignature keyUsage).
+    @Test
+    func caPresentedAsLeafWouldPassTheOtherFallbackChecks() throws {
+        let leaf = try Self.certificate("longlived-ca-as-leaf.pem")
+        #expect(TeleportTLSTrust.certificate(leaf, matchesName: "localhost"))
+        #expect(TeleportTLSTrust.certificateAllowsTLSServerUse(leaf))
+        #expect(TeleportTLSTrust.certificateIsCA(leaf))
+
+        let trust = try Self.trust(
+            leaf: leaf,
+            policy: SecPolicyCreateSSL(true, "localhost" as CFString)
+        )
+        SecTrustSetAnchorCertificates(trust, [leaf] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(trust, true)
+
+        var error: CFError?
+        #expect(!SecTrustEvaluateWithError(trust, &error))
+        guard let error else {
+            Issue.record("expected the SSL policy to fail with a validity-period error")
+            return
+        }
+        #expect(CFErrorGetCode(error) == errSecCertificateValidityPeriodTooLong)
+    }
+
+    /// A short-lived CA-as-leaf certificate reaches the primary SSL-policy
+    /// evaluation (not the validity-period fallback), so the CA-as-leaf rule
+    /// must be enforced there too. The precondition pins that the platform's
+    /// SSL policy accepts this fixture: `verify` is the deciding evaluation.
+    @Test
+    func shortLivedCAPresentedAsLeafIsRejectedOnThePrimaryPath() throws {
+        let leaf = try Self.certificate("shortlived-ca-as-leaf.pem")
+        let policyDate = Self.captureDate.addingTimeInterval(86_400)
+
+        let preconditionTrust = try Self.trust(
+            leaf: leaf,
+            policy: SecPolicyCreateSSL(true, "localhost" as CFString)
+        )
+        Self.pin(preconditionTrust, to: policyDate)
+        SecTrustSetAnchorCertificates(preconditionTrust, [leaf] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(preconditionTrust, true)
+        var sslError: CFError?
+        let sslAccepted = SecTrustEvaluateWithError(preconditionTrust, &sslError)
+        #expect(
+            sslAccepted,
+            "precondition: the SSL policy accepts the short-lived CA fixture"
+        )
+
+        let trust = try Self.trust(leaf: leaf)
+        Self.pin(trust, to: policyDate)
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [leaf],
+            serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(!result.ok, "a CA certificate must not be accepted as a TLS leaf")
+    }
+
+    /// RFC 5280 forbids repeated extensions. A certificate with
+    /// basicConstraints CA:TRUE followed by CA:FALSE must fail closed rather
+    /// than let the later value mask the earlier one.
+    @Test
+    func duplicateRecognizedExtensionsFailClosed() throws {
+        let valid = try Self.certificate("server.pem")
+        #expect(TeleportTLSTrust.parseExtensions(der: SecCertificateCopyData(valid) as Data) != nil)
+
+        let pem = try Self.fixtureString("loopback-tls/duplicate-basicconstraints.pem")
+        let der = try TeleportTLSTrust.pemToDER(pem: pem, label: "CERTIFICATE")
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+
+        let certificate = try #require(SecCertificateCreateWithData(nil, der as CFData))
+        #expect(TeleportTLSTrust.certificateIsCA(certificate))
+        #expect(!TeleportTLSTrust.certificateAllowsTLSServerUse(certificate))
+    }
+
+    // MARK: - DER walker strictness
+
+    /// Positive control: the synthetic DER builder produces extensions the
+    /// walker accepts, including the optional pathLenConstraint.
+    @Test
+    func syntheticBasicConstraintsFixturesParse() {
+        let ca = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: ca)?.basicConstraintsIsCA == true)
+
+        let leaf = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data())
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: leaf)?.basicConstraintsIsCA == false)
+
+        let pathLen = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(
+                0x30,
+                Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data([0x01]))
+            )
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: pathLen)?.basicConstraintsIsCA == true)
+    }
+
+    /// `SEQUENCE { BOOLEAN FALSE, BOOLEAN TRUE }` reads as non-CA to a
+    /// first-element walker while another parser could read CA:TRUE; the
+    /// extension must fail closed instead of deciding on the prefix.
+    @Test
+    func basicConstraintsWithTrailingBooleanFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(
+                0x30,
+                Self.tlv(0x01, Data([0x00])) + Self.tlv(0x01, Data([0xFF]))
+            )
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// A dangling tag byte after the recognized fields is not a clean end:
+    /// the walker must not accept the successfully-read prefix.
+    @Test
+    func basicConstraintsWithDanglingTagFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(
+                0x30,
+                Self.tlv(0x01, Data([0x00])) + Data([0x82])
+            )
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// A truncated long-form length consumes the remaining bytes without
+    /// producing an element; the walker must not treat that as a clean end.
+    @Test
+    func basicConstraintsWithTruncatedLongFormLengthFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(
+                0x30,
+                Self.tlv(0x01, Data([0x00])) + Data([0x82, 0x85])
+            )
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// The empty-sequence shortcut must also require a clean end: a malformed
+    /// non-empty sequence whose first element cannot be read is not empty.
+    @Test
+    func basicConstraintsWithMalformedFirstElementFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data([0x82]))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// Positive controls for the strictness rules above: a well-formed empty
+    /// basicConstraints sequence still parses as non-CA and a long-form
+    /// length that fits is still accepted, so the rejections are the
+    /// truncation rule and not the parser refusing valid encodings.
+    @Test
+    func wellFormedBasicConstraintsEncodingsStillParse() {
+        let empty = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data())
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: empty)?.basicConstraintsIsCA == false)
+
+        // SEQUENCE { BOOLEAN FALSE, INTEGER 2 } with a short-form length is
+        // covered above; exercise the long-form length path instead.
+        let longForm = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(
+                0x30,
+                Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data(repeating: 0x01, count: 0x82))
+            )
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: longForm)?.basicConstraintsIsCA == true)
+    }
+
+    /// Trailing bytes after the outer Certificate SEQUENCE would be ignored
+    /// by this walker while another parser could read them, so the DER entry
+    /// point must fail closed.
+    @Test
+    func trailingBytesAfterCertificateSequenceFailClosed() {
+        let certificate = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data())
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: certificate)?.basicConstraintsIsCA == false)
+        #expect(TeleportTLSTrust.parseExtensions(der: certificate + Data([0x00])) == nil)
+    }
+
+    /// DER requires the minimum number of length octets (X.690 §8.1.3.5): a
+    /// long-form length that could be encoded shorter, or that carries a
+    /// redundant leading zero octet, must fail closed.
+    @Test
+    func nonMinimalLongFormLengthFailsClosed() {
+        let extensionElement = Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data())
+        )
+        let extensions = Self.tlv(0x30, extensionElement)
+        let extensionsField = Self.tlv(0xA3, extensions)
+        let tbsCertificate = Self.tlv(0x30, extensionsField)
+
+        // 0x81 NN encodes a length below 0x80 in long form.
+        let longFormForShort = Data([0x30, 0x81, UInt8(tbsCertificate.count)]) + tbsCertificate
+        #expect(TeleportTLSTrust.parseExtensions(der: longFormForShort) == nil)
+
+        // 0x82 0x00 NN carries a redundant leading zero octet.
+        let leadingZero = Data([0x30, 0x82, 0x00, UInt8(tbsCertificate.count)]) + tbsCertificate
+        #expect(TeleportTLSTrust.parseExtensions(der: leadingZero) == nil)
+
+        // Positive control: the same content with a minimal length parses.
+        let minimal = Self.tlv(0x30, tbsCertificate)
+        #expect(TeleportTLSTrust.parseExtensions(der: minimal)?.basicConstraintsIsCA == false)
+    }
+
+    /// pathLenConstraint must be a non-negative, minimally-encoded INTEGER:
+    /// an empty, redundant-leading-zero, or negative encoding could be read
+    /// differently by another parser, so it fails closed.
+    @Test
+    func nonMinimalPathLenConstraintFailsClosed() {
+        let empty = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data()))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: empty) == nil)
+
+        let leadingZero = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data([0x00, 0x01])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: leadingZero) == nil)
+
+        let negative = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data([0xFF])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: negative) == nil)
+
+        // Positive controls: the minimal encodings of the same values parse.
+        let minimalZero = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data([0x00])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: minimalZero)?.basicConstraintsIsCA == true)
+
+        let minimalPositive = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])) + Self.tlv(0x02, Data([0x00, 0x80])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: minimalPositive)?.basicConstraintsIsCA == true)
+    }
+
+    /// A pathLenConstraint without cA TRUE is not valid DER: the constraint
+    /// is only defined when the cA boolean is asserted, so the walker must
+    /// not accept it.
+    @Test
+    func pathLenConstraintWithoutCAFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0x00])) + Self.tlv(0x02, Data([0x01])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// A high-tag-number-form tag byte carries additional tag bytes this
+    /// reader does not consume; misreading the next byte as a length must be
+    /// impossible, so it fails closed.
+    @Test
+    func highTagNumberFormFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0x00])) + Data([0x9F, 0x01, 0x00]))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// A non-canonical OID spelling of a recognized extension must fail
+    /// closed rather than being skipped as unrecognized: a basicConstraints
+    /// read as absent would let a CA act as a leaf.
+    @Test
+    func nonMinimalOIDFailsClosed() {
+        // 2.5.29.19 with a redundant leading 0x80 group in the first
+        // subidentifier.
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x80, 0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+
+        // Positive control: the canonical spelling still parses.
+        let canonical = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Self.tlv(0x01, Data([0xFF])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: canonical)?.basicConstraintsIsCA == true)
+    }
+
+    @Test
+    func keyUsageWithTrailingElementFailsClosed() {
+        let valid = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x0F],
+            value: Self.tlv(0x03, Data([0x07, 0x80]))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: valid)?.keyUsageBits == [0x80])
+
+        let trailing = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x0F],
+            value: Self.tlv(0x03, Data([0x07, 0x80])) + Self.tlv(0x02, Data([0x01]))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: trailing) == nil)
+    }
+
+    @Test
+    func subjectAltNameWithTrailingElementFailsClosed() {
+        let names = Self.tlv(0x30, Self.tlv(0x82, Data("example.com".utf8)))
+        let valid = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x11],
+            value: names
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: valid)?.dnsNames == ["example.com"])
+
+        let trailing = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x11],
+            value: names + Self.tlv(0x02, Data([0x01]))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: trailing) == nil)
+    }
+
+    @Test
+    func extendedKeyUsageWithTrailingElementFailsClosed() {
+        let serverAuth = Self.tlv(0x06, Data([0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01]))
+        let valid = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x25],
+            value: Self.tlv(0x30, serverAuth)
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: valid)?.hasExtendedKeyUsage == true)
+
+        let trailing = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x25],
+            value: Self.tlv(0x30, serverAuth + Self.tlv(0x02, Data([0x01])))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: trailing) == nil)
+    }
+
+    @Test
+    func recognizedExtensionWithTrailingFieldFailsClosed() {
+        let der = Self.syntheticCertificate(extension: Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data()),
+            trailing: Self.tlv(0x02, Data([0x01]))
+        ))
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
+    }
+
+    /// A keyUsage extension with a set unused trailing bit is malformed DER
+    /// and must fail the server-use check.
+    @Test
+    func keyUsageUnusedBitsAreValidated() throws {
+        let leaf = try Self.certificate("server.pem")
+        #expect(TeleportTLSTrust.certificateAllowsTLSServerUse(leaf))
+
+        let der = SecCertificateCopyData(leaf) as Data
+        guard let patchedDER = Self.patchingKeyUsageUnusedBit(in: der),
+              let patched = SecCertificateCreateWithData(nil, patchedDER as CFData) else {
+            Issue.record("could not build the malformed keyUsage fixture")
+            return
+        }
+        #expect(!TeleportTLSTrust.certificateAllowsTLSServerUse(patched))
+    }
+
+    /// Precondition for the rejection tests above: the generated leaves are
+    /// long-lived, so Apple's SSL policy fails with
+    /// `errSecCertificateValidityPeriodTooLong` and `verify` takes the
+    /// BasicX509 + explicit SAN fallback (the path under test).
+    @Test
+    func longLivedLeavesTakeTheValidityPeriodFallback() throws {
+        let leaf = try Self.certificate("longlived-clientauth.pem")
+        let ca = try Self.certificate("longlived-ca.pem")
+        let trust = try Self.trust(
+            leaf: leaf,
+            policy: SecPolicyCreateSSL(true, "localhost" as CFString)
+        )
+        SecTrustSetAnchorCertificates(trust, [ca] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(trust, true)
+
+        var error: CFError?
+        #expect(!SecTrustEvaluateWithError(trust, &error))
+        guard let error else {
+            Issue.record("expected the SSL policy to fail with a validity-period error")
+            return
+        }
+        #expect(CFErrorGetCode(error) == errSecCertificateValidityPeriodTooLong)
+    }
+
     @Test
     func basicX509PolicyTrustIsStillRejectedForWrongName() throws {
         // Network.framework does not document the policy attached to its
@@ -280,6 +761,63 @@ struct TeleportTLSTrustTests {
     }
 
     // MARK: - Helpers
+
+    /// Set the DER-forbidden trailing bit of the first keyUsage BIT STRING
+    /// (the fixture's extension value is short-form). Returns nil when the
+    /// extension cannot be located.
+    private static func patchingKeyUsageUnusedBit(in der: Data) -> Data? {
+        guard let oidRange = der.range(of: Data([0x55, 0x1D, 0x0F])) else { return nil }
+        var index = oidRange.upperBound
+        // Extension ::= SEQUENCE { OID, [BOOLEAN], OCTET STRING }
+        if index < der.count, der[index] == 0x01 { index += 3 }
+        guard index + 1 < der.count, der[index] == 0x04 else { return nil }
+        let octetLength = Int(der[index + 1])
+        let octetStart = index + 2
+        guard octetLength >= 3, octetStart + octetLength <= der.count else { return nil }
+        // Inside the OCTET STRING: BIT STRING ::= 03 len unused payload
+        guard der[octetStart] == 0x03 else { return nil }
+        let unusedIndex = octetStart + 2
+        guard unusedIndex + 1 < octetStart + octetLength else { return nil }
+        let unusedBits = der[unusedIndex]
+        guard unusedBits > 0, unusedBits <= 7 else { return nil }
+        var patched = der
+        patched[unusedIndex + 1] |= UInt8((1 << Int(unusedBits)) - 1)
+        return patched
+    }
+
+    /// Build a minimal certificate DER: Certificate ::= SEQUENCE { tbs } with
+    /// the tbsCertificate carrying only the [3] extensions field the walker
+    /// reads. The walker does not validate the other TBS fields.
+    private static func syntheticCertificate(extension extensionElement: Data) -> Data {
+        let extensions = tlv(0x30, extensionElement)
+        let extensionsField = tlv(0xA3, extensions)
+        let tbsCertificate = tlv(0x30, extensionsField)
+        return tlv(0x30, tbsCertificate)
+    }
+
+    /// Extension ::= SEQUENCE { extnID OID, extnValue OCTET STRING, trailing }.
+    private static func extensionElement(
+        oid: [UInt8],
+        value: Data,
+        trailing: Data = Data()
+    ) -> Data {
+        tlv(0x30, tlv(0x06, Data(oid)) + tlv(0x04, value) + trailing)
+    }
+
+    private static func tlv(_ tag: UInt8, _ content: Data) -> Data {
+        Data([tag]) + derLength(content.count) + content
+    }
+
+    private static func derLength(_ count: Int) -> Data {
+        if count < 0x80 { return Data([UInt8(count)]) }
+        var bytes: [UInt8] = []
+        var remaining = count
+        while remaining > 0 {
+            bytes.insert(UInt8(remaining & 0xFF), at: 0)
+            remaining >>= 8
+        }
+        return Data([0x80 | UInt8(bytes.count)]) + Data(bytes)
+    }
 
     private static func happyPathResult(negotiatedALPN: String?) throws -> (ok: Bool, error: CFError?) {
         let leaf = try certificate("server.pem")

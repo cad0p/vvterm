@@ -60,9 +60,11 @@ enum OpenSSHHostCertVerifier {
             return .notACertificate
         }
         // Teleport backdates validAfter to absorb clock skew; validBefore is
-        // the hard expiry (no skew tolerance).
+        // the hard expiry (no skew tolerance). A zero validBefore means "no
+        // expiry" in the OpenSSH wire format; an open-ended host certificate
+        // is never acceptable, so it is treated as invalid.
         let validAfterOK = cert.validAfterDate <= now.addingTimeInterval(clockSkew)
-        let validBeforeOK = now < cert.validBeforeDate
+        let validBeforeOK = cert.validBefore != 0 && now < cert.validBeforeDate
         guard validAfterOK, validBeforeOK else {
             return .expired
         }
@@ -163,20 +165,36 @@ private struct HostCAKey {
     /// Parse the OpenSSH ECDSA signature encoding (`mpint r || mpint s`) into
     /// CryptoKit's raw (r||s) representation.
     private static func ecdsaSignature(from sigData: Data) -> P256.Signing.ECDSASignature? {
+        guard let raw = OpenSSHECDSASignature.rawSignature(from: sigData) else { return nil }
+        return try? P256.Signing.ECDSASignature(rawRepresentation: raw)
+    }
+}
+
+// MARK: - ECDSA signature encoding
+
+/// The OpenSSH ECDSA signature encoding helpers, kept pure so the bounds
+/// rules are unit-testable without a live verifier.
+enum OpenSSHECDSASignature {
+
+    /// Parse `mpint r || mpint s` into a fixed 64-byte (r||s) representation.
+    ///
+    /// mpints may carry a leading zero byte (or be shorter than 32 bytes);
+    /// normalize to exactly 32 bytes. A component longer than 32 bytes after
+    /// stripping leading zeros is not a valid P-256 scalar and is rejected —
+    /// never silently truncated.
+    static func rawSignature(from sigData: Data) -> Data? {
         var reader = SSHBlobReader(data: sigData)
-        guard let r = reader.readString(), let s = reader.readString() else { return nil }
-        let r32 = leftPadded32(r)
-        let s32 = leftPadded32(s)
-        return try? P256.Signing.ECDSASignature(rawRepresentation: r32 + s32)
+        guard let r = reader.readString(), let s = reader.readString(),
+              let r32 = normalized32(r), let s32 = normalized32(s) else {
+            return nil
+        }
+        return r32 + s32
     }
 
-    /// mpints may carry a leading zero byte (or be shorter than 32 bytes);
-    /// normalize to exactly 32 bytes.
-    private static func leftPadded32(_ value: Data) -> Data {
+    /// Normalize an mpint to exactly 32 bytes, rejecting oversized values.
+    static func normalized32(_ value: Data) -> Data? {
         var bytes = Data(value.drop(while: { $0 == 0x00 }))
-        if bytes.count > 32 {
-            bytes = bytes.suffix(32)
-        }
+        guard bytes.count <= 32 else { return nil }
         if bytes.count < 32 {
             bytes = Data(repeating: 0, count: 32 - bytes.count) + bytes
         }

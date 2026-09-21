@@ -37,9 +37,41 @@ struct GRPCClientIdentity {
     let identity: sec_identity_t
     let label: String
 
+    /// The shared prefix for per-connect identity labels: used when creating
+    /// labels and when sweeping leftovers at startup.
+    static let labelPrefix = "vvterm-grpc-"
+
+    private static let registryLock = NSLock()
+    /// Labels whose cert/key items belong to an in-flight connection. The
+    /// sweep must never delete one of these: a second client construction
+    /// (SwiftUI evaluates `StateObject(wrappedValue:)` on every sheet init)
+    /// can otherwise delete the first client's identity mid-handshake.
+    private static var liveLabels: Set<String> = []
+    private static var hasSweptStaleIdentities = false
+
     /// A unique keychain label for one connection's cert + key.
     static func makeLabel() -> String {
-        "vvterm-grpc-\(UUID().uuidString)"
+        "\(labelPrefix)\(UUID().uuidString)"
+    }
+
+    /// Claim a label before its items are written, so a concurrent sweep
+    /// cannot delete them while the identity is being built.
+    static func registerLiveLabel(_ label: String) {
+        registryLock.lock()
+        liveLabels.insert(label)
+        registryLock.unlock()
+    }
+
+    static func unregisterLiveLabel(_ label: String) {
+        registryLock.lock()
+        liveLabels.remove(label)
+        registryLock.unlock()
+    }
+
+    static func isLiveLabel(_ label: String) -> Bool {
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        return liveLabels.contains(label)
     }
 
     func deleteKeychainItems() {
@@ -49,6 +81,7 @@ struct GRPCClientIdentity {
     /// Delete the cert + key items with the given label. Safe to call when
     /// the items are absent (returns `errSecItemNotFound`).
     static func deleteKeychainItems(label: String) {
+        unregisterLiveLabel(label)
         SecItemDelete([
             kSecClass as String: kSecClassCertificate,
             kSecAttrLabel as String: label,
@@ -58,6 +91,100 @@ struct GRPCClientIdentity {
             kSecAttrLabel as String: label,
         ] as CFDictionary)
         GRPCTransportLog.logger.info("grpc_identity_deleted label=\(label, privacy: .public)")
+    }
+
+    /// Delete leftover cert/key items from a previous process that never
+    /// reached `close()` / `disconnect()` (crash or force-quit).
+    ///
+    /// The sweep runs at most once per process, and only once every keychain
+    /// class enumerated successfully: a transient keychain error (locked or
+    /// entitlement-less host) must not silently skip the sweep forever.
+    /// Labels registered as live are skipped, so a concurrent connection's
+    /// identity is never deleted mid-handshake.
+    ///
+    /// The Security framework does not honor `kSecAttrService` on
+    /// key/certificate classes, so the query scopes by class and filters by
+    /// the per-connect label prefix (the app's generic-password service
+    /// scoping is not available here).
+    ///
+    /// - Returns: `true` when this call attempted the sweep.
+    @discardableResult
+    static func deleteStaleIdentities() -> Bool {
+        sweepStaleIdentities(force: false)
+    }
+
+    #if DEBUG
+    /// Test-only variant that bypasses the once-per-process gate. Not
+    /// compiled into release builds, so production cannot defeat the gate.
+    @discardableResult
+    static func deleteStaleIdentitiesForTesting() -> Bool {
+        sweepStaleIdentities(force: true)
+    }
+
+    /// Test seam: overrides the keychain enumeration for the next sweep.
+    /// Returning nil simulates a transient keychain error.
+    static var sweepEnumerationOverrideForTesting: ((String) -> [[String: Any]]?)?
+
+    /// Test seam: clears the once-per-process gate so the retry behavior can
+    /// be exercised deterministically.
+    static func resetSweepGateForTesting() {
+        registryLock.lock()
+        hasSweptStaleIdentities = false
+        registryLock.unlock()
+    }
+    #endif
+
+    private static func sweepStaleIdentities(force: Bool) -> Bool {
+        registryLock.lock()
+        guard force || !hasSweptStaleIdentities else {
+            registryLock.unlock()
+            return false
+        }
+        registryLock.unlock()
+
+        var enumeratedEveryClass = true
+        for className in [kSecClassCertificate as String, kSecClassKey as String] {
+            guard let items = enumerateItems(ofClass: className) else {
+                enumeratedEveryClass = false
+                continue
+            }
+            for item in items {
+                guard let label = item[kSecAttrLabel as String] as? String,
+                      label.hasPrefix(labelPrefix),
+                      !isLiveLabel(label) else { continue }
+                deleteKeychainItems(label: label)
+            }
+        }
+        if enumeratedEveryClass {
+            // Latch only after every class enumerated: a transient failure
+            // leaves the gate open so a later call retries the sweep.
+            registryLock.lock()
+            hasSweptStaleIdentities = true
+            registryLock.unlock()
+        }
+        return true
+    }
+
+    /// Enumerate all keychain items of one class for the sweep.
+    ///
+    /// - Returns: the items, or nil when the enumeration failed (a transient
+    ///   keychain error). `errSecItemNotFound` is a successful empty result.
+    private static func enumerateItems(ofClass className: String) -> [[String: Any]]? {
+        #if DEBUG
+        if let override = sweepEnumerationOverrideForTesting {
+            return override(className)
+        }
+        #endif
+        let query: [String: Any] = [
+            kSecClass as String: className,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess else { return nil }
+        return result as? [[String: Any]]
     }
 }
 
@@ -77,42 +204,54 @@ enum GRPCTLSOptions {
     /// Returns the options AND the ephemeral identity handle: the per-connect
     /// certificate/key are removed from the keychain when the connection
     /// closes (see `TeleportGRPCConnection.close`).
+    ///
+    /// The identity builder is injectable so the fail-closed ordering can be
+    /// pinned: every input validation must happen BEFORE the builder runs.
+    /// `buildSecIdentity` inserts the cert + key items into the keychain and
+    /// only the returned handle can delete them, so this function must not
+    /// throw after the identity has been built (nothing below the builder
+    /// call throws).
+    typealias IdentityBuilder = (String, SecKey) throws -> GRPCClientIdentity
+
     static func make(clientCertPEM: String,
                      privateKey: SecKey,
                      clusterName: String,
-                     clusterCAPEMs: [String]) throws -> (options: NWProtocolTLS.Options, identity: GRPCClientIdentity) {
+                     clusterCAPEMs: [String],
+                     identityBuilder: IdentityBuilder = { try GRPCTLSOptions.buildSecIdentity(certPEM: $0, privateKey: $1) }) throws -> (options: NWProtocolTLS.Options, identity: GRPCClientIdentity) {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
-        // ALPN: teleport-auth@<hex(cluster)>.teleport.cluster.local
+        // ALPN: the auth route only. The verify block requires this exact
+        // protocol, so an `h2` fallback could only ever negotiate into a
+        // rejection.
         let encodedCluster = encodedClusterName(clusterName)
         let alpnProto = "teleport-auth@\(encodedCluster)"
         alpnProto.withCString { cStr in
-            sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
-        }
-        // Also offer h2 as a fallback (the auth listener serves h2 too).
-        "h2".withCString { cStr in
             sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
         }
         // SNI: <hex(cluster)>.teleport.cluster.local
         encodedCluster.withCString { cStr in
             sec_protocol_options_set_tls_server_name(secOpts, cStr)
         }
-        // Client cert (mTLS) — ephemeral identity, deleted on close.
-        let identityHandle = try buildSecIdentity(certPEM: clientCertPEM, privateKey: privateKey)
-        sec_protocol_options_set_local_identity(secOpts, identityHandle.identity)
-
-        // Server verification: the cluster Host CA certs (from
-        // host_signers.tls_certs) are the only trust anchors; the trust is
-        // evaluated against explicit SSL policies for the encoded auth route
-        // name + teleport.cluster.local, and accepted only when the
-        // negotiated ALPN is the auth route.
+        // Server verification anchors: validate them BEFORE the keychain is
+        // touched. A throw here would otherwise bypass the returned identity
+        // handle and leak its cert/key items.
         let certRefs = TeleportTLSTrust.anchors(fromPEMs: clusterCAPEMs)
         guard !certRefs.isEmpty else {
             throw GRPCError.tls(
                 "no usable cluster CA trust anchors (input \(clusterCAPEMs.count) PEMs)"
             )
         }
+
+        // Client cert (mTLS) — ephemeral identity, deleted on close. This is
+        // the first keychain mutation; no code after it throws.
+        let identityHandle = try identityBuilder(clientCertPEM, privateKey)
+        sec_protocol_options_set_local_identity(secOpts, identityHandle.identity)
+
+        // The cluster Host CA certs (from host_signers.tls_certs) are the only
+        // trust anchors; the trust is evaluated against explicit SSL policies
+        // for the encoded auth route name + teleport.cluster.local, and
+        // accepted only when the negotiated ALPN is the auth route.
         GRPCTransportLog.logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
         sec_protocol_options_set_verify_block(
             secOpts,
@@ -149,15 +288,18 @@ enum GRPCTLSOptions {
     ///
     /// The returned handle owns the keychain items: `TeleportGRPCConnection`
     /// calls `deleteKeychainItems()` on close and on every failure path.
-    private static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> GRPCClientIdentity {
+    static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> GRPCClientIdentity {
         // 1. Parse cert.
         let certDER = try TeleportTLSTrust.pemToDER(pem: certPEM, label: "CERTIFICATE")
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
             throw GRPCError.tls("failed to create SecCertificate from PEM")
         }
 
-        // 2. Add cert + key to keychain with a unique label.
+        // 2. Add cert + key to keychain with a unique label. The label is
+        // registered live before the first write so a concurrent sweep
+        // cannot delete the items while the identity is being built.
         let label = GRPCClientIdentity.makeLabel()
+        GRPCClientIdentity.registerLiveLabel(label)
 
         let certAdd: [String: Any] = [
             kSecClass as String: kSecClassCertificate,
@@ -166,6 +308,7 @@ enum GRPCTLSOptions {
         ]
         let certStatus = SecItemAdd(certAdd as CFDictionary, nil)
         guard certStatus == errSecSuccess || certStatus == errSecDuplicateItem else {
+            GRPCClientIdentity.unregisterLiveLabel(label)
             throw GRPCError.tls("SecItemAdd cert: \(certStatus)")
         }
         let keyAdd: [String: Any] = [
@@ -177,10 +320,7 @@ enum GRPCTLSOptions {
         let keyStatus = SecItemAdd(keyAdd as CFDictionary, nil)
         guard keyStatus == errSecSuccess || keyStatus == errSecDuplicateItem else {
             // Do not leak the cert item when the key insert fails.
-            SecItemDelete([
-                kSecClass as String: kSecClassCertificate,
-                kSecAttrLabel as String: label,
-            ] as CFDictionary)
+            GRPCClientIdentity.deleteKeychainItems(label: label)
             throw GRPCError.tls("SecItemAdd key: \(keyStatus)")
         }
 
@@ -319,6 +459,14 @@ final class TeleportGRPCConnection: @unchecked Sendable {
         defer { identity.deleteKeychainItems() }
         try await channel.close().get()
         try await group.shutdownGracefully()
+    }
+
+    /// Remove the per-connect keychain identity without waiting for the
+    /// asynchronous channel teardown. `close()` is the normal path; this
+    /// bounds the leak when the owning client is deallocated without
+    /// `disconnect()`. Safe to call more than once.
+    func deleteKeychainIdentity() {
+        identity.deleteKeychainItems()
     }
 }
 
