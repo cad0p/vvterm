@@ -50,8 +50,33 @@ struct GRPCClientIdentity {
     private static var hasSweptStaleIdentities = false
 
     /// A unique keychain label for one connection's cert + key.
-    static func makeLabel() -> String {
-        "\(labelPrefix)\(UUID().uuidString)"
+    ///
+    /// The label embeds the creation time (`<prefix><unixMillis>-<uuid>`) so
+    /// the startup sweep can age-gate leftovers from a crashed process: a
+    /// second process must never delete another process's in-flight identity
+    /// (macOS can run a debug and a release instance at once).
+    static func makeLabel(now: Date = Date()) -> String {
+        let millis = Int64((now.timeIntervalSince1970 * 1000).rounded())
+        return "\(labelPrefix)\(millis)-\(UUID().uuidString)"
+    }
+
+    /// How old an unregistered identity label must be before the sweep may
+    /// delete it. Per-connect identities live for the duration of one gRPC
+    /// call; a label younger than this window may still belong to another
+    /// live process, so the sweep skips it. Legacy labels without an
+    /// embedded timestamp are treated as stale (they predate this scheme).
+    static let staleIdentityAge: TimeInterval = 30 * 60
+
+    /// The creation instant embedded in a label, or nil when the label has
+    /// no timestamp (legacy) or is malformed.
+    static func timestamp(inLabel label: String) -> Date? {
+        guard label.hasPrefix(labelPrefix) else { return nil }
+        let remainder = label.dropFirst(labelPrefix.count)
+        guard let separator = remainder.firstIndex(of: "-"),
+              let millis = Int64(remainder[remainder.startIndex..<separator]) else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: Double(millis) / 1000)
     }
 
     /// Claim a label before its items are written, so a concurrent sweep
@@ -100,7 +125,10 @@ struct GRPCClientIdentity {
     /// class enumerated successfully: a transient keychain error (locked or
     /// entitlement-less host) must not silently skip the sweep forever.
     /// Labels registered as live are skipped, so a concurrent connection's
-    /// identity is never deleted mid-handshake.
+    /// identity is never deleted mid-handshake. Labels without an embedded
+    /// timestamp (legacy) or older than `staleIdentityAge` are collected even
+    /// when this process does not know them: they belong to a process that
+    /// never reached `close()`.
     ///
     /// The Security framework does not honor `kSecAttrService` on
     /// key/certificate classes, so the query scopes by class and filters by
@@ -152,6 +180,13 @@ struct GRPCClientIdentity {
                 guard let label = item[kSecAttrLabel as String] as? String,
                       label.hasPrefix(labelPrefix),
                       !isLiveLabel(label) else { continue }
+                // Age gate: a label younger than the window may belong to a
+                // different live process, whose identities this process does
+                // not know about. Legacy labels (no timestamp) are stale.
+                if let created = timestamp(inLabel: label),
+                   Date().timeIntervalSince(created) < staleIdentityAge {
+                    continue
+                }
                 deleteKeychainItems(label: label)
             }
         }

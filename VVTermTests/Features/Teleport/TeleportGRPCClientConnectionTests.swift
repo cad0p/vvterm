@@ -274,17 +274,21 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     /// identity a concurrent handshake is using, and unrelated keychain
     /// items must survive.
     func testStaleIdentitySweepDeletesOnlyUnreferencedPrefixedItems() throws {
-        let staleLabel = GRPCClientIdentity.makeLabel() + "-stale"
-        let liveLabel = GRPCClientIdentity.makeLabel() + "-live"
+        let old = Date().addingTimeInterval(-(GRPCClientIdentity.staleIdentityAge + 60))
+        let staleLabel = GRPCClientIdentity.makeLabel(now: old) + "-stale"
+        let liveLabel = GRPCClientIdentity.makeLabel(now: old) + "-live"
+        let freshLabel = GRPCClientIdentity.makeLabel() + "-fresh"
         let foreignLabel = "vvterm-unrelated-\(UUID().uuidString)"
         defer {
             GRPCClientIdentity.deleteKeychainItems(label: staleLabel)
             GRPCClientIdentity.deleteKeychainItems(label: liveLabel)
+            GRPCClientIdentity.deleteKeychainItems(label: freshLabel)
             GRPCClientIdentity.deleteKeychainItems(label: foreignLabel)
         }
 
         try Self.insertKey(label: staleLabel)
         try Self.insertKey(label: liveLabel)
+        try Self.insertKey(label: freshLabel)
         try Self.insertKey(label: foreignLabel)
         GRPCClientIdentity.registerLiveLabel(liveLabel)
 
@@ -292,6 +296,11 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
 
         XCTAssertEqual(Self.keyStatus(label: staleLabel), errSecItemNotFound)
         XCTAssertEqual(Self.keyStatus(label: liveLabel), errSecSuccess)
+        XCTAssertEqual(
+            Self.keyStatus(label: freshLabel),
+            errSecSuccess,
+            "an unregistered but young label may belong to another live process and must survive"
+        )
         XCTAssertEqual(Self.keyStatus(label: foreignLabel), errSecSuccess)
     }
 
