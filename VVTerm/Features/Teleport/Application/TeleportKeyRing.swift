@@ -210,6 +210,12 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
                 // map it back to nil so the resolver treats it as "no expiry".
                 if cred.certValidBefore == .distantPast { return nil }
                 return cred.certValidBefore
+            },
+            hasHostCAKeys: { [weak self] id in
+                // Legacy installs (pre-checking-keys) have TLS state without
+                // Host CA keys; readiness routes them to Face ID login, and
+                // the login response refreshes the pinned keys.
+                self?.clusterTLSState[id]?.hostCACheckingKeys.isEmpty == false
             }
         )
         return resolver.resolve(clusterId: clusterId)

@@ -67,7 +67,17 @@ struct TeleportServerIntegrationTests {
         }
         let key = environment["VVTERM_TELEPORT_KEY"] ?? ""
         let caCerts = environment["VVTERM_TELEPORT_CA_CERTS"] ?? ""
+        let checkingKeysRaw = environment["VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS"] ?? ""
+        let checkingKeys = checkingKeysRaw
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         let clusterName = environment["VVTERM_TELEPORT_CLUSTER_NAME"] ?? "ci-cluster"
+        guard !checkingKeys.isEmpty else {
+            throw SSHError.connectionFailed(
+                "VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS missing — run scripts/ci/teleport-server.sh env-export"
+            )
+        }
         let host = environment["VVTERM_TELEPORT_HOST"] ?? "127.0.0.1"
         let port = Int(environment["VVTERM_TELEPORT_PORT"] ?? "443") ?? 443
         let node = environment["VVTERM_TELEPORT_NODE"] ?? "ci-node"
@@ -94,7 +104,11 @@ struct TeleportServerIntegrationTests {
         // keychain; `clear` wipes both stores.
         let keyRing = TeleportKeyRing.shared
         keyRing.storeClusterTLSState(
-            TeleportClusterTLSState(clusterName: clusterName, clusterCAPEMs: [caCerts]),
+            TeleportClusterTLSState(
+                clusterName: clusterName,
+                clusterCAPEMs: [caCerts],
+                hostCACheckingKeys: checkingKeys
+            ),
             for: clusterId
         )
         let validBefore = Date().addingTimeInterval(3600)

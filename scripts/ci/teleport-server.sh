@@ -548,6 +548,13 @@ cmd_bootstrap() {
   "${tctl[@]}" auth export --type=tls-host > "${FIXTURES_DIR}/tls-ca.pem"
   log "tls-ca: $(grep -c 'BEGIN CERTIFICATE' "${FIXTURES_DIR}/tls-ca.pem") cert(s) exported"
 
+  # 4a. Export the Host CA SSH public key(s) — the app pins these
+  #     (`checking_keys`) and verifies the proxy/node host certificates
+  #     against them. `tctl auth export --type=host` prints authorized_keys
+  #     lines (one per active CA key during rotation).
+  "${tctl[@]}" auth export --type=host > "${FIXTURES_DIR}/host-ca-checking-keys.txt"
+  log "host-ca checking keys: $(grep -c 'ssh-\|sk-' "${FIXTURES_DIR}/host-ca-checking-keys.txt") key(s) exported"
+
   # 4b. M4: the app-ceremony identity (webauthn clusters only). The app's
   #     Phase-2 gRPC registration needs a user with NO MFA devices
   #     (first-device path — no Safari Browser-MFA ceremony;
@@ -861,6 +868,9 @@ write_env_file() {
 VVTERM_TELEPORT_CERT="$(cat "${FIXTURES_DIR}/identity-cert.pub")"
 VVTERM_TELEPORT_KEY="$(cat "${FIXTURES_DIR}/identity")"
 VVTERM_TELEPORT_CA_CERTS="$(cat "${FIXTURES_DIR}/tls-ca.pem")"
+# Host CA SSH public key(s) (authorized_keys lines) — the SSH host-cert
+# verifier pins these; one line per active Host CA key.
+VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS="$(cat "${FIXTURES_DIR}/host-ca-checking-keys.txt" 2>/dev/null || true)"
 VVTERM_TELEPORT_CLUSTER_NAME="${TELEPORT_CLUSTER}"
 VVTERM_TELEPORT_HOST="${TELEPORT_HOST}"
 VVTERM_TELEPORT_PORT="${TELEPORT_WEB_PORT}"
