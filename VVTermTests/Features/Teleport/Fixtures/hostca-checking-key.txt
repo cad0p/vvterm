@@ -1,0 +1,1 @@
+@cert-authority teleport.pcad.it,teleport.pcad.it,*.teleport.pcad.it ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMOTgClSdrqdoNfQysxkw2zjry3xla7ML9L9QmH396K type=host

@@ -9,3 +9,9 @@ paths = [
   '''^VivyTerm/Services/SSH/SSHKeyGenerator\.swift$''',
   '''^VVTerm/Services/SSH/SSHKeyGenerator\.swift$''',
 ]
+
+[[allowlists]]
+description = "Test-only loopback TLS identity + certs for the Teleport TLS trust tests (no production secret)."
+paths = [
+  '''^VVTermTests/Features/Teleport/Fixtures/loopback-tls/''',
+]

@@ -39,7 +39,7 @@ enum GRPCTLSOptions {
     ///   - ALPN: "teleport-auth@<hex(clusterName)>.teleport.cluster.local"
     ///   - SNI: "<hex(clusterName)>.teleport.cluster.local"
     ///   - Client cert: the Phase 1 TLS cert (mTLS)
-    ///   - Server verification: the cluster's TLS CA certs (from host_signers.tls_certs)
+    ///   - Server verification: the cluster Host CA certs
     ///
     /// See api/client/client.go:ConfigureALPN + api/utils/cluster.go:EncodeClusterName.
     static func make(clientCertPEM: String,
@@ -75,24 +75,16 @@ enum GRPCTLSOptions {
             return SecCertificateCreateWithData(nil, der as CFData)
         }
         GRPCTransportLog.logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
-        sec_protocol_options_set_verify_block(secOpts, { _, sec_trust, complete in
-            let trust = sec_trust_copy_ref(sec_trust).takeRetainedValue()
-            // Set the cluster CA certs as trust anchors.
-            if !certRefs.isEmpty {
-                SecTrustSetAnchorCertificates(trust, certRefs as CFArray)
-                SecTrustSetAnchorCertificatesOnly(trust, true)
-            }
-            var error: CFError?
-            let result = SecTrustEvaluateWithError(trust, &error)
-            // Teleport proxy certs are not standards-compliant (weak sig /
-            // missing extensions), so SecTrustEvaluateWithError always fails
-            // — even with the cluster CA as anchor. tsh uses InsecureSkipVerify
-            // for ALPN dials for the same reason. We accept the cert anyway:
-            // the real auth is mTLS (the client cert), and the server's
-            // identity is proven by the fact that it issued our Phase 1 cert.
-            GRPCTransportLog.logger.info("tls_verify cluster CA eval=\(result) error=\(error?.localizedDescription ?? "none", privacy: .public) — accepting (mTLS auth)")
-            complete(true)
-        }, .global())
+        sec_protocol_options_set_verify_block(
+            secOpts,
+            TeleportTLSTrust.makeVerifyBlock(
+                anchors: certRefs,
+                serverNames: TeleportTLSTrust.authServerNames(clusterName: clusterName),
+                requiredALPN: alpnProto,
+                logger: GRPCTransportLog.logger
+            ),
+            .global()
+        )
         sec_protocol_options_set_challenge_block(secOpts, { _, complete in
             GRPCTransportLog.logger.info("tls_challenge server requested client cert — presenting identity")
             complete(secIdentity)
@@ -103,8 +95,7 @@ enum GRPCTLSOptions {
     /// Encode a cluster name the way Teleport does: hex(name) + ".teleport.cluster.local".
     /// See api/utils/cluster.go:EncodeClusterName.
     private static func encodedClusterName(_ name: String) -> String {
-        let hex = name.utf8.map { String(format: "%02x", $0) }.joined()
-        return "\(hex).teleport.cluster.local"
+        TeleportTLSTrust.encodedClusterName(name)
     }
 
     /// Build a sec_identity_t from a PEM-encoded cert + a SecKey.
@@ -118,7 +109,7 @@ enum GRPCTLSOptions {
     ///   4. Wrap in sec_identity_t.
     private static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> sec_identity_t {
         // 1. Parse cert.
-        let certDER = try pemToDER(pem: certPEM, label: "CERTIFICATE")
+        let certDER = try TeleportTLSTrust.pemToDER(pem: certPEM, label: "CERTIFICATE")
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
             throw GRPCError.tls("failed to create SecCertificate from PEM")
         }

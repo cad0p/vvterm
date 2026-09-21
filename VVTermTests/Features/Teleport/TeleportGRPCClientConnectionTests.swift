@@ -132,22 +132,115 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     /// This is the ALPN SNI auth route (api/client/client.go:ConfigureALPN),
     /// NOT the `teleport-proxy-grpc-mtls` listener (which hosts only the
     /// Kubernetes service — see spike commit ff6ebe3).
-    /// We assert the ALPN token shape indirectly via the encoded cluster name,
-    /// which is the load-bearing input. A regression here would dial the wrong
-    /// ALPN route and get UNIMPLEMENTED (grpc code 12), not connection failure.
     func testEncodedClusterName_matchesTeleportALPNRoute() {
-        // The encoded cluster name is hex(clusterName) + ".teleport.cluster.local".
-        // We can't call the private `encodedClusterName` from here, so we
-        // re-derive the expected value and assert the ALPN token format.
         let cluster = "teleport.pcad.it"
         let hex = cluster.utf8.map { String(format: "%02x", $0) }.joined()
         let encoded = "\(hex).teleport.cluster.local"
         let alpn = "teleport-auth@\(encoded)"
+        XCTAssertEqual(TeleportTLSTrust.encodedClusterName(cluster), encoded)
         XCTAssertTrue(alpn.hasPrefix("teleport-auth@"),
                       "ALPN must use the auth SNI route; got: \(alpn)")
         XCTAssertTrue(alpn.contains(hex),
                       "ALPN must carry the hex-encoded cluster name; got: \(alpn)")
         XCTAssertTrue(alpn.hasSuffix(".teleport.cluster.local"),
                       "ALPN must end with the teleport.cluster.local suffix; got: \(alpn)")
+    }
+
+    // MARK: - GRPCTLSOptions server-trust seam
+
+    /// The gRPC auth leg must accept the fixture CA + auth-route ALPN when
+    /// the presented cert chains to the anchor (the second expected name,
+    /// `teleport.cluster.local`, matches the leaf SAN).
+    func testVerify_matchingCAAndAuthALPNIsAccepted() throws {
+        let leaf = try Self.loopbackLeaf()
+        let ca = try Self.loopbackCertificate("loopback-ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+        let encoded = TeleportTLSTrust.encodedClusterName("ci-cluster")
+        let alpn = "teleport-auth@\(encoded)"
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
+            negotiatedALPN: alpn,
+            requiredALPN: alpn
+        )
+        XCTAssertTrue(result.ok, "expected acceptance: \(String(describing: result.error))")
+    }
+
+    /// A foreign CA (the real pcad.it Host CA against the loopback leaf) must
+    /// be rejected — this is the deterministic guard against the removed
+    /// `complete(true)` accept-anyway behavior.
+    func testVerify_foreignCAIsRejected() throws {
+        let leaf = try Self.loopbackLeaf()
+        let foreignCA = try Self.certificate("hostca-x509.pem")
+        let trust = try Self.trust(leaf: leaf)
+        let encoded = TeleportTLSTrust.encodedClusterName("ci-cluster")
+        let alpn = "teleport-auth@\(encoded)"
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [foreignCA],
+            serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
+            negotiatedALPN: alpn,
+            requiredALPN: alpn
+        )
+        XCTAssertFalse(result.ok)
+    }
+
+    /// Negotiated `h2` (an HTTP edge terminating TLS) must be rejected even
+    /// when the chain and name are otherwise valid.
+    func testVerify_h2IsRejected() throws {
+        let leaf = try Self.loopbackLeaf()
+        let ca = try Self.loopbackCertificate("loopback-ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+        let encoded = TeleportTLSTrust.encodedClusterName("ci-cluster")
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
+            negotiatedALPN: "h2",
+            requiredALPN: "teleport-auth@\(encoded)"
+        )
+        XCTAssertFalse(result.ok)
+    }
+
+    // MARK: - Trust test helpers
+
+    private static func fixtureURL(_ relativePath: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/\(relativePath)")
+    }
+
+    private static func loopbackLeaf() throws -> SecCertificate {
+        try certificate("loopback-tls/server.pem")
+    }
+
+    private static func loopbackCertificate(_ relativePath: String) throws -> SecCertificate {
+        try certificate("loopback-tls/\(relativePath)")
+    }
+
+    private static func certificate(_ relativePath: String) throws -> SecCertificate {
+        let pem = try String(contentsOf: fixtureURL(relativePath), encoding: .utf8)
+        let der = try TeleportTLSTrust.pemToDER(pem: pem, label: "CERTIFICATE")
+        guard let certificate = SecCertificateCreateWithData(nil, der as CFData) else {
+            throw TeleportTLSTrustError.malformedPEM(relativePath)
+        }
+        return certificate
+    }
+
+    private static func trust(leaf: SecCertificate) throws -> SecTrust {
+        var trust: SecTrust?
+        let status = SecTrustCreateWithCertificates(
+            [leaf] as CFArray,
+            SecPolicyCreateBasicX509(),
+            &trust
+        )
+        guard status == errSecSuccess, let trust else {
+            throw TeleportTLSTrustError.malformedPEM("SecTrustCreateWithCertificates OSStatus \(status)")
+        }
+        return trust
     }
 }
