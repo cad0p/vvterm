@@ -201,6 +201,17 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         clusterTLSStates[clusterId] = state
     }
 
+    func updateClusterHostKeys(_ checkingKeys: [String], for clusterId: UUID) -> TeleportHostKeyUpdateResult {
+        guard let state = clusterTLSStates[clusterId] else {
+            return .noChange
+        }
+        let outcome = TeleportHostKeyUpdatePolicy.apply(checkingKeys: checkingKeys, to: state)
+        if let updatedState = outcome.updatedState {
+            clusterTLSStates[clusterId] = updatedState
+        }
+        return outcome.result
+    }
+
     func clear(for clusterId: UUID) {
         credentials.removeValue(forKey: clusterId)
         fixtures.removeValue(forKey: clusterId)

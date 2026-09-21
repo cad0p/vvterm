@@ -296,6 +296,18 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             return
         }
 
+        // Refresh the pinned Host CA checking keys from the login response.
+        // The update is additions-only (the keyring rejects a refresh that
+        // would drop a pinned key); a rejected refresh keeps the existing
+        // anchors and requires re-bootstrap.
+        if let hostSigners = finishResp.hostSigners, let first = hostSigners.first {
+            let update = keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
+            if update == .rejectedWouldDropPinnedKeys {
+                logger.error(
+                    "Host CA key refresh rejected for cluster \(cluster.id.uuidString, privacy: .public) — pinned anchors kept; re-bootstrap required"
+                )
+            }
+        }
 
         // Store the fresh cert in the key ring. Readiness flips to `ready`.
         // Also store the ed25519 private key — the SSHClient cert seam

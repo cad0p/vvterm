@@ -151,12 +151,11 @@ struct TeleportHTTPClient {
                       let pem = String(data: der, encoding: .utf8) else { return nil }
                 return pem
             }
-            // checking_keys are Go []byte → base64(PEM). Decode to PEM strings.
-            checkingKeys = first.checkingKeys.compactMap { b64 in
-                guard let der = Data(base64Encoded: b64),
-                      let pem = String(data: der, encoding: .utf8) else { return nil }
-                return pem
-            }
+            // checking_keys are Go []byte → base64 of an authorized_keys
+            // line (`ssh-ed25519 AAAA… type=host`), NOT base64(PEM).
+            // Decode to the authorized_keys lines the SSH host-cert
+            // verifier consumes.
+            checkingKeys = TeleportHostCACheckingKeysDecoder.decodeAll(first.checkingKeys)
         }
 
         return HeadlessLoginResult(

@@ -378,6 +378,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // Phase 2's auth-service ALPN dial.
         var clusterName = cluster.clusterName
         var clusterCAPEMs: [String] = []
+        var hostCACheckingKeys: [String] = []
         if let hostSigners = response.hostSigners, let first = hostSigners.first {
             clusterName = first.clusterName
             clusterCAPEMs = (first.tlsCerts ?? []).compactMap { b64 in
@@ -385,6 +386,8 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                       let pem = String(data: der, encoding: .utf8) else { return nil }
                 return pem
             }
+            // checking_keys elements are base64(authorized_keys line).
+            hostCACheckingKeys = TeleportHostCACheckingKeysDecoder.decodeAll(first.checkingKeys)
         }
 
         // The cert's ValidBefore. The HTTP response doesn't include it
@@ -468,7 +471,8 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // SSH connect can rebuild the TLS options without a network round-trip.
         let tlsState = TeleportClusterTLSState(
             clusterName: clusterName,
-            clusterCAPEMs: clusterCAPEMs
+            clusterCAPEMs: clusterCAPEMs,
+            hostCACheckingKeys: hostCACheckingKeys
         )
         keyRing.storeClusterTLSState(tlsState, for: cluster.id)
 
