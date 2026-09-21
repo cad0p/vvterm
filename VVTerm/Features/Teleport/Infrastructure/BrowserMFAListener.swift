@@ -51,6 +51,7 @@
 
 import Foundation
 import os.log
+import os
 import CryptoKit
 import Network
 
@@ -111,6 +112,10 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
     private(set) var port: UInt16 = 0
 
     private var listener: NWListener?
+    /// The companion IPv6 loopback listener (same port as `listener`), so
+    /// `localhost` resolves on either family. Nil when the ::1 bind was
+    /// unavailable (the URL then advertises 127.0.0.1).
+    private var listenerV6: NWListener?
     private var continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>?
     private let resumeLock = NSLock()
     private var didResume = false  // guard against double-resume (timeout vs. callback race)
@@ -120,13 +125,15 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
     private var timeoutTimer: Timer?
     private let timeout: TimeInterval = 180
 
-    /// The hostname we advertise in the callback URL. We bind NWListener to
-    /// `.any` (all interfaces, including loopback) but advertise `localhost`
-    /// rather than `127.0.0.1` so Safari's HTTPS-Only mode treats it as a
-    /// secure context and doesn't show the "connection is not secure"
-    /// banner. ValidateClientRedirect (lib/client/sso/redirector.go) accepts
-    /// both `localhost` and `127.0.0.1` for the http scheme.
-    private let host = "localhost"
+    /// The hostname we advertise in the callback URL. The listener binds
+    /// loopback only (127.0.0.1 + ::1) and advertises `localhost` rather than
+    /// `127.0.0.1` so Safari's HTTPS-Only mode treats it as a secure context
+    /// and doesn't show the "connection is not secure" banner.
+    /// ValidateClientRedirect (lib/client/sso/redirector.go) accepts both
+    /// `localhost` and `127.0.0.1` for the http scheme. If the ::1 bind is
+    /// unavailable, the v4 listener is kept and this falls back to
+    /// `127.0.0.1`.
+    private var host = "localhost"
 
     override init() {
         // Generate 32 random bytes for AES-256-GCM.
@@ -145,41 +152,85 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
     }
 
     /// Start the listener. Returns the client callback URL to send to the
-    /// server. Throws if the listener fails to start.
+    /// server. Throws if the loopback listener fails to start.
+    ///
+    /// Binds 127.0.0.1 first on an OS-assigned port, then ::1 on the same
+    /// port, so the advertised `localhost` URL works whichever family Safari
+    /// resolves first (CI can pass on IPv4 while a device resolves ::1). If
+    /// the ::1 bind is unavailable (race / port reuse), the v4 listener is
+    /// kept and the URL advertises `127.0.0.1`.
     func start() async throws -> String {
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            do {
-                // Port 0 = OS-assigned. NWListener binds to all interfaces
-                // by default; on iOS, only the loopback address (127.0.0.1)
-                // can reach an in-process listener from Safari (127.x.x.x
-                // other than .0.0.1 is unsupported — see Apple Developer
-                // Forums thread 724864).
-                let listener = try NWListener(using: .tcp, on: .any)
-                self.listener = listener
-                listener.stateUpdateHandler = { [weak self] state in
-                    guard let self else { return }
-                    switch state {
-                    case .ready:
-                        // Read the bound port.
-                        if let port = listener.port {
-                            self.port = UInt16(port.rawValue)
-                        }
-                        self.clientCallbackURL = "http://\(self.host):\(self.port)/callback?secret_key=\(self.secretKeyHex)"
-                        BrowserMFAListenerLog.logger.info("ready listening on \(self.host):\(self.port, privacy: .public)")
-                        cont.resume(returning: self.clientCallbackURL)
-                    case .failed(let err):
-                        BrowserMFAListenerLog.logger.error("failed \(err.localizedDescription, privacy: .public)")
-                        cont.resume(throwing: BrowserMFAListenerError.listenerFailed(err.localizedDescription))
-                    default:
-                        break
+        let v4 = try makeLoopbackListener(host: .ipv4(.loopback), port: .any)
+        let boundPort = try await awaitListenerReady(v4, timeout: 5)
+        self.listener = v4
+
+        var advertisedHost = "localhost"
+        do {
+            let v6 = try makeLoopbackListener(host: .ipv6(.loopback), port: boundPort)
+            _ = try await awaitListenerReady(v6, timeout: 5)
+            self.listenerV6 = v6
+        } catch {
+            BrowserMFAListenerLog.logger.error(
+                "ipv6_loopback_bind_failed \(error.localizedDescription, privacy: .public) — advertising 127.0.0.1"
+            )
+            self.listenerV6?.cancel()
+            self.listenerV6 = nil
+            advertisedHost = "127.0.0.1"
+        }
+
+        self.host = advertisedHost
+        self.port = boundPort.rawValue
+        self.clientCallbackURL = "http://\(self.host):\(self.port)/callback?secret_key=\(self.secretKeyHex)"
+        BrowserMFAListenerLog.logger.info(
+            "ready listening on \(self.host, privacy: .public):\(self.port, privacy: .public) v6=\(self.listenerV6 != nil)"
+        )
+        return self.clientCallbackURL
+    }
+
+    /// Build an NWListener bound to the given loopback endpoint.
+    private func makeLoopbackListener(host: NWEndpoint.Host, port: NWEndpoint.Port) throws -> NWListener {
+        let params = NWParameters.tcp
+        params.requiredLocalEndpoint = .hostPort(host: host, port: port)
+        let listener = try NWListener(using: params)
+        listener.newConnectionHandler = { [weak self] conn in
+            self?.handleConnection(conn)
+        }
+        return listener
+    }
+
+    /// Start the listener and await `.ready` (or a failure / timeout).
+    private func awaitListenerReady(_ listener: NWListener, timeout: TimeInterval) async throws -> NWEndpoint.Port {
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<NWEndpoint.Port, Error>) in
+            func resumeOnce(_ result: Result<NWEndpoint.Port, Error>) {
+                let already = resumed.withLock { isResumed -> Bool in
+                    if isResumed { return true }
+                    isResumed = true
+                    return false
+                }
+                guard !already else { return }
+                cont.resume(with: result)
+            }
+
+            listener.stateUpdateHandler = { listenerState in
+                switch listenerState {
+                case .ready:
+                    if let port = listener.port {
+                        resumeOnce(.success(port))
+                    } else {
+                        resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("listener ready without a port")))
                     }
+                case .failed(let error):
+                    resumeOnce(.failure(BrowserMFAListenerError.listenerFailed(error.localizedDescription)))
+                case .cancelled:
+                    resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("listener cancelled")))
+                default:
+                    break
                 }
-                listener.newConnectionHandler = { [weak self] conn in
-                    self?.handleConnection(conn)
-                }
-                listener.start(queue: .global(qos: .userInitiated))
-            } catch {
-                cont.resume(throwing: BrowserMFAListenerError.listenerFailed(error.localizedDescription))
+            }
+            listener.start(queue: .global(qos: .userInitiated))
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("listener start timed out after \(timeout)s")))
             }
         }
     }
@@ -203,12 +254,14 @@ final class BrowserMFAListener: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Stop the listener + cancel the timeout.
+    /// Stop the listeners + cancel the timeout.
     func cancel() {
         timeoutTimer?.invalidate()
         timeoutTimer = nil
         listener?.cancel()
         listener = nil
+        listenerV6?.cancel()
+        listenerV6 = nil
     }
 
     // MARK: - Connection handling
