@@ -26,6 +26,14 @@ struct TeleportTLSTrustTests {
     /// Capture instant of the real fixtures (2026-09-21T15:33Z).
     static let captureDate = Date(timeIntervalSince1970: 1_790_004_826)
 
+    /// 2026-10-01T00:00:00Z — inside the public-chain fixture leaf's validity
+    /// (2026-09-04 → 2026-11-27); pinned so the fixture cannot age out.
+    static let publicChainVerifyDate = Date(timeIntervalSince1970: 1_790_812_800)
+
+    /// 2026-09-21T23:36:39Z — inside the short-lived EKU fixture leaf's
+    /// 30-day validity window.
+    static let shortLivedEKUVerifyDate = Date(timeIntervalSince1970: 1_790_033_799)
+
     // MARK: - Happy paths
 
     @Test
@@ -133,6 +141,71 @@ struct TeleportTLSTrustTests {
             requiredALPN: SSHTLSTransport.alpnProtocol
         )
         #expect(!result.ok)
+    }
+
+    /// The pinned anchors must be exclusive of the system trust store. The
+    /// fixture is a live public chain (www.google.com → GTS WR2) that
+    /// validates against the system roots, so it is the only test shape that
+    /// distinguishes "anchors added" from "anchors only": if
+    /// `SecTrustSetAnchorCertificatesOnly(true)` were dropped, the system
+    /// store would be added back and this chain would pass.
+    @Test
+    func pinnedAnchorsAreExclusiveOfTheSystemStore() throws {
+        let leaf = try Self.certificate("public-chain/google-leaf.pem")
+        let intermediate = try Self.certificate("public-chain/google-intermediate.pem")
+        let pinnedCA = try Self.certificate("loopback-ca.pem")
+        let trust = try Self.trust(chain: [leaf, intermediate])
+        Self.pin(trust, to: Self.publicChainVerifyDate)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [pinnedCA],
+            serverNames: ["www.google.com"],
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(
+            !result.ok,
+            "a system-trusted chain must not pass when only the pinned Host CA is an allowed anchor"
+        )
+    }
+
+    /// A short-lived leaf whose EKU allows only clientAuth must be rejected
+    /// on the primary SSL-policy path (not just by the long-lived fallback).
+    @Test
+    func shortLivedClientAuthOnlyLeafIsRejectedOnThePrimaryPath() throws {
+        let leaf = try Self.certificate("short-lived-eku/clientauth-leaf.pem")
+        let ca = try Self.certificate("short-lived-eku/ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+        Self.pin(trust, to: Self.shortLivedEKUVerifyDate)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: ["localhost"],
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(!result.ok, "a clientAuth-only leaf must be rejected even when short-lived")
+    }
+
+    /// Positive control for the fixture CA: the same CA's serverAuth leaf
+    /// verifies, proving the rejection above is EKU-specific.
+    @Test
+    func shortLivedServerAuthLeafStillVerifies() throws {
+        let leaf = try Self.certificate("short-lived-eku/serverauth-leaf.pem")
+        let ca = try Self.certificate("short-lived-eku/ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+        Self.pin(trust, to: Self.shortLivedEKUVerifyDate)
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: ["localhost"],
+            negotiatedALPN: SSHTLSTransport.alpnProtocol,
+            requiredALPN: SSHTLSTransport.alpnProtocol
+        )
+        #expect(result.ok, "the serverAuth control leaf must verify: \(String(describing: result.error))")
     }
 
     @Test
@@ -369,6 +442,23 @@ struct TeleportTLSTrustTests {
             )
         ))
         #expect(TeleportTLSTrust.parseExtensions(der: pathLen)?.basicConstraintsIsCA == true)
+    }
+
+    /// Extensions are the final TBSCertificate component: a certificate with
+    /// a field after the [3] extensions field must fail closed instead of
+    /// silently ignoring the trailing component.
+    @Test
+    func tbsFieldAfterExtensionsFailsClosed() {
+        let extensionElement = Self.extensionElement(
+            oid: [0x55, 0x1D, 0x13],
+            value: Self.tlv(0x30, Data())
+        )
+        let extensions = Self.tlv(0x30, extensionElement)
+        let extensionsField = Self.tlv(0xA3, extensions)
+        let trailing = Self.tlv(0x0C, Data("x".utf8))
+        let tbsCertificate = Self.tlv(0x30, extensionsField + trailing)
+        let der = Self.tlv(0x30, tbsCertificate)
+        #expect(TeleportTLSTrust.parseExtensions(der: der) == nil)
     }
 
     /// `SEQUENCE { BOOLEAN FALSE, BOOLEAN TRUE }` reads as non-CA to a
@@ -865,10 +955,10 @@ struct TeleportTLSTrustTests {
         return certificate
     }
 
-    private static func trust(leaf: SecCertificate, policy: SecPolicy? = nil) throws -> SecTrust {
+    private static func trust(chain: [SecCertificate], policy: SecPolicy? = nil) throws -> SecTrust {
         var trust: SecTrust?
         let status = SecTrustCreateWithCertificates(
-            [leaf] as CFArray,
+            chain as CFArray,
             policy ?? SecPolicyCreateBasicX509(),
             &trust
         )
@@ -876,6 +966,10 @@ struct TeleportTLSTrustTests {
             throw TeleportTLSTrustError.malformedPEM("SecTrustCreateWithCertificates OSStatus \(status)")
         }
         return trust
+    }
+
+    private static func trust(leaf: SecCertificate, policy: SecPolicy? = nil) throws -> SecTrust {
+        try trust(chain: [leaf], policy: policy)
     }
 
     private static func pin(_ trust: SecTrust, to date: Date) {

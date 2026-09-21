@@ -130,6 +130,7 @@ enum TeleportTLSTrust {
 
         var lastError: CFError?
         var rejectedCALeaf = false
+        var rejectedEKU = false
         var missingLeaf = false
         for name in serverNames {
             let policy = SecPolicyCreateSSL(true, name as CFString)
@@ -151,6 +152,16 @@ enum TeleportTLSTrust {
                     continue
                 }
                 if !certificateIsCA(leaf) {
+                    // A Host-CA-signed leaf that is not permitted to act as a
+                    // TLS server (clientAuth-only EKU, keyEncipherment-only
+                    // keyUsage) must not pass just because the SSL policy's
+                    // chain/name checks do. The long-lived fallback below
+                    // enforces the same check; this keeps the primary path
+                    // and the fallback equivalent.
+                    guard certificateAllowsTLSServerUse(leaf) else {
+                        rejectedEKU = true
+                        continue
+                    }
                     return (true, nil)
                 }
                 rejectedCALeaf = true
@@ -173,6 +184,9 @@ enum TeleportTLSTrust {
         }
         if rejectedCALeaf {
             return failure("leaf certificate is a CA certificate")
+        }
+        if rejectedEKU {
+            return failure("leaf certificate is not permitted for TLS server use (EKU/keyUsage)")
         }
         if let lastError {
             return (false, lastError)
@@ -357,6 +371,10 @@ enum TeleportTLSTrust {
             }
         }
         guard let extensionsField else { return nil }
+        // Extensions are the final TBSCertificate component. A field after
+        // the [3] field is not valid and could hide data from a stricter
+        // parser, so fail closed instead of ignoring it.
+        guard tbsFields.isAtEnd else { return nil }
 
         // Extensions ::= SEQUENCE OF Extension
         // Extension ::= SEQUENCE { extnID OID, critical BOOLEAN DEFAULT FALSE, extnValue OCTET STRING }
