@@ -121,6 +121,13 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         return continuation != nil
     }
 
+    /// The number of connections currently holding an admission slot.
+    /// Read-only and lock-guarded so tests can synchronize admission without
+    /// a fixed sleep.
+    var activeConnectionCount: Int {
+        activeConnections.withLock { $0 }
+    }
+
     /// The callback URL to send to the server
     /// (http://127.0.0.1:<port>/callback?secret_key=<hex>).
     private(set) var clientCallbackURL: String = ""
@@ -177,14 +184,28 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// needed).
     private static let headerTerminator = Data("\r\n\r\n".utf8)
 
-    /// The idle read deadline for a single connection: a client that
-    /// connects and then goes silent (or stalls mid-request) must not pin
-    /// the connection.
+    /// The total read deadline for a single connection, armed when the
+    /// connection is accepted: a client that connects and then goes silent
+    /// (or stalls mid-request) must not pin the connection. The genuine
+    /// loopback callback arrives in one burst well inside this window.
     private let readTimeout: TimeInterval
 
-    init(timeout: TimeInterval = 180, readTimeout: TimeInterval = 10) {
+    /// The maximum number of connections buffered at once. The genuine
+    /// callback is a single small GET; a burst of connections is not part of
+    /// the ceremony and must not accumulate per-connection buffers.
+    private let maxConcurrentConnections: Int
+    /// The number of connections currently holding an admission slot.
+    /// Released exactly once per admitted connection by `respond`.
+    private let activeConnections = OSAllocatedUnfairLock(initialState: 0)
+
+    init(
+        timeout: TimeInterval = 180,
+        readTimeout: TimeInterval = 10,
+        maxConcurrentConnections: Int = 16
+    ) {
         self.timeout = timeout
         self.readTimeout = readTimeout
+        self.maxConcurrentConnections = maxConcurrentConnections
         // Generate 32 random bytes for AES-256-GCM.
         var keyBytes = [UInt8](repeating: 0, count: 32)
         let status = SecRandomCopyBytes(kSecRandomDefault, 32, &keyBytes)
@@ -328,7 +349,14 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             if let pending = pendingResult {
                 pendingResult = nil
                 resumeLock.unlock()
-                cont.resume(with: pending)
+                // A cancellation that raced the buffered resolution must
+                // win: a cancelled login must not complete from a result
+                // that arrived before the wait started.
+                if Task.isCancelled {
+                    cont.resume(throwing: CancellationError())
+                } else {
+                    cont.resume(with: pending)
+                }
                 return
             }
             guard !didResume, continuation == nil else {
@@ -374,10 +402,19 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         resumeLock.lock()
         timeoutTask?.cancel()
         timeoutTask = nil
-        // A cancelled listener has no waiter left; drop a buffered result so
-        // it cannot be delivered to a later call on a different ceremony.
+        // Resolve an installed waiter now: after cancel there is no callback
+        // and no deadline left, so leaving the continuation installed would
+        // hang the caller. Latch the terminal state so a later
+        // `waitForResponse()` fails fast instead of arming a deadline on a
+        // torn-down listener.
+        let continuation = self.continuation
+        self.continuation = nil
+        didResume = true
+        // Drop any buffered result: a cancelled listener must not deliver a
+        // resolution from a different ceremony.
         pendingResult = nil
         resumeLock.unlock()
+        continuation?.resume(throwing: CancellationError())
         listener?.cancel()
         listener = nil
         listenerV6?.cancel()
@@ -387,6 +424,24 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     // MARK: - Connection handling
 
     private func handleConnection(_ conn: NWConnection) {
+        // Admission control: bound the number of per-connection buffers a
+        // local caller can pin during the ceremony. The listener is
+        // loopback-only, but another process on the same host can still
+        // connect; excess connections get 503 and are dropped immediately.
+        let admitted = activeConnections.withLock { count -> Bool in
+            guard count < maxConcurrentConnections else { return false }
+            count += 1
+            return true
+        }
+        guard admitted else {
+            BrowserMFAListenerLog.logger.error(
+                "connection rejected: max \(self.maxConcurrentConnections) concurrent requests in flight"
+            )
+            conn.start(queue: .global(qos: .userInitiated))
+            writeResponse(conn, status: 503, body: "too many concurrent requests")
+            return
+        }
+
         conn.start(queue: .global(qos: .userInitiated))
         // Exactly one exit path answers each connection: the request parser,
         // the idle deadline, and a listener teardown race to claim it. The
@@ -664,6 +719,16 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     // MARK: - HTTP response
 
     private func respond(_ conn: NWConnection, status: Int, body: String) {
+        // Every admitted connection answers exactly once (guarded by
+        // `claimConnection`), so this is the single point that releases its
+        // admission slot.
+        defer { releaseAdmission() }
+        writeResponse(conn, status: status, body: body)
+    }
+
+    /// Write an HTTP response without touching the admission counter: used
+    /// for the over-cap rejection, which never acquired a slot.
+    private func writeResponse(_ conn: NWConnection, status: Int, body: String) {
         let reason: String
         switch status {
         case 200: reason = "OK"
@@ -672,6 +737,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         case 408: reason = "Request Timeout"
         case 413: reason = "Payload Too Large"
         case 500: reason = "Internal Server Error"
+        case 503: reason = "Service Unavailable"
         default: reason = "OK"
         }
         let response = "HTTP/1.1 \(status) \(reason)\r\n" +
@@ -684,6 +750,15 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         conn.send(content: data, completion: .contentProcessed { _ in
             conn.cancel()
         })
+    }
+
+    /// Release one admission slot. Called exactly once per admitted
+    /// connection from `respond`; the over-cap rejection path never
+    /// acquires a slot and never releases one.
+    private func releaseAdmission() {
+        activeConnections.withLock { count in
+            if count > 0 { count -= 1 }
+        }
     }
 
     private let closePageHTML = """

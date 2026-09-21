@@ -156,6 +156,130 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         )
     }
 
+    /// Cancelling the listener itself with an installed waiter must resolve
+    /// the wait immediately instead of hanging: after `cancel()` there is no
+    /// callback and no deadline left. A later wait must also fail fast
+    /// rather than arm a new deadline on a torn-down listener.
+    func testCancelWithInstalledWaiterResolvesPromptly() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let waiter = Task.detached { () -> Bool in
+            do {
+                _ = try await listener.waitForResponse()
+                return false
+            } catch is CancellationError {
+                return true
+            } catch {
+                return false
+            }
+        }
+        let installDeadline = ContinuousClock.now + .seconds(5)
+        while !listener.isAwaitingResponse, ContinuousClock.now < installDeadline {
+            await Task.yield()
+        }
+        XCTAssertTrue(listener.isAwaitingResponse, "the waiter must install before cancel")
+
+        listener.cancel()
+        let cancelledAsExpected = await waiter.value
+        let elapsed = clock.now - started
+        XCTAssertTrue(cancelledAsExpected, "cancel must resolve an installed waiter with CancellationError")
+        XCTAssertLessThan(elapsed, .seconds(5), "cancel must not wait out the 60s deadline")
+        XCTAssertTrue(listener.didResume)
+
+        do {
+            _ = try await listener.waitForResponse()
+            XCTFail("a wait on a cancelled listener must fail fast")
+        } catch {
+            // expected: the listener is terminally resolved
+        }
+    }
+
+    /// A cancellation that races a buffered result must win: a cancelled
+    /// login must not complete from a result that arrived before the wait.
+    func testCancellationWinsOverABufferedResult() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        defer { listener.cancel() }
+
+        var buffered = Proto_CredentialAssertionResponse()
+        buffered.id = "buffered"
+        listener.resume(.success(buffered))
+
+        // Cancel from inside the task before awaiting, so `Task.isCancelled`
+        // is deterministically true when the buffered branch runs.
+        let waiter = Task { () -> Bool in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                _ = try await listener.waitForResponse()
+                return false
+            } catch is CancellationError {
+                return true
+            } catch {
+                return false
+            }
+        }
+        let cancelled = await waiter.value
+        XCTAssertTrue(cancelled, "cancellation must beat the buffered success")
+    }
+
+    /// A burst of connections must not accumulate per-connection buffers:
+    /// connections over the admission cap are answered 503 immediately and
+    /// do not resolve the login.
+    func testAdmissionCapRejectsExcessConnections() async throws {
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        guard let endpointPort = NWEndpoint.Port(rawValue: listener.port) else {
+            return XCTFail("listener must expose a bound port")
+        }
+        let silent = NWConnection(host: .ipv4(.loopback), port: endpointPort, using: .tcp)
+        defer { silent.cancel() }
+        try await connect(silent)
+
+        let admitDeadline = ContinuousClock.now + .seconds(5)
+        while listener.activeConnectionCount < 1, ContinuousClock.now < admitDeadline {
+            await Task.yield()
+        }
+        XCTAssertEqual(listener.activeConnectionCount, 1, "the first connection must hold the only slot")
+
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 503"),
+            "an over-cap connection must get 503; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume, "an over-cap connection must not resolve the login")
+    }
+
+    /// A request that exceeds the buffered ceiling is answered 413 instead of
+    /// accumulating unboundedly.
+    func testOversizedRequestIsAnswered413() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        var request = Data("GET /callback?secret_key=\(listener.secretKeyHex)&response=".utf8)
+        // No header terminator: the size guard must trip before the parser
+        // ever sees a complete request.
+        request.append(Data(repeating: 0x41, count: (1 << 20) + 1))
+        let response = try await sendRawRequest(
+            request,
+            host: .ipv4(.loopback),
+            port: listener.port
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 413"),
+            "an oversized request must get 413; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume)
+    }
+
     /// A `/callback` request without the authenticated `response` param must
     /// not terminate the login: any local process can reach the loopback
     /// port, so the listener answers 400 and keeps waiting for the genuine
