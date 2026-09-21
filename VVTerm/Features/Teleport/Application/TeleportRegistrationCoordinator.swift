@@ -257,7 +257,16 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
             await grpcClient.disconnect()
             return
         }
-        let rpID = webauthnCC.rp.id.isEmpty ? cluster.rpID : webauthnCC.rp.id
+        let rpID: String
+        switch TeleportWebAuthnRPID.resolve(serverProvided: webauthnCC.rp.id, cluster: cluster) {
+        case .success(let resolved):
+            rpID = resolved
+        case .failure(let error):
+            logger.error("CreateRegisterChallenge rpID rejected: \(error.errorDescription ?? "unknown", privacy: .public)")
+            state = .failed(.server("CreateRegisterChallenge: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
+            await grpcClient.disconnect()
+            return
+        }
         let challenge = webauthnCC.challenge
         // The user handle is the raw UUID string's UTF-8 bytes — NOT
         // base64url-decoded. See the 2.2 prompt gotcha.

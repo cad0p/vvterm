@@ -195,7 +195,15 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
         let challenge = Data(base64URLEncoded: assertion.publicKey.challenge)
             ?? Data(assertion.publicKey.challenge.utf8)
-        let rpID = assertion.publicKey.rpId ?? cluster.rpID
+        let rpID: String
+        switch TeleportWebAuthnRPID.resolve(serverProvided: assertion.publicKey.rpId, cluster: cluster) {
+        case .success(let resolved):
+            rpID = resolved
+        case .failure(let error):
+            logger.error("login/begin rpID rejected: \(error.errorDescription ?? "unknown", privacy: .public)")
+            state = .failed(.server("login/begin: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
+            return
+        }
         logger.info("login/begin: challenge \(challenge.count)B, rpID=\(rpID, privacy: .public)")
 
         // ── Step 2: WebAuthn.login (Face ID prompt) ──────────────────────
