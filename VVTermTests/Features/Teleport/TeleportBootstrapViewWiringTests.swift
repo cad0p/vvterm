@@ -68,7 +68,10 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
             // MockSEPKeySigner conforms to TeleportSEPSigning; the bootstrap
             // coordinator keeps a signer for symmetry but doesn't use it in
             // Phase 1, so a default mock is fine.
-            signer: MockSEPKeySigner(outcome: .success)
+            signer: MockSEPKeySigner(outcome: .success),
+            sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
         )
     }
 
@@ -117,7 +120,10 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 httpClient: http,
                 keyRing: keyRing,
                 safariPresenter: safari,
-                signer: MockSEPKeySigner(outcome: .success)
+                signer: MockSEPKeySigner(outcome: .success),
+                sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+                tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),
+                now: { TeleportFixtureSupport.fixtureClock }
             )
         }
     }
@@ -182,7 +188,10 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 httpClient: http,
                 keyRing: keyRing,
                 safariPresenter: safari,
-                signer: MockSEPKeySigner(outcome: .success)
+                signer: MockSEPKeySigner(outcome: .success),
+                sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+                tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),
+                now: { TeleportFixtureSupport.fixtureClock }
             )
         }
     }
@@ -242,6 +251,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
         // Small delay so the parent's periodic re-eval lands during the POST,
         // recreating the inline coordinator (the production race).
         http.scriptedDelay = 0.15
@@ -297,6 +307,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     func testBootstrapSuccess_firesOnSuccess_whenCoordinatorHeldInStateObject() {
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
         http.scriptedDelay = 0.15
         let safari = MockWebAuthenticationSessionPresenter()
         let keyRing = MockTeleportKeyRing()
@@ -344,6 +355,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     func testCoordinator_reachesSuccessAndSetsResult_whenHttpReturnsCert() async {
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
         let safari = MockWebAuthenticationSessionPresenter()
         let keyRing = MockTeleportKeyRing()
         let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)

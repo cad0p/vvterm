@@ -112,18 +112,29 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// The injected WebAuthn builder wrapper. Defaults to the real impl.
     private let webAuthnBuilder: any TeleportWebAuthnBuilding
 
+    /// Generates the ed25519 keypair the certificate is requested against.
+    /// Injectable so tests can bind a fixture certificate to a known key.
+    private let keyPairGenerator: any TeleportSSHKeyPairGenerating
+
+    /// The clock used for the issued-certificate validity checks.
+    private let now: () -> Date
+
     private let logger = Logger.forCategory("teleport-login")
 
     init(
         httpClient: any TeleportHTTPClienting,
         keyRing: any TeleportKeyRingStoring,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
-        webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder()
+        webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder(),
+        keyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
+        now: @escaping () -> Date = Date.init
     ) {
         self.httpClient = httpClient
         self.keyRing = keyRing
         self.signer = signer
         self.webAuthnBuilder = webAuthnBuilder
+        self.keyPairGenerator = keyPairGenerator
+        self.now = now
     }
 
     func begin(cluster: TeleportCluster) async {
@@ -219,9 +230,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // (the server clamps it to the role's MaxSessionTTL — the actual
         // TTL is read from the returned cert's ValidBefore).
         state = .fetchingCert
-        let (sshPubKey, sshPrivateKeyPEM) = SSHPubKey.generateEd25519KeyPair(comment: "vvterm-teleport-login")
+        let (sshPubKey, sshPrivateKeyPEM) = keyPairGenerator.generateKeyPair(comment: "vvterm-teleport-login")
         let sshPubKeyBytes = Data((sshPubKey + "\n").utf8)
         let ttl: Int64 = 3_600_000_000_000  // 1h in ns (server clamps)
+        let requestedTTLSeconds = TimeInterval(ttl) / 1_000_000_000
 
         let finishResp: LoginFinishResponse
         do {
@@ -256,13 +268,34 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
         // The cert's ValidBefore. The HTTP response doesn't include it
         // directly — it's embedded in the PEM cert. Parse it from the SSH
-        // cert blob (OpenSSH cert format: valid_before is a uint64 Unix
-        // timestamp appended after the signature). Fall back to a
-        // conservative 1h default if parsing fails — the readiness state
-        // will flip to `needsLogin` when the cert expires, triggering a
-        // re-auth.
-        let certValidBefore = SSHCertExpiryParser.validBefore(pem: certPEM)
-            ?? Date(timeIntervalSinceNow: 3600)  // 1h fallback
+        // cert blob (OpenSSH cert format). Additionally, bind the cert to
+        // the generated keypair: the passwordless webapi issue path has no
+        // server-side binding between the WebAuthn assertion and the SSH
+        // public key that rides along in the same request, so the client
+        // verifies before storing anything.
+        guard let sshKeyBlob = OpenSSHCertificate.parseAuthorizedKeysLine(sshPubKey)?.blob else {
+            logger.error("failed to parse the generated ssh public key")
+            state = .failed(.unknown("generated ssh key parse failed"))
+            return
+        }
+        let validation = TeleportIssuedCertValidator.validateIssuedUserCert(
+            certPEM,
+            expectedPublicKeyBlob: sshKeyBlob,
+            requestedTTL: requestedTTLSeconds,
+            now: now()
+        )
+        let certValidBefore: Date
+        switch validation {
+        case .success(let cert):
+            certValidBefore = cert.validBeforeDate
+        case .failure(let failure):
+            logger.error(
+                "issued certificate rejected: \(failure.errorDescription ?? "unknown", privacy: .public)"
+            )
+            state = .failed(.server("Certificate binding check failed: \(failure.errorDescription ?? "unknown")"))
+            return
+        }
+
 
         // Store the fresh cert in the key ring. Readiness flips to `ready`.
         // Also store the ed25519 private key — the SSHClient cert seam

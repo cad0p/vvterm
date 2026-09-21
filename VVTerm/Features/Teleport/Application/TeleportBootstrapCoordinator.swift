@@ -130,6 +130,18 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// `SecureEnclaveSigner`.
     private let signer: any TeleportSEPSigning
 
+    /// Generates the ed25519 SSH keypair the certificate is requested
+    /// against. Injectable so tests can bind a fixture certificate to a
+    /// known key.
+    private let sshKeyPairGenerator: any TeleportSSHKeyPairGenerating
+
+    /// Generates the ephemeral TLS keypair. Injectable for the TLS-cert
+    /// binding test.
+    private let tlsKeyPairGenerator: any TeleportTLSKeyPairGenerating
+
+    /// The clock used for the issued-certificate validity checks.
+    private let now: () -> Date
+
     /// The in-flight POST task. Cancelled by `cancel()` / `retry()`.
     private var postTask: Task<Void, Never>?
 
@@ -171,12 +183,18 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         httpClient: any TeleportHTTPClienting,
         keyRing: any TeleportKeyRingStoring,
         safariPresenter: (any WebAuthenticationSessionPresenting)?,
-        signer: any TeleportSEPSigning = SecureEnclaveSigner()
+        signer: any TeleportSEPSigning = SecureEnclaveSigner(),
+        sshKeyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
+        tlsKeyPairGenerator: any TeleportTLSKeyPairGenerating = LiveTeleportTLSKeyPairGenerator(),
+        now: @escaping () -> Date = Date.init
     ) {
         self.httpClient = httpClient
         self.keyRing = keyRing
         self.safariPresenter = safariPresenter
         self.signer = signer
+        self.sshKeyPairGenerator = sshKeyPairGenerator
+        self.tlsKeyPairGenerator = tlsKeyPairGenerator
+        self.now = now
     }
 
     func begin(cluster: TeleportCluster) async {
@@ -201,8 +219,8 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         let sshPubKey: String
         let sshPrivateKeyPEM: String
         do {
-            (sshPubKey, sshPrivateKeyPEM) = SSHPubKey.generateEd25519KeyPair(comment: "vvterm-teleport")
-            tlsKeyPair = try TLSKeyPairGen.generate()
+            (sshPubKey, sshPrivateKeyPEM) = sshKeyPairGenerator.generateKeyPair(comment: "vvterm-teleport")
+            tlsKeyPair = try tlsKeyPairGenerator.generate()
         } catch {
             logger.error("keypair generation failed: \(error.localizedDescription, privacy: .public)")
             state = .failed(.unknown("keypair generation failed: \(error.localizedDescription)"))
@@ -243,7 +261,13 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                     tlsPubKeyB64: tlsPubKeyB64,
                     ttl: ttl
                 )
-                await self.handlePostSuccess(response: resp, cluster: cluster, sshPrivateKeyPEM: sshPrivateKeyPEM)
+                await self.handlePostSuccess(
+                    response: resp,
+                    cluster: cluster,
+                    sshPrivateKeyPEM: sshPrivateKeyPEM,
+                    sshPubKey: sshPubKey,
+                    requestedTTLSeconds: TimeInterval(ttl) / 1_000_000_000
+                )
             } catch {
                 await self.handlePostFailure(error: error)
             }
@@ -317,7 +341,13 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
     // MARK: - POST result handling
 
-    private func handlePostSuccess(response: HeadlessLoginResponse, cluster: TeleportCluster, sshPrivateKeyPEM: String) async {
+    private func handlePostSuccess(
+        response: HeadlessLoginResponse,
+        cluster: TeleportCluster,
+        sshPrivateKeyPEM: String,
+        sshPubKey: String,
+        requestedTTLSeconds: TimeInterval
+    ) async {
         guard let certB64 = response.cert, !certB64.isEmpty else {
             logger.error("POST returned 200 but no cert")
             state = .failed(.unknown("no cert in response"))
@@ -358,20 +388,49 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         }
 
         // The cert's ValidBefore. The HTTP response doesn't include it
-        // directly — it's embedded in the PEM cert. Parse it from the SSH
-        // cert blob (OpenSSH cert format: valid_before is a uint64 Unix
-        // timestamp appended after the signature). Fall back to a
-        // conservative 1h default if parsing fails — the login
-        // coordinator (Phase 3) overwrites this with the real expiry when
-        // it issues a fresh cert.
-        let certValidBefore = SSHCertExpiryParser.validBefore(pem: certPEM)
-            ?? Date(timeIntervalSinceNow: 3600)  // 1h fallback
+        // directly — it's embedded in the PEM cert. Parse it from the OpenSSH
+        // cert blob and bind the cert to the generated keypair: the same
+        // checks as Phase 3 (defense in depth), plus the TLS certificate
+        // binding for the Phase-2 gRPC identity. Nothing is stored when a
+        // check fails.
+        guard let sshKeyBlob = OpenSSHCertificate.parseAuthorizedKeysLine(sshPubKey)?.blob else {
+            logger.error("failed to parse the generated ssh public key")
+            state = .failed(.unknown("generated ssh key parse failed"))
+            return
+        }
+        let certValidBefore: Date
+        switch TeleportIssuedCertValidator.validateIssuedUserCert(
+            certPEM,
+            expectedPublicKeyBlob: sshKeyBlob,
+            requestedTTL: requestedTTLSeconds,
+            now: now()
+        ) {
+        case .success(let cert):
+            certValidBefore = cert.validBeforeDate
+        case .failure(let failure):
+            logger.error(
+                "issued bootstrap certificate rejected: \(failure.errorDescription ?? "unknown", privacy: .public)"
+            )
+            state = .failed(.unknown("Certificate binding check failed: \(failure.errorDescription ?? "unknown")"))
+            return
+        }
 
         // The TLS private key for the gRPC mTLS dial. `tlsKeyPair` is set
         // in step 1 (we return early on failure), so it's non-nil here.
         guard let tlsPrivateKey = tlsKeyPair?.privateKey else {
             logger.error("no TLS private key available for Phase 2")
             state = .failed(.unknown("no TLS private key"))
+            return
+        }
+
+        if let failure = TeleportIssuedCertValidator.validateTLSCertBinding(
+            tlsCertPEM,
+            expectedPrivateKey: tlsPrivateKey
+        ) {
+            logger.error(
+                "issued bootstrap TLS certificate rejected: \(failure.errorDescription ?? "unknown", privacy: .public)"
+            )
+            state = .failed(.unknown("Certificate binding check failed: \(failure.errorDescription ?? "unknown")"))
             return
         }
 
