@@ -5756,8 +5756,10 @@ enum SSHError: LocalizedError {
     /// message the banner is showing, so the prompt can be refused when the
     /// pending entry no longer describes that failure.
     static func fingerprint(inFailureMessage message: String) -> String? {
+        // The fingerprint is the last parenthesised group: the host itself
+        // can contain parentheses, while the base64 fingerprint cannot.
         guard let marker = message.range(of: hostKeyUnknownMessageMarker),
-              let open = message[marker.upperBound...].firstIndex(of: "("),
+              let open = message[marker.upperBound...].lastIndex(of: "("),
               let close = message[message.index(after: open)...].firstIndex(of: ")") else {
             return nil
         }

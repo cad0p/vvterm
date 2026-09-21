@@ -265,12 +265,24 @@ struct TerminalConnectionStatusPresentationTests {
         #expect(SSHError.fingerprint(inFailureMessage: "") == nil)
     }
 
+    /// A host containing parentheses must not shift fingerprint extraction:
+    /// the fingerprint is the last parenthesised group in the message.
+    @Test
+    func failureMessageFingerprintSurvivesParenthesisedHosts() {
+        let message = firstUseFailureMessage(
+            host: "my(pc)",
+            port: 22,
+            fingerprint: "SHA256:abc123"
+        )
+        #expect(SSHError.fingerprint(inFailureMessage: message) == "SHA256:abc123")
+    }
+
     /// Simulates the review-to-confirmation race: the user reviews A in the
     /// alert, a background attempt overwrites the single pending entry with
     /// B, and the confirmation is refused while the stale B entry is
     /// discarded (the next attempt re-records and re-prompts).
     @Test
-    func capturedReviewRefusesARacingPendingEntry() {
+    func capturedReviewRefusesARacingPendingEntry() throws {
         let manager = KnownHostsManager.shared
         manager.removeAll()
         defer { manager.removeAll() }
@@ -307,7 +319,7 @@ struct TerminalConnectionStatusPresentationTests {
         let confirmed = manager.confirmPending(
             host: "race.example.com",
             port: 22,
-            expectedFingerprint: review.reviewedEntry?.fingerprint ?? ""
+            expectedFingerprint: try #require(review.reviewedEntry?.fingerprint)
         )
 
         #expect(!confirmed)
