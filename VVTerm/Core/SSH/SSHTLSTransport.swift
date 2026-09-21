@@ -22,12 +22,22 @@
 //                                            ▲
 //                                            └── pump task forwards bytes both ways
 //
-//  TLS verification mirrors the gRPC path (GRPCTLSOptions.make): the cluster
-//  CA certs are set as trust anchors, but the verify block accepts the cert
-//  anyway because Teleport proxy certs are not standards-compliant and
-//  SecTrustEvaluateWithError fails even with the right anchor — the real
-//  authentication is the SSH cert (mTLS is not used on the SSH ALPN; the
-//  SSH cert authenticates the user inside the tunnel).
+//  TLS verification: the proxy presents a *host identity* certificate
+//  signed by the cluster's Host CA — the TLS-routing model from RFD 39 /
+//  RFD 123, matching tsh's `configureTLS` and the ALPN listener serving the
+//  proxy host identity. The Host CA x509 certs captured at Phase 1 bootstrap
+//  (`host_signers[].tls_certs`) are the only trust anchors: the leaf must
+//  chain to them, carry a SAN matching the dial host (or
+//  `teleport.cluster.local`), and negotiate the `teleport-proxy-ssh` ALPN.
+//  User authentication *inside* the tunnel is the SSH certificate (this leg
+//  carries no client cert).
+//
+//  This chain validates against the real cluster: `SecTrustEvaluateWithError`
+//  succeeds with the Host CA anchored (verified against teleport.pcad.it,
+//  2026-09-21), and `TeleportTLSTrust` evaluates an explicit SSL policy per
+//  candidate name. Earlier revisions accepted the certificate unconditionally
+//  on the incorrect premise that proxy certs cannot validate; that bypass is
+//  gone — a self-signed or foreign-CA leaf now fails the handshake.
 //
 
 #if canImport(Network)
