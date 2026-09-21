@@ -28,6 +28,39 @@ import os.log
 
 // MARK: - TLS options (ALPN + client cert)
 
+/// The ephemeral per-connection mTLS identity: the `sec_identity_t` plus the
+/// keychain label of the cert/key items it was built from.
+///
+/// Per-connect identities must not accumulate in the keychain: the connection
+/// deletes its items in `close()` and on every failure path.
+struct GRPCClientIdentity {
+    let identity: sec_identity_t
+    let label: String
+
+    /// A unique keychain label for one connection's cert + key.
+    static func makeLabel() -> String {
+        "vvterm-grpc-\(UUID().uuidString)"
+    }
+
+    func deleteKeychainItems() {
+        Self.deleteKeychainItems(label: label)
+    }
+
+    /// Delete the cert + key items with the given label. Safe to call when
+    /// the items are absent (returns `errSecItemNotFound`).
+    static func deleteKeychainItems(label: String) {
+        SecItemDelete([
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: label,
+        ] as CFDictionary)
+        SecItemDelete([
+            kSecClass as String: kSecClassKey,
+            kSecAttrLabel as String: label,
+        ] as CFDictionary)
+        GRPCTransportLog.logger.info("grpc_identity_deleted label=\(label, privacy: .public)")
+    }
+}
+
 enum GRPCTLSOptions {
 
     /// Build NWProtocolTLS.Options for dialing the Teleport AUTH service via
@@ -41,11 +74,13 @@ enum GRPCTLSOptions {
     ///   - Client cert: the Phase 1 TLS cert (mTLS)
     ///   - Server verification: the cluster Host CA certs
     ///
-    /// See api/client/client.go:ConfigureALPN + api/utils/cluster.go:EncodeClusterName.
+    /// Returns the options AND the ephemeral identity handle: the per-connect
+    /// certificate/key are removed from the keychain when the connection
+    /// closes (see `TeleportGRPCConnection.close`).
     static func make(clientCertPEM: String,
                      privateKey: SecKey,
                      clusterName: String,
-                     clusterCAPEMs: [String]) throws -> NWProtocolTLS.Options {
+                     clusterCAPEMs: [String]) throws -> (options: NWProtocolTLS.Options, identity: GRPCClientIdentity) {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
@@ -63,16 +98,20 @@ enum GRPCTLSOptions {
         encodedCluster.withCString { cStr in
             sec_protocol_options_set_tls_server_name(secOpts, cStr)
         }
-        // Client cert (mTLS).
-        let secIdentity = try buildSecIdentity(certPEM: clientCertPEM, privateKey: privateKey)
-        sec_protocol_options_set_local_identity(secOpts, secIdentity)
+        // Client cert (mTLS) — ephemeral identity, deleted on close.
+        let identityHandle = try buildSecIdentity(certPEM: clientCertPEM, privateKey: privateKey)
+        sec_protocol_options_set_local_identity(secOpts, identityHandle.identity)
 
-        // Server verification: use the cluster TLS CA certs (not the system
-        // trust store — the auth listener serves the cluster CA, which the
-        // system doesn't trust).
-        let certRefs = clusterCAPEMs.compactMap { pem -> SecCertificate? in
-            guard let der = try? pemToDER(pem: pem, label: "CERTIFICATE") else { return nil }
-            return SecCertificateCreateWithData(nil, der as CFData)
+        // Server verification: the cluster Host CA certs (from
+        // host_signers.tls_certs) are the only trust anchors; the trust is
+        // evaluated against explicit SSL policies for the encoded auth route
+        // name + teleport.cluster.local, and accepted only when the
+        // negotiated ALPN is the auth route.
+        let certRefs = TeleportTLSTrust.anchors(fromPEMs: clusterCAPEMs)
+        guard !certRefs.isEmpty else {
+            throw GRPCError.tls(
+                "no usable cluster CA trust anchors (input \(clusterCAPEMs.count) PEMs)"
+            )
         }
         GRPCTransportLog.logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
         sec_protocol_options_set_verify_block(
@@ -87,9 +126,9 @@ enum GRPCTLSOptions {
         )
         sec_protocol_options_set_challenge_block(secOpts, { _, complete in
             GRPCTransportLog.logger.info("tls_challenge server requested client cert — presenting identity")
-            complete(secIdentity)
+            complete(identityHandle.identity)
         }, .global())
-        return tlsOpts
+        return (tlsOpts, identityHandle)
     }
 
     /// Encode a cluster name the way Teleport does: hex(name) + ".teleport.cluster.local".
@@ -107,15 +146,18 @@ enum GRPCTLSOptions {
     ///   2. Add cert + key to the keychain with a unique label.
     ///   3. SecItemCopyMatching to get the SecIdentity.
     ///   4. Wrap in sec_identity_t.
-    private static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> sec_identity_t {
+    ///
+    /// The returned handle owns the keychain items: `TeleportGRPCConnection`
+    /// calls `deleteKeychainItems()` on close and on every failure path.
+    private static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> GRPCClientIdentity {
         // 1. Parse cert.
         let certDER = try TeleportTLSTrust.pemToDER(pem: certPEM, label: "CERTIFICATE")
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
             throw GRPCError.tls("failed to create SecCertificate from PEM")
         }
 
-        // 3. Add cert + key to keychain with a unique label.
-        let label = "vvterm-grpc-\(UUID().uuidString)"
+        // 2. Add cert + key to keychain with a unique label.
+        let label = GRPCClientIdentity.makeLabel()
 
         let certAdd: [String: Any] = [
             kSecClass as String: kSecClassCertificate,
@@ -134,10 +176,15 @@ enum GRPCTLSOptions {
         ]
         let keyStatus = SecItemAdd(keyAdd as CFDictionary, nil)
         guard keyStatus == errSecSuccess || keyStatus == errSecDuplicateItem else {
+            // Do not leak the cert item when the key insert fails.
+            SecItemDelete([
+                kSecClass as String: kSecClassCertificate,
+                kSecAttrLabel as String: label,
+            ] as CFDictionary)
             throw GRPCError.tls("SecItemAdd key: \(keyStatus)")
         }
 
-        // 4. Copy the matching SecIdentity.
+        // 3. Copy the matching SecIdentity.
         let idQuery: [String: Any] = [
             kSecClass as String: kSecClassIdentity,
             kSecAttrLabel as String: label,
@@ -147,23 +194,16 @@ enum GRPCTLSOptions {
         var idRef: CFTypeRef?
         let idStatus = SecItemCopyMatching(idQuery as CFDictionary, &idRef)
         guard idStatus == errSecSuccess, let identity = idRef else {
+            GRPCClientIdentity.deleteKeychainItems(label: label)
             throw GRPCError.tls("SecItemCopyMatching identity: \(idStatus)")
         }
-        // 5. Wrap in sec_identity_t.
+
+        // 4. Wrap in sec_identity_t.
         guard let secIdentity = sec_identity_create(identity as! SecIdentity) else {
+            GRPCClientIdentity.deleteKeychainItems(label: label)
             throw GRPCError.tls("sec_identity_create failed")
         }
-        return secIdentity
-    }
-
-    /// Strip PEM headers and base64-decode the DER body.
-    private static func pemToDER(pem: String, label: String) throws -> Data {
-        let lines = pem.split(separator: "\n", omittingEmptySubsequences: true)
-        let b64 = lines.filter { !$0.hasPrefix("-----") }.joined()
-        guard let data = Data(base64Encoded: b64) else {
-            throw GRPCError.tls("failed to base64-decode PEM (\(label))")
-        }
-        return data
+        return GRPCClientIdentity(identity: secIdentity, label: label)
     }
 }
 
@@ -177,15 +217,18 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     private let multiplexer: NIOHTTP2Handler.StreamMultiplexer
     private let authority: String
     private let group: NIOTSEventLoopGroup
+    private let identity: GRPCClientIdentity
 
     private init(channel: Channel,
                  multiplexer: NIOHTTP2Handler.StreamMultiplexer,
                  authority: String,
-                 group: NIOTSEventLoopGroup) {
+                 group: NIOTSEventLoopGroup,
+                 identity: GRPCClientIdentity) {
         self.channel = channel
         self.multiplexer = multiplexer
         self.authority = authority
         self.group = group
+        self.identity = identity
     }
 
     /// Dial the Teleport proxy gRPC endpoint with a client cert.
@@ -202,7 +245,7 @@ final class TeleportGRPCConnection: @unchecked Sendable {
                         privateKey: SecKey,
                         clusterName: String,
                         clusterCAPEMs: [String]) async throws -> TeleportGRPCConnection {
-        let tlsOpts = try GRPCTLSOptions.make(
+        let (tlsOpts, identity) = try GRPCTLSOptions.make(
             clientCertPEM: clientCertPEM,
             privateKey: privateKey,
             clusterName: clusterName,
@@ -230,14 +273,25 @@ final class TeleportGRPCConnection: @unchecked Sendable {
                 }
             }
 
-        let channel = try await bootstrap.connect(host: host, port: port).get()
+        let channel: Channel
+        do {
+            channel = try await bootstrap.connect(host: host, port: port).get()
+        } catch {
+            // Dial failed: remove this connection's keychain identity.
+            identity.deleteKeychainItems()
+            try? await group.shutdownGracefully()
+            throw error
+        }
         guard let multiplexer = capturedMultiplexer else {
+            identity.deleteKeychainItems()
+            try? await group.shutdownGracefully()
             throw GRPCError.transport("HTTP/2 multiplexer not captured")
         }
         return TeleportGRPCConnection(channel: channel,
                                        multiplexer: multiplexer,
                                        authority: host,
-                                       group: group)
+                                       group: group,
+                                       identity: identity)
     }
 
     /// Make a unary gRPC call.
@@ -260,6 +314,9 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     }
 
     func close() async throws {
+        // Delete the per-connect keychain identity even if the graceful
+        // channel shutdown fails.
+        defer { identity.deleteKeychainItems() }
         try await channel.close().get()
         try await group.shutdownGracefully()
     }

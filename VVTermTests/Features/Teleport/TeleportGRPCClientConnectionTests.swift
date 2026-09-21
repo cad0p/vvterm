@@ -206,6 +206,23 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
         XCTAssertFalse(result.ok)
     }
 
+    // MARK: - Ephemeral gRPC identities
+
+    /// Each per-connect identity gets a unique keychain label so concurrent
+    /// connections cannot delete each other's cert/key items.
+    func testGRPCIdentityLabelsAreUnique() {
+        let first = GRPCClientIdentity.makeLabel()
+        let second = GRPCClientIdentity.makeLabel()
+        XCTAssertTrue(first.hasPrefix("vvterm-grpc-"))
+        XCTAssertNotEqual(first, second)
+    }
+
+    /// Deleting an identity that was never inserted must be a no-op (no
+    /// throw, no crash, no entitlement dependency).
+    func testGRPCIdentityDeletionOfAbsentItemsIsSafe() {
+        GRPCClientIdentity.deleteKeychainItems(label: GRPCClientIdentity.makeLabel())
+    }
+
     // MARK: - Trust test helpers
 
     private static func fixtureURL(_ relativePath: String) -> URL {
