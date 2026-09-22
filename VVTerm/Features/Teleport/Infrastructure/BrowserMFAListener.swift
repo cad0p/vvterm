@@ -24,9 +24,11 @@
 //    1. Generate an AES-256-GCM key (32 random bytes), hex-encode for the URL.
 //    2. Start NWListener on 127.0.0.1, port 0 (OS-assigned).
 //    3. Expose clientCallbackURL = "http://localhost:<port>/callback?secret_key=<hex>".
-//       (localhost, not 127.0.0.1, so Safari's HTTPS-Only mode doesn't show
-//       the "connection is not secure" banner — Safari treats localhost as a
-//       secure context but shows the banner for a literal 127.0.0.1 IP.)
+//       (Always `localhost`, never a literal loopback IP: Safari's Not Secure
+//       Connection Warning (iOS 18.2+) flags `http://127.0.0.1:…` but not
+//       `http://localhost:…`. If the ::1 companion bind loses its port to
+//       another listener, the pair is retried on a fresh port; the URL still
+//       advertises `localhost` and the browser falls back to 127.0.0.1.)
 //    4. On GET/POST to /callback, read `response` query param, decrypt with
 //       the key, decode CLILoginResponse JSON, extract
 //       BrowserMFAWebauthnResponse (a CredentialAssertionResponse).
@@ -161,15 +163,18 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     private var timeoutTask: Task<Void, Never>?
     private let timeout: TimeInterval
 
-    /// The hostname we advertise in the callback URL. The listener binds
-    /// loopback only (127.0.0.1 + ::1) and advertises `localhost` rather than
-    /// `127.0.0.1` so Safari's HTTPS-Only mode treats it as a secure context
-    /// and doesn't show the "connection is not secure" banner.
+    /// The hostname we advertise in the callback URL. Always `localhost`,
+    /// never a literal loopback IP: Safari's Not Secure Connection Warning
+    /// (iOS 18.2+) flags `http://127.0.0.1:…` but not `http://localhost:…`,
+    /// and `localhost` resolves to 127.0.0.1 even when ::1 is not bound.
     /// ValidateClientRedirect (lib/client/sso/redirector.go) accepts both
-    /// `localhost` and `127.0.0.1` for the http scheme. If the ::1 bind is
-    /// unavailable, the v4 listener is kept and this falls back to
-    /// `127.0.0.1`.
+    /// `localhost` and `127.0.0.1` for the http scheme.
     private var host = "localhost"
+
+    /// Whether the ::1 companion listener is bound. Readable for tests: the
+    /// advertised URL is always `localhost`, so it no longer reveals which
+    /// loopback families are actually bound.
+    var hasIPv6LoopbackListener: Bool { listenerV6 != nil }
 
     /// The largest request we buffer before rejecting the connection. The
     /// genuine callback is a small GET whose payload lives in the
@@ -198,9 +203,20 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     private let startTimeout: TimeInterval
 
     /// The deadline for the secondary (`::1`) bind. This one is a fallback:
-    /// on timeout the v4 listener is kept and the URL advertises
-    /// `127.0.0.1`, so the deadline stays short.
+    /// on failure the pair is retried on a fresh port (and ultimately the v4
+    /// listener is kept), so the deadline stays short.
     private static let secondaryLoopbackStartTimeout: TimeInterval = 5
+
+    /// How many times the 127.0.0.1 + ::1 pair is bound before falling back to
+    /// IPv4-only. An OS-assigned IPv4 ephemeral port can already be in use on
+    /// ::1 (EADDRINUSE — observed on a real device), which is transient; a
+    /// fresh port almost always binds both families.
+    private static let loopbackBindAttempts = 3
+
+    /// Builds an `NWListener` for a loopback endpoint. Injectable so tests can
+    /// force the `::1` bind to fail and exercise the retry + IPv4-only paths
+    /// deterministically.
+    private let listenerFactory: (NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener
 
     /// The maximum number of connections buffered at once. The genuine
     /// callback is a single small GET; a burst of connections is not part of
@@ -214,12 +230,14 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         timeout: TimeInterval = 180,
         readTimeout: TimeInterval = 10,
         maxConcurrentConnections: Int = 16,
-        startTimeout: TimeInterval = 15
+        startTimeout: TimeInterval = 15,
+        listenerFactory: ((NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener)? = nil
     ) {
         self.timeout = timeout
         self.readTimeout = readTimeout
         self.maxConcurrentConnections = maxConcurrentConnections
         self.startTimeout = startTimeout
+        self.listenerFactory = listenerFactory ?? Self.makeLoopbackListener
         // Generate 32 random bytes for AES-256-GCM.
         var keyBytes = [UInt8](repeating: 0, count: 32)
         let status = SecRandomCopyBytes(kSecRandomDefault, 32, &keyBytes)
@@ -241,60 +259,95 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// Binds 127.0.0.1 first on an OS-assigned port, then ::1 on the same
     /// port, so the advertised `localhost` URL works whichever family Safari
     /// resolves first (CI can pass on IPv4 while a device resolves ::1). If
-    /// the ::1 bind is unavailable (race / port reuse), the v4 listener is
-    /// kept and the URL advertises `127.0.0.1`.
+    /// the ::1 bind is unavailable (race / port reuse — EADDRINUSE), the pair
+    /// is retried on a fresh port; if every attempt fails, the v4 listener is
+    /// kept and the URL still advertises `localhost` (never 127.0.0.1, which
+    /// would trigger Safari's Not Secure Connection Warning).
     func start() async throws -> String {
-        let v4 = try makeLoopbackListener(host: .ipv4(.loopback), port: .any)
+        var lastIPv6Error: Error?
+        for _ in 0..<Self.loopbackBindAttempts {
+            let v4 = try makeBoundListener(host: .ipv4(.loopback), port: .any)
+            let boundPort: NWEndpoint.Port
+            do {
+                boundPort = try await awaitListenerReady(v4, timeout: startTimeout)
+            } catch {
+                // Do not leak the not-yet-published v4 listener when the first
+                // await fails (timeout / start failure).
+                v4.cancel()
+                throw error
+            }
+
+            do {
+                let v6 = try makeBoundListener(host: .ipv6(.loopback), port: boundPort)
+                do {
+                    _ = try await awaitListenerReady(v6, timeout: Self.secondaryLoopbackStartTimeout)
+                } catch {
+                    // The local listener is not yet published to `listenerV6`;
+                    // cancel it here so a failed ::1 bind does not leak it.
+                    v6.cancel()
+                    throw error
+                }
+                return finishStartup(v4: v4, v6: v6, port: boundPort.rawValue)
+            } catch {
+                // ::1 is unavailable on this port — release v4 and retry with
+                // a fresh ephemeral port.
+                v4.cancel()
+                lastIPv6Error = error
+                BrowserMFAListenerLog.logger.error(
+                    "ipv6_loopback_bind_failed \(error.localizedDescription, privacy: .public) — retrying on a new port"
+                )
+            }
+        }
+
+        // Last resort: IPv4-only. The URL still advertises `localhost` — the
+        // hostname resolves to 127.0.0.1 even when ::1 is not bound, and a
+        // literal 127.0.0.1 URL would trigger Safari's Not Secure Connection
+        // Warning.
+        let v4 = try makeBoundListener(host: .ipv4(.loopback), port: .any)
         let boundPort: NWEndpoint.Port
         do {
             boundPort = try await awaitListenerReady(v4, timeout: startTimeout)
         } catch {
-            // Do not leak the not-yet-published v4 listener when the first
-            // await fails (timeout / start failure).
             v4.cancel()
             throw error
         }
+        BrowserMFAListenerLog.logger.error(
+            "ipv6_loopback_unavailable \(lastIPv6Error?.localizedDescription ?? "unknown", privacy: .public) — advertising localhost (IPv4 only)"
+        )
+        return finishStartup(v4: v4, v6: nil, port: boundPort.rawValue)
+    }
+
+    /// Publish the bound listeners and build the callback URL. The advertised
+    /// host is always `localhost`, never a literal loopback IP.
+    private func finishStartup(v4: NWListener, v6: NWListener?, port: UInt16) -> String {
         self.listener = v4
-
-        var advertisedHost = "localhost"
-        do {
-            let v6 = try makeLoopbackListener(host: .ipv6(.loopback), port: boundPort)
-            do {
-                _ = try await awaitListenerReady(v6, timeout: Self.secondaryLoopbackStartTimeout)
-            } catch {
-                // The local listener is not yet published to `listenerV6`;
-                // cancel it here so a failed ::1 bind does not leak it.
-                v6.cancel()
-                throw error
-            }
-            self.listenerV6 = v6
-        } catch {
-            BrowserMFAListenerLog.logger.error(
-                "ipv6_loopback_bind_failed \(error.localizedDescription, privacy: .public) — advertising 127.0.0.1"
-            )
-            self.listenerV6?.cancel()
-            self.listenerV6 = nil
-            advertisedHost = "127.0.0.1"
-        }
-
-        self.host = advertisedHost
-        self.port = boundPort.rawValue
-        self.clientCallbackURL = "http://\(self.host):\(self.port)/callback?secret_key=\(self.secretKeyHex)"
+        self.listenerV6 = v6
+        self.port = port
+        self.host = "localhost"
+        self.clientCallbackURL = "http://localhost:\(port)/callback?secret_key=\(self.secretKeyHex)"
         BrowserMFAListenerLog.logger.info(
-            "ready listening on \(self.host, privacy: .public):\(self.port, privacy: .public) v6=\(self.listenerV6 != nil)"
+            "ready listening on localhost:\(port, privacy: .public) v6=\(v6 != nil)"
         )
         return self.clientCallbackURL
     }
 
-    /// Build an NWListener bound to the given loopback endpoint.
-    private func makeLoopbackListener(host: NWEndpoint.Host, port: NWEndpoint.Port) throws -> NWListener {
-        let params = NWParameters.tcp
-        params.requiredLocalEndpoint = .hostPort(host: host, port: port)
-        let listener = try NWListener(using: params)
+    /// Build a loopback `NWListener` via the injectable factory and wire its
+    /// connection handler.
+    private func makeBoundListener(host: NWEndpoint.Host, port: NWEndpoint.Port) throws -> NWListener {
+        let listener = try listenerFactory(host, port)
         listener.newConnectionHandler = { [weak self] conn in
             self?.handleConnection(conn)
         }
         return listener
+    }
+
+    /// Default listener factory: an `NWListener` bound to the given loopback
+    /// endpoint. Internal so tests can wrap it when injecting a failing `::1`
+    /// bind.
+    static func makeLoopbackListener(host: NWEndpoint.Host, port: NWEndpoint.Port) throws -> NWListener {
+        let params = NWParameters.tcp
+        params.requiredLocalEndpoint = .hostPort(host: host, port: port)
+        return try NWListener(using: params)
     }
 
     /// Start the listener and await `.ready` (or a failure / timeout).

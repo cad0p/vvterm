@@ -6,7 +6,10 @@
 //  The Browser MFA callback listener must be reachable on both loopback
 //  families: the URL advertises `localhost`, and Safari may resolve it to
 //  127.0.0.1 or ::1 first. `BrowserMFAListener` binds both; this test proves
-//  a raw TCP + HTTP round-trip succeeds on each family.
+//  a raw TCP + HTTP round-trip succeeds on each family. The advertised URL
+//  must always be `localhost` — a literal `127.0.0.1` triggers Safari's Not
+//  Secure Connection Warning (iOS 18.2+) on a real device, even though the
+//  callback still completes.
 //
 //  A device re-test remains required — the simulator/CI can pass on IPv4
 //  while a device resolves ::1.
@@ -29,21 +32,59 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         defer { listener.cancel() }
 
         XCTAssertFalse(callbackURL.contains(":0/"), "callback URL must carry a real port: \(callbackURL)")
+        XCTAssertTrue(
+            callbackURL.hasPrefix("http://localhost:"),
+            "callback URL must advertise localhost, never a literal loopback IP: \(callbackURL)"
+        )
         let port = listener.port
         XCTAssertGreaterThan(port, 0)
 
         let v4 = try await probe(host: .ipv4(.loopback), port: port, secretKey: listener.secretKeyHex)
         XCTAssertTrue(v4, "listener must be reachable on 127.0.0.1")
 
-        // The product intentionally falls back to the v4-only listener (and
-        // advertises 127.0.0.1) when the ::1 bind is unavailable on the
-        // runner. Only assert the v6 leg when the dual-family bind was kept.
-        guard !callbackURL.contains("127.0.0.1") else {
-            throw XCTSkip("IPv6 loopback bind unavailable on this runner; the v4 fallback was taken")
+        // The product retries the pair on a fresh port, then falls back to
+        // IPv4-only when ::1 stays unavailable on the runner. Only assert the
+        // v6 leg when the dual-family bind was kept.
+        guard listener.hasIPv6LoopbackListener else {
+            throw XCTSkip("IPv6 loopback bind unavailable on this runner; the IPv4-only fallback was taken")
         }
 
         let v6 = try await probe(host: .ipv6(.loopback), port: port, secretKey: listener.secretKeyHex)
         XCTAssertTrue(v6, "listener must be reachable on ::1")
+    }
+
+    /// A device run showed the `::1` bind losing the OS-assigned IPv4 port to
+    /// an existing IPv6 listener (EADDRINUSE) and the old fallback advertising
+    /// `http://127.0.0.1:…` — which triggers Safari's Not Secure Connection
+    /// Warning. Pin the invariant deterministically: every `::1` bind fails,
+    /// the pair is retried, and the URL still advertises `localhost` while the
+    /// IPv4 listener serves the callback.
+    func testIPv6BindFailureStillAdvertisesLocalhost() async throws {
+        let v6Attempts = OSAllocatedUnfairLock(initialState: 0)
+        let listener = BrowserMFAListener(listenerFactory: { host, port in
+            if case .ipv6 = host {
+                v6Attempts.withLock { $0 += 1 }
+                throw BrowserMFAListenerError.listenerFailed("forced ::1 bind failure")
+            }
+            return try BrowserMFAListener.makeLoopbackListener(host: host, port: port)
+        })
+        let callbackURL = try await listener.start()
+        defer { listener.cancel() }
+
+        XCTAssertTrue(
+            callbackURL.hasPrefix("http://localhost:"),
+            "the IPv4-only fallback must still advertise localhost: \(callbackURL)"
+        )
+        XCTAssertFalse(callbackURL.contains("127.0.0.1"))
+        XCTAssertFalse(listener.hasIPv6LoopbackListener)
+        XCTAssertEqual(
+            v6Attempts.withLock { $0 },
+            3,
+            "the 127.0.0.1 + ::1 pair must be retried before the IPv4-only fallback"
+        )
+
+        let v4 = try await probe(host: .ipv4(.loopback), port: listener.port, secretKey: listener.secretKeyHex)
+        XCTAssertTrue(v4, "the IPv4-only fallback must still serve the callback")
     }
 
     /// The timeout path must resolve through the same serialization as the
