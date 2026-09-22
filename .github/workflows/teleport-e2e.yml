@@ -345,6 +345,14 @@ jobs:
           # Hard step timeout: the integration tests can wedge the app's
           # main thread in a blocking C call that no Swift timeout can
           # preempt — without this the whole job hangs to its timeout-minutes.
+          #
+          # 20m, not 10m: this is a WEDGE guard, not a build budget. On a
+          # cold `e2e-deriveddata-<sha>` cache (every new sha) both matrix
+          # legs build from scratch concurrently, and under runner
+          # contention the compile alone has exceeded 10m — observed
+          # 2026-09-22 (run 35728161320): the webauthn leg was killed
+          # mid-compile with no test ever started, while the off leg built
+          # in ~8m. The sampler loop below covers the same 20m window.
           # With job control (set -m) the pipeline runs in its own process
           # group, so kill -9 -$! reaps xcodebuild AND tee.
           set -m
@@ -374,7 +382,7 @@ jobs:
             done
           ) &
           SPID=$!
-          ( sleep 600 && echo "::error::xcodebuild test exceeded 10m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
+          ( sleep 1200 && echo "::error::xcodebuild test exceeded 20m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
           WPID=$!
           set +e
           wait "$XPID"
