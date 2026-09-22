@@ -99,7 +99,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         }
         defer { waiter.cancel() }
 
-        await fulfillment(of: [resolved], timeout: 5)
+        await fulfillment(of: [resolved], timeout: 15)
 
         guard case .timedOut? = captured.withLock({ $0 }) else {
             return XCTFail(
@@ -136,7 +136,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         // Deterministic handshake: wait (bounded) until the waiter has
         // installed its continuation, so the cancellation exercises the
         // installed wait instead of racing the install.
-        let installDeadline = ContinuousClock.now + .seconds(5)
+        let installDeadline = ContinuousClock.now + .seconds(15)
         while !listener.isAwaitingResponse, ContinuousClock.now < installDeadline {
             await Task.yield()
         }
@@ -176,7 +176,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
                 return false
             }
         }
-        let installDeadline = ContinuousClock.now + .seconds(5)
+        let installDeadline = ContinuousClock.now + .seconds(15)
         while !listener.isAwaitingResponse, ContinuousClock.now < installDeadline {
             await Task.yield()
         }
@@ -239,7 +239,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         defer { silent.cancel() }
         try await connect(silent)
 
-        let admitDeadline = ContinuousClock.now + .seconds(5)
+        let admitDeadline = ContinuousClock.now + .seconds(15)
         while listener.activeConnectionCount < 1, ContinuousClock.now < admitDeadline {
             await Task.yield()
         }
@@ -637,7 +637,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         return try await receiveResponse(connection)
     }
 
-    /// Start `connection` and await `.ready` (or a failure / 5s timeout).
+    /// Start `connection` and await `.ready` (or a failure / 15s timeout).
     private func connect(_ connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
@@ -663,7 +663,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
                 }
             }
             connection.start(queue: .global(qos: .userInitiated))
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 5) {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 15) {
                 resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("probe connect timed out")))
             }
         }
@@ -681,7 +681,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         }
     }
 
-    /// Await the first response bytes (or a failure / 5s timeout).
+    /// Await the first response bytes (or a failure / 15s timeout).
     private func receiveResponse(_ connection: NWConnection) async throws -> String {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
@@ -701,7 +701,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
                     resumeOnce(.success(String(data: data ?? Data(), encoding: .utf8) ?? ""))
                 }
             }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 5) {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 15) {
                 resumeOnce(.failure(BrowserMFAListenerError.timedOut))
             }
         }

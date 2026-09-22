@@ -190,6 +190,18 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// loopback callback arrives in one burst well inside this window.
     private let readTimeout: TimeInterval
 
+    /// The deadline for the primary (`127.0.0.1`) listener to reach `.ready`.
+    /// `NWListener.start` is asynchronous, and on a loaded runner/device the
+    /// `.ready` transition can exceed the old hardcoded 5s; a start timeout
+    /// aborts the whole MFA ceremony, so the deadline is generous while still
+    /// bounded. Injectable so tests can pin it.
+    private let startTimeout: TimeInterval
+
+    /// The deadline for the secondary (`::1`) bind. This one is a fallback:
+    /// on timeout the v4 listener is kept and the URL advertises
+    /// `127.0.0.1`, so the deadline stays short.
+    private static let secondaryLoopbackStartTimeout: TimeInterval = 5
+
     /// The maximum number of connections buffered at once. The genuine
     /// callback is a single small GET; a burst of connections is not part of
     /// the ceremony and must not accumulate per-connection buffers.
@@ -201,11 +213,13 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     init(
         timeout: TimeInterval = 180,
         readTimeout: TimeInterval = 10,
-        maxConcurrentConnections: Int = 16
+        maxConcurrentConnections: Int = 16,
+        startTimeout: TimeInterval = 15
     ) {
         self.timeout = timeout
         self.readTimeout = readTimeout
         self.maxConcurrentConnections = maxConcurrentConnections
+        self.startTimeout = startTimeout
         // Generate 32 random bytes for AES-256-GCM.
         var keyBytes = [UInt8](repeating: 0, count: 32)
         let status = SecRandomCopyBytes(kSecRandomDefault, 32, &keyBytes)
@@ -233,7 +247,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         let v4 = try makeLoopbackListener(host: .ipv4(.loopback), port: .any)
         let boundPort: NWEndpoint.Port
         do {
-            boundPort = try await awaitListenerReady(v4, timeout: 5)
+            boundPort = try await awaitListenerReady(v4, timeout: startTimeout)
         } catch {
             // Do not leak the not-yet-published v4 listener when the first
             // await fails (timeout / start failure).
@@ -246,7 +260,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         do {
             let v6 = try makeLoopbackListener(host: .ipv6(.loopback), port: boundPort)
             do {
-                _ = try await awaitListenerReady(v6, timeout: 5)
+                _ = try await awaitListenerReady(v6, timeout: Self.secondaryLoopbackStartTimeout)
             } catch {
                 // The local listener is not yet published to `listenerV6`;
                 // cancel it here so a failed ::1 bind does not leak it.
