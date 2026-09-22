@@ -289,6 +289,25 @@ jobs:
           echo "SPM resolution failed after 3 attempts" >&2
           exit 1
 
+      - name: Trust the cluster web certificate in the simulator
+        # The app's webapi leg verifies the server with system trust. The CI
+        # cluster serves a self-signed web certificate whose SANs cover
+        # 127.0.0.1, so add it to the simulator's root store before the
+        # Phase-2/3 ceremony — the test then exercises the production trust
+        # path (no app-side test seam). The certificate is exported by
+        # `teleport-server.sh bootstrap` (fixtures/web-cert.pem).
+        if: matrix.second-factor == 'webauthn'
+        run: |
+          set -euo pipefail
+          CERT="$RUNNER_TEMP/vvterm-teleport/fixtures/web-cert.pem"
+          if [ ! -s "$CERT" ]; then
+            echo "::error::web certificate fixture missing — bootstrap did not export it"
+            exit 1
+          fi
+          xcrun simctl boot "iPhone 17" 2>/dev/null || true
+          xcrun simctl bootstatus "iPhone 17" -b
+          xcrun simctl keychain "iPhone 17" add-root-cert "$CERT"
+
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
         # xcodebuild process. VVTERM_TELEPORT_* propagate to the test
