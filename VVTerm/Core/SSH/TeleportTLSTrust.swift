@@ -18,8 +18,14 @@
 //      for the SSH leg (`teleport-proxy-ssh`); the encoded auth route name
 //      (`<hex(cluster)>.teleport.cluster.local`) and `teleport.cluster.local`
 //      for the gRPC auth leg (`teleport-auth@<hex>`).
-//    - The negotiated ALPN must be the protocol we asked for; an HTTP edge
-//      that terminates TLS and negotiates `h2` must not be accepted.
+//    - The negotiated ALPN, when the server picks one, must be one of the
+//      protocols the leg offered; an HTTP edge that terminates TLS and
+//      negotiates `h2` on the SSH leg must not be accepted. Teleport serves
+//      the SSH route's host certificate without a `NextProtos` list before
+//      v17, so that leg legitimately negotiates no ALPN; the auth route
+//      instead negotiates `h2` after the ALPN-SNI hop (tsh offers the route
+//      plus `h2`). The security gate is the Host-CA chain + name, not the
+//      ALPN.
 //
 //  This file is the single place that turns the incoming `SecTrust` into an
 //  accept/reject decision. It never evaluates the trust's inherited policy
@@ -95,10 +101,13 @@ enum TeleportTLSTrust {
     /// Decide whether the presented trust is acceptable.
     ///
     /// Every `OSStatus` is checked; any non-`errSecSuccess` result is a
-    /// failure. The negotiated ALPN must equal `requiredALPN`. The trust's
-    /// inherited policy is replaced with an explicit SSL policy per candidate
-    /// name (certificate hostname verification happens inside
-    /// `SecTrustEvaluateWithError`); passing any candidate name accepts.
+    /// failure. When the server negotiated an ALPN it must be one of
+    /// `allowedALPNs`; `nil` is accepted because Teleport serves the SSH
+    /// route without a `NextProtos` list before v17 and the auth hop
+    /// negotiates its own protocol. The trust's inherited policy is replaced
+    /// with an explicit SSL policy per candidate name (certificate hostname
+    /// verification happens inside `SecTrustEvaluateWithError`); passing any
+    /// candidate name accepts.
     ///
     /// - Returns: `ok` plus the last evaluation error (or an explanatory
     ///   error for a policy/ALPN failure).
@@ -107,11 +116,11 @@ enum TeleportTLSTrust {
         anchors: [SecCertificate],
         serverNames: [String],
         negotiatedALPN: String?,
-        requiredALPN: String
+        allowedALPNs: [String]
     ) -> (ok: Bool, error: CFError?) {
-        guard negotiatedALPN == requiredALPN else {
+        if let negotiatedALPN, !allowedALPNs.contains(negotiatedALPN) {
             return failure(
-                "ALPN mismatch: negotiated \(negotiatedALPN ?? "nil"), required \(requiredALPN)"
+                "ALPN mismatch: negotiated \(negotiatedALPN), allowed \(allowedALPNs.joined(separator: ","))"
             )
         }
 
@@ -655,7 +664,7 @@ enum TeleportTLSTrust {
     static func makeVerifyBlock(
         anchors: [SecCertificate],
         serverNames: [String],
-        requiredALPN: String,
+        allowedALPNs: [String],
         logger: Logger
     ) -> sec_protocol_verify_t {
         { metadata, secTrust, complete in
@@ -666,13 +675,14 @@ enum TeleportTLSTrust {
                 anchors: anchors,
                 serverNames: serverNames,
                 negotiatedALPN: negotiatedALPN,
-                requiredALPN: requiredALPN
+                allowedALPNs: allowedALPNs
             )
             if !result.ok {
                 let nameList = serverNames.joined(separator: ",")
+                let alpnList = allowedALPNs.joined(separator: ",")
                 let errorDescription = result.error.map { String(describing: $0) } ?? "unknown"
                 logger.error(
-                    "teleport_tls_verify_failed server_names=\(nameList, privacy: .private(mask: .hash)) alpn=\(negotiatedALPN ?? "nil", privacy: .public) error=\(errorDescription, privacy: .private(mask: .hash))"
+                    "teleport_tls_verify_failed server_names=\(nameList, privacy: .private(mask: .hash)) alpn=\(negotiatedALPN ?? "nil", privacy: .public) allowed_alpn=\(alpnList, privacy: .public) error=\(errorDescription, privacy: .private(mask: .hash))"
                 )
             }
             complete(result.ok)

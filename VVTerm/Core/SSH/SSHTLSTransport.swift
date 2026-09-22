@@ -125,7 +125,8 @@ actor SSHTLSTransport {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
-        // ALPN: offer teleport-proxy-ssh (the verify block requires it).
+        // ALPN: offer teleport-proxy-ssh (the verify block accepts this or
+        // no negotiated ALPN — see TeleportTLSTrust).
         for proto in offeredALPNProtocols {
             proto.withCString { cStr in
                 sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
@@ -144,8 +145,8 @@ actor SSHTLSTransport {
 
         // Server verification: the cluster Host CA certs are the only
         // anchors; the trust is evaluated against explicit SSL policies for
-        // the expected names and accepted only when the ALPN is the SSH
-        // route.
+        // the expected names and accepted only when the negotiated ALPN is
+        // the SSH route (or absent — Teleport ≤ v16 does not echo it).
         let anchors = TeleportTLSTrust.anchors(fromPEMs: clusterCAPEMs)
         guard !anchors.isEmpty else {
             throw SSHError.connectionFailed(
@@ -158,7 +159,7 @@ actor SSHTLSTransport {
             TeleportTLSTrust.makeVerifyBlock(
                 anchors: anchors,
                 serverNames: serverNames,
-                requiredALPN: alpnProtocol,
+                allowedALPNs: [alpnProtocol],
                 logger: Self.tlsLogger
             ),
             .global()

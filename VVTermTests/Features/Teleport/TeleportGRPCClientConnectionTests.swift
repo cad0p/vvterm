@@ -167,7 +167,7 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
             anchors: [ca],
             serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
             negotiatedALPN: alpn,
-            requiredALPN: alpn
+            allowedALPNs: [alpn, "h2"]
         )
         XCTAssertTrue(result.ok, "expected acceptance: \(String(describing: result.error))")
     }
@@ -187,14 +187,15 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
             anchors: [foreignCA],
             serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
             negotiatedALPN: alpn,
-            requiredALPN: alpn
+            allowedALPNs: [alpn, "h2"]
         )
         XCTAssertFalse(result.ok)
     }
 
-    /// Negotiated `h2` (an HTTP edge terminating TLS) must be rejected even
-    /// when the chain and name are otherwise valid.
-    func testVerify_h2IsRejected() throws {
+    /// The auth hop forwards TLS to the auth server, which negotiates `h2`
+    /// (tsh offers the route token plus `h2`). With a valid Host-CA chain and
+    /// name, `h2` must be accepted on this leg.
+    func testVerify_h2IsAcceptedOnTheAuthRoute() throws {
         let leaf = try Self.loopbackLeaf()
         let ca = try Self.loopbackCertificate("loopback-ca.pem")
         let trust = try Self.trust(leaf: leaf)
@@ -205,7 +206,25 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
             anchors: [ca],
             serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
             negotiatedALPN: "h2",
-            requiredALPN: "teleport-auth@\(encoded)"
+            allowedALPNs: ["teleport-auth@\(encoded)", "h2"]
+        )
+        XCTAssertTrue(result.ok, "expected h2 to be accepted on the auth route: \(String(describing: result.error))")
+    }
+
+    /// A negotiated protocol outside the allowed set is rejected even when
+    /// the chain and name are otherwise valid.
+    func testVerify_unexpectedALPNIsRejected() throws {
+        let leaf = try Self.loopbackLeaf()
+        let ca = try Self.loopbackCertificate("loopback-ca.pem")
+        let trust = try Self.trust(leaf: leaf)
+        let encoded = TeleportTLSTrust.encodedClusterName("ci-cluster")
+
+        let result = TeleportTLSTrust.verify(
+            trust: trust,
+            anchors: [ca],
+            serverNames: TeleportTLSTrust.authServerNames(clusterName: "ci-cluster"),
+            negotiatedALPN: "http/1.1",
+            allowedALPNs: ["teleport-auth@\(encoded)", "h2"]
         )
         XCTAssertFalse(result.ok)
     }

@@ -48,7 +48,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(result.ok, "expected the fixture CA/leaf to verify: \(String(describing: result.error))")
     }
@@ -65,7 +65,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "teleport.pcad.it"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(result.ok, "the live proxy leaf must verify against the captured Host CA: \(String(describing: result.error))")
     }
@@ -86,7 +86,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.authServerNames(clusterName: "teleport.pcad.it"),
             negotiatedALPN: expectedALPN,
-            requiredALPN: expectedALPN
+            allowedALPNs: [expectedALPN, "h2"]
         )
         #expect(result.ok, "expected the live leaf to match the encoded auth route name: \(String(describing: result.error))")
     }
@@ -106,7 +106,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: ["not-teleport.pcad.it"],
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -138,7 +138,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "teleport.pcad.it"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -162,7 +162,7 @@ struct TeleportTLSTrustTests {
             anchors: [pinnedCA],
             serverNames: ["www.google.com"],
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(
             !result.ok,
@@ -184,7 +184,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: ["localhost"],
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok, "a clientAuth-only leaf must be rejected even when short-lived")
     }
@@ -203,7 +203,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: ["localhost"],
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(result.ok, "the serverAuth control leaf must verify: \(String(describing: result.error))")
     }
@@ -220,7 +220,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -237,7 +237,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -254,7 +254,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "teleport.pcad.it"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -276,7 +276,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok, "a clientAuth-only leaf must not be accepted as a TLS server")
     }
@@ -293,7 +293,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok, "a keyEncipherment-only leaf must not be accepted as a TLS server")
     }
@@ -312,7 +312,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(result.ok, "a long-lived serverAuth leaf must still verify: \(String(describing: result.error))")
     }
@@ -331,7 +331,7 @@ struct TeleportTLSTrustTests {
             anchors: [leaf],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok, "a CA certificate must not be accepted as a TLS leaf")
     }
@@ -394,7 +394,7 @@ struct TeleportTLSTrustTests {
             anchors: [leaf],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok, "a CA certificate must not be accepted as a TLS leaf")
     }
@@ -773,7 +773,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "teleport.pcad.it"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -789,7 +789,7 @@ struct TeleportTLSTrustTests {
             anchors: [],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: SSHTLSTransport.alpnProtocol,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
         #expect(!result.ok)
     }
@@ -803,9 +803,12 @@ struct TeleportTLSTrustTests {
     }
 
     @Test
-    func nilALPNIsRejected() throws {
+    func nilALPNIsAccepted() throws {
+        // Teleport serves the SSH route's host certificate without a
+        // `NextProtos` list before v17, so the server legitimately negotiates
+        // no ALPN; the Host-CA chain + name remain the security gate.
         let result = try Self.happyPathResult(negotiatedALPN: nil)
-        #expect(!result.ok)
+        #expect(result.ok)
     }
 
     @Test
@@ -919,7 +922,7 @@ struct TeleportTLSTrustTests {
             anchors: [ca],
             serverNames: TeleportTLSTrust.sshServerNames(dialHost: "localhost"),
             negotiatedALPN: negotiatedALPN,
-            requiredALPN: SSHTLSTransport.alpnProtocol
+            allowedALPNs: [SSHTLSTransport.alpnProtocol]
         )
     }
 

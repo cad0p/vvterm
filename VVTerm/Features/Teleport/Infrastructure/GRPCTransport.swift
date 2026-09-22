@@ -256,12 +256,17 @@ enum GRPCTLSOptions {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
-        // ALPN: the auth route only. The verify block requires this exact
-        // protocol, so an `h2` fallback could only ever negotiate into a
-        // rejection.
+        // ALPN: the auth route plus `h2`, mirroring tsh's
+        // `configureTLS` (the route token is what the ALPN-SNI router
+        // matches; the auth server then negotiates `h2` on the forwarded
+        // TLS). Offering only the route token is rejected by the auth
+        // server with `no_application_protocol` on strict-ALPN versions.
         let encodedCluster = encodedClusterName(clusterName)
         let alpnProto = "teleport-auth@\(encodedCluster)"
         alpnProto.withCString { cStr in
+            sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
+        }
+        "h2".withCString { cStr in
             sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
         }
         // SNI: <hex(cluster)>.teleport.cluster.local
@@ -286,14 +291,15 @@ enum GRPCTLSOptions {
         // The cluster Host CA certs (from host_signers.tls_certs) are the only
         // trust anchors; the trust is evaluated against explicit SSL policies
         // for the encoded auth route name + teleport.cluster.local, and
-        // accepted only when the negotiated ALPN is the auth route.
+        // accepted only when the negotiated ALPN is the auth route or `h2`
+        // (or absent — servers without a NextProtos list).
         GRPCTransportLog.logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
         sec_protocol_options_set_verify_block(
             secOpts,
             TeleportTLSTrust.makeVerifyBlock(
                 anchors: certRefs,
                 serverNames: TeleportTLSTrust.authServerNames(clusterName: clusterName),
-                requiredALPN: alpnProto,
+                allowedALPNs: [alpnProto, "h2"],
                 logger: GRPCTransportLog.logger
             ),
             .global()
