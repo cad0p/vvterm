@@ -36,6 +36,9 @@ struct OpenSSHHostCertVerifierTests {
     private static let rsaHostCert = TeleportFixtureSupport
         .fixtureString("OpenSSH/host-cert-rsa.pub")
         .trimmingCharacters(in: .whitespacesAndNewlines)
+    private static let rsaCASignedHostCert = TeleportFixtureSupport
+        .fixtureString("OpenSSH/host-cert-rsa-ca.pub")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
     private static let foreignHostCert = TeleportFixtureSupport
         .fixtureString("OpenSSH/host-cert-foreign.pub")
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -83,6 +86,38 @@ struct OpenSSHHostCertVerifierTests {
             hostKeyBlob: try Self.blob(Self.rsaHostCert),
             expectedPrincipals: ["other"],
             checkingKeys: [Self.caEd25519],
+            now: Self.validNow
+        )
+        #expect(result == .verified)
+    }
+
+    @Test
+    func verifiesHostCertSignedByRsaCA() throws {
+        // Teleport's legacy signature suite signs host certificates with an
+        // RSA Host CA (`rsa-sha2-512`); the Security-framework path verifies
+        // it without CryptoKit.
+        let rsaCA = TeleportFixtureSupport
+            .fixtureString("OpenSSH/ca_rsa.pub")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = OpenSSHHostCertVerifier.verify(
+            hostKeyBlob: try Self.blob(Self.rsaCASignedHostCert),
+            expectedPrincipals: ["testhost"],
+            checkingKeys: [rsaCA],
+            now: Self.validNow
+        )
+        #expect(result == .verified)
+    }
+
+    @Test
+    func verifiesWithCertAuthorityPrefixedCheckingKey() throws {
+        // `tctl auth export --type=host` (and known_hosts files) carry the
+        // `@cert-authority <patterns>` marker before the key; the parser must
+        // skip marker and patterns and pin the key itself.
+        let prefixed = "@cert-authority ci-cluster,*.ci-cluster \(Self.caEd25519)"
+        let result = OpenSSHHostCertVerifier.verify(
+            hostKeyBlob: try Self.blob(Self.ed25519HostCert),
+            expectedPrincipals: ["testhost"],
+            checkingKeys: [prefixed],
             now: Self.validNow
         )
         #expect(result == .verified)
@@ -244,10 +279,11 @@ struct OpenSSHHostCertVerifierTests {
     }
 
     @Test
-    func reportsUnsupportedRsaCAKeyType() throws {
+    func rejectsRsaCACertWithBadSignature() throws {
         // A structurally valid host cert whose signature key is an RSA
-        // authorized_keys blob: the verifier finds the matching pinned key
-        // but reports the unsupported CA type (fail closed).
+        // authorized_keys blob but whose signature is a placeholder: the
+        // verifier finds the matching pinned key and the RSA verification
+        // fails closed.
         let rsaCA = TeleportFixtureSupport
             .fixtureString("OpenSSH/hostkey_rsa.pub")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -259,7 +295,7 @@ struct OpenSSHHostCertVerifierTests {
             checkingKeys: [rsaCA],
             now: Self.validNow
         )
-        #expect(result == .unsupportedCAKeyType("ssh-rsa"))
+        #expect(result == .badSignature)
     }
 
     /// OpenSSH's "no expiry" encoding (`validBefore == 0`) is not acceptable

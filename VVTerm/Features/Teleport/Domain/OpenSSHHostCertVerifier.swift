@@ -18,13 +18,15 @@
 //    4. its signature key equals one of the pinned Host CA keys;
 //    5. the CA signature over the signed certificate body verifies.
 //
-//  Supported CA key types: `ssh-ed25519` and `ecdsa-sha2-nistp256`.
-//  RSA CA keys are reported as `.unsupportedCAKeyType` (fail closed with an
-//  actionable error) until a need is demonstrated.
+//  Supported CA key types: `ssh-ed25519`, `ecdsa-sha2-nistp256`, and
+//  `ssh-rsa`/`rsa-sha2-256`/`rsa-sha2-512`. RSA CAs (Teleport's legacy
+//  signature suite) are verified through the Security framework, which has
+//  no CryptoKit equivalent.
 //
 
 import Foundation
 import CryptoKit
+import Security
 
 enum OpenSSHHostCertVerification: Equatable {
     /// The host certificate chains to a pinned Host CA key and is valid.
@@ -174,7 +176,33 @@ private struct HostCAKey {
             return publicKey.isValidSignature(signature, for: signedData) ? .valid : .invalid
 
         case "ssh-rsa", "rsa-sha2-256", "rsa-sha2-512":
-            return .unsupportedType(keyType)
+            // The CA signs with its RSA key; the signature blob's type
+            // selects the digest (ssh-rsa = SHA-1, rsa-sha2-* = SHA-256/512).
+            var keyReader = SSHBlobReader(data: keyMaterial)
+            guard let exponent = keyReader.readString(),
+                  let modulus = keyReader.readString(),
+                  // The material is exactly mpint(e) + mpint(n): trailing
+                  // bytes must not be ignored.
+                  keyReader.remainingData.isEmpty,
+                  let publicKey = Self.rsaPublicKey(exponent: exponent, modulus: modulus) else {
+                return .invalid
+            }
+            let algorithm: SecKeyAlgorithm
+            switch sigType {
+            case "ssh-rsa": algorithm = .rsaSignatureMessagePKCS1v15SHA1
+            case "rsa-sha2-256": algorithm = .rsaSignatureMessagePKCS1v15SHA256
+            case "rsa-sha2-512": algorithm = .rsaSignatureMessagePKCS1v15SHA512
+            default: return .invalid
+            }
+            var error: Unmanaged<CFError>?
+            let valid = SecKeyVerifySignature(
+                publicKey,
+                algorithm,
+                signedData as CFData,
+                sigData as CFData,
+                &error
+            )
+            return valid ? .valid : .invalid
 
         default:
             return .unsupportedType(keyType)
@@ -186,6 +214,47 @@ private struct HostCAKey {
     private static func ecdsaSignature(from sigData: Data) -> P256.Signing.ECDSASignature? {
         guard let raw = OpenSSHECDSASignature.rawSignature(from: sigData) else { return nil }
         return try? P256.Signing.ECDSASignature(rawRepresentation: raw)
+    }
+
+    /// Build a Security-framework RSA public key from OpenSSH mpints.
+    ///
+    /// `SecKeyCreateWithData` expects the PKCS#1 `RSAPublicKey` DER
+    /// (`SEQUENCE { modulus INTEGER, publicExponent INTEGER }`), assembled
+    /// here with minimal DER writers: SSH mpints are big-endian two's
+    /// complement, which matches DER's INTEGER rules once a leading zero is
+    /// added for a high bit.
+    private static func rsaPublicKey(exponent: Data, modulus: Data) -> SecKey? {
+        guard !exponent.isEmpty, !modulus.isEmpty else { return nil }
+        let der = derTLV(0x30, derInteger(modulus) + derInteger(exponent))
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+        ]
+        return SecKeyCreateWithData(der as CFData, attributes as CFDictionary, nil)
+    }
+
+    private static func derInteger(_ value: Data) -> Data {
+        var bytes = Data(value.drop(while: { $0 == 0x00 }))
+        if bytes.isEmpty { bytes = Data([0x00]) }
+        if bytes[bytes.startIndex] & 0x80 != 0 { bytes = Data([0x00]) + bytes }
+        return derTLV(0x02, bytes)
+    }
+
+    private static func derTLV(_ tag: UInt8, _ content: Data) -> Data {
+        let length: Data
+        let count = content.count
+        if count < 0x80 {
+            length = Data([UInt8(count)])
+        } else {
+            var bytes: [UInt8] = []
+            var remaining = count
+            while remaining > 0 {
+                bytes.insert(UInt8(remaining & 0xFF), at: 0)
+                remaining >>= 8
+            }
+            length = Data([0x80 | UInt8(bytes.count)]) + Data(bytes)
+        }
+        return Data([tag]) + length + content
     }
 }
 
