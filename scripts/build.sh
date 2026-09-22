@@ -16,16 +16,21 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 VENDOR_GHOSTTY="$PROJECT_ROOT/Vendor/libghostty"
 VENDOR_SSH="$PROJECT_ROOT/Vendor/libssh2"
+NATIVE_ARTIFACT_MANIFEST="$PROJECT_ROOT/Vendor/native-artifacts.sha256"
 BUILD_DIR_SSH="$PROJECT_ROOT/.build/ssh"
 
 OPENSSL_VERSION="3.2.0"
-# libssh2 fork with ECDSA/RSA certificate hostkey verification (init/sig_verify
-# callbacks that are NULL stubs in upstream 1.11.1 and master). Required for
-# Teleport's proxy, which offers only ecdsa-sha2-nistp256-cert-v01@openssh.com.
-# See: https://github.com/cad0p/libssh2/pull/1
-#      https://github.com/cad0p/libssh2/releases/tag/hostkey-cert-verify-20260726T194929Z
-LIBSSH2_VERSION="hostkey-cert-verify-20260726T194929Z"
-LIBSSH2_SOURCE_URL="https://github.com/cad0p/libssh2/archive/refs/tags/${LIBSSH2_VERSION}.tar.gz"
+# libssh2 pinned to upstream master, which now carries the ECDSA/RSA
+# certificate-hostkey verification (init/sig_verify callbacks that were NULL
+# stubs in 1.11.1). Required for Teleport's proxy, which offers only
+# ecdsa-sha2-nistp256-cert-v01@openssh.com.
+# See: https://github.com/libssh2/libssh2/issues/2434
+#      fix c704efcc, merged via https://github.com/libssh2/libssh2/pull/2539
+# No release past 1.11.1 exists, so the source is pinned by full commit SHA and
+# fetched with git — the tree is verified by git object hashing, the same
+# pattern as GHOSTTY_COMMIT.
+LIBSSH2_COMMIT="2e1717456b8dd4c980e8e48d6dbfec524c2e62d1"
+LIBSSH2_REPO="https://github.com/libssh2/libssh2.git"
 MACOS_DEPLOYMENT_TARGET="13.3"
 IOS_DEPLOYMENT_TARGET="16.0"
 
@@ -62,6 +67,7 @@ Commands:
   all       Build GhosttyKit + libssh2/OpenSSL (default)
   ghostty   Build GhosttyKit.xcframework and copy .a libs
   ssh       Build libssh2 + OpenSSL (macOS + iOS + simulator)
+  verify    Verify committed native artifact hashes (Vendor/native-artifacts.sha256)
   clean     Remove .build + Vendor libraries
   help      Show this help message
 
@@ -90,6 +96,7 @@ check_deps_ghostty() {
 }
 
 check_deps_ssh() {
+    require_cmd git
     require_cmd curl
     require_cmd tar
     require_cmd cmake
@@ -343,10 +350,12 @@ download_sources() {
         tar xzf "openssl-${OPENSSL_VERSION}.tar.gz"
     fi
 
-    if [ ! -d "libssh2-${LIBSSH2_VERSION}" ]; then
-        log_info "Downloading libssh2 ${LIBSSH2_VERSION}..."
-        curl -L -O "${LIBSSH2_SOURCE_URL}"
-        tar xzf "libssh2-${LIBSSH2_VERSION}.tar.gz"
+    if [ ! -d "libssh2-${LIBSSH2_COMMIT}" ]; then
+        log_info "Fetching libssh2 ${LIBSSH2_COMMIT}..."
+        git clone --quiet --filter=blob:none --no-checkout "${LIBSSH2_REPO}" "libssh2-${LIBSSH2_COMMIT}"
+        git -C "libssh2-${LIBSSH2_COMMIT}" checkout --quiet "${LIBSSH2_COMMIT}"
+        # Fail closed if the checkout does not resolve to the pinned commit.
+        test "$(git -C "libssh2-${LIBSSH2_COMMIT}" rev-parse HEAD)" = "${LIBSSH2_COMMIT}"
     fi
 }
 
@@ -424,7 +433,7 @@ build_openssl_simulator() {
 
 build_libssh2_macos() {
     log_info "Building libssh2 for macOS arm64..."
-    cd "${BUILD_DIR_SSH}/libssh2-${LIBSSH2_VERSION}"
+    cd "${BUILD_DIR_SSH}/libssh2-${LIBSSH2_COMMIT}"
 
     rm -rf build-macos
     mkdir -p build-macos && cd build-macos
@@ -449,7 +458,7 @@ build_libssh2_macos() {
 
 build_libssh2_ios() {
     log_info "Building libssh2 for iOS arm64..."
-    cd "${BUILD_DIR_SSH}/libssh2-${LIBSSH2_VERSION}"
+    cd "${BUILD_DIR_SSH}/libssh2-${LIBSSH2_COMMIT}"
 
     rm -rf build-ios
     mkdir -p build-ios && cd build-ios
@@ -482,7 +491,7 @@ build_libssh2_ios() {
 
 build_libssh2_simulator() {
     log_info "Building libssh2 for iOS Simulator arm64..."
-    cd "${BUILD_DIR_SSH}/libssh2-${LIBSSH2_VERSION}"
+    cd "${BUILD_DIR_SSH}/libssh2-${LIBSSH2_COMMIT}"
 
     rm -rf build-simulator
     mkdir -p build-simulator && cd build-simulator
@@ -546,6 +555,7 @@ build_ssh() {
     log_info "  macOS: $(ls -lh "${VENDOR_SSH}/macos/lib/libssh2.a" | awk '{print $5}')"
     log_info "  iOS: $(ls -lh "${VENDOR_SSH}/ios/lib/libssh2.a" | awk '{print $5}')"
     log_info "  iOS Simulator: $(ls -lh "${VENDOR_SSH}/ios-simulator/lib/libssh2.a" | awk '{print $5}')"
+    write_native_artifact_manifest
 }
 
 clean() {
@@ -557,6 +567,31 @@ clean() {
 }
 
 COMMAND="${1:-all}"
+
+write_native_artifact_manifest() {
+    log_info "Writing ${NATIVE_ARTIFACT_MANIFEST#"$PROJECT_ROOT"/}..."
+    (
+        cd "${PROJECT_ROOT}"
+        : > "${NATIVE_ARTIFACT_MANIFEST}"
+        for lib in \
+            Vendor/libssh2/macos/lib/libssh2.a Vendor/libssh2/macos/lib/libssl.a Vendor/libssh2/macos/lib/libcrypto.a \
+            Vendor/libssh2/ios/lib/libssh2.a Vendor/libssh2/ios/lib/libssl.a Vendor/libssh2/ios/lib/libcrypto.a \
+            Vendor/libssh2/ios-simulator/lib/libssh2.a Vendor/libssh2/ios-simulator/lib/libssl.a Vendor/libssh2/ios-simulator/lib/libcrypto.a ; do
+            if [ -f "$lib" ]; then
+                shasum -a 256 "$lib" >> "${NATIVE_ARTIFACT_MANIFEST}"
+            fi
+        done
+    )
+}
+
+verify_native_artifacts() {
+    if [ ! -f "${NATIVE_ARTIFACT_MANIFEST}" ]; then
+        log_error "Missing ${NATIVE_ARTIFACT_MANIFEST}"
+        exit 1
+    fi
+    ( cd "${PROJECT_ROOT}" && shasum -a 256 -c "${NATIVE_ARTIFACT_MANIFEST}" )
+    log_info "Native artifact hashes OK"
+}
 
 case "${COMMAND}" in
     all)
@@ -572,6 +607,9 @@ case "${COMMAND}" in
     ssh)
         check_deps_ssh
         build_ssh
+        ;;
+    verify)
+        verify_native_artifacts
         ;;
     clean)
         clean
