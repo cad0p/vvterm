@@ -148,7 +148,7 @@ struct TerminalConnectionStatusView: View {
                     handler: onRetry
                 )
             )
-        case .failed(let message, let allowsHostKeyReplacement):
+        case .failed(let message, let hostKeyTrust):
             statusSheet(
                 level: .error,
                 leading: .icon("exclamationmark.triangle.fill"),
@@ -159,7 +159,7 @@ struct TerminalConnectionStatusView: View {
                     title: String(localized: "Retry"),
                     handler: onRetry
                 ),
-                secondaryAction: allowsHostKeyReplacement
+                secondaryAction: hostKeyTrust != .none
                     ? NoticeAction(
                         id: "trust-new-host-key",
                         title: String(localized: "Trust New Host Key"),
@@ -260,8 +260,8 @@ struct TerminalConnectionStatusView: View {
             return 1
         case .disconnected(let message):
             return message == nil ? 310 : 360
-        case .failed(_, let allowsHostKeyReplacement):
-            return allowsHostKeyReplacement ? 500 : 420
+        case .failed(_, let hostKeyTrust):
+            return hostKeyTrust != .none ? 500 : 420
         }
     }
 }

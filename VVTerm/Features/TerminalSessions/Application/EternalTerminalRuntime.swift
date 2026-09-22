@@ -45,6 +45,18 @@ nonisolated enum EternalTerminalErrorPresentation {
             return message(for: clientError, host: host, port: port)
         }
 
+        if let sshError = error as? SSHError {
+            switch sshError {
+            case .hostKeyUnknown, .hostKeyVerificationFailed:
+                // The bootstrap SSH leg carries the host-key trust errors;
+                // surface them so the connection banner can offer the
+                // host-key affordance instead of the generic bootstrap copy.
+                return sshError.errorDescription ?? error.localizedDescription
+            default:
+                break
+            }
+        }
+
         return String(localized: "Eternal Terminal could not connect. Verify etserver is running and the configured ET port is reachable.")
     }
 
@@ -252,7 +264,7 @@ final class EternalTerminalRuntime {
                 return
             } catch {
                 guard let self else { return }
-                self.publishFailure(error, host: host, port: port)
+                await self.publishFailure(error, host: host, port: port)
             }
             self?.connectTask = nil
         }
@@ -461,13 +473,13 @@ final class EternalTerminalRuntime {
                     return
                 }
             } catch {
-                publishFailure(error, host: host, port: port)
+                await publishFailure(error, host: host, port: port)
                 return
             }
         }
 
         if case .failed(let error) = state {
-            publishFailure(error, host: host, port: port)
+            await publishFailure(error, host: host, port: port)
             return
         }
 
@@ -507,7 +519,7 @@ final class EternalTerminalRuntime {
             do {
                 try await session.send(data)
             } catch {
-                publishFailure(error, host: server.host, port: server.eternalTerminalPort)
+                await publishFailure(error, host: server.host, port: server.eternalTerminalPort)
             }
         }
     }
@@ -536,7 +548,32 @@ final class EternalTerminalRuntime {
         Task { await TerminalTabManager.shared.unregisterEternalTerminalRuntime(for: paneId) }
     }
 
-    private func publishFailure(_ error: Error, host: String, port: Int) {
+    /// The error a failure report classifies.
+    ///
+    /// `ETBootstrap.run` collapses the executor's SSH failure into
+    /// `ETBootstrapError.sshFailed`, so the reported error alone cannot
+    /// distinguish a transport failure from a host-key trust failure. The
+    /// bootstrap executor retains the original `SSHError` for exactly one
+    /// failure report; prefer it so the pane records the real retryability
+    /// and surfaces the trust affordance.
+    ///
+    /// `nonisolated` so the preference is unit-testable without driving a
+    /// live bootstrap connect (the end-to-end path needs a real session).
+    nonisolated static func classifiedConnectionError(
+        reportedError: Error,
+        bootstrapSSHError: SSHError?
+    ) -> Error {
+        bootstrapSSHError ?? reportedError
+    }
+
+    private func publishFailure(_ error: Error, host: String, port: Int) async {
+        // Prefer the retained SSH cause so the pane records the real
+        // retryability and can surface trust errors.
+        let bootstrapSSHError = await bootstrapExecutor.consumeLastBootstrapSSHError()
+        let connectionError = Self.classifiedConnectionError(
+            reportedError: error,
+            bootstrapSSHError: bootstrapSSHError
+        )
         if EternalTerminalResumePolicy.shouldDiscardCredentials(after: error) {
             do {
                 try resumeStore.deleteResumeState(for: paneId)
@@ -551,10 +588,14 @@ final class EternalTerminalRuntime {
                 reason: EternalTerminalErrorPresentation.analyticsCategory(for: error)
             )
         }
+        // Record retryability before publishing the state: the presentation
+        // change schedules the automatic retry, and a trust failure must
+        // wait for the user instead of looping over the prompt.
+        TerminalTabManager.shared.recordConnectionFailure(for: paneId, error: connectionError)
         TerminalTabManager.shared.updatePaneState(
             paneId,
             connectionState: .failed(EternalTerminalErrorPresentation.message(
-                for: error,
+                for: connectionError,
                 host: host,
                 port: port
             ))

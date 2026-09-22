@@ -30,7 +30,11 @@
 import Foundation
 import os.log
 import AuthenticationServices
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 #if canImport(Network)
 import Network
 #endif
@@ -99,6 +103,14 @@ final class BrowserMFACeremony: NSObject {
         // ── 1. Start the loopback listener ────────────────────────────────
         let listener = BrowserMFAListener()
         self.listener = listener
+        // Every early exit (start failure, challenge failure, missing
+        // challenge, wait error) must tear the loopback listener down.
+        // `cancel()` is idempotent, so the explicit cancel on the success
+        // path stays as-is.
+        defer {
+            listener.cancel()
+            self.listener = nil
+        }
         let clientCallbackURL: String
         do {
             clientCallbackURL = try await listener.start()
@@ -209,6 +221,9 @@ final class BrowserMFACeremony: NSObject {
 extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
     @MainActor
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if os(macOS)
+        return NSApp.keyWindow ?? ASPresentationAnchor()
+        #else
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }),
@@ -216,6 +231,7 @@ extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
             return ASPresentationAnchor()
         }
         return window
+        #endif
     }
 }
 

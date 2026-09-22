@@ -44,7 +44,7 @@ struct TerminalConnectionStatusView: View {
                 }
                 .multilineTextAlignment(.center)
             }
-        case .failed(let message, let allowsHostKeyReplacement):
+        case .failed(let message, let hostKeyTrust):
             BlockingStatusView(surfaceStyle: surfaceStyle) {
                 VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle")
@@ -55,7 +55,7 @@ struct TerminalConnectionStatusView: View {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if allowsHostKeyReplacement {
+                    if hostKeyTrust != .none {
                         Button("Trust New Host Key", action: onTrustNewHostKey)
                             .noticePrimaryButtonStyle()
                     }

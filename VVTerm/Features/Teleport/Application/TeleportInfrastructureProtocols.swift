@@ -179,6 +179,36 @@ protocol WebAuthenticationSessionPresenting: AnyObject {
 }
 #endif
 
+// MARK: - Keypair generation (Phase 1 + Phase 3)
+
+/// Generates the ed25519 SSH keypair a Teleport certificate is requested
+/// against. Injectable so tests can pin the generated public key to a
+/// fixture certificate and exercise the issued-cert binding checks.
+protocol TeleportSSHKeyPairGenerating: AnyObject {
+    func generateKeyPair(comment: String) -> (publicKey: String, privateKeyPEM: String)
+}
+
+/// The live generator — a fresh ed25519 keypair per request.
+final class LiveTeleportSSHKeyPairGenerator: TeleportSSHKeyPairGenerating {
+    func generateKeyPair(comment: String) -> (publicKey: String, privateKeyPEM: String) {
+        SSHPubKey.generateEd25519KeyPair(comment: comment)
+    }
+}
+
+/// Generates the ephemeral EC P-256 TLS keypair used for the Phase-1
+/// bootstrap (and Phase-2 gRPC mTLS identity). Injectable for the same
+/// reason as `TeleportSSHKeyPairGenerating`.
+protocol TeleportTLSKeyPairGenerating: AnyObject {
+    func generate() throws -> TLSKeyPair
+}
+
+/// The live generator — a fresh SecKey + PKIX public key PEM per bootstrap.
+final class LiveTeleportTLSKeyPairGenerator: TeleportTLSKeyPairGenerating {
+    func generate() throws -> TLSKeyPair {
+        try TLSKeyPairGen.generate()
+    }
+}
+
 // MARK: - WebAuthn builder (Phase 2 + Phase 3)
 
 /// A combined protocol that requires both `WebAuthnSigner` (the builder-facing

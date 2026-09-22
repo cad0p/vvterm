@@ -198,6 +198,80 @@ struct EternalTerminalStatePolicyTests {
     }
 
     @Test
+    @MainActor
+    func sshHostKeyTrustErrorsSurfaceTheHostKeyAffordanceInETMode() {
+        let unknown = SSHError.hostKeyUnknown(
+            host: "ssh.example.com",
+            port: 22,
+            fingerprint: "SHA256:presented",
+            keyType: 1
+        )
+        let unknownMessage = EternalTerminalErrorPresentation.message(
+            for: unknown,
+            host: "ssh.example.com",
+            port: 2022
+        )
+        #expect(unknownMessage.contains(SSHError.hostKeyUnknownMessageMarker))
+        #expect(unknownMessage.contains("SHA256:presented"))
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: unknownMessage,
+                authMethod: .password
+            ) == .trustNewHost
+        )
+
+        let mismatchMessage = EternalTerminalErrorPresentation.message(
+            for: SSHError.hostKeyVerificationFailed,
+            host: "ssh.example.com",
+            port: 2022
+        )
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: mismatchMessage,
+                authMethod: .sshKey
+            ) == .replaceTrustedHost
+        )
+    }
+
+    @Test
+    func sshTrustErrorsAreNotAutomaticallyRetryable() {
+        #expect(!SSHError.hostKeyUnknown(
+            host: "ssh.example.com",
+            port: 22,
+            fingerprint: "SHA256:presented",
+            keyType: 1
+        ).allowsAutomaticReconnectRetry)
+        #expect(!SSHError.hostKeyVerificationFailed.allowsAutomaticReconnectRetry)
+    }
+
+    /// `ETBootstrap.run` collapses the bootstrap SSH cause into
+    /// `ETBootstrapError.sshFailed`; the retained cause must win so the pane
+    /// records non-retryability and surfaces the trust affordance.
+    @Test
+    func retainedBootstrapSSHCauseWinsTheFailureClassification() {
+        let cause = SSHError.hostKeyUnknown(
+            host: "ssh.example.com",
+            port: 22,
+            fingerprint: "SHA256:presented",
+            keyType: 1
+        )
+        let reported: Error = ETBootstrapError.sshFailed
+
+        let classified = EternalTerminalRuntime.classifiedConnectionError(
+            reportedError: reported,
+            bootstrapSSHError: cause
+        )
+        let classifiedSSHError = classified as? SSHError
+        #expect(classifiedSSHError?.allowsAutomaticReconnectRetry == false)
+
+        let fallback = EternalTerminalRuntime.classifiedConnectionError(
+            reportedError: reported,
+            bootstrapSSHError: nil
+        )
+        #expect(fallback is ETBootstrapError)
+    }
+
+    @Test
     func tmuxStartupUsesAShortSelfDeletingRemoteScript() throws {
         let token = try #require(UUID(uuidString: "45B943D4-58C7-4BC9-B089-A9F0ED25C2D3"))
         let command = String(repeating: "tmux set-option -g mouse on; ", count: 100)

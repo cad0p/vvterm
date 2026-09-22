@@ -137,6 +137,23 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
     private var connection: TeleportGRPCConnection?
     private let logger = Logger.forCategory("teleport-grpc")
 
+    init() {
+        // Bound leaks from a previous process that never reached
+        // `disconnect()` (crash / force-quit): remove leftover per-connect
+        // identities before creating a new one. The sweep is a no-op after
+        // the first call per process, so the repeated client construction
+        // from SwiftUI state initialization is cheap and cannot delete
+        // another live client's in-flight identity.
+        GRPCClientIdentity.deleteStaleIdentities()
+    }
+
+    deinit {
+        // `disconnect()` deletes the identity on the normal path; this
+        // bounds the leak when the client is deallocated without it (e.g. an
+        // aborted registration).
+        connection?.deleteKeychainIdentity()
+    }
+
     func connect(
         host: String,
         clientCertPEM: String,

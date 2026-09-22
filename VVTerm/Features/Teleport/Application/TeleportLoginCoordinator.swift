@@ -112,18 +112,29 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// The injected WebAuthn builder wrapper. Defaults to the real impl.
     private let webAuthnBuilder: any TeleportWebAuthnBuilding
 
+    /// Generates the ed25519 keypair the certificate is requested against.
+    /// Injectable so tests can bind a fixture certificate to a known key.
+    private let keyPairGenerator: any TeleportSSHKeyPairGenerating
+
+    /// The clock used for the issued-certificate validity checks.
+    private let now: () -> Date
+
     private let logger = Logger.forCategory("teleport-login")
 
     init(
         httpClient: any TeleportHTTPClienting,
         keyRing: any TeleportKeyRingStoring,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
-        webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder()
+        webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder(),
+        keyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
+        now: @escaping () -> Date = Date.init
     ) {
         self.httpClient = httpClient
         self.keyRing = keyRing
         self.signer = signer
         self.webAuthnBuilder = webAuthnBuilder
+        self.keyPairGenerator = keyPairGenerator
+        self.now = now
     }
 
     func begin(cluster: TeleportCluster) async {
@@ -184,7 +195,15 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
         let challenge = Data(base64URLEncoded: assertion.publicKey.challenge)
             ?? Data(assertion.publicKey.challenge.utf8)
-        let rpID = assertion.publicKey.rpId ?? cluster.rpID
+        let rpID: String
+        switch TeleportWebAuthnRPID.resolve(serverProvided: assertion.publicKey.rpId, cluster: cluster) {
+        case .success(let resolved):
+            rpID = resolved
+        case .failure(let error):
+            logger.error("login/begin rpID rejected: \(error.errorDescription ?? "unknown", privacy: .public)")
+            state = .failed(.server("login/begin: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
+            return
+        }
         logger.info("login/begin: challenge \(challenge.count)B, rpID=\(rpID, privacy: .public)")
 
         // ── Step 2: WebAuthn.login (Face ID prompt) ──────────────────────
@@ -219,9 +238,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // (the server clamps it to the role's MaxSessionTTL — the actual
         // TTL is read from the returned cert's ValidBefore).
         state = .fetchingCert
-        let (sshPubKey, sshPrivateKeyPEM) = SSHPubKey.generateEd25519KeyPair(comment: "vvterm-teleport-login")
+        let (sshPubKey, sshPrivateKeyPEM) = keyPairGenerator.generateKeyPair(comment: "vvterm-teleport-login")
         let sshPubKeyBytes = Data((sshPubKey + "\n").utf8)
         let ttl: Int64 = 3_600_000_000_000  // 1h in ns (server clamps)
+        let requestedTTLSeconds = TimeInterval(ttl) / 1_000_000_000
 
         let finishResp: LoginFinishResponse
         do {
@@ -256,13 +276,59 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
         // The cert's ValidBefore. The HTTP response doesn't include it
         // directly — it's embedded in the PEM cert. Parse it from the SSH
-        // cert blob (OpenSSH cert format: valid_before is a uint64 Unix
-        // timestamp appended after the signature). Fall back to a
-        // conservative 1h default if parsing fails — the readiness state
-        // will flip to `needsLogin` when the cert expires, triggering a
-        // re-auth.
-        let certValidBefore = SSHCertExpiryParser.validBefore(pem: certPEM)
-            ?? Date(timeIntervalSinceNow: 3600)  // 1h fallback
+        // cert blob (OpenSSH cert format). The client contract is to store
+        // only a certificate bound to the keypair it generated, so the
+        // binding is verified before anything is persisted.
+        guard let sshKeyBlob = OpenSSHCertificate.parseAuthorizedKeysLine(sshPubKey)?.blob else {
+            logger.error("failed to parse the generated ssh public key")
+            state = .failed(.unknown("generated ssh key parse failed"))
+            return
+        }
+        let validation = TeleportIssuedCertValidator.validateIssuedUserCert(
+            certPEM,
+            expectedPublicKeyBlob: sshKeyBlob,
+            requestedTTL: requestedTTLSeconds,
+            now: now()
+        )
+        let certValidBefore: Date
+        switch validation {
+        case .success(let cert):
+            certValidBefore = cert.validBeforeDate
+        case .failure(let failure):
+            logger.error(
+                "issued certificate rejected: \(failure.errorDescription ?? "unknown", privacy: .public)"
+            )
+            state = .failed(.server("Certificate binding check failed: \(failure.errorDescription ?? "unknown")"))
+            return
+        }
+
+        // Refresh the pinned Host CA checking keys from the login response.
+        // The update is additions-only (the keyring rejects a refresh that
+        // would drop a pinned key); a rejected refresh keeps the existing
+        // anchors and requires re-bootstrap. `domain_name` must name the
+        // cluster that owns the pinned state, and an accepted refresh can
+        // only add key blobs: `clusterCAPEMs` (the outer TLS anchors) are
+        // never touched, so this unauthenticated channel cannot change the
+        // TLS-leg trust anchors. Additions cannot evict a pinned key; first
+        // capture remains TOFU, an accepted risk.
+        if let hostSigners = finishResp.hostSigners, let first = hostSigners.first {
+            let pinnedClusterName = keyRing.clusterTLSState(for: cluster.id)?.clusterName
+            if TeleportHostKeyUpdatePolicy.matchesPinnedCluster(
+                domainName: first.domainName,
+                pinnedClusterName: pinnedClusterName
+            ) {
+                let update = keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
+                if update == .rejectedWouldDropPinnedKeys {
+                    logger.error(
+                        "Host CA key refresh rejected for cluster \(cluster.id.uuidString, privacy: .public) — pinned anchors kept; re-bootstrap required"
+                    )
+                }
+            } else {
+                logger.error(
+                    "Host CA key refresh skipped for cluster \(cluster.id.uuidString, privacy: .public) — login response domain_name does not match the pinned cluster name"
+                )
+            }
+        }
 
         // Store the fresh cert in the key ring. Readiness flips to `ready`.
         // Also store the ed25519 private key — the SSHClient cert seam

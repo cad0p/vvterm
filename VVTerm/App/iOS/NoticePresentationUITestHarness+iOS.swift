@@ -9,6 +9,7 @@ enum HarnessScenario: String, CaseIterable {
     case connectionFailure
     case disconnected
     case hostKeyFailure
+    case hostKeyUnknown
     case connecting
     case reconnectBanner
     case operationStack
@@ -82,6 +83,8 @@ struct NoticePresentationUITestHarness: View {
             NoticeConnectionStatusHarness(scenario: .disconnected)
         case .hostKeyFailure:
             NoticeConnectionStatusHarness(scenario: .hostKeyFailure)
+        case .hostKeyUnknown:
+            NoticeConnectionStatusHarness(scenario: .hostKeyUnknown)
         case .connecting:
             NoticeConnectingHarness()
         case .reconnectBanner:
@@ -364,20 +367,26 @@ private struct NoticeConnectionStatusHarness: View {
         case failure
         case disconnected
         case hostKeyFailure
+        case hostKeyUnknown
 
         var presentation: TerminalConnectionStatusPresentation {
             switch self {
             case .failure:
                 return .failed(
                     message: "Connection timed out. Please retry.",
-                    allowsHostKeyReplacement: false
+                    hostKeyTrust: .none
                 )
             case .disconnected:
                 return .disconnected(message: "The remote session ended.")
             case .hostKeyFailure:
                 return .failed(
                     message: "Host key verification failed.",
-                    allowsHostKeyReplacement: true
+                    hostKeyTrust: .replaceTrustedHost
+                )
+            case .hostKeyUnknown:
+                return .failed(
+                    message: "Host key is not trusted yet for 127.0.0.1:22232 (SHA256:abc). Verify the fingerprint with the server owner before continuing.",
+                    hostKeyTrust: .trustNewHost
                 )
             }
         }

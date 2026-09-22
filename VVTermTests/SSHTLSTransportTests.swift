@@ -13,15 +13,17 @@
 //
 //  `SSHTLSTransport` bridges `NWConnection` (TLS + ALPN) to libssh2 via a
 //  socketpair + pump. These tests verify the ALPN string, the TLS options
-//  construction, and the socketpair plumbing — all deterministic and
-//  requiring no live Teleport server (a real TLS handshake against the
-//  proxy is covered by live-device validation).
+//  construction, the socketpair plumbing, and the server-certificate
+//  verification through a real in-process loopback TLS listener
+//  (`LoopbackTLSServer` + the test-only identities under
+//  `Fixtures/loopback-tls/`).
 //
 
 #if canImport(Network)
 import Darwin
 import Foundation
 import Network
+import Security
 import Testing
 @testable import VVTerm
 
@@ -50,11 +52,11 @@ struct SSHTLSTransportTests {
     @Test
     func makeTLSOptionsBuildsWithoutThrowing() throws {
         // Building the NWProtocolTLS.Options must succeed with a non-empty
-        // cluster name + at least one CA PEM. Mirrors the gRPC path's
-        // GRPCTLSOptions.make (cluster CA + accept-anyway verify block).
+        // cluster name, a dial host, and at least one parseable CA PEM.
         let opts = try SSHTLSTransport.makeTLSOptions(
             clusterName: "teleport.pcad.it",
-            clusterCAPEMs: [Self.sampleCAPEM]
+            clusterCAPEMs: [try Self.loopbackCAPEM],
+            dialHost: "teleport.pcad.it"
         )
         // The options object is non-nil (would throw on failure). We can't
         // introspect sec_protocol_options ALPN directly, but construction
@@ -67,9 +69,101 @@ struct SSHTLSTransportTests {
         #expect(throws: (any Error).self) {
             try SSHTLSTransport.makeTLSOptions(
                 clusterName: "",
-                clusterCAPEMs: [Self.sampleCAPEM]
+                clusterCAPEMs: [try Self.loopbackCAPEM],
+                dialHost: "teleport.pcad.it"
             )
         }
+    }
+
+    @Test
+    func makeTLSOptionsThrowsForEmptyDialHost() {
+        #expect(throws: (any Error).self) {
+            try SSHTLSTransport.makeTLSOptions(
+                clusterName: "teleport.pcad.it",
+                clusterCAPEMs: [try Self.loopbackCAPEM],
+                dialHost: ""
+            )
+        }
+    }
+
+    @Test
+    func makeTLSOptionsFailsClosedWhenNoAnchorParses() {
+        // A non-empty CA input whose PEMs are all malformed must throw — never
+        // fall back to the system trust store.
+        #expect(throws: (any Error).self) {
+            try SSHTLSTransport.makeTLSOptions(
+                clusterName: "teleport.pcad.it",
+                clusterCAPEMs: ["not a pem", "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----"],
+                dialHost: "teleport.pcad.it"
+            )
+        }
+        #expect(throws: (any Error).self) {
+            try SSHTLSTransport.makeTLSOptions(
+                clusterName: "teleport.pcad.it",
+                clusterCAPEMs: [],
+                dialHost: "teleport.pcad.it"
+            )
+        }
+    }
+
+    // MARK: - Loopback TLS handshake (real listener)
+
+    @Test
+    func loopbackHandshakeSucceedsForFixtureCA() async throws {
+        let identity = try LoopbackTLSServerTestSupport.identity(named: "server.p12")
+        let server = try LoopbackTLSServer(
+            identity: identity,
+            alpnProtocols: [SSHTLSTransport.alpnProtocol, "h2"]
+        )
+        defer { server.stop() }
+
+        let transport = Self.transport(server: server, caPEM: Self.loopbackCAPEMUnchecked)
+        let fd = try await transport.connect()
+        await transport.close()
+        #expect(fd >= 0)
+        Darwin.close(fd)
+    }
+
+    @Test
+    func loopbackHandshakeFailsForSelfSignedIdentity() async throws {
+        // The listener presents a self-signed cert; the client only anchors
+        // the fixture CA — the handshake must fail (the certificate is
+        // evaluated, never skipped).
+        let identity = try LoopbackTLSServerTestSupport.identity(named: "self-signed.p12")
+        let server = try LoopbackTLSServer(
+            identity: identity,
+            alpnProtocols: [SSHTLSTransport.alpnProtocol, "h2"]
+        )
+        defer { server.stop() }
+
+        let transport = Self.transport(server: server, caPEM: Self.loopbackCAPEMUnchecked)
+        await Self.expectConnectThrows(transport)
+    }
+
+    @Test
+    func loopbackHandshakeFailsForWrongNameIdentity() async throws {
+        // CA-signed but no matching name: the SSL policy must reject it.
+        let identity = try LoopbackTLSServerTestSupport.identity(named: "server-wrongname.p12")
+        let server = try LoopbackTLSServer(
+            identity: identity,
+            alpnProtocols: [SSHTLSTransport.alpnProtocol, "h2"]
+        )
+        defer { server.stop() }
+
+        let transport = Self.transport(server: server, caPEM: Self.loopbackCAPEMUnchecked)
+        await Self.expectConnectThrows(transport)
+    }
+
+    @Test
+    func loopbackHandshakeFailsForH2OnlyServer() async throws {
+        // An HTTP edge that terminates TLS and negotiates h2 must not be
+        // accepted for the SSH route.
+        let identity = try LoopbackTLSServerTestSupport.identity(named: "server.p12")
+        let server = try LoopbackTLSServer(identity: identity, alpnProtocols: ["h2"])
+        defer { server.stop() }
+
+        let transport = Self.transport(server: server, caPEM: Self.loopbackCAPEMUnchecked)
+        await Self.expectConnectThrows(transport)
     }
 
     // MARK: - Socketpair plumbing
@@ -125,21 +219,37 @@ struct SSHTLSTransportTests {
 
     // MARK: - Helpers
 
-    /// A throwaway self-signed CA PEM (content is irrelevant — the verify
-    /// block accepts anyway, mirroring the gRPC path). Must be a valid
-    /// PEM envelope so the DER parse in makeTLSOptions succeeds.
-    static let sampleCAPEM: String = """
------BEGIN CERTIFICATE-----
-MIIBnzCCAUWgAwIBAgIRAOJ9Z9FqQ2pBb6rFQ3p3qPcwCgYIKoZIzj0EAwIwGTEX
-MBUGA1UEChMOdHZ0ZXJtLXRlc3QtY2EwHhcNMjQwMTAxMDAwMDAwWhcNMzQwMTAx
-MDAwMDAwWjAZMRcwFQYDVQQKEw50dnRlcm0tdGVzdC1jYTBZMBMGByqGSM49AgEG
-CCqGSM49AwEHA0IABBMm9iW2p1rJ0RH9eMehxVjV0Yq3pIQE0l5BWFq8X5mZpGn
-2j9p3oq9bE6jQ3p3qPcwXjQgD9aZ9FqQ2pBb6rFQ3p3qPcwSjBIMEGA1UdDgQ8
-BBYk9iW2p1rJ0RH9eMehxVjV0Yq3pIQLBgNVHSMEGDAWgBYk9iW2p1rJ0RH9eMe
-hxVjV0Yq3pIQAwCgYIKoZIzj0EAwIDSAAwRQIgIh7Z9FqQ2pBb6rFQ3p3qPcwXj
-QgD9aZ9FqQ2pBb6rFQ3p3qPcwXjQgD9aZ9FqQ2pBb6rFQ3p3qPcw
------END CERTIFICATE-----
-"""
+    private static func transport(server: LoopbackTLSServer, caPEM: String) -> SSHTLSTransport {
+        SSHTLSTransport(
+            host: "127.0.0.1",
+            port: Int(server.port),
+            clusterName: "ci-cluster",
+            clusterCAPEMs: [caPEM]
+        )
+    }
+
+    private static func expectConnectThrows(_ transport: SSHTLSTransport) async {
+        var didThrow = false
+        do {
+            let fd = try await transport.connect()
+            Darwin.close(fd)
+        } catch {
+            didThrow = true
+        }
+        await transport.close()
+        #expect(didThrow, "expected the loopback TLS handshake to fail")
+    }
+
+    /// The generated test CA PEM (`Fixtures/loopback-tls/loopback-ca.pem`).
+    static let loopbackCAPEMUnchecked: String = {
+        (try? LoopbackTLSServerTestSupport.pemString("loopback-tls/loopback-ca.pem")) ?? ""
+    }()
+
+    static var loopbackCAPEM: String {
+        get throws {
+            try LoopbackTLSServerTestSupport.pemString("loopback-tls/loopback-ca.pem")
+        }
+    }
 }
 
 #endif // canImport(Network)

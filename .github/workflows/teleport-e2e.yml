@@ -289,6 +289,25 @@ jobs:
           echo "SPM resolution failed after 3 attempts" >&2
           exit 1
 
+      - name: Trust the cluster web certificate in the simulator
+        # The app's webapi leg verifies the server with system trust. The CI
+        # cluster serves a self-signed web certificate whose SANs cover
+        # 127.0.0.1, so add it to the simulator's root store before the
+        # Phase-2/3 ceremony — the test then exercises the production trust
+        # path (no app-side test seam). The certificate is exported by
+        # `teleport-server.sh bootstrap` (fixtures/web-cert.pem).
+        if: matrix.second-factor == 'webauthn'
+        run: |
+          set -euo pipefail
+          CERT="$RUNNER_TEMP/vvterm-teleport/fixtures/web-cert.pem"
+          if [ ! -s "$CERT" ]; then
+            echo "::error::web certificate fixture missing — bootstrap did not export it"
+            exit 1
+          fi
+          xcrun simctl boot "iPhone 17" 2>/dev/null || true
+          xcrun simctl bootstatus "iPhone 17" -b
+          xcrun simctl keychain "iPhone 17" add-root-cert "$CERT"
+
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
         # xcodebuild process. VVTERM_TELEPORT_* propagate to the test
@@ -326,6 +345,14 @@ jobs:
           # Hard step timeout: the integration tests can wedge the app's
           # main thread in a blocking C call that no Swift timeout can
           # preempt — without this the whole job hangs to its timeout-minutes.
+          #
+          # 20m, not 10m: this is a WEDGE guard, not a build budget. On a
+          # cold `e2e-deriveddata-<sha>` cache (every new sha) both matrix
+          # legs build from scratch concurrently, and under runner
+          # contention the compile alone has exceeded 10m — observed
+          # 2026-09-22 (run 35728161320): the webauthn leg was killed
+          # mid-compile with no test ever started, while the off leg built
+          # in ~8m. The sampler loop below covers the same 20m window.
           # With job control (set -m) the pipeline runs in its own process
           # group, so kill -9 -$! reaps xcodebuild AND tee.
           set -m
@@ -355,7 +382,7 @@ jobs:
             done
           ) &
           SPID=$!
-          ( sleep 600 && echo "::error::xcodebuild test exceeded 10m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
+          ( sleep 1200 && echo "::error::xcodebuild test exceeded 20m — killed (wedged test runner?)" && kill -9 -"$XPID" 2>/dev/null || true ) &
           WPID=$!
           set +e
           wait "$XPID"

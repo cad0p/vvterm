@@ -107,6 +107,17 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
     /// any prior state.
     func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID)
 
+    /// Refresh the Host CA checking keys captured for a cluster.
+    ///
+    /// Additions-only: a refresh that would drop a currently pinned key is
+    /// rejected (the pinned anchors are kept) because the login/finish
+    /// channel is not authenticated for anchor rotation. A legitimate
+    /// Teleport CA rotation publishes the old + new keys during the
+    /// AdditionalTrustedKeys window, so rotations are additions-first.
+    ///
+    /// - Returns: whether the refresh was applied, rejected, or a no-op.
+    func updateClusterHostKeys(_ checkingKeys: [String], for clusterId: UUID) -> TeleportHostKeyUpdateResult
+
     /// The ed25519 private key (OpenSSH PEM format) paired with the live
     /// cert, or nil if none. Stored in the keychain (NOT UserDefaults —
     /// the private key is secret). The coordinators store this alongside
@@ -199,6 +210,12 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
                 // map it back to nil so the resolver treats it as "no expiry".
                 if cred.certValidBefore == .distantPast { return nil }
                 return cred.certValidBefore
+            },
+            hasHostCAKeys: { [weak self] id in
+                // Legacy installs (pre-checking-keys) have TLS state without
+                // Host CA keys; readiness routes them to Face ID login, and
+                // the login response refreshes the pinned keys.
+                self?.clusterTLSState[id]?.hostCACheckingKeys.isEmpty == false
             }
         )
         return resolver.resolve(clusterId: clusterId)
@@ -363,8 +380,32 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         clusterTLSState[clusterId] = state
         saveClusterTLSState()
         logger.info(
-            "stored cluster TLS state for cluster \(clusterId.uuidString, privacy: .public) name=\(state.clusterName, privacy: .public) ca_certs=\(state.clusterCAPEMs.count)"
+            "stored cluster TLS state for cluster \(clusterId.uuidString, privacy: .public) name=\(state.clusterName, privacy: .public) ca_certs=\(state.clusterCAPEMs.count) checking_keys=\(state.hostCACheckingKeys.count)"
         )
+    }
+
+    func updateClusterHostKeys(_ checkingKeys: [String], for clusterId: UUID) -> TeleportHostKeyUpdateResult {
+        guard let state = clusterTLSState[clusterId] else {
+            logger.error(
+                "host key refresh for cluster \(clusterId.uuidString, privacy: .public) has no stored TLS state — ignoring"
+            )
+            return .noChange
+        }
+        let outcome = TeleportHostKeyUpdatePolicy.apply(checkingKeys: checkingKeys, to: state)
+        if outcome.result == .rejectedWouldDropPinnedKeys {
+            logger.error(
+                "host key refresh for cluster \(clusterId.uuidString, privacy: .public) would drop a pinned Host CA key — keeping pinned anchors, re-bootstrap required"
+            )
+        }
+        guard let updatedState = outcome.updatedState else {
+            return outcome.result
+        }
+        clusterTLSState[clusterId] = updatedState
+        saveClusterTLSState()
+        logger.info(
+            "refreshed Host CA checking keys for cluster \(clusterId.uuidString, privacy: .public): \(state.hostCACheckingKeys.count) → \(updatedState.hostCACheckingKeys.count)"
+        )
+        return outcome.result
     }
 
     // MARK: - Persistence

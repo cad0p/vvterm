@@ -49,6 +49,10 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         var userHandle: Data
         /// The device name.
         var deviceName: String
+        /// Whether Host CA checking keys are persisted. Defaults to true so
+        /// pre-W4b fixtures (which never captured them) still resolve as
+        /// ready; tests can script the legacy state with false.
+        var hasHostCAKeys: Bool = true
     }
 
     /// The per-cluster fixtures, keyed by cluster ID.
@@ -95,7 +99,8 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in fixture?.hasBootstrapCert == true },
             hasSEPKey: { _ in fixture?.hasSEPKey == true },
-            certExpiry: { _ in fixture?.certValidBefore }
+            certExpiry: { _ in fixture?.certValidBefore },
+            hasHostCAKeys: { _ in fixture?.hasHostCAKeys == true }
         )
         return resolver.resolve(clusterId: clusterId)
     }
@@ -199,6 +204,17 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
 
     func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID) {
         clusterTLSStates[clusterId] = state
+    }
+
+    func updateClusterHostKeys(_ checkingKeys: [String], for clusterId: UUID) -> TeleportHostKeyUpdateResult {
+        guard let state = clusterTLSStates[clusterId] else {
+            return .noChange
+        }
+        let outcome = TeleportHostKeyUpdatePolicy.apply(checkingKeys: checkingKeys, to: state)
+        if let updatedState = outcome.updatedState {
+            clusterTLSStates[clusterId] = updatedState
+        }
+        return outcome.result
     }
 
     func clear(for clusterId: UUID) {

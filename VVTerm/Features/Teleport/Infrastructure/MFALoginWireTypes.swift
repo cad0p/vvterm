@@ -45,10 +45,24 @@ struct LoginFinishResponse: Decodable {
     }
     struct HostSigner: Decodable {
         let domainName: String
+        /// The Host CA SSH public keys as authorized_keys lines. The wire
+        /// value is base64(authorized_keys line), decoded here.
         let checkingKeys: [String]
         enum CodingKeys: String, CodingKey {
             case domainName = "domain_name"
             case checkingKeys = "checking_keys"
+        }
+
+        init(domainName: String, checkingKeys: [String]) {
+            self.domainName = domainName
+            self.checkingKeys = checkingKeys
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            domainName = try container.decode(String.self, forKey: .domainName)
+            let base64Keys = try container.decodeIfPresent([String].self, forKey: .checkingKeys) ?? []
+            checkingKeys = TeleportHostCACheckingKeysDecoder.decodeAll(base64Keys)
         }
     }
 }

@@ -67,4 +67,6 @@ func seedLoopbackFixtureEnv(into app: XCUIApplication) {
     app.launchEnvironment["VVTERM_REPRO_SSH_USERNAME"] = env["VVTERM_REPRO_SSH_USERNAME"] ?? ""
     app.launchEnvironment["VVTERM_REPRO_SSH_PRIVATE_KEY"] = env["VVTERM_REPRO_SSH_PRIVATE_KEY"] ?? ""
     app.launchEnvironment["VVTERM_REPRO_SSH_PORT"] = env["VVTERM_REPRO_SSH_PORT"] ?? "22229"
+    app.launchEnvironment["VVTERM_REPRO_SSH_HOST_KEY_FINGERPRINT"] = env["VVTERM_REPRO_SSH_HOST_KEY_FINGERPRINT"] ?? ""
+    app.launchEnvironment["VVTERM_REPRO_SSH_HOST_KEY_TYPE"] = env["VVTERM_REPRO_SSH_HOST_KEY_TYPE"] ?? "6"
 }

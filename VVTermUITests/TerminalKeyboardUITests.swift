@@ -595,6 +595,14 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal() throws {
+        // #201: shard-0 AX wedge on host-degraded xcode-27 runners — the tap
+        // retries fail with "Failed to scroll to visible (by AX action)" and the
+        // shard stops progressing until the 35m job timeout (run 35679912795;
+        // two reruns wedged the same way). Quarantined from CI per the
+        // #92/#119 precedent; kept for local runs.
+        if ProcessInfo.processInfo.environment["CI"] != nil {
+            throw XCTSkip("Host-degraded AX scroll wedge — quarantined (#201)")
+        }
         let app = launchKeyboardHarness(privacyModeEnabled: true)
         let terminal = waitForTerminal(in: app)
         terminal.tap()
@@ -2009,6 +2017,14 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testDefaultKeyboardAvoidanceResizesTerminalGrid() throws {
+        // #201: shard-0 AX wedge on host-degraded xcode-27 runners — the tap
+        // retries fail with "Failed to scroll to visible (by AX action)" and the
+        // shard stops progressing until the 35m job timeout (run 35679912795;
+        // two reruns wedged the same way). Quarantined from CI per the
+        // #92/#119 precedent; kept for local runs.
+        if ProcessInfo.processInfo.environment["CI"] != nil {
+            throw XCTSkip("Host-degraded AX scroll wedge — quarantined (#201)")
+        }
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
         terminal.tap()

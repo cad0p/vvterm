@@ -44,14 +44,33 @@ struct TeleportDeviceReadinessResolver {
     typealias HasSEPKey = (UUID) -> Bool
     /// Returns the live cert's ValidBefore, or nil if no cert.
     typealias CertExpiry = (UUID) -> Date?
+    /// Returns true if Host CA checking keys are persisted for this cluster.
+    /// Missing keys on an otherwise-registered device route to `.needsLogin`
+    /// (the login response refreshes them) — legacy installs never capture
+    /// checking keys until their next login.
+    typealias HasHostCAKeys = (UUID) -> Bool
 
     let hasBootstrapCert: HasBootstrapCert
     let hasSEPKey: HasSEPKey
     let certExpiry: CertExpiry
+    let hasHostCAKeys: HasHostCAKeys
+
+    init(
+        hasBootstrapCert: @escaping HasBootstrapCert,
+        hasSEPKey: @escaping HasSEPKey,
+        certExpiry: @escaping CertExpiry,
+        hasHostCAKeys: @escaping HasHostCAKeys = { _ in true }
+    ) {
+        self.hasBootstrapCert = hasBootstrapCert
+        self.hasSEPKey = hasSEPKey
+        self.certExpiry = certExpiry
+        self.hasHostCAKeys = hasHostCAKeys
+    }
 
     func resolve(clusterId: UUID, now: Date = Date()) -> TeleportDeviceReadiness {
         guard hasBootstrapCert(clusterId) else { return .needsBootstrap }
         guard hasSEPKey(clusterId) else { return .needsRegistration }
+        guard hasHostCAKeys(clusterId) else { return .needsLogin }
         guard let expiry = certExpiry(clusterId), expiry > now else {
             return .needsLogin
         }

@@ -259,11 +259,26 @@ echo "key-command scripts written to $HOME/bin"
 
 # --- fixture env ------------------------------------------------------------
 PRIVATE_KEY_B64="$(base64 < "$REPRO_DIR/client_key" | tr -d '\n')"
+# Host key pin for the fixture sshd, pre-seeded into the app's
+# KnownHostsManager by the UI harness. Format matches KnownHostsManager.Entry:
+# `ssh-keygen -lf -E sha256`'s SHA256:… with the base64 `=` padding stripped,
+# plus the libssh2 host-key type constant (ED25519 = 6).
+HOST_KEY_FINGERPRINT="$(ssh-keygen -lf "$REPRO_DIR/ssh_host_ed25519_key.pub" -E sha256 | awk '{print $2}' | tr -d '=')"
+HOST_KEY_ALGO="$(ssh-keygen -lf "$REPRO_DIR/ssh_host_ed25519_key.pub" -E sha256 | sed -n 's/.*(\(.*\)).*/\1/p')"
+case "$HOST_KEY_ALGO" in
+  RSA) HOST_KEY_TYPE=1 ;;
+  DSA) HOST_KEY_TYPE=2 ;;
+  ECDSA) HOST_KEY_TYPE=3 ;;
+  ED25519) HOST_KEY_TYPE=6 ;;
+  *) HOST_KEY_TYPE=0 ;;
+esac
 cat > "$REPRO_DIR/vvterm-repro.env" <<EOF
 VVTERM_REPRO_SSH_USERNAME=$USERNAME
 VVTERM_REPRO_SSH_PRIVATE_KEY=$PRIVATE_KEY_B64
 VVTERM_REPRO_SSH_PORT=22229
 VVTERM_BYTEMETER_STATE_PORT=22233
+VVTERM_REPRO_SSH_HOST_KEY_FINGERPRINT=$HOST_KEY_FINGERPRINT
+VVTERM_REPRO_SSH_HOST_KEY_TYPE=$HOST_KEY_TYPE
 EOF
 echo "== fixture env written: $REPRO_DIR/vvterm-repro.env =="
 echo "repro sshd ready: 127.0.0.1:$SSH_PORT user=$USERNAME"

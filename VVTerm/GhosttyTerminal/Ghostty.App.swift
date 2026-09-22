@@ -801,7 +801,9 @@ extension Ghostty {
                     Ghostty.logger.info("PWD changed: \(pwd)")
                     DispatchQueue.main.async {
                         #if DEBUG
+                        #if os(iOS)
                         terminalView?.keyboardUITestLastPwdRaw = pwd
+                        #endif
                         #endif
                         terminalView?.onPwdChange?(pwd)
                     }

@@ -273,4 +273,32 @@ final class TeleportDeviceReadinessTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - Host CA checking keys (legacy-upgrade path)
+
+    func testNeedsLogin_whenHostCAKeysMissingButSEPKeyPresent() {
+        // Legacy install: cert + SEP key, but the bootstrap predates checking
+        // keys. Readiness routes to Face ID login, whose response refreshes
+        // the pinned keys.
+        let now = Date()
+        let resolver = TeleportDeviceReadinessResolver(
+            hasBootstrapCert: { _ in true },
+            hasSEPKey: { _ in true },
+            certExpiry: { _ in now.addingTimeInterval(3600) },
+            hasHostCAKeys: { _ in false }
+        )
+        XCTAssertEqual(resolver.resolve(clusterId: UUID(), now: now), .needsLogin)
+    }
+
+    func testNeedsRegistration_whenHostCAKeysMissingAndNoSEPKey() {
+        // No SEP key → registration is still the right next step (bootstrap
+        // captures the checking keys).
+        let resolver = TeleportDeviceReadinessResolver(
+            hasBootstrapCert: { _ in true },
+            hasSEPKey: { _ in false },
+            certExpiry: { _ in nil },
+            hasHostCAKeys: { _ in false }
+        )
+        XCTAssertEqual(resolver.resolve(clusterId: UUID()), .needsRegistration)
+    }
 }

@@ -70,6 +70,12 @@ struct TerminalPaneState {
     let serverId: UUID
     var connectionState: ConnectionState
     var disconnectReason: TerminalDisconnectReason?
+    /// Whether the most recent connection failure is one the automatic
+    /// reconnect loop may retry. Recorded from
+    /// `SSHError.allowsAutomaticReconnectRetry` when the failure is handled;
+    /// trust failures (unknown or mismatched host key) always wait for the
+    /// user, so a pending first-use key cannot be overwritten by a retry.
+    private(set) var lastFailureAllowsAutomaticReconnectRetry: Bool
     private(set) var hasEstablishedConnection: Bool
     var lastActivity: Date
     var tmuxStatus: TmuxStatus
@@ -92,6 +98,7 @@ struct TerminalPaneState {
         self.serverId = serverId
         self.connectionState = .connecting
         self.disconnectReason = nil
+        self.lastFailureAllowsAutomaticReconnectRetry = true
         self.hasEstablishedConnection = false
         self.lastActivity = Date()
         self.tmuxStatus = .unknown
@@ -106,5 +113,22 @@ struct TerminalPaneState {
 
     mutating func markConnectionEstablished() {
         hasEstablishedConnection = true
+        lastFailureAllowsAutomaticReconnectRetry = true
+    }
+
+    mutating func markConnectionAttemptStarted() {
+        lastFailureAllowsAutomaticReconnectRetry = true
+    }
+
+    mutating func recordConnectionFailure(allowsAutomaticReconnectRetry: Bool) {
+        // Sticky: the Eternal Terminal runtime can report one failure more
+        // than once, and only the report carrying the retained bootstrap
+        // cause classifies a trust failure as non-retryable. A later generic
+        // report must not re-enable the automatic retry loop over a prompt
+        // the user has not answered. A fresh attempt
+        // (`markConnectionAttemptStarted`) or a successful connection
+        // (`markConnectionEstablished`) clears the classification.
+        lastFailureAllowsAutomaticReconnectRetry =
+            lastFailureAllowsAutomaticReconnectRetry && allowsAutomaticReconnectRetry
     }
 }

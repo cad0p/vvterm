@@ -68,13 +68,263 @@ struct TerminalConnectionStatusPresentationTests {
         #expect(TerminalAutoReconnectPolicy.shouldScheduleRetry(
             automaticReconnectAllowed: true,
             hasEstablishedConnection: true,
-            connectionState: .failed("Temporary transport failure")
+            connectionState: .failed("Temporary transport failure"),
+            lastFailureAllowsAutomaticReconnectRetry: true
         ))
         #expect(!TerminalAutoReconnectPolicy.shouldScheduleRetry(
             automaticReconnectAllowed: false,
             hasEstablishedConnection: true,
-            connectionState: .failed("Authentication failed")
+            connectionState: .failed("Authentication failed"),
+            lastFailureAllowsAutomaticReconnectRetry: true
         ))
+    }
+
+    /// A trust failure must never re-enter the automatic retry loop: each
+    /// retry re-records the pending first-use entry, which would let a
+    /// changed key replace the one the prompt is showing.
+    @Test
+    func trustFailuresAreNeverRetriedAutomatically() {
+        let unknownHost = SSHError.hostKeyUnknown(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:presented",
+            keyType: 1
+        )
+        let mismatch = SSHError.hostKeyVerificationFailed
+
+        #expect(!unknownHost.allowsAutomaticReconnectRetry)
+        #expect(!mismatch.allowsAutomaticReconnectRetry)
+        #expect(!TerminalAutoReconnectPolicy.shouldScheduleRetry(
+            automaticReconnectAllowed: true,
+            hasEstablishedConnection: true,
+            connectionState: .failed(unknownHost.localizedDescription),
+            lastFailureAllowsAutomaticReconnectRetry: unknownHost.allowsAutomaticReconnectRetry
+        ))
+        #expect(!TerminalAutoReconnectPolicy.shouldScheduleRetry(
+            automaticReconnectAllowed: true,
+            hasEstablishedConnection: true,
+            connectionState: .failed(mismatch.localizedDescription),
+            lastFailureAllowsAutomaticReconnectRetry: mismatch.allowsAutomaticReconnectRetry
+        ))
+    }
+
+    /// The first-use review captures the pending entry when the affordance is
+    /// tapped, and a connection-state change clears it so a stale alert
+    /// cannot confirm a key that replaced the reviewed one.
+    @Test
+    func firstUseReviewIsCapturedAndClearedOnStateChange() {
+        let entry = KnownHostsManager.Entry(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:reviewed",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        )
+        let failureMessage = firstUseFailureMessage(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:reviewed"
+        )
+        var review = HostKeyTrustReviewState()
+
+        // The replace flow captures nil but must still present its alert.
+        let replaceCaptured = review.capture(
+            disposition: .replaceTrustedHost,
+            failureMessage: nil,
+            pendingEntry: entry
+        )
+        #expect(replaceCaptured)
+        #expect(review.reviewedEntry == nil)
+        #expect(review.reviewedDisposition == .replaceTrustedHost)
+
+        let trustCaptured = review.capture(
+            disposition: .trustNewHost,
+            failureMessage: failureMessage,
+            pendingEntry: entry
+        )
+        #expect(trustCaptured)
+        #expect(review.reviewedEntry?.fingerprint == "SHA256:reviewed")
+        #expect(review.reviewedDisposition == .trustNewHost)
+
+        review.connectionStateChanged()
+        #expect(review.reviewedEntry == nil)
+        #expect(review.reviewedDisposition == .none)
+    }
+
+    /// The confirmation must act on the disposition captured with the
+    /// reviewed entry: the live connection state can flip while the alert is
+    /// up (a first-use prompt becoming a replace prompt, whose action would
+    /// delete the saved pin). The capture retains the reviewed disposition,
+    /// and a state change invalidates it together with the entry.
+    @Test
+    func reviewedDispositionIsCapturedAndInvalidatedWithTheEntry() {
+        let entry = KnownHostsManager.Entry(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:reviewed",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        )
+        var review = HostKeyTrustReviewState()
+
+        review.capture(
+            disposition: .trustNewHost,
+            failureMessage: firstUseFailureMessage(
+                host: "example.com",
+                port: 22,
+                fingerprint: "SHA256:reviewed"
+            ),
+            pendingEntry: entry
+        )
+        #expect(review.reviewedDisposition == .trustNewHost)
+        #expect(review.reviewedEntry?.fingerprint == "SHA256:reviewed")
+
+        // The confirmation reads the captured disposition, not a live
+        // re-resolve that could have flipped to `.replaceTrustedHost`.
+        #expect(review.reviewedDisposition != .replaceTrustedHost)
+
+        review.connectionStateChanged()
+        #expect(review.reviewedDisposition == .none)
+        #expect(review.reviewedEntry == nil)
+    }
+
+    /// The trust review is only capturable when the failure is a first-use
+    /// prompt; a missing pending entry captures nothing, so the confirmation
+    /// fails closed instead of pinning an unreviewed key.
+    @Test
+    func firstUseReviewWithoutAPendingEntryCapturesNothing() {
+        var review = HostKeyTrustReviewState()
+        let captured = review.capture(
+            disposition: .trustNewHost,
+            failureMessage: firstUseFailureMessage(
+                host: "example.com",
+                port: 22,
+                fingerprint: "SHA256:reviewed"
+            ),
+            pendingEntry: nil
+        )
+        #expect(!captured)
+        #expect(review.reviewedEntry == nil)
+    }
+
+    /// A pending entry that no longer matches the failure the banner is
+    /// showing must refuse the capture: the alert would otherwise display a
+    /// fingerprint that disagrees with the failure that opened it.
+    @Test
+    func firstUseReviewRefusesAPendingEntryThatDoesNotMatchTheFailure() {
+        let entry = KnownHostsManager.Entry(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:B",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        )
+        var review = HostKeyTrustReviewState()
+
+        let captured = review.capture(
+            disposition: .trustNewHost,
+            failureMessage: firstUseFailureMessage(
+                host: "example.com",
+                port: 22,
+                fingerprint: "SHA256:A"
+            ),
+            pendingEntry: entry
+        )
+
+        #expect(!captured)
+        #expect(review.reviewedEntry == nil)
+    }
+
+    /// A stale tap after the failure state moved on must not present an
+    /// alert: there is no trust disposition to review any more.
+    @Test
+    func noDispositionRefusesTheCapture() {
+        var review = HostKeyTrustReviewState()
+        let captured = review.capture(
+            disposition: .none,
+            failureMessage: nil,
+            pendingEntry: nil
+        )
+        #expect(!captured)
+        #expect(review.reviewedEntry == nil)
+    }
+
+    /// The fingerprint parser reads the value the failure message carries.
+    @Test
+    func failureMessageFingerprintIsExtracted() {
+        let message = firstUseFailureMessage(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:abc123"
+        )
+        #expect(SSHError.fingerprint(inFailureMessage: message) == "SHA256:abc123")
+        #expect(SSHError.fingerprint(inFailureMessage: "Host key verification failed") == nil)
+        #expect(SSHError.fingerprint(inFailureMessage: "") == nil)
+    }
+
+    /// A host containing parentheses must not shift fingerprint extraction:
+    /// the fingerprint is the last parenthesised group in the message.
+    @Test
+    func failureMessageFingerprintSurvivesParenthesisedHosts() {
+        let message = firstUseFailureMessage(
+            host: "my(pc)",
+            port: 22,
+            fingerprint: "SHA256:abc123"
+        )
+        #expect(SSHError.fingerprint(inFailureMessage: message) == "SHA256:abc123")
+    }
+
+    /// Simulates the review-to-confirmation race: the user reviews A in the
+    /// alert, a background attempt overwrites the single pending entry with
+    /// B, and the confirmation is refused while the stale B entry is
+    /// discarded (the next attempt re-records and re-prompts).
+    @Test
+    func capturedReviewRefusesARacingPendingEntry() throws {
+        let manager = KnownHostsManager.shared
+        manager.removeAll()
+        defer { manager.removeAll() }
+
+        manager.recordPending(entry: KnownHostsManager.Entry(
+            host: "race.example.com",
+            port: 22,
+            fingerprint: "SHA256:A",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        ))
+        var review = HostKeyTrustReviewState()
+        review.capture(
+            disposition: .trustNewHost,
+            failureMessage: firstUseFailureMessage(
+                host: "race.example.com",
+                port: 22,
+                fingerprint: "SHA256:A"
+            ),
+            pendingEntry: manager.pendingEntry(for: "race.example.com", port: 22)
+        )
+        #expect(review.reviewedEntry?.fingerprint == "SHA256:A")
+
+        manager.recordPending(entry: KnownHostsManager.Entry(
+            host: "race.example.com",
+            port: 22,
+            fingerprint: "SHA256:B",
+            keyType: 1,
+            addedAt: Date(),
+            lastSeenAt: Date()
+        ))
+
+        let confirmed = manager.confirmPending(
+            host: "race.example.com",
+            port: 22,
+            expectedFingerprint: try #require(review.reviewedEntry?.fingerprint)
+        )
+
+        #expect(!confirmed)
+        #expect(manager.entry(for: "race.example.com", port: 22) == nil)
+        #expect(manager.pendingEntry(for: "race.example.com", port: 22) == nil)
     }
 
     @Test
@@ -370,15 +620,109 @@ struct TerminalConnectionStatusPresentationTests {
     func hostKeyFailureEnablesReplacementAction() {
         let presentation = resolve(
             connectionState: .failed("Host key verification failed"),
-            isHostKeyVerificationFailure: true
+            hostKeyTrust: .replaceTrustedHost
         )
 
         #expect(
             presentation == .failed(
                 message: "Host key verification failed",
-                allowsHostKeyReplacement: true
+                hostKeyTrust: .replaceTrustedHost
             )
         )
+    }
+
+    @Test
+    func firstUseHostKeyFailureEnablesTrustAction() {
+        let presentation = resolve(
+            connectionState: .failed("Host key is not trusted yet for example.com:22 (SHA256:abc)."),
+            hostKeyTrust: .trustNewHost
+        )
+
+        #expect(
+            presentation == .failed(
+                message: "Host key is not trusted yet for example.com:22 (SHA256:abc).",
+                hostKeyTrust: .trustNewHost
+            )
+        )
+    }
+
+    @Test
+    func teleportHostKeyFailureDoesNotOfferPinReplacement() {
+        // The Teleport pin hashes the rotating host certificate and is not
+        // authoritative (the Host CA decides), so replacing it cannot fix a
+        // CA/principal failure and the retry would loop.
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: "Host key verification failed",
+                authMethod: .faceIDTeleport
+            ) == .none
+        )
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: SSHError.hostKeyVerificationFailed.localizedDescription,
+                authMethod: .faceIDTeleport
+            ) == .none
+        )
+    }
+
+    @Test
+    func nonTeleportHostKeyFailureStillOffersPinReplacement() {
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: "Host key verification failed",
+                authMethod: .password
+            ) == .replaceTrustedHost
+        )
+    }
+
+    @Test
+    func firstUseHostKeyFailureStillOffersTrust() {
+        let message = SSHError.hostKeyUnknown(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:abc",
+            keyType: 0
+        ).localizedDescription
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: message,
+                authMethod: .password
+            ) == .trustNewHost
+        )
+    }
+
+    @Test
+    func teleportFirstUseHostKeyFailureDoesNotOfferPinTrust() {
+        // Teleport host keys are verified against the Host CA, so a
+        // fingerprint confirmation cannot fix the failure; the first-use
+        // spelling must not offer a trust affordance either.
+        let message = SSHError.hostKeyUnknown(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:abc",
+            keyType: 0
+        ).localizedDescription
+        #expect(
+            TerminalHostKeyTrustDisposition.resolve(
+                failureMessage: message,
+                authMethod: .faceIDTeleport
+            ) == .none
+        )
+    }
+
+    @Test
+    func hostKeyUnknownErrorCarriesTheUiMarkerAndDoesNotAutoRetry() {
+        // The terminal UI only has the localized string; the marker prefix is
+        // what routes it to the first-use trust affordance.
+        #expect(SSHError.hostKeyUnknownMessageMarker == "Host key is not trusted yet")
+        let message = SSHError.hostKeyUnknown(
+            host: "example.com",
+            port: 22,
+            fingerprint: "SHA256:abc",
+            keyType: 0
+        ).localizedDescription
+        #expect(message.contains(SSHError.hostKeyUnknownMessageMarker))
+        #expect(!SSHError.hostKeyUnknown(host: "h", port: 22, fingerprint: "f", keyType: 0).allowsAutomaticReconnectRetry)
     }
 
     @Test
@@ -393,7 +737,7 @@ struct TerminalConnectionStatusPresentationTests {
         #expect(
             presentation == .failed(
                 message: "Failed to load credentials",
-                allowsHostKeyReplacement: false
+                hostKeyTrust: .none
             )
         )
     }
@@ -402,7 +746,7 @@ struct TerminalConnectionStatusPresentationTests {
     func dismissedStatusIdentityDoesNotImmediatelyPresentAgain() throws {
         let attemptID = UUID()
         let identity = try #require(TerminalConnectionStatusDismissalPolicy.identity(
-            for: .failed(message: "Connection timed out", allowsHostKeyReplacement: false),
+            for: .failed(message: "Connection timed out", hostKeyTrust: .none),
             connectionAttemptID: attemptID
         ))
 
@@ -430,7 +774,7 @@ struct TerminalConnectionStatusPresentationTests {
     func changedStatusPresentsAfterPreviousIdentityWasDismissed() throws {
         let attemptID = UUID()
         let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
-            for: .failed(message: "Timed out", allowsHostKeyReplacement: false),
+            for: .failed(message: "Timed out", hostKeyTrust: .none),
             connectionAttemptID: attemptID
         ))
         let changed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
@@ -449,7 +793,7 @@ struct TerminalConnectionStatusPresentationTests {
     func newAttemptPresentsEvenWhenFailureTextIsUnchanged() throws {
         let presentation = TerminalConnectionStatusPresentation.failed(
             message: "Connection timed out",
-            allowsHostKeyReplacement: false
+            hostKeyTrust: .none
         )
         let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
             for: presentation,
@@ -470,7 +814,7 @@ struct TerminalConnectionStatusPresentationTests {
     @Test
     func hiddenOrChangedStatusClearsTheRetainedDismissal() throws {
         let dismissed = try #require(TerminalConnectionStatusDismissalPolicy.identity(
-            for: .failed(message: "Connection timed out", allowsHostKeyReplacement: false),
+            for: .failed(message: "Connection timed out", hostKeyTrust: .none),
             connectionAttemptID: UUID()
         ))
 
@@ -499,10 +843,23 @@ struct TerminalConnectionStatusPresentationTests {
         #expect(TerminalConnectionStatusDismissalPolicy.identity(
             for: .failed(
                 message: "Authentication failed",
-                allowsHostKeyReplacement: false
+                hostKeyTrust: .none
             ),
             connectionAttemptID: attemptID
         ) != nil)
+    }
+
+    private func firstUseFailureMessage(
+        host: String,
+        port: Int,
+        fingerprint: String
+    ) -> String {
+        SSHError.hostKeyUnknown(
+            host: host,
+            port: port,
+            fingerprint: fingerprint,
+            keyType: 1
+        ).localizedDescription
     }
 
     private func resolve(
@@ -515,7 +872,7 @@ struct TerminalConnectionStatusPresentationTests {
         terminalExists: Bool = true,
         isReady: Bool = true,
         disconnectedMessage: String? = nil,
-        isHostKeyVerificationFailure: Bool = false
+        hostKeyTrust: TerminalHostKeyTrustDisposition = .none
     ) -> TerminalConnectionStatusPresentation {
         .resolve(
             credentialLoadErrorMessage: credentialLoadErrorMessage,
@@ -528,7 +885,7 @@ struct TerminalConnectionStatusPresentationTests {
             terminalExists: terminalExists,
             isReady: isReady,
             disconnectedMessage: disconnectedMessage,
-            isHostKeyVerificationFailure: isHostKeyVerificationFailure
+            hostKeyTrust: hostKeyTrust
         )
     }
 }

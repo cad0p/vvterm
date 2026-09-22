@@ -22,12 +22,22 @@
 //                                            ▲
 //                                            └── pump task forwards bytes both ways
 //
-//  TLS verification mirrors the gRPC path (GRPCTLSOptions.make): the cluster
-//  CA certs are set as trust anchors, but the verify block accepts the cert
-//  anyway because Teleport proxy certs are not standards-compliant and
-//  SecTrustEvaluateWithError fails even with the right anchor — the real
-//  authentication is the SSH cert (mTLS is not used on the SSH ALPN; the
-//  SSH cert authenticates the user inside the tunnel).
+//  TLS verification: the proxy presents a *host identity* certificate
+//  signed by the cluster's Host CA — the TLS-routing model from RFD 39 /
+//  RFD 123, matching tsh's `configureTLS` and the ALPN listener serving the
+//  proxy host identity. The Host CA x509 certs captured at Phase 1 bootstrap
+//  (`host_signers[].tls_certs`) are the only trust anchors: the leaf must
+//  chain to them, carry a SAN matching the dial host (or
+//  `teleport.cluster.local`), and negotiate the `teleport-proxy-ssh` ALPN.
+//  User authentication *inside* the tunnel is the SSH certificate (this leg
+//  carries no client cert).
+//
+//  This chain validates against the real cluster: `SecTrustEvaluateWithError`
+//  succeeds with the Host CA anchored (verified against teleport.pcad.it,
+//  2026-09-21), and `TeleportTLSTrust` evaluates an explicit SSL policy per
+//  candidate name. Earlier revisions did not evaluate the certificate chain
+//  on this leg; that gap is closed — a self-signed or foreign-CA leaf now
+//  fails the handshake.
 //
 
 #if canImport(Network)
@@ -53,10 +63,10 @@ actor SSHTLSTransport {
     /// See Teleport RFD 39 (TLS Routing).
     static let alpnProtocol = "teleport-proxy-ssh"
 
-    /// The full list of ALPN protocols offered to the TLS listener.
-    /// `teleport-proxy-ssh` is the SSH route; `h2` is offered as a fallback
-    /// (the proxy listener serves h2 too, mirroring the gRPC path).
-    static let offeredALPNProtocols: [String] = [alpnProtocol, "h2"]
+    /// The ALPN protocols offered to the TLS listener. Only the SSH route is
+    /// offered: the verify block requires `teleport-proxy-ssh`, so an `h2`
+    /// fallback could only ever negotiate into a rejection.
+    static let offeredALPNProtocols: [String] = [alpnProtocol]
 
     /// The result of creating the socketpair bridge.
     struct SocketPair: Sendable {
@@ -74,6 +84,7 @@ actor SSHTLSTransport {
     private var pumpTask: Task<Void, Never>?
 
     private let logger = Logger.forCategory("SSH-TLS-Transport")
+    private static let tlsLogger = Logger.forCategory("SSH-TLS-Transport")
 
     init(host: String,
          port: Int,
@@ -89,26 +100,33 @@ actor SSHTLSTransport {
 
     /// Build `NWProtocolTLS.Options` for the Teleport proxy SSH ALPN route.
     ///
-    /// - ALPN: `teleport-proxy-ssh` (+ `h2` fallback)
+    /// - ALPN: `teleport-proxy-ssh` only
     /// - SNI: the dial host
-    /// - Server verification: cluster CA certs as anchors + accept-anyway
-    ///   (Teleport proxy certs fail SecTrustEvaluateWithError; the real auth
-    ///   is the SSH cert inside the tunnel). Mirrors `GRPCTLSOptions.make`.
+    /// - Server verification: the cluster Host CA certs as the only trust
+    ///   anchors, the cert evaluated against the dial host /
+    ///   `teleport.cluster.local`, and the negotiated ALPN required to be
+    ///   `teleport-proxy-ssh`.
     ///
-    /// - Throws: if the cluster name is empty or a CA PEM fails to parse.
+    /// - Throws: if the cluster name / dial host is empty, or no usable
+    ///   trust anchor can be built from the supplied PEMs (fail closed —
+    ///   never fall back to the system roots).
     static func makeTLSOptions(
         clusterName: String,
         clusterCAPEMs: [String],
-        sniHost: String? = nil
+        dialHost: String
     ) throws -> NWProtocolTLS.Options {
         guard !clusterName.isEmpty else {
             throw SSHError.connectionFailed("SSHTLSTransport: empty cluster name")
+        }
+        guard !dialHost.isEmpty else {
+            throw SSHError.connectionFailed("SSHTLSTransport: empty dial host")
         }
 
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
-        // ALPN: offer teleport-proxy-ssh + h2 fallback.
+        // ALPN: offer teleport-proxy-ssh (the verify block accepts this or
+        // no negotiated ALPN — see TeleportTLSTrust).
         for proto in offeredALPNProtocols {
             proto.withCString { cStr in
                 sec_protocol_options_add_tls_application_protocol(secOpts, cStr)
@@ -121,37 +139,31 @@ actor SSHTLSTransport {
         // SSH proxy ALPN route uses the dial host directly (matching `tsh`'s
         // SSH dial — Network.framework also derives SNI from NWEndpoint.host,
         // but setting it explicitly on the TLS options is belt-and-suspenders).
-        if let sni = sniHost, !sni.isEmpty {
-            sni.withCString { cStr in
-                sec_protocol_options_set_tls_server_name(secOpts, cStr)
-            }
+        dialHost.withCString { cStr in
+            sec_protocol_options_set_tls_server_name(secOpts, cStr)
         }
 
-        // Server verification: cluster CA anchors + accept-anyway.
-        // Teleport proxy certs are not standards-compliant, so
-        // SecTrustEvaluateWithError fails even with the cluster CA as
-        // anchor — same as the gRPC path. We accept the cert anyway: the
-        // real authentication is the SSH cert inside the tunnel.
-        let certRefs = clusterCAPEMs.compactMap { pem -> SecCertificate? in
-            // pemToDER throws on a malformed PEM; treat a throw as "skip this CA".
-            guard let der = try? Self.pemToDER(pem: pem, label: "CERTIFICATE") else { return nil }
-            return SecCertificateCreateWithData(nil, der as CFData)
+        // Server verification: the cluster Host CA certs are the only
+        // anchors; the trust is evaluated against explicit SSL policies for
+        // the expected names and accepted only when the negotiated ALPN is
+        // the SSH route (or absent — Teleport ≤ v16 does not echo it).
+        let anchors = TeleportTLSTrust.anchors(fromPEMs: clusterCAPEMs)
+        guard !anchors.isEmpty else {
+            throw SSHError.connectionFailed(
+                "SSHTLSTransport: no usable cluster CA trust anchors (input \(clusterCAPEMs.count) PEMs)"
+            )
         }
-
-        sec_protocol_options_set_verify_block(secOpts, { _, sec_trust, complete in
-            let trust = sec_trust_copy_ref(sec_trust).takeRetainedValue()
-            if !certRefs.isEmpty {
-                SecTrustSetAnchorCertificates(trust, certRefs as CFArray)
-                SecTrustSetAnchorCertificatesOnly(trust, true)
-            }
-            var error: CFError?
-            let result = SecTrustEvaluateWithError(trust, &error)
-            // Accept anyway — see class doc. The cluster CA eval result is
-            // logged for diagnostics but does not gate acceptance.
-            _ = result
-            _ = error
-            complete(true)
-        }, .global())
+        let serverNames = TeleportTLSTrust.sshServerNames(dialHost: dialHost)
+        sec_protocol_options_set_verify_block(
+            secOpts,
+            TeleportTLSTrust.makeVerifyBlock(
+                anchors: anchors,
+                serverNames: serverNames,
+                allowedALPNs: [alpnProtocol],
+                logger: Self.tlsLogger
+            ),
+            .global()
+        )
 
         return tlsOpts
     }
@@ -197,7 +209,7 @@ actor SSHTLSTransport {
         let tlsOpts = try Self.makeTLSOptions(
             clusterName: clusterName,
             clusterCAPEMs: clusterCAPEMs,
-            sniHost: host
+            dialHost: host
         )
 
         let params = NWParameters(tls: tlsOpts)
@@ -498,19 +510,6 @@ actor SSHTLSTransport {
             return false
         }
         return true
-    }
-
-    // MARK: - PEM helpers
-
-    /// Strip PEM headers and base64-decode the DER body.
-    /// Mirrors `GRPCTLSOptions.pemToDER`.
-    private static func pemToDER(pem: String, label: String) throws -> Data {
-        let lines = pem.split(separator: "\n", omittingEmptySubsequences: true)
-        let b64 = lines.filter { !$0.hasPrefix("-----") }.joined()
-        guard let data = Data(base64Encoded: b64) else {
-            throw SSHError.connectionFailed("SSHTLSTransport: failed to base64-decode PEM (\(label))")
-        }
-        return data
     }
 }
 

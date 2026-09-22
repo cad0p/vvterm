@@ -114,6 +114,17 @@ final class NoticePresentationUITests: XCTestCase {
     }
 
     @MainActor
+    func testFirstUseHostKeyShowsTrustAffordance() throws {
+        // First contact with an unknown host must offer the trust action
+        // instead of silently pinning the key (W4c).
+        let app = launchNoticeHarness()
+        selectScenario("hostKeyUnknown", in: app)
+
+        XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["Trust New Host Key"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testInitialConnectionUsesNonBlockingTopBanner() throws {
         let app = launchNoticeHarness()
         selectScenario("connecting", in: app)

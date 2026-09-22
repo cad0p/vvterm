@@ -1915,7 +1915,7 @@ actor SSHSession {
 
         let hostKeyToken = startupTrace?.begin(.hostKeyVerification)
         do {
-            try verifyHostKey()
+            try await verifyHostKey()
             if let hostKeyToken { startupTrace?.end(hostKeyToken) }
         } catch {
             if let hostKeyToken { startupTrace?.end(hostKeyToken, outcome: "failed") }
@@ -2221,42 +2221,134 @@ actor SSHSession {
         }
     }
 
-    private func verifyHostKey() throws {
+    private func verifyHostKey() async throws {
         guard let session = libssh2Session else {
             throw SSHError.notConnected
         }
 
-        let (fingerprint, keyType) = try hostKeyFingerprint(for: session)
-        let host = config.hostKeyHost
-        let port = config.hostKeyPort
-
-        if let entry = KnownHostsManager.shared.entry(for: host, port: port) {
-            if entry.fingerprint != fingerprint {
-                logger.error(
-                    "Host key mismatch for \(host, privacy: .private(mask: .hash)):\(port). Known: \(entry.fingerprint, privacy: .private(mask: .hash)), Presented: \(fingerprint, privacy: .private(mask: .hash))"
-                )
-                throw SSHError.hostKeyVerificationFailed
-            }
-            KnownHostsManager.shared.updateSeen(host: host, port: port)
-            logger.info("Host key verified for \(host, privacy: .private(mask: .hash)):\(port)")
-            return
-        }
-
-        let entry = KnownHostsManager.Entry(
-            host: host,
-            port: port,
-            fingerprint: fingerprint,
-            keyType: keyType,
-            addedAt: Date(),
-            lastSeenAt: Date()
-        )
-        KnownHostsManager.shared.save(entry: entry)
-        logger.info(
-            "Trusted new host key for \(host, privacy: .private(mask: .hash)):\(port) (\(fingerprint, privacy: .private(mask: .hash)))"
+        let info = try hostKeyInfo(for: session)
+        try await verifyHostKey(
+            fingerprint: info.fingerprint,
+            keyType: info.keyType,
+            blob: info.blob,
+            host: config.hostKeyHost,
+            port: config.hostKeyPort,
+            expectedPrincipals: [config.hostKeyHost]
         )
     }
 
-    private func hostKeyFingerprint(for session: OpaquePointer) throws -> (String, Int) {
+    /// Apply the host-key trust policy and update the known-hosts pin.
+    ///
+    /// Teleport (`faceIDTeleport`): the Host CA is authoritative — the host
+    /// certificate is verified against the pinned `checking_keys`, and the
+    /// (rotating) certificate fingerprint pin is refreshed on success, never
+    /// used to reject. Missing anchors fail closed (the readiness layer routes
+    /// the user to login/bootstrap before connecting).
+    ///
+    /// Non-Teleport: the fingerprint pin decides.
+    private func verifyHostKey(
+        fingerprint: String,
+        keyType: Int,
+        blob: Data,
+        host: String,
+        port: Int,
+        expectedPrincipals: [String]
+    ) async throws {
+        let checkingKeys: [String]
+        if config.authMethod == .faceIDTeleport {
+            checkingKeys = await TeleportKeyRing.shared
+                .clusterTLSState(for: config.credentials.serverId)?
+                .hostCACheckingKeys ?? []
+        } else {
+            checkingKeys = []
+        }
+
+        let knownFingerprint = KnownHostsManager.shared.entry(for: host, port: port)?.fingerprint
+        let decision = HostKeyTrustPolicy.decide(
+            authMethod: config.authMethod,
+            fingerprint: fingerprint,
+            keyType: keyType,
+            knownFingerprint: knownFingerprint,
+            hostKeyBlob: blob,
+            expectedPrincipals: expectedPrincipals,
+            teleportHostCACheckingKeys: checkingKeys,
+            now: Date()
+        )
+
+        switch decision {
+        case .verified(let refreshPin):
+            if refreshPin || knownFingerprint == nil {
+                let entry = KnownHostsManager.Entry(
+                    host: host,
+                    port: port,
+                    fingerprint: fingerprint,
+                    keyType: keyType,
+                    addedAt: Date(),
+                    lastSeenAt: Date()
+                )
+                KnownHostsManager.shared.save(entry: entry)
+            } else {
+                KnownHostsManager.shared.updateSeen(host: host, port: port)
+            }
+            logger.info("Host key verified for \(host, privacy: .private(mask: .hash)):\(port)")
+
+        case .rejectHostKeyVerification:
+            if config.authMethod == .faceIDTeleport,
+               let cert = OpenSSHCertificate.parse(blob: blob) {
+                // Actionable diagnostics: the presented principals let an
+                // operator correct the expected set from evidence.
+                logger.error(
+                    "teleport_host_cert_rejected key_id=\(cert.keyID, privacy: .public) principals=\(cert.validPrincipals.joined(separator: ","), privacy: .public) expected=\(expectedPrincipals.joined(separator: ","), privacy: .public)"
+                )
+            }
+            logger.error(
+                "Host key mismatch for \(host, privacy: .private(mask: .hash)):\(port). Known: \(knownFingerprint ?? "none", privacy: .private(mask: .hash)), Presented: \(fingerprint, privacy: .private(mask: .hash))"
+            )
+            throw SSHError.hostKeyVerificationFailed
+
+        case .rejectMissingTeleportAnchors:
+            logger.error(
+                "Teleport Host CA checking keys missing for \(host, privacy: .private(mask: .hash)):\(port) — login/bootstrap required"
+            )
+            throw SSHError.teleportCertMissing
+
+        case .unknownHost(let presentedFingerprint, let presentedKeyType):
+            // Defense in depth: the policy only returns this for non-Teleport
+            // hosts (a Teleport host either verifies against the Host CA or
+            // fails closed with missing anchors). A Teleport host must never
+            // be offered a first-use trust prompt — fail closed instead.
+            guard config.authMethod != .faceIDTeleport else {
+                logger.error(
+                    "teleport host key reached the first-use path for \(host, privacy: .private(mask: .hash)):\(port) — failing closed"
+                )
+                throw SSHError.hostKeyVerificationFailed
+            }
+            // First use: record the key as pending and prompt. The pin is
+            // persisted only after the user confirms the trust affordance.
+            let entry = KnownHostsManager.Entry(
+                host: host,
+                port: port,
+                fingerprint: presentedFingerprint,
+                keyType: presentedKeyType,
+                addedAt: Date(),
+                lastSeenAt: Date()
+            )
+            KnownHostsManager.shared.recordPending(entry: entry)
+            logger.info(
+                "Host key for \(host, privacy: .private(mask: .hash)):\(port) is not trusted yet (\(presentedFingerprint, privacy: .private(mask: .hash))) — awaiting user confirmation"
+            )
+            throw SSHError.hostKeyUnknown(
+                host: host,
+                port: port,
+                fingerprint: presentedFingerprint,
+                keyType: presentedKeyType
+            )
+        }
+    }
+
+    /// Read the host key fingerprint, libssh2 key type, and raw host key blob
+    /// (the full certificate blob for certificate host keys).
+    private func hostKeyInfo(for session: OpaquePointer) throws -> (fingerprint: String, keyType: Int, blob: Data) {
         guard let hashPtr = libssh2_hostkey_hash(session, Int32(LIBSSH2_HOSTKEY_HASH_SHA256)) else {
             throw SSHError.hostKeyVerificationFailed
         }
@@ -2267,9 +2359,12 @@ actor SSHSession {
 
         var keyLen: size_t = 0
         var keyType: Int32 = 0
-        _ = libssh2_session_hostkey(session, &keyLen, &keyType)
+        guard let keyPtr = libssh2_session_hostkey(session, &keyLen, &keyType), keyLen > 0 else {
+            throw SSHError.hostKeyVerificationFailed
+        }
+        let blob = Data(bytes: keyPtr, count: keyLen)
 
-        return (fingerprint, Int(keyType))
+        return (fingerprint, Int(keyType), blob)
     }
 
     func disconnect() async {
@@ -3289,7 +3384,7 @@ actor SSHSession {
         // 6. Verify the inner hostkey against the target node hostname.
         let innerAuthToken = startupTrace?.begin(.teleportInnerAuthentication)
         do {
-            try verifyInnerHostKey(session: innerSession, host: nodeName, port: config.port)
+            try await verifyInnerHostKey(session: innerSession, host: nodeName, port: config.port)
         } catch {
             if let innerAuthToken {
                 startupTrace?.end(innerAuthToken, outcome: "failed", detail: "hostkey")
@@ -3521,44 +3616,16 @@ actor SSHSession {
         session: OpaquePointer,
         host: String,
         port: Int
-    ) throws {
-        let (fingerprint, keyType) = try innerHostKeyFingerprint(for: session)
-        if let entry = KnownHostsManager.shared.entry(for: host, port: port) {
-            if entry.fingerprint != fingerprint {
-                logger.error(
-                    "Inner host key mismatch for \(host, privacy: .private(mask: .hash)):\(port). Known: \(entry.fingerprint, privacy: .private(mask: .hash)), Presented: \(fingerprint, privacy: .private(mask: .hash))"
-                )
-                throw SSHError.hostKeyVerificationFailed
-            }
-            KnownHostsManager.shared.updateSeen(host: host, port: port)
-            logger.info("Inner host key verified for \(host, privacy: .private(mask: .hash)):\(port)")
-            return
-        }
-        let entry = KnownHostsManager.Entry(
+    ) async throws {
+        let info = try hostKeyInfo(for: session)
+        try await verifyHostKey(
+            fingerprint: info.fingerprint,
+            keyType: info.keyType,
+            blob: info.blob,
             host: host,
             port: port,
-            fingerprint: fingerprint,
-            keyType: keyType,
-            addedAt: Date(),
-            lastSeenAt: Date()
+            expectedPrincipals: [host]
         )
-        KnownHostsManager.shared.save(entry: entry)
-        logger.info(
-            "Trusted new inner host key for \(host, privacy: .private(mask: .hash)):\(port) (\(fingerprint, privacy: .private(mask: .hash)))"
-        )
-    }
-
-    private func innerHostKeyFingerprint(for session: OpaquePointer) throws -> (String, Int) {
-        guard let hashPtr = libssh2_hostkey_hash(session, Int32(LIBSSH2_HOSTKEY_HASH_SHA256)) else {
-            throw SSHError.hostKeyVerificationFailed
-        }
-        let hash = Data(bytes: hashPtr, count: 32)
-        let base64 = hash.base64EncodedString().trimmingCharacters(in: CharacterSet(charactersIn: "="))
-        let fingerprint = "SHA256:\(base64)"
-        var keyLen: size_t = 0
-        var keyType: Int32 = 0
-        _ = libssh2_session_hostkey(session, &keyLen, &keyType)
-        return (fingerprint, Int(keyType))
     }
 
     /// Authenticate the inner (target-node) session with the same Teleport
@@ -5673,9 +5740,32 @@ enum SSHError: LocalizedError {
     case channelOpenFailed
     case shellRequestFailed
     case hostKeyVerificationFailed
+    case hostKeyUnknown(host: String, port: Int, fingerprint: String, keyType: Int)
     case socketError(String)
     case teleportCertMissing
     case unknown(String)
+
+    /// Marker prefix for `hostKeyUnknown`'s message. `ConnectionState.failed`
+    /// only stores the localized string, so the terminal UI matches on it to
+    /// decide which host-key trust affordance to show.
+    static let hostKeyUnknownMessageMarker = "Host key is not trusted yet"
+
+    /// The fingerprint embedded in a `hostKeyUnknown` failure message.
+    ///
+    /// The trust affordance re-reads the presented fingerprint from the
+    /// message the banner is showing, so the prompt can be refused when the
+    /// pending entry no longer describes that failure.
+    static func fingerprint(inFailureMessage message: String) -> String? {
+        // The fingerprint is the last parenthesised group: the host itself
+        // can contain parentheses, while the base64 fingerprint cannot.
+        guard let marker = message.range(of: hostKeyUnknownMessageMarker),
+              let open = message[marker.upperBound...].lastIndex(of: "("),
+              let close = message[message.index(after: open)...].firstIndex(of: ")") else {
+            return nil
+        }
+        let fingerprint = message[message.index(after: open)..<close]
+        return fingerprint.isEmpty ? nil : String(fingerprint)
+    }
 
     var allowsAutomaticReconnectRetry: Bool {
         switch self {
@@ -5699,6 +5789,7 @@ enum SSHError: LocalizedError {
              .moshBootstrapFailed,
              .moshInvalidEndpoint,
              .hostKeyVerificationFailed,
+             .hostKeyUnknown,
              .teleportCertMissing,
              .unknown:
             return false
@@ -5737,6 +5828,8 @@ enum SSHError: LocalizedError {
         case .shellRequestFailed: return "Failed to request shell"
         case .hostKeyVerificationFailed:
             return "Host key verification failed. The saved SSH host fingerprint does not match the server's current key."
+        case .hostKeyUnknown(let host, let port, let fingerprint, _):
+            return "\(Self.hostKeyUnknownMessageMarker) for \(host):\(port) (\(fingerprint)). Verify the fingerprint with the server owner before continuing."
         case .socketError(let msg): return "Socket error: \(msg)"
         case .teleportCertMissing:
             return String(localized: "Teleport certificate is missing or expired. Sign in with Face ID to refresh it.")

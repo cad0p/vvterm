@@ -1093,6 +1093,78 @@ struct TerminalTabManagerLifecycleTests {
     }
 
     @Test
+    func eternalTerminalHostKeyFailureRecordsNonRetryableState() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "ET host key")
+            let trustError = SSHError.hostKeyUnknown(
+                host: "ssh.example.com",
+                port: 22,
+                fingerprint: "SHA256:presented",
+                keyType: 1
+            )
+            installTab(
+                tab,
+                in: manager,
+                connectionState: .failed(trustError.localizedDescription)
+            )
+
+            // The Eternal Terminal runtime records retryability through this
+            // path before publishing its failure copy, so the automatic
+            // retry loop must not run over a pending trust prompt.
+            manager.recordConnectionFailure(for: tab.rootPaneId, error: trustError)
+
+            #expect(
+                manager.paneStates[tab.rootPaneId]?.lastFailureAllowsAutomaticReconnectRetry == false
+            )
+            #expect(!TerminalAutoReconnectPolicy.shouldScheduleRetry(
+                automaticReconnectAllowed: true,
+                hasEstablishedConnection: true,
+                connectionState: .failed(trustError.localizedDescription),
+                lastFailureAllowsAutomaticReconnectRetry: manager.paneStates[tab.rootPaneId]?
+                    .lastFailureAllowsAutomaticReconnectRetry ?? true
+            ))
+        }
+    }
+
+    @Test
+    func nonRetryableEtFailureStaysStickyAcrossLaterReports() async {
+        await withCleanManager { manager in
+            let tab = TerminalTab(serverId: UUID(), title: "ET sticky")
+            let trustError = SSHError.hostKeyUnknown(
+                host: "ssh.example.com",
+                port: 22,
+                fingerprint: "SHA256:presented",
+                keyType: 1
+            )
+            installTab(
+                tab,
+                in: manager,
+                connectionState: .failed(trustError.localizedDescription)
+            )
+
+            // The ET runtime can report one failure twice; only the report
+            // carrying the retained bootstrap cause classifies it as
+            // non-retryable, and the later generic report must not re-enable
+            // the automatic retry loop over the trust prompt.
+            manager.recordConnectionFailure(for: tab.rootPaneId, error: trustError)
+            #expect(manager.paneStates[tab.rootPaneId]?.lastFailureAllowsAutomaticReconnectRetry == false)
+
+            struct GenericRetryableError: LocalizedError {
+                var errorDescription: String? { "Temporary transport failure" }
+            }
+            manager.recordConnectionFailure(for: tab.rootPaneId, error: GenericRetryableError())
+            #expect(
+                manager.paneStates[tab.rootPaneId]?.lastFailureAllowsAutomaticReconnectRetry == false,
+                "a later retryable report must not clear the non-retryable classification"
+            )
+
+            // A fresh attempt re-arms the automatic retry decision.
+            manager.updatePaneState(tab.rootPaneId, connectionState: .connecting)
+            #expect(manager.paneStates[tab.rootPaneId]?.lastFailureAllowsAutomaticReconnectRetry == true)
+        }
+    }
+
+    @Test
     func staleShellEndCannotDisconnectReplacementShell() async {
         await withCleanManager { manager in
             let tab = TerminalTab(serverId: UUID(), title: "Replacement")
