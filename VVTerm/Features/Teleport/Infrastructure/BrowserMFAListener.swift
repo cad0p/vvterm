@@ -438,7 +438,17 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 "connection rejected: max \(self.maxConcurrentConnections) concurrent requests in flight"
             )
             conn.start(queue: .global(qos: .userInitiated))
-            writeResponse(conn, status: 503, body: "too many concurrent requests")
+            // Read (and discard) the request before answering. Answering a
+            // connection that still has unread inbound data makes the kernel
+            // close it with RST, which can discard the 503 before the client
+            // reads it. The drain is bounded and never accumulates.
+            drainRejectedRequest(conn) { [weak self] in
+                guard let self else {
+                    conn.cancel()
+                    return
+                }
+                self.writeResponse(conn, status: 503, body: "too many concurrent requests")
+            }
             return
         }
 
@@ -750,6 +760,53 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         conn.send(content: data, completion: .contentProcessed { _ in
             conn.cancel()
         })
+    }
+
+    /// Discard an over-cap connection's request without buffering it, then
+    /// invoke `completion` so the caller can send a final response. Bounded
+    /// by `maxRequestBytes` and `readTimeout`; a read error (client gone)
+    /// completes immediately. Only a 3-byte window is retained to detect the
+    /// header terminator across fragment boundaries.
+    private func drainRejectedRequest(_ conn: NWConnection, completion: @escaping () -> Void) {
+        let finished = OSAllocatedUnfairLock(initialState: false)
+        func finish() {
+            let already = finished.withLock { isDone -> Bool in
+                if isDone { return true }
+                isDone = true
+                return false
+            }
+            guard !already else { return }
+            completion()
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + readTimeout) {
+            finish()
+        }
+        var drained = 0
+        var tail = Data()
+        func readMore() {
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+                if error != nil {
+                    finish()
+                    return
+                }
+                if let data, !data.isEmpty {
+                    drained += data.count
+                    var window = tail
+                    window.append(data)
+                    if window.range(of: Self.headerTerminator) != nil || drained >= Self.maxRequestBytes {
+                        finish()
+                        return
+                    }
+                    tail = window.count > 3 ? Data(window.suffix(3)) : window
+                }
+                if isComplete {
+                    finish()
+                    return
+                }
+                readMore()
+            }
+        }
+        readMore()
     }
 
     /// Release one admission slot. Called exactly once per admitted
