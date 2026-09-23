@@ -23,6 +23,10 @@ import Foundation
 
 /// A handle to one presented in-app browser session. The ceremony keeps it
 /// alive until the listener resolves, then cancels it.
+///
+/// `@MainActor` because the only conformer owns an
+/// `ASWebAuthenticationSession`, which must be touched on the main actor.
+@MainActor
 protocol BrowserMFASessionHandle: AnyObject, Sendable {
     /// Whether the session started (`ASWebAuthenticationSession.start()`).
     /// Mirrors the `safari_started <bool>` log line.
@@ -33,6 +37,11 @@ protocol BrowserMFASessionHandle: AnyObject, Sendable {
 }
 
 /// Presents the Browser-MFA approval URL in an in-app browser.
+///
+/// `@MainActor` because presentation is a main-actor concern (the ceremony
+/// already calls it on the main actor, and the host adapter owns
+/// `ASWebAuthenticationSession`).
+@MainActor
 protocol BrowserMFAPresenting: Sendable {
     /// Present `url` and return once the session has started.
     ///
