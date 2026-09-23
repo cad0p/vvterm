@@ -7,11 +7,12 @@
 #   2. unit-tests  — runs VVTermTests (fast, pure logic). Downloads the
 #                    build artifact so it reuses the prebuilt app + SPM deps
 #                    and only compiles the VVTermTests target.
-#   3. ui-tests    — matrix of 5 parallel shard jobs (notice-outlier,
-#                    keyboard-a/b/c, teleport), each downloading the build
-#                    artifact and running a subset of VVTermUITests via
-#                    -only-testing:. fail-fast is disabled so one failing
-#                    shard does not cancel the others.
+#   3. ui-tests    — matrix of 4 parallel shard jobs (shard-0..shard-3),
+#                    each downloading the build artifact and running a
+#                    subset of VVTermUITests via -only-testing:. fail-fast
+#                    is disabled so one failing shard does not cancel the
+#                    others; the 18 TeleportUITests are distributed across
+#                    the 4 shards.
 #   (The unsigned Release device archive for per-PR OTA distribution —
 #   formerly job 4, ota-archive — moved to vvterm-pr-ota.yml. Split out so
 #   ios-adhoc-pr's workflow_run trigger fires when the archive is ready
@@ -24,24 +25,21 @@
 # (which can be slow) from blocking unit test results.
 #
 # Concurrency-cap-aware shard count:
-#   - GitHub Actions caps this repo at 5 concurrent jobs. With build(1) +
-#     unit-tests(1) + 5 ui-tests = 7 jobs total, the build runs first alone,
-#     then the 5 test-phase jobs (4 existing UI + 1 unit) fit within the cap.
-#     The 5th UI shard (`teleport`) waits for a slot only if all 5 existing
-#     test jobs are still running — in practice the unit-tests job finishes
-#     fast (~7s of tests + ~3m compile) and frees a slot before the teleport
-#     shard is scheduled. fail-fast is disabled so a failing shard does not
-#     cancel the others.
-#   - The `teleport` shard runs the 18 TeleportUITests (Phase 1/2/3 sheet
-#     matrices) against the DEBUG-only TeleportUITestHarness + mock
-#     coordinators (no real Safari/Face ID/Teleport server). Each test
-#     captures an XCTAttachment(screenshot:) with .keepAlways lifetime.
+#   - GitHub Actions caps this repo at 5 concurrent macOS jobs. The build
+#     job runs first alone; then unit-tests (1) + 4 ui-tests shards (4)
+#     fill the cap with zero queueing. fail-fast is disabled so a failing
+#     shard does not cancel the others.
+#   - The 18 TeleportUITests (Phase 1/2/3 sheet matrices) run against the
+#     DEBUG-only TeleportUITestHarness + mock coordinators (no real Safari/
+#     Face ID/Teleport server) and are distributed across the 4 shards
+#     (~4-5 per shard). Each test captures an XCTAttachment(screenshot:)
+#     with .keepAlways lifetime.
 #
 # Build-once-fanout architecture:
-#   - The `build` job compiles the app once and uploads Build/Products from
-#     DerivedData (Intermediates.noindex is excluded — ui-tests uses
-#     test-without-building and unit-tests gets compiled SPM intermediates
-#     from the SPM cache).
+#   - The `build` job compiles the app once and uploads Build/Products +
+#     Build/Intermediates.noindex from DerivedData (ui-tests uses
+#     test-without-building; unit-tests reuses the compiled SPM
+#     intermediates instead of rebuilding swift-nio/MLX from scratch).
 #   - Each `ui-tests` shard downloads that artifact into the same
 #     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
 #     app and skips compilation. Each shard then runs only its assigned tests
