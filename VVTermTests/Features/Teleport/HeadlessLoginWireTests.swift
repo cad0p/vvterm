@@ -429,6 +429,24 @@ final class HeadlessLoginWireTests: XCTestCase {
         }
     }
 
+    /// A non-200 whose body is not valid UTF-8 must map to the documented
+    /// `<binary>` placeholder rather than a lossy replacement-character
+    /// decode: the body is a diagnostic payload, never parsed.
+    func testPost_nonUTF8ErrorBodyMapsToTheBinaryPlaceholder() async throws {
+        let server = try makeServer(.init(statusCode: 500, body: Data([0xFF, 0xFE, 0x00])))
+        defer { server.stop() }
+        do {
+            _ = try await HeadlessLogin.post(baseURL: loopbackURL(server), req: Self.makeRequest())
+            XCTFail("expected HeadlessError.http for a 500 response")
+        } catch let error as HeadlessError {
+            guard case .http(let status, let body) = error else {
+                return XCTFail("expected .http, got \(error)")
+            }
+            XCTAssertEqual(status, 500)
+            XCTAssertEqual(body, "<binary>")
+        }
+    }
+
     func testPost_mapsURLSessionErrorsToTransport() async throws {
         // Nothing listens on 127.0.0.1:1 (privileged port), so URLSession
         // fails. Assert the `.transport` case shape and that the underlying
@@ -524,8 +542,9 @@ final class HeadlessLoginWireTests: XCTestCase {
 
     func testSharedTrustSessionConfiguration_pinsThe200sTimeouts() {
         // This pins the shared trust session's configuration (200 s > the
-        // 180 s blocking window the server holds), not which session
-        // `HeadlessLogin.post` uses — see the rewrite acceptance list.
+        // 180 s blocking window the server holds). Which session `post` reads
+        // is pinned separately by
+        // `testPostSignature_defaultsToTheSharedTrustSessionExpression`.
         let config = TeleportTrustSession.session.configuration
         XCTAssertGreaterThanOrEqual(config.timeoutIntervalForRequest, 180)
         XCTAssertGreaterThanOrEqual(config.timeoutIntervalForResource, 180)

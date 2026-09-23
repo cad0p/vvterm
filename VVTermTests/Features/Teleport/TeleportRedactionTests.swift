@@ -14,8 +14,9 @@
 //      log store. This layer pins everything that is decided *before* the
 //      interpolation: the callback URL is truncated at `?`, the request id is
 //      truncated to a 16-character prefix, and the HTTP error log carries the
-//      status instead of the response body. Those hold regardless of how the
-//      log store treats privacy.
+//      status instead of the response body (`…httpFailureLogsTheStatusNotTheBody`,
+//      the scripted-failure path). Those hold regardless of how the log store
+//      treats privacy.
 //
 //   2. Source-level annotations — the log store does not apply privacy
 //      masking on the iOS Simulator: every level (`.public`, `.private`,

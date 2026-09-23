@@ -640,6 +640,85 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         )
     }
 
+    /// The `secret_key` query value is the per-run proof the callback came
+    /// from the server. A genuine envelope sent under a wrong key must be
+    /// answered 400 and must not resolve the login — without this vector the
+    /// guard could be deleted and every other callback test would stay green.
+    func testCallbackWithAWrongSecretKeyIsRejected() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintext(id: "wrong-secret"),
+            secretKeyHex: listener.secretKeyHex
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: String(repeating: "cd", count: 32),
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 400"),
+            "a wrong secret_key must be answered 400; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume, "a wrong secret_key must not resolve the login")
+    }
+
+    /// The same guard must reject a callback with no `secret_key` at all
+    /// (the pre-rewrite code documented the parameter but never checked it).
+    func testCallbackWithoutASecretKeyIsRejected() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintext(id: "missing-secret"),
+            secretKeyHex: listener.secretKeyHex
+        )
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "response", value: envelope)]
+        let query = components.percentEncodedQuery ?? ""
+        let request = Data(
+            "GET /callback?\(query) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8
+        )
+        let response = try await sendRawRequest(request, host: .ipv4(.loopback), port: listener.port)
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 400"),
+            "a missing secret_key must be answered 400; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume, "a missing secret_key must not resolve the login")
+    }
+
+    /// Only the browser's GET/POST are callback methods; anything else must be
+    /// answered 405 without touching the query or the envelope.
+    func testCallbackWithAnUnsupportedMethodIsRejected() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintext(id: "bad-method"),
+            secretKeyHex: listener.secretKeyHex
+        )
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "secret_key", value: listener.secretKeyHex),
+            URLQueryItem(name: "response", value: envelope),
+        ]
+        let query = components.percentEncodedQuery ?? ""
+        let request = Data(
+            "PUT /callback?\(query) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8
+        )
+        let response = try await sendRawRequest(request, host: .ipv4(.loopback), port: listener.port)
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 405"),
+            "a PUT must be answered 405; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume, "a PUT must not resolve the login")
+    }
+
     /// A bit flip inside the GCM tag must fail authentication. Without this
     /// vector a refactor could construct the sealed box without opening it and
     /// keep every other callback test green.

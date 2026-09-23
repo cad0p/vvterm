@@ -96,6 +96,34 @@ final class TeleportFrozenTextTests: XCTestCase {
         XCTAssertEqual(BrowserMFAListener.defaultMaxConcurrentConnections, 16)
     }
 
+    /// Pins the wiring, not only the values: the init's default arguments must
+    /// read the frozen statics. A literal (`timeout: TimeInterval = 1`) keeps
+    /// `testListenerContractDefaultsAreFrozen` green while changing the
+    /// effective default.
+    func testListenerInitDefaultsReferenceTheFrozenStatics() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // TeleportFrozenTextTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/BrowserMFAListener.swift"),
+            encoding: .utf8
+        )
+        for expression in [
+            "timeout: TimeInterval = BrowserMFAListener.defaultWaitTimeout",
+            "readTimeout: TimeInterval = BrowserMFAListener.defaultReadTimeout",
+            "startTimeout: TimeInterval = BrowserMFAListener.defaultStartTimeout",
+            "maxConcurrentConnections: Int = BrowserMFAListener.defaultMaxConcurrentConnections",
+        ] {
+            XCTAssertTrue(
+                source.contains(expression),
+                "the listener init must default through the frozen static: \(expression)"
+            )
+        }
+    }
+
     // MARK: - Face ID error mapping
 
     /// Regression for the isolated-deinit abort (issue #206 class): releasing a
