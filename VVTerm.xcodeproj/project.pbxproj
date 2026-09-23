@@ -21,6 +21,7 @@
 		D3F1A0003100100AB00000003 /* NIOHTTP2 in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000013 /* NIOHTTP2 */; };
 		D3F1A0003100100AB00000004 /* NIOTransportServices in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000014 /* NIOTransportServices */; };
 		D3F1A0003100100AB00000005 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000015 /* SwiftProtobuf */; };
+		D3F1A0003100100AB00000006 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = D3F1A0003100100AB00000015 /* SwiftProtobuf */; };
 		E7C4A10031BB100100C00001 /* Umami in Frameworks */ = {isa = PBXBuildFile; productRef = E7C4A10031BB100100C00011 /* Umami */; };
 		E8A1E70031C1000100E00001 /* ETSession in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00011 /* ETSession */; };
 		E8A1E70031C1000100E00002 /* ETBootstrap in Frameworks */ = {isa = PBXBuildFile; productRef = E8A1E70031C1000100E00012 /* ETBootstrap */; };
@@ -161,6 +162,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E8A1E70031C1000100E00003 /* ETSession in Frameworks */,
+				D3F1A0003100100AB00000006 /* SwiftProtobuf in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -290,6 +292,7 @@
 			name = VVTermTests;
 			packageProductDependencies = (
 				E8A1E70031C1000100E00011 /* ETSession */,
+				D3F1A0003100100AB00000015 /* SwiftProtobuf */,
 			);
 			productName = VVTermTests;
 			productReference = CC8312922F0CD84E006804BF /* VVTermTests.xctest */;
