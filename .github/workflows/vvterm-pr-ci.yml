@@ -843,14 +843,18 @@ jobs:
               plistlib.dump(data, f)
           PY
 
+          # Explicit YES values and option-before-option ordering: a bare
+          # `-parallel-testing-enabled` can absorb the following option token
+          # (the same defect fixed in the shard invocation), silently
+          # disabling the diagnostics/timeout flags this job exists for.
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:"${{ github.event.inputs.debug_test }}" \
-            -parallel-testing-enabled \
+            -parallel-testing-enabled YES \
             -collect-test-diagnostics always \
-            -test-timeouts-enabled \
+            -test-timeouts-enabled YES \
             -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
