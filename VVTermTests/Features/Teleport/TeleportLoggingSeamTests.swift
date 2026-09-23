@@ -79,7 +79,12 @@ struct TeleportLoggingSeamTests {
     @Test
     func keyRingRequestsKeyringCategory() {
         let spy = SpyTeleportLogging()
-        _ = TeleportKeyRing(signer: MockSEPKeySigner(outcome: .success), logging: spy)
+        let defaults = UserDefaults(suiteName: "TeleportLoggingSeamTests") ?? .standard
+        _ = TeleportKeyRing(
+            signer: MockSEPKeySigner(outcome: .success),
+            logging: spy,
+            config: TeleportKeychainConfig(keychainService: "app.vivy.vvterm.tests", defaults: defaults)
+        )
         #expect(spy.categories == ["teleport-keyring"])
     }
 

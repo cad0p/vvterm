@@ -258,7 +258,7 @@ struct TeleportServerIntegrationTests {
         // coordinator, and the login coordinator (the keys live in its
         // in-memory dictionary — a fresh instance per run).
         let signer = SoftwareSigner()
-        let keyRing = TeleportKeyRing(signer: signer, logging: DefaultTeleportLogging())
+        let keyRing = TeleportKeyRing(signer: signer, logging: DefaultTeleportLogging(), config: TeleportKeychainConfig(keychainService: "app.vivy.vvterm", defaults: .standard))
         defer { keyRing.clear(for: clusterId) }
 
         // The Phase-1 stand-in: the harness-minted TLS identity (tctl auth

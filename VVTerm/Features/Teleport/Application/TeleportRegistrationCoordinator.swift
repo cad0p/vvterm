@@ -120,8 +120,8 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
     /// `BrowserMFACeremony` in production; injectable for tests.
     private let browserMFACeremony: any BrowserMFACeremonyRunning
 
-    /// The injected key ring (stores the credentialID + userHandle).
-    private let keyRing: any TeleportKeyRingStoring
+    /// The injected credential store (stores the credentialID + userHandle).
+    private let keyRing: any TeleportCredentialStore
 
     /// The injected SEP signer (creates the persistent SEP key + signs the
     /// WebAuthn registration response). Defaults to a real
@@ -138,7 +138,7 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
     init(
         grpcClient: any TeleportGRPCClienting,
         browserMFACeremony: any BrowserMFACeremonyRunning,
-        keyRing: any TeleportKeyRingStoring,
+        keyRing: any TeleportCredentialStore,
         logging: any TeleportLogging,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder()
@@ -344,7 +344,7 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
         }
 
         // ── Success: persist the credentialID + userHandle ──────────────
-        keyRing.storeRegisteredSEPKey(
+        await keyRing.storeRegisteredSEPKey(
             credentialID: credentialID,
             userHandle: userHandle,
             publicKeyRaw: publicKeyRaw,

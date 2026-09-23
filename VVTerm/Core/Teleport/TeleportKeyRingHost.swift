@@ -20,5 +20,8 @@ import Foundation
 /// adapter. Constructed once; every host call site reads this provider.
 @MainActor
 enum TeleportKeyRingHost {
-    static let shared = TeleportKeyRing(logging: AppTeleportLogging.shared)
+    static let shared = TeleportKeyRing(
+        logging: AppTeleportLogging.shared,
+        config: .vvterm
+    )
 }
