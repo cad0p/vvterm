@@ -31,6 +31,12 @@ import CryptoKit
 /// credential ID. The credential ID is a random 32-byte value generated at
 /// `createKey` time (no persistence — the spike re-creates per run).
 public final class SoftwareSigner: WebAuthnSigner {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
+
     public let label = "software"
 
     /// The credential ID → SecKey map (mirrors `SecureEnclaveSigner.keys`).
