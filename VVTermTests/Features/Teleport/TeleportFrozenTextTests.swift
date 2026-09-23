@@ -78,7 +78,7 @@ final class TeleportFrozenTextTests: XCTestCase {
     // MARK: - HeadlessError
 
     func testHeadlessError_textsAreFrozen() {
-        XCTAssertEqual(HeadlessError.transport("boom").errorDescription, "transport: boom")
+        XCTAssertEqual(HeadlessError.transport("boom", code: nil).errorDescription, "transport: boom")
         XCTAssertEqual(HeadlessError.http(status: 403, body: "denied").errorDescription, "HTTP 403: denied")
         XCTAssertEqual(HeadlessError.decode("boom").errorDescription, "decode: boom")
         XCTAssertEqual(HeadlessError.noCert.errorDescription, "no cert in response")

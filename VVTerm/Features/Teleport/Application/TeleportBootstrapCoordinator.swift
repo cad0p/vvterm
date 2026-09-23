@@ -498,6 +498,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         let failureSummary: String
         if case HeadlessError.http(let status, _) = error {
             failureSummary = "HTTP \(status)"
+        } else if case HeadlessError.transport(_, let code) = error {
+            // The transport case's message is the OS-localized URLSession
+            // text; log the locale-stable code instead. Never interpolate the
+            // raw error — its userInfo can print NSErrorFailingURLKey.
+            failureSummary = "transport code=\(code?.rawValue ?? 0)"
         } else {
             failureSummary = error.localizedDescription
         }
@@ -507,15 +512,18 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         let mapped: TeleportBootstrapError
         if let headlessError = error as? HeadlessError {
             switch headlessError {
-            case .transport(let m):
-                // URLSession error — distinguish timeout from network loss.
-                // The spike's HeadlessError.transport wraps the URLSession
-                // error's localizedDescription, so we string-match.
-                if m.lowercased().contains("timed out") {
-                    mapped = .timeout
-                } else {
-                    mapped = .networkLost
-                }
+            case .transport(_, let code):
+                // URLSession error — distinguish timeout from network loss on
+                // the carried `URLError.Code`, never on the OS-localized
+                // message (a non-English device must still classify a
+                // timeout as `.timeout`).
+                //
+                // Deliberate asymmetry with the unwrapped-URLError branch
+                // below: a wrapped `.cancelled` stays `.networkLost` here
+                // instead of `.userCancelled`. That is pre-existing behavior,
+                // preserved so this fix changes only the timeout
+                // classification (tracked as a follow-up).
+                mapped = (code == .timedOut) ? .timeout : .networkLost
             case .http(let status, let body):
                 // Non-2xx HTTP. Surface the server message verbatim.
                 mapped = .server("HTTP \(status): \(body)")
