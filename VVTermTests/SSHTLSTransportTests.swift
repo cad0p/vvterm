@@ -171,6 +171,52 @@ struct SSHTLSTransportTests {
         await Self.expectConnectThrows(transport)
     }
 
+    @Test
+    func loopbackTransportFailureMapsToSSHErrorConnectionFailed() async throws {
+        // The package transport throws `TeleportPackageError`; `SSHSession`
+        // maps it across the seam so the app's `error as? SSHError`
+        // classification (disconnect-before-retry) still fires. Assert both
+        // halves: the raw package error + the mapped host error, with the
+        // same payload and the same user-visible description.
+        let identity = try LoopbackTLSServerTestSupport.identity(named: "self-signed.p12")
+        let server = try LoopbackTLSServer(
+            identity: identity,
+            alpnProtocols: [SSHTLSTransport.alpnProtocol, "h2"]
+        )
+        defer { server.stop() }
+
+        let transport = Self.transport(server: server, caPEM: Self.loopbackCAPEMUnchecked)
+        var packageError: TeleportPackageError?
+        do {
+            let fd = try await transport.connect()
+            Darwin.close(fd)
+        } catch let error as TeleportPackageError {
+            packageError = error
+        } catch {
+            Issue.record("expected TeleportPackageError, got \(error)")
+        }
+        await transport.close()
+
+        guard case .connectionFailed(let message)? = packageError else {
+            Issue.record("expected TeleportPackageError.connectionFailed")
+            return
+        }
+        #expect(message.hasPrefix("TLS transport connect failed: "))
+
+        let mapped = TeleportErrorMapping.map(packageError!)
+        guard let sshError = mapped as? SSHError,
+              case .connectionFailed(let mappedMessage) = sshError else {
+            Issue.record("expected SSHError.connectionFailed, got \(mapped)")
+            return
+        }
+        #expect(mappedMessage == message)
+        #expect(sshError.errorDescription == packageError?.errorDescription)
+        // The SSHConnectionRunner classification treats `.connectionFailed`
+        // as disconnect-before-retry; the mapped error must not fall through
+        // the `error as? SSHError` cast.
+        #expect(sshError.allowsAutomaticReconnectRetry)
+    }
+
     // MARK: - Socketpair plumbing
 
     @Test

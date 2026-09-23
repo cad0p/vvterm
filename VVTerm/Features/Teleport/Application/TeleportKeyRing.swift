@@ -349,7 +349,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
             logger.error("storeEd25519PrivateKey SecItemAdd: OSStatus \(status)")
-            throw KeychainError.unhandled(status)
+            throw TeleportPackageError.keychain(status)
         }
         logger.info("stored ed25519 private key for cluster \(clusterId.uuidString, privacy: .public)")
     }

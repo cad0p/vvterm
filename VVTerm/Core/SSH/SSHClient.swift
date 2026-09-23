@@ -2000,9 +2000,11 @@ actor SSHSession {
         } catch {
             // connect() already cleaned up its own FDs + NWConnection on
             // failure (see SSHTLSTransport.connect). Close once more to be
-            // safe, then rethrow — don't retain the transport.
+            // safe, then rethrow — don't retain the transport. Map the
+            // package error into the host space so the app's
+            // `error as? SSHError` classification keeps working.
             await transport.close()
-            throw error
+            throw TeleportErrorMapping.map(error)
         }
         tlsTransport = transport
         let dialPort = config.dialPort
@@ -2284,7 +2286,7 @@ actor SSHSession {
 
         let knownFingerprint = KnownHostsManager.shared.entry(for: host, port: port)?.fingerprint
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: config.authMethod,
+            isTeleport: config.authMethod == .faceIDTeleport,
             fingerprint: fingerprint,
             keyType: keyType,
             knownFingerprint: knownFingerprint,

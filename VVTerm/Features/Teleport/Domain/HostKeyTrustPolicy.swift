@@ -37,7 +37,7 @@ enum HostKeyTrustPolicy {
     }
 
     static func decide(
-        authMethod: AuthMethod,
+        isTeleport: Bool,
         fingerprint: String,
         keyType: Int,
         knownFingerprint: String?,
@@ -46,7 +46,7 @@ enum HostKeyTrustPolicy {
         teleportHostCACheckingKeys: [String],
         now: Date
     ) -> Decision {
-        if authMethod == .faceIDTeleport {
+        if isTeleport {
             guard !teleportHostCACheckingKeys.isEmpty else {
                 return .rejectMissingTeleportAnchors
             }

@@ -120,10 +120,10 @@ actor SSHTLSTransport {
         logger: Logger
     ) throws -> NWProtocolTLS.Options {
         guard !clusterName.isEmpty else {
-            throw SSHError.connectionFailed("SSHTLSTransport: empty cluster name")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: empty cluster name")
         }
         guard !dialHost.isEmpty else {
-            throw SSHError.connectionFailed("SSHTLSTransport: empty dial host")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: empty dial host")
         }
 
         let tlsOpts = NWProtocolTLS.Options()
@@ -153,7 +153,7 @@ actor SSHTLSTransport {
         // the SSH route (or absent — Teleport ≤ v16 does not echo it).
         let anchors = TeleportTLSTrust.anchors(fromPEMs: clusterCAPEMs)
         guard !anchors.isEmpty else {
-            throw SSHError.connectionFailed(
+            throw TeleportPackageError.connectionFailed(
                 "SSHTLSTransport: no usable cluster CA trust anchors (input \(clusterCAPEMs.count) PEMs)"
             )
         }
@@ -180,14 +180,14 @@ actor SSHTLSTransport {
     /// both FDs and must `close()` them.
     ///
     /// - Returns: a `SocketPair` with two valid (>= 0) FDs.
-    /// - Throws: `SSHError.connectionFailed` if `socketpair(2)` fails.
+    /// - Throws: `TeleportPackageError.connectionFailed` if `socketpair(2)` fails.
     static func makeSocketPair() throws -> SocketPair {
         var fds: [Int32] = [0, 0]
         // SOCK_STREAM is an Int32 constant on Darwin (not an option-set),
         // so no .rawValue.
         let result = Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, &fds)
         guard result == 0, fds[0] >= 0, fds[1] >= 0 else {
-            throw SSHError.connectionFailed("SSHTLSTransport: socketpair failed (errno \(errno))")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: socketpair failed (errno \(errno))")
         }
         // Non-blocking ends: the libssh2 session runs in non-blocking mode
         // (EAGAIN-loop handshake + non-blocking I/O) and the pump loops
@@ -221,7 +221,7 @@ actor SSHTLSTransport {
 
         let hostPort = NWEndpoint.Port(rawValue: UInt16(port))
         guard let hostPort else {
-            throw SSHError.connectionFailed("SSHTLSTransport: invalid port \(port)")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: invalid port \(port)")
         }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: hostPort)
         let connection = NWConnection(to: endpoint, using: params)
@@ -278,7 +278,7 @@ actor SSHTLSTransport {
             Darwin.close(pair.libssh2FD)
             Darwin.close(pair.pumpFD)
             socketPair = nil
-            throw SSHError.connectionFailed("TLS transport connect failed: \(error.localizedDescription)")
+            throw TeleportPackageError.connectionFailed("TLS transport connect failed: \(error.localizedDescription)")
         }
 
         return pair.libssh2FD
@@ -355,7 +355,7 @@ actor SSHTLSTransport {
                         return false
                     }
                     if !already {
-                        continuation.resume(throwing: SSHError.connectionFailed("TLS transport cancelled"))
+                        continuation.resume(throwing: TeleportPackageError.connectionFailed("TLS transport cancelled"))
                     }
                 default:
                     break

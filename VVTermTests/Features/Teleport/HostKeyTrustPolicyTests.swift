@@ -31,7 +31,7 @@ struct HostKeyTrustPolicyTests {
     @Test
     func teleportVerifiesAgainstTheHostCAAndRefreshesThePin() {
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .faceIDTeleport,
+            isTeleport: true,
             fingerprint: "SHA256:whatever",
             keyType: 0,
             knownFingerprint: "SHA256:old-rotated-cert",
@@ -49,7 +49,7 @@ struct HostKeyTrustPolicyTests {
             .fixtureString("OpenSSH/ca_foreign.pub")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .faceIDTeleport,
+            isTeleport: true,
             fingerprint: "SHA256:whatever",
             keyType: 0,
             knownFingerprint: nil,
@@ -64,7 +64,7 @@ struct HostKeyTrustPolicyTests {
     @Test
     func teleportRejectsPrincipalMismatch() {
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .faceIDTeleport,
+            isTeleport: true,
             fingerprint: "SHA256:whatever",
             keyType: 0,
             knownFingerprint: nil,
@@ -79,7 +79,7 @@ struct HostKeyTrustPolicyTests {
     @Test
     func teleportFailsClosedWithoutPinnedAnchors() {
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .faceIDTeleport,
+            isTeleport: true,
             fingerprint: "SHA256:whatever",
             keyType: 0,
             knownFingerprint: nil,
@@ -96,7 +96,7 @@ struct HostKeyTrustPolicyTests {
     @Test
     func nonTeleportFirstUseIsUnknown() {
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .password,
+            isTeleport: false,
             fingerprint: "SHA256:abc",
             keyType: 1,
             knownFingerprint: nil,
@@ -111,7 +111,7 @@ struct HostKeyTrustPolicyTests {
     @Test
     func nonTeleportMatchingPinVerifies() {
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .password,
+            isTeleport: false,
             fingerprint: "SHA256:abc",
             keyType: 1,
             knownFingerprint: "SHA256:abc",
@@ -126,7 +126,7 @@ struct HostKeyTrustPolicyTests {
     @Test
     func nonTeleportChangedKeyIsRejected() {
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: .password,
+            isTeleport: false,
             fingerprint: "SHA256:new",
             keyType: 1,
             knownFingerprint: "SHA256:old",
