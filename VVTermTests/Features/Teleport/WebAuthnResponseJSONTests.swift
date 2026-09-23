@@ -240,4 +240,83 @@ final class WebAuthnResponseJSONTests: XCTestCase {
         XCTAssertEqual(decodedAssertion.response.signature, assertion.response.signature)
         XCTAssertEqual(decodedAssertion.response.userHandle, assertion.response.userHandle)
     }
+
+    /// Go's `encoding/json` (with its default HTML escaping) is what hashed
+    /// the `clientDataJSON`, so the Swift encoder must escape `<`, `>`, `&`
+    /// the same way and keep the field order. A reordered or unescaped
+    /// payload produces a different hash and the server rejects the ceremony.
+    func testCollectedClientData_escapesGoHTMLCharactersAndKeepsFieldOrder() {
+        let ccd = CollectedClientData(
+            type: CeremonyType.create.rawValue,
+            challenge: "AQID",
+            origin: "https://a<b>c&d.example"
+        )
+        let json = ccd.toJSONBytes()
+        let text = String(data: json, encoding: .utf8) ?? ""
+
+        XCTAssertEqual(
+            text,
+            #"{"type":"webauthn.create","challenge":"AQID","origin":"https://a\u003cb\u003ec\u0026d.example"}"#
+        )
+        XCTAssertFalse(text.contains("<"), "a raw `<` must be escaped")
+        XCTAssertFalse(text.contains(">"), "a raw `>` must be escaped")
+        XCTAssertFalse(text.contains("&"), "a raw `&` must be escaped")
+
+        // Field order is part of the hash: type, then challenge, then origin.
+        let typeIndex = try? XCTUnwrap(text.range(of: "\"type\"")?.lowerBound)
+        let challengeIndex = try? XCTUnwrap(text.range(of: "\"challenge\"")?.lowerBound)
+        let originIndex = try? XCTUnwrap(text.range(of: "\"origin\"")?.lowerBound)
+        if let typeIndex, let challengeIndex, let originIndex {
+            XCTAssertLessThan(typeIndex, challengeIndex)
+            XCTAssertLessThan(challengeIndex, originIndex)
+        } else {
+            XCTFail("the clientDataJSON must carry all three keys: \(text)")
+        }
+    }
+
+    /// The COSE EC2 encoder rejects malformed X9.63 inputs rather than
+    /// emitting a key the server cannot verify.
+    func testCOSEKey_rejectsMalformedPublicKeys() {
+        func assertRejected(_ raw: Data, _ label: String) {
+            do {
+                _ = try coseEC2PublicKeyCBOR(publicKeyRaw: raw)
+                XCTFail("\(label) must be rejected")
+            } catch let error as SignerError {
+                guard case .invalidPublicKey = error else {
+                    return XCTFail("\(label): expected .invalidPublicKey, got \(error)")
+                }
+            } catch {
+                XCTFail("\(label): expected SignerError, got \(error)")
+            }
+        }
+
+        assertRejected(Data(), "an empty representation")
+        assertRejected(Data([0x04, 0x01]), "an even-length representation")
+        assertRejected(
+            Data([0x05] + Array(repeating: 0x11, count: 64)),
+            "a representation that does not start with 0x04"
+        )
+        assertRejected(
+            Data([0x04] + Array(repeating: 0x11, count: 66)),
+            "a representation with 33-byte coordinates"
+        )
+
+        // A create ceremony without credential data is a programming error.
+        do {
+            _ = try makeAttestationData(
+                ceremony: .create,
+                origin: Self.origin,
+                rpID: Self.rpID,
+                challenge: Self.challenge,
+                cred: nil
+            )
+            XCTFail("a create ceremony without credential data must be rejected")
+        } catch let error as SignerError {
+            guard case .invalidPublicKey = error else {
+                return XCTFail("expected .invalidPublicKey, got \(error)")
+            }
+        } catch {
+            XCTFail("expected SignerError, got \(error)")
+        }
+    }
 }

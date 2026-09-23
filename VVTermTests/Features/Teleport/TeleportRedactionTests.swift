@@ -1,17 +1,29 @@
 // SPDX-License-Identifier: MIT
 //
 //  TeleportRedactionTests.swift
-//  VVTermTests
+//  VVTerm
 //
-//  Spy-logging coverage for the Teleport redaction contract: the callback
+//  Redaction coverage for the Teleport logging contract: the callback
 //  `secret_key`, the full loopback callback URL, a clear headless id, and a
-//  full browser-MFA request id must never reach the logger payloads.
+//  full browser-MFA request id must never reach a logger payload.
 //
-//  The spy logging seam returns `Logger`s in a per-test subsystem, and the
-//  test reads the payloads back from the process's own unified-log store.
-//  Private interpolations come back redacted as `<private>`, so a regression
-//  that drops a privacy annotation (or logs a secret with `.public`) shows up
-//  as the raw value in the composed message and fails the assertions.
+//  Two layers, because the unified log cannot prove everything on its own:
+//
+//   1. Runtime readback — a spy logging seam emits into a unique subsystem
+//      and the test reads the composed messages back from the process's own
+//      log store. This layer pins everything that is decided *before* the
+//      interpolation: the callback URL is truncated at `?`, the request id is
+//      truncated to a 16-character prefix, and the HTTP error log carries the
+//      status instead of the response body. Those hold regardless of how the
+//      log store treats privacy.
+//
+//   2. Source-level annotations — the log store does not apply privacy
+//      masking on the iOS Simulator: every level (`.public`, `.private`,
+//      `.private(mask:)`) reads back in the clear there, while on macOS
+//      `.private`/`.private(mask:)` are redacted. A runtime assertion that a
+//      value is absent therefore cannot distinguish "annotated" from
+//      "unannotated" on the simulator, so the annotation *form* is pinned at
+//      the source level instead (`…LogsArePrivacyAnnotated`).
 //
 
 #if DEBUG
@@ -44,7 +56,9 @@ final class TeleportRedactionTests: XCTestCase {
     }
 
     /// Polls the unified log until an entry containing `needle` arrives, then
-    /// returns every message logged for the subsystem.
+    /// returns every message logged for the subsystem. The needle must be the
+    /// entry under test (not an earlier one), otherwise the snapshot can be
+    /// taken before that entry lands.
     private func waitForLog(
         subsystem: String,
         containing needle: String,
@@ -61,6 +75,15 @@ final class TeleportRedactionTests: XCTestCase {
         }
         XCTFail("timed out waiting for a log entry containing \(needle); saw: \(messages)")
         return messages
+    }
+
+    /// The repository root, derived from this file's location.
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // TeleportRedactionTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
     }
 
     // MARK: - BrowserMFACeremony
@@ -104,6 +127,47 @@ final class TeleportRedactionTests: XCTestCase {
         func disconnect() async {}
     }
 
+    /// A gRPC stub that fails the way a real proxy can: the server's error
+    /// message echoes the redirect URL (and therefore the per-run secret).
+    private final class FailingCeremonyGRPCStub: TeleportGRPCClienting {
+        struct ServerError: Error, CustomStringConvertible {
+            let message: String
+            var description: String { message }
+        }
+
+        var capturedRedirectURL: String?
+
+        func connect(
+            host: String,
+            clientCertPEM: String,
+            privateKey: SecKey,
+            clusterName: String,
+            clusterCAPEMs: [String]
+        ) async throws {}
+
+        func createAuthenticateChallenge(
+            browserMFATSHRedirectURL: String
+        ) async throws -> Proto_MFAAuthenticateChallenge {
+            capturedRedirectURL = browserMFATSHRedirectURL
+            throw ServerError(
+                message: "unable to create MFA challenges: invalid redirect \(browserMFATSHRedirectURL)"
+            )
+        }
+
+        func createRegisterChallenge(
+            existingMFAResponse: Proto_MFAAuthenticateResponse?
+        ) async throws -> Proto_MFARegisterChallenge {
+            Proto_MFARegisterChallenge()
+        }
+
+        func addMFADeviceSync(
+            deviceName: String,
+            newMFAResponse: Proto_MFARegisterResponse
+        ) async throws {}
+
+        func disconnect() async {}
+    }
+
     func testBrowserMFACeremony_neverLogsTheSecretOrTheFullRequestID() async throws {
         let logging = SpySubsystemLogging()
         let client = CeremonyGRPCStub()
@@ -121,7 +185,7 @@ final class TeleportRedactionTests: XCTestCase {
 
         let messages = try await waitForLog(
             subsystem: logging.subsystem,
-            containing: "browser MFA callback listening"
+            containing: "browser MFA challenge received"
         )
 
         guard let redirectURL = client.capturedRedirectURL,
@@ -150,9 +214,48 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    /// The error path: a server message that embeds the redirect URL must not
+    /// reach the log, because that URL carries the per-run `secret_key`.
+    func testBrowserMFACeremony_errorPathNeverLogsTheSecret() async throws {
+        let logging = SpySubsystemLogging()
+        let client = FailingCeremonyGRPCStub()
+        let ceremony = BrowserMFACeremony(logging: logging, presenter: RecordingBrowserMFAPresenter())
+
+        do {
+            _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")
+            XCTFail("the ceremony must surface the gRPC failure")
+        } catch {
+            // Expected: the stub rejects the challenge request.
+        }
+
+        guard let redirectURL = client.capturedRedirectURL,
+              let secret = URLComponents(string: redirectURL)?
+                  .queryItems?
+                  .first(where: { $0.name == "secret_key" })?
+                  .value
+        else {
+            return XCTFail("the ceremony did not pass a callback URL to the gRPC client")
+        }
+
+        let messages = try await waitForLog(
+            subsystem: logging.subsystem,
+            containing: "CreateAuthenticateChallenge failed"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(secret),
+                "the per-run secret_key leaked into the error log payload: \(message)"
+            )
+            XCTAssertFalse(
+                message.contains("secret_key="),
+                "the redirect URL leaked into the error log payload: \(message)"
+            )
+        }
+    }
+
     // MARK: - TeleportBootstrapCoordinator
 
-    func testTeleportBootstrapCoordinator_neverLogsTheClearHeadlessID() async throws {
+    func testTeleportBootstrapCoordinator_neverLogsASecretOrAResponseBody() async throws {
         let logging = SpySubsystemLogging()
         let http = MockTeleportHTTPClient()
         http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
@@ -169,22 +272,46 @@ final class TeleportRedactionTests: XCTestCase {
         )
         await coordinator.begin(cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"))
 
-        let headlessID = HeadlessID.compute(
-            sshAuthorizedKey: TeleportFixtureSupport.fixedSSHPublicKey
-        )
         let messages = try await waitForLog(
             subsystem: logging.subsystem,
-            containing: "beginning bootstrap for cluster"
+            containing: "headlessAuthenticationID="
         )
 
+        // The entry under test exists (a vacuous pass otherwise).
+        XCTAssertTrue(
+            messages.contains(where: { $0.contains("headlessAuthenticationID=") }),
+            "the coordinator must log the headless-authentication entry; saw: \(messages)"
+        )
         for message in messages {
-            XCTAssertFalse(
-                message.contains(headlessID),
-                "the clear headless id leaked into a log payload: \(message)"
-            )
             XCTAssertFalse(
                 message.contains("secret_key="),
                 "a secret_key leaked into a log payload: \(message)"
+            )
+        }
+    }
+
+    /// The unified log does not apply privacy masking on the iOS Simulator, so
+    /// the runtime readback above cannot distinguish an annotated
+    /// interpolation from a bare one. Pin the annotation form at the source
+    /// level: every interpolation of the headless id must be private.
+    func testTeleportBootstrapCoordinator_headlessIDLogsArePrivacyAnnotated() throws {
+        let sourceURL = repositoryRoot()
+            .appendingPathComponent("VVTerm/Features/Teleport/Application/TeleportBootstrapCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        let headlessLines = source
+            .components(separatedBy: "\n")
+            .filter { $0.contains("headlessAuthenticationID=") || $0.contains("opening Safari to") }
+
+        XCTAssertEqual(
+            headlessLines.count,
+            2,
+            "expected exactly two headless-id log lines to review; found: \(headlessLines)"
+        )
+        for line in headlessLines {
+            XCTAssertTrue(
+                line.contains("privacy: .private"),
+                "the headless id must be logged with a privacy annotation: \(line)"
             )
         }
     }

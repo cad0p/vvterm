@@ -611,6 +611,125 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         XCTAssertFalse(listener.didResume, "a silent connection must not resolve the login")
     }
 
+    /// A callback sealed under a *different* key must not authenticate: the
+    /// listener's per-run key is the proof the payload came from the server,
+    /// and a local process that never saw it must not resolve the login.
+    func testCallbackSealedUnderADifferentKeyIsRejected() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let otherKeyHex = String(repeating: "ab", count: 32)
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintext(id: "cross-key"),
+            secretKeyHex: otherKeyHex
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex,
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 400"),
+            "a cross-key replay must be answered 400; got: \(response)"
+        )
+        XCTAssertFalse(
+            listener.didResume,
+            "a cross-key replay must not resolve the login"
+        )
+    }
+
+    /// A bit flip inside the GCM tag must fail authentication. Without this
+    /// vector a refactor could construct the sealed box without opening it and
+    /// keep every other callback test green.
+    func testCallbackWithATagBitFlipIsRejected() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let parts = try Self.sealedParts(
+            plaintext: try Self.loginResponsePlaintext(id: "bit-flip"),
+            secretKeyHex: listener.secretKeyHex
+        )
+        var tampered = parts.sealed
+        tampered[tampered.count - 1] ^= 0x01
+        let envelope = try Self.envelopeJSON(sealed: tampered, nonce: parts.nonce)
+
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex,
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 400"),
+            "a tampered tag must be answered 400; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume, "a tampered tag must not resolve the login")
+    }
+
+    /// `ciphertext‖tag` must carry at least one plaintext byte: exactly the
+    /// 16 tag bytes is the boundary the listener rejects before opening.
+    func testCiphertextOfExactlyTheTagLengthIsRejected() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let parts = try Self.sealedParts(
+            plaintext: try Self.loginResponsePlaintext(id: "boundary"),
+            secretKeyHex: listener.secretKeyHex
+        )
+        let envelope = try Self.envelopeJSON(
+            sealed: parts.sealed.suffix(16),
+            nonce: parts.nonce
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex,
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 400"),
+            "a tag-only payload must be answered 400; got: \(response)"
+        )
+        XCTAssertFalse(listener.didResume, "a tag-only payload must not resolve the login")
+    }
+
+    /// Go marshals the assertion's binary fields as `base64.RawURLEncoding`
+    /// (URL-safe alphabet, no padding). The listener must decode that form,
+    /// not only the padded standard alphabet.
+    func testUrlSafeUnpaddedBase64FieldsDecode() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let clientData = Data([0xfb, 0xef, 0xbe, 0x01, 0x02, 0x03])
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintextUrlSafe(id: "url-safe", clientDataJSON: clientData),
+            secretKeyHex: listener.secretKeyHex
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex,
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 200"),
+            "a url-safe unpadded payload must be accepted; got: \(response)"
+        )
+
+        let resolved = try await listener.waitForResponse()
+        XCTAssertEqual(resolved.id, "url-safe")
+        XCTAssertEqual(
+            resolved.response.clientDataJson,
+            clientData,
+            "the url-safe (no padding) field must decode to the same bytes"
+        )
+    }
+
     /// Connect, send a minimal HTTP GET, and require at least one response
     /// byte. Uses NWConnection directly (no ATS involvement).
     private func probe(host: NWEndpoint.Host, port: UInt16, secretKey: String) async throws -> Bool {
@@ -775,6 +894,36 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// produces, sealed under the listener's per-run key, so tests can
     /// exercise the post-authentication decode path. Test-only helper.
     private static func encryptedEnvelope(plaintext: Data, secretKeyHex: String) throws -> String {
+        let parts = try sealedParts(plaintext: plaintext, secretKeyHex: secretKeyHex)
+        return try envelopeJSON(sealed: parts.sealed, nonce: parts.nonce)
+    }
+
+    /// The raw `ciphertext‖tag` and nonce for a payload sealed under
+    /// `secretKeyHex` — the parts a tamper/cross-key test mutates before
+    /// rebuilding the envelope.
+    private static func sealedParts(plaintext: Data, secretKeyHex: String) throws -> (sealed: Data, nonce: Data) {
+        let key = SymmetricKey(data: Data(try keyBytes(secretKeyHex)))
+        let nonce = try AES.GCM.Nonce()
+        let box = try AES.GCM.seal(plaintext, using: key, nonce: nonce)
+        // Go's aesgcm.Seal appends the 16-byte tag to the ciphertext; the
+        // listener splits it back off.
+        return (box.ciphertext + box.tag, Data(nonce))
+    }
+
+    /// Rebuild the `{"ciphertext": …, "nonce": …}` JSON from raw parts.
+    private static func envelopeJSON(sealed: Data, nonce: Data) throws -> String {
+        let envelope = [
+            "ciphertext": sealed.base64EncodedString(),
+            "nonce": nonce.base64EncodedString(),
+        ]
+        let json = try JSONSerialization.data(withJSONObject: envelope)
+        guard let string = String(data: json, encoding: .utf8) else {
+            throw BrowserMFAListenerError.decodeFailed("envelope not utf8")
+        }
+        return string
+    }
+
+    private static func keyBytes(_ secretKeyHex: String) throws -> [UInt8] {
         var keyBytes: [UInt8] = []
         var index = secretKeyHex.startIndex
         while index < secretKeyHex.endIndex {
@@ -785,20 +934,32 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
             keyBytes.append(byte)
             index = next
         }
-        let key = SymmetricKey(data: Data(keyBytes))
-        let nonce = try AES.GCM.Nonce()
-        let sealed = try AES.GCM.seal(plaintext, using: key, nonce: nonce)
-        // Go's aesgcm.Seal appends the 16-byte tag to the ciphertext; the
-        // listener splits it back off.
-        let envelope = [
-            "ciphertext": (sealed.ciphertext + sealed.tag).base64EncodedString(),
-            "nonce": Data(nonce).base64EncodedString(),
-        ]
-        let json = try JSONSerialization.data(withJSONObject: envelope)
-        guard let string = String(data: json, encoding: .utf8) else {
-            throw BrowserMFAListenerError.decodeFailed("envelope not utf8")
+        return keyBytes
+    }
+
+    /// The same plaintext with every binary field in Go's
+    /// `base64.RawURLEncoding` form (URL-safe alphabet, no padding).
+    private static func loginResponsePlaintextUrlSafe(id: String, clientDataJSON: Data) throws -> Data {
+        func rawURL(_ data: Data) -> String {
+            data.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
         }
-        return string
+        let payload: [String: Any] = [
+            "browser_mfa_webauthn_response": [
+                "id": id,
+                "type": "public-key",
+                "rawId": rawURL(Data("raw-id".utf8)),
+                "response": [
+                    "clientDataJSON": rawURL(clientDataJSON),
+                    "authenticatorData": rawURL(Data("auth-data".utf8)),
+                    "signature": rawURL(Data("signature".utf8)),
+                    "userHandle": rawURL(Data("user".utf8)),
+                ],
+            ],
+        ]
+        return try JSONSerialization.data(withJSONObject: payload)
     }
 }
 

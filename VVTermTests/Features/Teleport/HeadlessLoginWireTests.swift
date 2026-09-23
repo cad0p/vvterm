@@ -14,9 +14,9 @@
 //      HTTP server, so the actual shared `TeleportTrustSession.session` path
 //      is exercised;
 //    - the shared trust session's request/resource timeout constants
-//      (200 s >= the 180 s server-side block). This pins the shared session
-//      configuration, not which session `post` uses — making that link
-//      observable is a rewrite acceptance item.
+//      (200 s >= the 180 s server-side block), the default-session value
+//      identity, and the source-level wiring that makes `post` read that
+//      default.
 //
 //  Note: `URLProtocol.registerClass` does NOT intercept `URLSession` on this
 //  OS (verified: a fresh ephemeral session still hit the network, while an
@@ -492,6 +492,31 @@ final class HeadlessLoginWireTests: XCTestCase {
         XCTAssertTrue(
             HeadlessLogin.defaultSession === TeleportTrustSession.session,
             "post's default session must be TeleportTrustSession.session"
+        )
+    }
+
+    /// Pins the wiring, not only the value: `post`'s `session` parameter must
+    /// default to `HeadlessLogin.defaultSession`. A signature-level swap to
+    /// `URLSession.shared` would bypass the trust session and still leave every
+    /// runtime test green.
+    func testPostSignature_defaultsToTheSharedTrustSessionExpression() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // HeadlessLoginWireTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/HeadlessLogin.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("session: URLSession = HeadlessLogin.defaultSession"),
+            "post's default session must read HeadlessLogin.defaultSession"
+        )
+        XCTAssertFalse(
+            source.contains("session: URLSession = URLSession.shared"),
+            "post must not fall back to URLSession.shared (it bypasses the trust session)"
         )
     }
 
