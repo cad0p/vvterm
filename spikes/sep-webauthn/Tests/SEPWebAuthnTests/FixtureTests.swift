@@ -10,7 +10,8 @@
 //  `macos-14` runner or any Mac with Go installed) and committed under
 //  `fixtures/expected/*.bin`. The generator is fully deterministic (fixed
 //  P-256 key + RFC 6979 ECDSA), so the committed set must byte-match a fresh
-//  run. Regenerate with `./fixtures/regenerate.sh`.
+//  run; `fixtures/check-provenance.sh` enforces that fail-closed in CI.
+//  Regenerate with `./fixtures/regenerate.sh`.
 //
 //  What's compared:
 //    - collectedClientData JSON bytes (3-field form, base64url challenge)

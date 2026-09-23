@@ -18,8 +18,10 @@
 //  test data and FULLY REPRODUCIBLE: the Go generator
 //  (`spikes/sep-webauthn/fixtures/generate/main.go`) derives a fixed P-256 key
 //  from a domain-separated seed and signs with RFC 6979 deterministic ECDSA,
-//  so a fresh generator run byte-matches the committed set. If the generator
-//  changes, regenerate and commit all 8 files together
+//  so a fresh generator run byte-matches the committed set. The
+//  `SEP-WebAuthn fixture tests` workflow proves it with the fail-closed
+//  `spikes/sep-webauthn/fixtures/check-provenance.sh` before regenerating in
+//  place. If the generator changes, regenerate and commit all 8 files together
 //  (`spikes/sep-webauthn/fixtures/regenerate.sh`).
 //
 //  An absent fixture is a HARD FAILURE (`XCTFail` + throw), never a skip:

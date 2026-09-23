@@ -46,6 +46,7 @@ spikes/sep-webauthn/
 └── fixtures/
     ├── generate/main.go           ← Go fixture generator (uses Teleport's api.go)
     ├── regenerate.sh              ← regenerates fixtures/expected/*.bin
+    ├── check-provenance.sh        ← fail-closed: committed set == generator output
     └── expected/                 ← committed byte-exact reference outputs
 ```
 
@@ -69,10 +70,13 @@ The fixture tests compare Swift output against the committed Go fixtures in
 `fixtures/expected/`. That directory is **fully reproducible**: the Go
 generator derives a fixed P-256 key from a domain-separated seed and signs
 with RFC 6979 deterministic ECDSA (SHA-256), so every run emits byte-identical
-output. The committed set must byte-match a fresh run: if the generator
-changes, regenerate and commit all 8 files together. An absent fixture is a
-hard test failure, never a skip: the byte comparison is the acceptance oracle
-for wire-format-affecting refactors.
+output. The committed set must byte-match a fresh run —
+`fixtures/check-provenance.sh` regenerates into a temp dir and byte-compares
+all 8 files, fail-closed, and `.github/workflows/sep-webauthn-fixtures.yml`
+runs it before the in-place regeneration step. If the generator changes,
+regenerate and commit all 8 files together. An absent fixture is a hard test
+failure, never a skip: the byte comparison is the acceptance oracle for
+wire-format-affecting refactors.
 
 Regenerate the fixtures with (the generator is self-contained — it inlines the
 one Teleport function it needs and does not read a Teleport checkout):
@@ -80,6 +84,8 @@ one Teleport function it needs and does not read a Teleport checkout):
 ```bash
 cd spikes/sep-webauthn
 ./fixtures/regenerate.sh            # writes fixtures/expected/
+./fixtures/regenerate.sh /tmp/out   # optional: write elsewhere
+./fixtures/check-provenance.sh      # fail-closed provenance check
 ```
 
 ## Running in CI
