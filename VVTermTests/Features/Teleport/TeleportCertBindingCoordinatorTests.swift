@@ -49,6 +49,7 @@ struct TeleportCertBindingCoordinatorTests {
         return TeleportLoginCoordinator(
             httpClient: http,
             keyRing: keyRing,
+            logging: DefaultTeleportLogging(),
             signer: signer,
             keyPairGenerator: FixedTeleportSSHKeyPairGenerator(publicKey: publicKey),
             now: now
@@ -266,6 +267,7 @@ struct TeleportCertBindingCoordinatorTests {
             httpClient: http,
             keyRing: keyRing,
             safariPresenter: nil,
+            logging: DefaultTeleportLogging(),
             signer: MockSEPKeySigner(outcome: .success),
             sshKeyPairGenerator: FixedTeleportSSHKeyPairGenerator(publicKey: publicKey),
             tlsKeyPairGenerator: try TeleportFixtureSupport.makeFixedTLSGenerator(),

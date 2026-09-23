@@ -118,8 +118,8 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// shared `TeleportHTTPClient` in production; injectable for tests.
     private let httpClient: any TeleportHTTPClienting
 
-    /// The injected key ring (stores the cert + metadata). Defaults to
-    /// `TeleportKeyRing.shared`.
+    /// The injected key ring (stores the cert + metadata). In production
+    /// this is the host-side `TeleportKeyRingHost.shared` provider.
     private let keyRing: any TeleportKeyRingStoring
 
     /// The injected Safari presenter (wraps ASWebAuthenticationSession).
@@ -159,7 +159,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// pub key). Used to build the Safari URL.
     private var headlessID: String = ""
 
-    private let logger = Logger.forCategory("teleport-bootstrap")
+    private let logger: Logger
 
     /// The result of a successful Phase 1 bootstrap. Passed to the Phase 2
     /// registration coordinator (the cert authenticates the gRPC dial).
@@ -183,6 +183,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         httpClient: any TeleportHTTPClienting,
         keyRing: any TeleportKeyRingStoring,
         safariPresenter: (any WebAuthenticationSessionPresenting)?,
+        logging: any TeleportLogging,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         sshKeyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
         tlsKeyPairGenerator: any TeleportTLSKeyPairGenerating = LiveTeleportTLSKeyPairGenerator(),
@@ -191,6 +192,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         self.httpClient = httpClient
         self.keyRing = keyRing
         self.safariPresenter = safariPresenter
+        self.logger = logging.logger(category: "teleport-bootstrap")
         self.signer = signer
         self.sshKeyPairGenerator = sshKeyPairGenerator
         self.tlsKeyPairGenerator = tlsKeyPairGenerator

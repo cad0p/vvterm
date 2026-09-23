@@ -182,6 +182,11 @@ actor SSHClient {
 
     private var session: SSHSession?
     private let logger = Logger.forCategory("SSH")
+    /// The Teleport logging seam forwarded into every `SSHSession` (and from
+    /// there into `SSHTLSTransport`). Defaulted so the synthesized `init()`
+    /// keeps every bare `SSHClient()` call site compiling; the app injects
+    /// `AppTeleportLogging.shared`, tests can inject a spy.
+    var teleportLogging: any TeleportLogging = AppTeleportLogging.shared
     private var keepAliveTask: Task<Void, Never>?
     private var connectTask: Task<SSHSession, Error>?
     private var pendingConnectSession: SSHSession?
@@ -280,7 +285,11 @@ actor SSHClient {
             teleportNodeName: server.name
         )
 
-        let pendingSession = SSHSession(config: config, startupTrace: startupTrace)
+        let pendingSession = SSHSession(
+            config: config,
+            startupTrace: startupTrace,
+            teleportLogging: teleportLogging
+        )
         pendingConnectSession = pendingSession
 
         let task = Task { [connectTimeout] () -> SSHSession in
@@ -1630,6 +1639,10 @@ actor SSHSession {
     private var connectedPeerAddress: String?
     private let logger = Logger.forCategory("SSHSession")
     private let startupTrace: SSHStartupTrace?
+    /// The Teleport logging seam (forwarded to `SSHTLSTransport`). Injected
+    /// through `SSHClient`; defaulted so direct `SSHSession` construction in
+    /// tests keeps compiling.
+    private let teleportLogging: any TeleportLogging
 
     /// Atomic socket storage for emergency abort from any thread
     private let atomicSocket = AtomicSocket()
@@ -1660,9 +1673,14 @@ actor SSHSession {
     private var discardedShellStartupChannelCount = 0
     #endif
 
-    init(config: SSHSessionConfig, startupTrace: SSHStartupTrace? = nil) {
+    init(
+        config: SSHSessionConfig,
+        startupTrace: SSHStartupTrace? = nil,
+        teleportLogging: any TeleportLogging = AppTeleportLogging.shared
+    ) {
         self.config = config
         self.startupTrace = startupTrace
+        self.teleportLogging = teleportLogging
     }
 
     var isConnected: Bool {
@@ -1957,7 +1975,7 @@ actor SSHSession {
     /// without the cluster CA.
     private func connectTeleportTLS() async throws -> Int32 {
         let clusterId = config.credentials.serverId
-        let keyRing = TeleportKeyRing.shared
+        let keyRing = TeleportKeyRingHost.shared
         guard let tlsState = await keyRing.clusterTLSState(for: clusterId) else {
             logger.error(
                 "teleport TLS state missing for cluster \(clusterId.uuidString, privacy: .public) — re-bootstrap required"
@@ -1973,7 +1991,8 @@ actor SSHSession {
             host: config.dialHost,
             port: config.dialPort,
             clusterName: tlsState.clusterName,
-            clusterCAPEMs: tlsState.clusterCAPEMs
+            clusterCAPEMs: tlsState.clusterCAPEMs,
+            logging: teleportLogging
         )
         let fd: Int32
         do {
@@ -2067,7 +2086,7 @@ actor SSHSession {
             // throw `teleportCertMissing` so the UI layer can trigger the
             // `TeleportLoginCoordinator` flow.
             let clusterId = config.credentials.serverId
-            let keyRing = TeleportKeyRing.shared
+            let keyRing = TeleportKeyRingHost.shared
             guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
                   let certData = certPEM.data(using: .utf8),
                   let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {
@@ -2256,7 +2275,7 @@ actor SSHSession {
     ) async throws {
         let checkingKeys: [String]
         if config.authMethod == .faceIDTeleport {
-            checkingKeys = await TeleportKeyRing.shared
+            checkingKeys = await TeleportKeyRingHost.shared
                 .clusterTLSState(for: config.credentials.serverId)?
                 .hostCACheckingKeys ?? []
         } else {
@@ -3642,7 +3661,7 @@ actor SSHSession {
     /// TODO: parse cert ValidPrincipals for the inner-session OS login.
     private func authenticateInner(session: OpaquePointer) async throws {
         let clusterId = config.credentials.serverId
-        let keyRing = TeleportKeyRing.shared
+        let keyRing = TeleportKeyRingHost.shared
         guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
               let certData = certPEM.data(using: .utf8),
               let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {

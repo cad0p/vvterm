@@ -52,7 +52,7 @@ struct TeleportServerIntegrationTests {
     /// handshakes, cert auth), and prepares the inner (node) session so exec
     /// routes to the target node. Callers own the client lifecycle
     /// (`disconnect()` on every path) and the keyring cleanup
-    /// (`TeleportKeyRing.shared.clear(for: clusterId)`).
+    /// (`TeleportKeyRingHost.shared.clear(for: clusterId)`).
     ///
     /// The 30s default connect budget is tight for a contended CI runner
     /// (the off leg's outer handshake has stalled 18-30s+ there); give the
@@ -102,7 +102,7 @@ struct TeleportServerIntegrationTests {
         // SEP key), so seed the record via `storeBootstrapCert` first — same
         // cert, same validity window. The ed25519 private key goes to the
         // keychain; `clear` wipes both stores.
-        let keyRing = TeleportKeyRing.shared
+        let keyRing = TeleportKeyRingHost.shared
         keyRing.storeClusterTLSState(
             TeleportClusterTLSState(
                 clusterName: clusterName,
@@ -140,7 +140,7 @@ struct TeleportServerIntegrationTests {
     @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
     func teleportSSHConnectsThroughTLSRoutingAndExecutes() async throws {
         let (client, clusterId) = try await Self.makeTeleportClient()
-        defer { TeleportKeyRing.shared.clear(for: clusterId) }
+        defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
         do {
             // The node's exec-session startup can stall behind the CI
             // cluster's lite-backend write-lock pileups (observed: 1-4.5s
@@ -168,7 +168,7 @@ struct TeleportServerIntegrationTests {
     @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
     func teleportOSC8HyperlinkBytesSurviveRealSSHSession() async throws {
         let (client, clusterId) = try await Self.makeTeleportClient()
-        defer { TeleportKeyRing.shared.clear(for: clusterId) }
+        defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
         do {
             // printf (not echo): keeps the escape bytes literal. The remote
             // sh -c wrapper passes the single-quoted string through.
@@ -258,7 +258,7 @@ struct TeleportServerIntegrationTests {
         // coordinator, and the login coordinator (the keys live in its
         // in-memory dictionary — a fresh instance per run).
         let signer = SoftwareSigner()
-        let keyRing = TeleportKeyRing(signer: signer)
+        let keyRing = TeleportKeyRing(signer: signer, logging: DefaultTeleportLogging())
         defer { keyRing.clear(for: clusterId) }
 
         // The Phase-1 stand-in: the harness-minted TLS identity (tctl auth
@@ -279,6 +279,7 @@ struct TeleportServerIntegrationTests {
             grpcClient: LiveTeleportGRPCClient(),
             browserMFACeremony: LiveBrowserMFACeremony(),
             keyRing: keyRing,
+            logging: DefaultTeleportLogging(),
             signer: signer,
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )
@@ -297,6 +298,7 @@ struct TeleportServerIntegrationTests {
         let login = TeleportLoginCoordinator(
             httpClient: LiveTeleportHTTPClient(),
             keyRing: keyRing,
+            logging: DefaultTeleportLogging(),
             signer: signer,
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )

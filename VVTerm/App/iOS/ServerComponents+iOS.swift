@@ -42,7 +42,7 @@ struct ServerListRow<KeyRing>: View where KeyRing: ObservableObject, KeyRing: Te
         onMove: (() -> Void)? = nil,
         onLockedTap: (() -> Void)? = nil,
         onTeleportSetup: ((Server, TeleportDeviceReadiness) -> Void)? = nil,
-        keyRing: KeyRing = TeleportKeyRing.shared,
+        keyRing: KeyRing = TeleportKeyRingHost.shared,
         isLockedOverride: Bool? = nil
     ) {
         self.server = server

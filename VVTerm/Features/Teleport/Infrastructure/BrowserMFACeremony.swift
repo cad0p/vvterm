@@ -64,12 +64,23 @@ enum BrowserMFACeremonyError: Error, LocalizedError {
 @MainActor
 final class BrowserMFACeremony: NSObject {
 
+    /// The injected logging seam (the host passes `AppTeleportLogging`; tests
+    /// pass a spy or the package default).
+    private let logging: any TeleportLogging
+    private let logger: Logger
+
     /// The ASWebAuthenticationSession (kept alive so it isn't deallocated
     /// while the Safari sheet is presented).
     private var webAuthSession: ASWebAuthenticationSession?
 
     /// The loopback listener.
     private var listener: BrowserMFAListener?
+
+    init(logging: any TeleportLogging) {
+        self.logging = logging
+        self.logger = logging.logger(category: "TeleportBrowserMFA")
+        super.init()
+    }
 
     /// Run the ceremony. Returns the ExistingMFAResponse.Browser to send in
     /// CreateRegisterChallenge.
@@ -101,7 +112,7 @@ final class BrowserMFACeremony: NSObject {
     ) async throws -> Proto_BrowserMFAResponse {
         #if canImport(Network)
         // ── 1. Start the loopback listener ────────────────────────────────
-        let listener = BrowserMFAListener()
+        let listener = BrowserMFAListener(logger: logger)
         self.listener = listener
         // Every early exit (start failure, challenge failure, missing
         // challenge, wait error) must tear the loopback listener down.
@@ -120,13 +131,13 @@ final class BrowserMFACeremony: NSObject {
         // Never log the full callback URL: its secret_key query is a session
         // credential and would leak into exported diagnostics reports.
         let redactedCallbackURL = clientCallbackURL.components(separatedBy: "?").first ?? clientCallbackURL
-        BrowserMFACeremonyLog.logger.info("listener on \(redactedCallbackURL, privacy: .public)")
+        logger.info("listener on \(redactedCallbackURL, privacy: .public)")
 
         // ── 2. CreateAuthenticateChallenge with BrowserMFATSHRedirectURL ──
         // The ceremony passes the REAL loopback URL (a non-zero, OS-assigned
         // port) — never the bogus localhost:0 sentinel that broke the live
         // device. Teleport's ValidateClientRedirect rejects invalid URLs.
-        BrowserMFACeremonyLog.logger.info("create_auth_challenge ContextUser MANAGE_DEVICES + BrowserMFATSHRedirectURL")
+        logger.info("create_auth_challenge ContextUser MANAGE_DEVICES + BrowserMFATSHRedirectURL")
         let authChal = try await grpcClient.createAuthenticateChallenge(
             browserMFATSHRedirectURL: clientCallbackURL
         )
@@ -140,13 +151,13 @@ final class BrowserMFACeremony: NSObject {
             throw BrowserMFACeremonyError.noBrowserMFAChallenge
         }
         let requestID = authChal.browserMfaChallenge.requestID
-        BrowserMFACeremonyLog.logger.info("got_challenge request_id=\(requestID.prefix(16), privacy: .public)…")
+        logger.info("got_challenge request_id=\(requestID.prefix(16), privacy: .public)…")
 
         // ── 4. Open Safari to /web/mfa/browser/<id> ───────────────────────
         let browserMFAURL = "https://\(host)/web/mfa/browser/\(requestID)"
         // Log only the request-id prefix (as above): the full id is a bearer
         // for the MFA challenge and must not land in diagnostics reports.
-        BrowserMFACeremonyLog.logger.info("open_safari https://\(host, privacy: .public)/web/mfa/browser/\(requestID.prefix(16), privacy: .public)…")
+        logger.info("open_safari https://\(host, privacy: .public)/web/mfa/browser/\(requestID.prefix(16), privacy: .public)…")
         // We use ASWebAuthenticationSession to present Safari in-app. The
         // callback scheme "vvterm" is set but won't fire for the loopback
         // redirect — we cancel the session after the listener receives the
@@ -164,7 +175,7 @@ final class BrowserMFACeremony: NSObject {
             listener.cancel()
             throw error
         }
-        BrowserMFACeremonyLog.logger.info("got_callback webauthn id=\(webauthnResp.id.prefix(16), privacy: .public)…")
+        logger.info("got_callback webauthn id=\(webauthnResp.id.prefix(16), privacy: .public)…")
 
         // ── 6. Build ExistingMFAResponse.Browser ──────────────────────────
         var response = Proto_BrowserMFAResponse()
@@ -177,7 +188,7 @@ final class BrowserMFACeremony: NSObject {
         listener.cancel()
         self.listener = nil
 
-        BrowserMFACeremonyLog.logger.info("done ExistingMFAResponse.Browser built")
+        logger.info("done ExistingMFAResponse.Browser built")
         return response
         #else
         throw BrowserMFACeremonyError.safariFailed("Browser MFA requires Apple platform (Network.framework)")
@@ -192,6 +203,9 @@ final class BrowserMFACeremony: NSObject {
     /// is the actual response channel). We only need to know Safari opened.
     private func openSafari(url: URL) async {
         return await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // Capture the logger by value: the completion handler runs on an
+            // arbitrary queue and must not retain the ceremony through `self`.
+            let logger = self.logger
             let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "vvterm") { _, error in
                 // This fires if the user dismisses the Safari sheet, or if
                 // the web UI happens to redirect to vvterm:// (it won't for
@@ -199,16 +213,16 @@ final class BrowserMFACeremony: NSObject {
                 // it but don't resume — the continuation was already resumed
                 // on start(), and the listener is the real gate.
                 if let error {
-                    BrowserMFACeremonyLog.logger.info("safari_callback error: \(error.localizedDescription, privacy: .public)")
+                    logger.info("safari_callback error: \(error.localizedDescription, privacy: .public)")
                 } else {
-                    BrowserMFACeremonyLog.logger.info("safari_callback session ended (dismissed or redirected to vvterm://)")
+                    logger.info("safari_callback session ended (dismissed or redirected to vvterm://)")
                 }
             }
             session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = true
             webAuthSession = session
             let started = session.start()
-            BrowserMFACeremonyLog.logger.info("safari_started \(started)")
+            logger.info("safari_started \(started)")
             // Resume immediately — we only care that Safari opened. The
             // listener (already started) is the real gate.
             continuation.resume()
@@ -233,12 +247,4 @@ extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
         return window
         #endif
     }
-}
-
-// MARK: - Logging
-
-/// Shared logger for the Browser MFA ceremony. Uses VVTerm's logging convention
-/// (subsystem = bundle id, category = feature).
-enum BrowserMFACeremonyLog {
-    static let logger = Logger.forCategory("TeleportBrowserMFA")
 }

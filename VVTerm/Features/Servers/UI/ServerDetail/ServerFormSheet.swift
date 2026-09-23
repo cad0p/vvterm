@@ -976,7 +976,7 @@ struct ServerFormSheet: View {
     @ViewBuilder
     private var teleportSetupButton: some View {
         if let server = server {
-            let readiness = TeleportKeyRing.shared.readiness(for: server.id)
+            let readiness = TeleportKeyRingHost.shared.readiness(for: server.id)
             switch readiness {
             case .ready:
                 Label {
@@ -1231,8 +1231,9 @@ struct ServerFormSheet: View {
     private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
         TeleportBootstrapCoordinator(
             httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
+            keyRing: TeleportKeyRingHost.shared,
             safariPresenter: WebAuthenticationSessionPresenter.shared,
+            logging: AppTeleportLogging.shared,
             signer: SecureEnclaveSigner()
         )
     }
@@ -1242,7 +1243,8 @@ struct ServerFormSheet: View {
         TeleportRegistrationCoordinator(
             grpcClient: LiveTeleportGRPCClient(),
             browserMFACeremony: LiveBrowserMFACeremony(),
-            keyRing: TeleportKeyRing.shared,
+            keyRing: TeleportKeyRingHost.shared,
+            logging: AppTeleportLogging.shared,
             signer: SecureEnclaveSigner(),
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )
@@ -1252,7 +1254,8 @@ struct ServerFormSheet: View {
     private func makeLoginCoordinator() -> TeleportLoginCoordinator {
         TeleportLoginCoordinator(
             httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
+            keyRing: TeleportKeyRingHost.shared,
+            logging: AppTeleportLogging.shared,
             signer: SecureEnclaveSigner(),
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )

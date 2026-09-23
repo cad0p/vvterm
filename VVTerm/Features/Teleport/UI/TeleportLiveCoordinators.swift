@@ -135,16 +135,19 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
 /// a Phase-2 registration run; `disconnect()` closes it.
 final class LiveTeleportGRPCClient: TeleportGRPCClienting {
     private var connection: TeleportGRPCConnection?
-    private let logger = Logger.forCategory("teleport-grpc")
+    private let logging: any TeleportLogging
+    private let logger: Logger
 
-    init() {
+    init(logging: any TeleportLogging = AppTeleportLogging.shared) {
+        self.logging = logging
+        self.logger = logging.logger(category: "teleport-grpc")
         // Bound leaks from a previous process that never reached
         // `disconnect()` (crash / force-quit): remove leftover per-connect
         // identities before creating a new one. The sweep is a no-op after
         // the first call per process, so the repeated client construction
         // from SwiftUI state initialization is cheap and cannot delete
         // another live client's in-flight identity.
-        GRPCClientIdentity.deleteStaleIdentities()
+        GRPCClientIdentity.deleteStaleIdentities(logger: logger)
     }
 
     deinit {
@@ -185,7 +188,8 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
                 clientCertPEM: clientCertPEM,
                 privateKey: privateKey,
                 clusterName: clusterName,
-                clusterCAPEMs: clusterCAPEMs
+                clusterCAPEMs: clusterCAPEMs,
+                logger: logger
             )
         } catch {
             // Surface the concrete error (NWError/TLS) rather than letting the
@@ -281,13 +285,17 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
 /// `ValidateClientRedirect` → "unable to create MFA challenges" (gRPC code 7)
 /// — that was the live-device regression.
 final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
-    private let logger = Logger.forCategory("teleport-browsermfa")
+    private let logging: any TeleportLogging
+
+    init(logging: any TeleportLogging = AppTeleportLogging.shared) {
+        self.logging = logging
+    }
 
     func run(
         grpcClient: any TeleportGRPCClienting,
         host: String
     ) async throws -> Proto_BrowserMFAResponse {
-        let ceremony = BrowserMFACeremony()
+        let ceremony = BrowserMFACeremony(logging: logging)
         return try await ceremony.run(grpcClient: grpcClient, host: host)
     }
 }

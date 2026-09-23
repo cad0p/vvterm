@@ -104,6 +104,7 @@ struct TeleportWebAuthnRPIDTests {
         return TeleportLoginCoordinator(
             httpClient: http,
             keyRing: keyRing,
+            logging: DefaultTeleportLogging(),
             signer: signer,
             webAuthnBuilder: builder,
             keyPairGenerator: FixedTeleportSSHKeyPairGenerator(publicKey: TeleportFixtureSupport.fixedSSHPublicKey),
@@ -201,6 +202,7 @@ struct TeleportWebAuthnRPIDTests {
             grpcClient: grpc,
             browserMFACeremony: NoBrowserMFACeremony(),
             keyRing: MockTeleportKeyRing(),
+            logging: DefaultTeleportLogging(),
             signer: MockSEPKeySigner(outcome: .success),
             webAuthnBuilder: builder
         )

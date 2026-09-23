@@ -99,13 +99,13 @@ struct GRPCClientIdentity {
         return liveLabels.contains(label)
     }
 
-    func deleteKeychainItems() {
-        Self.deleteKeychainItems(label: label)
+    func deleteKeychainItems(logger: Logger) {
+        Self.deleteKeychainItems(label: label, logger: logger)
     }
 
     /// Delete the cert + key items with the given label. Safe to call when
     /// the items are absent (returns `errSecItemNotFound`).
-    static func deleteKeychainItems(label: String) {
+    static func deleteKeychainItems(label: String, logger: Logger) {
         unregisterLiveLabel(label)
         SecItemDelete([
             kSecClass as String: kSecClassCertificate,
@@ -115,7 +115,7 @@ struct GRPCClientIdentity {
             kSecClass as String: kSecClassKey,
             kSecAttrLabel as String: label,
         ] as CFDictionary)
-        GRPCTransportLog.logger.info("grpc_identity_deleted label=\(label, privacy: .public)")
+        logger.info("grpc_identity_deleted label=\(label, privacy: .public)")
     }
 
     /// Delete leftover cert/key items from a previous process that never
@@ -137,16 +137,16 @@ struct GRPCClientIdentity {
     ///
     /// - Returns: `true` when this call attempted the sweep.
     @discardableResult
-    static func deleteStaleIdentities() -> Bool {
-        sweepStaleIdentities(force: false)
+    static func deleteStaleIdentities(logger: Logger) -> Bool {
+        sweepStaleIdentities(force: false, logger: logger)
     }
 
     #if DEBUG
     /// Test-only variant that bypasses the once-per-process gate. Not
     /// compiled into release builds, so production cannot defeat the gate.
     @discardableResult
-    static func deleteStaleIdentitiesForTesting() -> Bool {
-        sweepStaleIdentities(force: true)
+    static func deleteStaleIdentitiesForTesting(logger: Logger) -> Bool {
+        sweepStaleIdentities(force: true, logger: logger)
     }
 
     /// Test seam: overrides the keychain enumeration for the next sweep.
@@ -162,7 +162,7 @@ struct GRPCClientIdentity {
     }
     #endif
 
-    private static func sweepStaleIdentities(force: Bool) -> Bool {
+    private static func sweepStaleIdentities(force: Bool, logger: Logger) -> Bool {
         registryLock.lock()
         guard force || !hasSweptStaleIdentities else {
             registryLock.unlock()
@@ -187,7 +187,7 @@ struct GRPCClientIdentity {
                    Date().timeIntervalSince(created) < staleIdentityAge {
                     continue
                 }
-                deleteKeychainItems(label: label)
+                deleteKeychainItems(label: label, logger: logger)
             }
         }
         if enumeratedEveryClass {
@@ -246,13 +246,14 @@ enum GRPCTLSOptions {
     /// only the returned handle can delete them, so this function must not
     /// throw after the identity has been built (nothing below the builder
     /// call throws).
-    typealias IdentityBuilder = (String, SecKey) throws -> GRPCClientIdentity
+    typealias IdentityBuilder = (String, SecKey, Logger) throws -> GRPCClientIdentity
 
     static func make(clientCertPEM: String,
                      privateKey: SecKey,
                      clusterName: String,
                      clusterCAPEMs: [String],
-                     identityBuilder: IdentityBuilder = { try GRPCTLSOptions.buildSecIdentity(certPEM: $0, privateKey: $1) }) throws -> (options: NWProtocolTLS.Options, identity: GRPCClientIdentity) {
+                     logger: Logger,
+                     identityBuilder: IdentityBuilder = { try GRPCTLSOptions.buildSecIdentity(certPEM: $0, privateKey: $1, logger: $2) }) throws -> (options: NWProtocolTLS.Options, identity: GRPCClientIdentity) {
         let tlsOpts = NWProtocolTLS.Options()
         let secOpts = tlsOpts.securityProtocolOptions
 
@@ -285,7 +286,7 @@ enum GRPCTLSOptions {
 
         // Client cert (mTLS) — ephemeral identity, deleted on close. This is
         // the first keychain mutation; no code after it throws.
-        let identityHandle = try identityBuilder(clientCertPEM, privateKey)
+        let identityHandle = try identityBuilder(clientCertPEM, privateKey, logger)
         sec_protocol_options_set_local_identity(secOpts, identityHandle.identity)
 
         // The cluster Host CA certs (from host_signers.tls_certs) are the only
@@ -293,19 +294,19 @@ enum GRPCTLSOptions {
         // for the encoded auth route name + teleport.cluster.local, and
         // accepted only when the negotiated ALPN is the auth route or `h2`
         // (or absent — servers without a NextProtos list).
-        GRPCTransportLog.logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
+        logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
         sec_protocol_options_set_verify_block(
             secOpts,
             TeleportTLSTrust.makeVerifyBlock(
                 anchors: certRefs,
                 serverNames: TeleportTLSTrust.authServerNames(clusterName: clusterName),
                 allowedALPNs: [alpnProto, "h2"],
-                logger: GRPCTransportLog.logger
+                logger: logger
             ),
             .global()
         )
         sec_protocol_options_set_challenge_block(secOpts, { _, complete in
-            GRPCTransportLog.logger.info("tls_challenge server requested client cert — presenting identity")
+            logger.info("tls_challenge server requested client cert — presenting identity")
             complete(identityHandle.identity)
         }, .global())
         return (tlsOpts, identityHandle)
@@ -329,7 +330,7 @@ enum GRPCTLSOptions {
     ///
     /// The returned handle owns the keychain items: `TeleportGRPCConnection`
     /// calls `deleteKeychainItems()` on close and on every failure path.
-    static func buildSecIdentity(certPEM: String, privateKey: SecKey) throws -> GRPCClientIdentity {
+    static func buildSecIdentity(certPEM: String, privateKey: SecKey, logger: Logger) throws -> GRPCClientIdentity {
         // 1. Parse cert.
         let certDER = try TeleportTLSTrust.pemToDER(pem: certPEM, label: "CERTIFICATE")
         guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
@@ -361,7 +362,7 @@ enum GRPCTLSOptions {
         let keyStatus = SecItemAdd(keyAdd as CFDictionary, nil)
         guard keyStatus == errSecSuccess || keyStatus == errSecDuplicateItem else {
             // Do not leak the cert item when the key insert fails.
-            GRPCClientIdentity.deleteKeychainItems(label: label)
+            GRPCClientIdentity.deleteKeychainItems(label: label, logger: logger)
             throw GRPCError.tls("SecItemAdd key: \(keyStatus)")
         }
 
@@ -375,13 +376,13 @@ enum GRPCTLSOptions {
         var idRef: CFTypeRef?
         let idStatus = SecItemCopyMatching(idQuery as CFDictionary, &idRef)
         guard idStatus == errSecSuccess, let identity = idRef else {
-            GRPCClientIdentity.deleteKeychainItems(label: label)
+            GRPCClientIdentity.deleteKeychainItems(label: label, logger: logger)
             throw GRPCError.tls("SecItemCopyMatching identity: \(idStatus)")
         }
 
         // 4. Wrap in sec_identity_t.
         guard let secIdentity = sec_identity_create(identity as! SecIdentity) else {
-            GRPCClientIdentity.deleteKeychainItems(label: label)
+            GRPCClientIdentity.deleteKeychainItems(label: label, logger: logger)
             throw GRPCError.tls("sec_identity_create failed")
         }
         return GRPCClientIdentity(identity: secIdentity, label: label)
@@ -399,17 +400,20 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     private let authority: String
     private let group: NIOTSEventLoopGroup
     private let identity: GRPCClientIdentity
+    private let logger: Logger
 
     private init(channel: Channel,
                  multiplexer: NIOHTTP2Handler.StreamMultiplexer,
                  authority: String,
                  group: NIOTSEventLoopGroup,
-                 identity: GRPCClientIdentity) {
+                 identity: GRPCClientIdentity,
+                 logger: Logger) {
         self.channel = channel
         self.multiplexer = multiplexer
         self.authority = authority
         self.group = group
         self.identity = identity
+        self.logger = logger
     }
 
     /// Dial the Teleport proxy gRPC endpoint with a client cert.
@@ -425,12 +429,14 @@ final class TeleportGRPCConnection: @unchecked Sendable {
                         clientCertPEM: String,
                         privateKey: SecKey,
                         clusterName: String,
-                        clusterCAPEMs: [String]) async throws -> TeleportGRPCConnection {
+                        clusterCAPEMs: [String],
+                        logger: Logger) async throws -> TeleportGRPCConnection {
         let (tlsOpts, identity) = try GRPCTLSOptions.make(
             clientCertPEM: clientCertPEM,
             privateKey: privateKey,
             clusterName: clusterName,
-            clusterCAPEMs: clusterCAPEMs
+            clusterCAPEMs: clusterCAPEMs,
+            logger: logger
         )
 
         let group = NIOTSEventLoopGroup()
@@ -440,7 +446,7 @@ final class TeleportGRPCConnection: @unchecked Sendable {
             .channelInitializer { channel in
                 // Add a state handler first so we can log the real TLS/NWError
                 // (otherwise ChannelError error 0 is opaque).
-                let stateHandler = GRPCConnectionStateHandler(host: host)
+                let stateHandler = GRPCConnectionStateHandler(host: host, logger: logger)
                 return channel.pipeline.addHandler(stateHandler).flatMap {
                     channel.configureHTTP2Pipeline(
                         mode: .client,
@@ -459,12 +465,12 @@ final class TeleportGRPCConnection: @unchecked Sendable {
             channel = try await bootstrap.connect(host: host, port: port).get()
         } catch {
             // Dial failed: remove this connection's keychain identity.
-            identity.deleteKeychainItems()
+            identity.deleteKeychainItems(logger: logger)
             try? await group.shutdownGracefully()
             throw error
         }
         guard let multiplexer = capturedMultiplexer else {
-            identity.deleteKeychainItems()
+            identity.deleteKeychainItems(logger: logger)
             try? await group.shutdownGracefully()
             throw GRPCError.transport("HTTP/2 multiplexer not captured")
         }
@@ -472,7 +478,8 @@ final class TeleportGRPCConnection: @unchecked Sendable {
                                        multiplexer: multiplexer,
                                        authority: host,
                                        group: group,
-                                       identity: identity)
+                                       identity: identity,
+                                       logger: logger)
     }
 
     /// Make a unary gRPC call.
@@ -497,7 +504,7 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     func close() async throws {
         // Delete the per-connect keychain identity even if the graceful
         // channel shutdown fails.
-        defer { identity.deleteKeychainItems() }
+        defer { identity.deleteKeychainItems(logger: logger) }
         try await channel.close().get()
         try await group.shutdownGracefully()
     }
@@ -507,7 +514,7 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     /// bounds the leak when the owning client is deallocated without
     /// `disconnect()`. Safe to call more than once.
     func deleteKeychainIdentity() {
-        identity.deleteKeychainItems()
+        identity.deleteKeychainItems(logger: logger)
     }
 }
 
@@ -518,33 +525,27 @@ final class TeleportGRPCConnection: @unchecked Sendable {
 final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = Any
     private let host: String
+    private let logger: Logger
 
-    init(host: String) {
+    init(host: String, logger: Logger) {
         self.host = host
+        self.logger = logger
     }
 
     func channelActive(context: ChannelHandlerContext) {
-        GRPCTransportLog.logger.info("conn_active channel active for \(self.host, privacy: .public)")
+        logger.info("conn_active channel active for \(self.host, privacy: .public)")
         context.fireChannelActive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        GRPCTransportLog.logger.error("conn_error \(error.localizedDescription, privacy: .public) [type: \(String(describing: type(of: error)), privacy: .public)]")
+        logger.error("conn_error \(error.localizedDescription, privacy: .public) [type: \(String(describing: type(of: error)), privacy: .public)]")
         context.fireErrorCaught(error)
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        GRPCTransportLog.logger.info("conn_inactive channel closed for \(self.host, privacy: .public)")
+        logger.info("conn_inactive channel closed for \(self.host, privacy: .public)")
         context.fireChannelInactive()
     }
-}
-
-// MARK: - Logging
-
-/// Shared logger for the gRPC transport layer. Uses VVTerm's logging convention
-/// (subsystem = bundle id, category = feature).
-enum GRPCTransportLog {
-    static let logger = Logger.forCategory("TeleportGRPC")
 }
 
 #endif // canImport(Network)

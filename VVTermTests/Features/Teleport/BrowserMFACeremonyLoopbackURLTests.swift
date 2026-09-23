@@ -81,7 +81,7 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// A real URL looks like `http://localhost:<non-zero-port>/callback?secret_key=<hex>`.
     func testCeremony_passesRealLoopbackURLToCreateAuthenticateChallenge() async {
         let client = CapturingGRPCClient()
-        let ceremony = BrowserMFACeremony()
+        let ceremony = BrowserMFACeremony(logging: DefaultTeleportLogging())
 
         // The ceremony throws noBrowserMFAChallenge because the mock returns
         // an empty challenge — but only AFTER it has started the listener and
@@ -142,7 +142,7 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// coordinator pre-fetch).
     func testCeremony_ownsCreateAuthenticateChallengeCall() async {
         let client = CapturingGRPCClient()
-        let ceremony = BrowserMFACeremony()
+        let ceremony = BrowserMFACeremony(logging: DefaultTeleportLogging())
 
         do {
             _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")

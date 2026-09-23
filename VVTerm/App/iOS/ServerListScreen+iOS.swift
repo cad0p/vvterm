@@ -599,8 +599,9 @@ struct ServerListScreen: View {
     private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
         TeleportBootstrapCoordinator(
             httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
+            keyRing: TeleportKeyRingHost.shared,
             safariPresenter: WebAuthenticationSessionPresenter.shared,
+            logging: AppTeleportLogging.shared,
             signer: SecureEnclaveSigner()
         )
     }
@@ -610,7 +611,8 @@ struct ServerListScreen: View {
         TeleportRegistrationCoordinator(
             grpcClient: LiveTeleportGRPCClient(),
             browserMFACeremony: LiveBrowserMFACeremony(),
-            keyRing: TeleportKeyRing.shared,
+            keyRing: TeleportKeyRingHost.shared,
+            logging: AppTeleportLogging.shared,
             signer: SecureEnclaveSigner(),
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )
@@ -620,7 +622,8 @@ struct ServerListScreen: View {
     private func makeLoginCoordinator() -> TeleportLoginCoordinator {
         TeleportLoginCoordinator(
             httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
+            keyRing: TeleportKeyRingHost.shared,
+            logging: AppTeleportLogging.shared,
             signer: SecureEnclaveSigner(),
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )

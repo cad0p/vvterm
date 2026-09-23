@@ -83,17 +83,20 @@ actor SSHTLSTransport {
     private var socketPair: SocketPair?
     private var pumpTask: Task<Void, Never>?
 
-    private let logger = Logger.forCategory("SSH-TLS-Transport")
-    private static let tlsLogger = Logger.forCategory("SSH-TLS-Transport")
+    private let logger: Logger
+    private nonisolated let logging: any TeleportLogging
 
     init(host: String,
          port: Int,
          clusterName: String,
-         clusterCAPEMs: [String]) {
+         clusterCAPEMs: [String],
+         logging: any TeleportLogging) {
         self.host = host
         self.port = port
         self.clusterName = clusterName
         self.clusterCAPEMs = clusterCAPEMs
+        self.logging = logging
+        self.logger = logging.logger(category: "SSH-TLS-Transport")
     }
 
     // MARK: - TLS options (static, testable)
@@ -113,7 +116,8 @@ actor SSHTLSTransport {
     static func makeTLSOptions(
         clusterName: String,
         clusterCAPEMs: [String],
-        dialHost: String
+        dialHost: String,
+        logger: Logger
     ) throws -> NWProtocolTLS.Options {
         guard !clusterName.isEmpty else {
             throw SSHError.connectionFailed("SSHTLSTransport: empty cluster name")
@@ -160,7 +164,7 @@ actor SSHTLSTransport {
                 anchors: anchors,
                 serverNames: serverNames,
                 allowedALPNs: [alpnProtocol],
-                logger: Self.tlsLogger
+                logger: logger
             ),
             .global()
         )
@@ -209,7 +213,8 @@ actor SSHTLSTransport {
         let tlsOpts = try Self.makeTLSOptions(
             clusterName: clusterName,
             clusterCAPEMs: clusterCAPEMs,
-            dialHost: host
+            dialHost: host,
+            logger: logger
         )
 
         let params = NWParameters(tls: tlsOpts)
@@ -252,7 +257,11 @@ actor SSHTLSTransport {
         // server as soon as the TLS tunnel is up.
         pumpTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            await self.runPump(connection: connection, pair: pair)
+            await self.runPump(
+                connection: connection,
+                pair: pair,
+                logger: self.logging.logger(category: "SSH-TLS-Pump")
+            )
         }
 
         // Wait for the connection to be ready (TLS handshake complete).
@@ -367,8 +376,7 @@ actor SSHTLSTransport {
     /// `nonisolated` so the blocking `read()`/`write()` on the pump FD run on
     /// the detached task's thread without hopping onto the actor (which would
     /// serialize + stall the pump).
-    nonisolated private func runPump(connection: NWConnection, pair: SocketPair) async {
-        let pumpLog = Logger.forCategory("SSH-TLS-Pump")
+    nonisolated private func runPump(connection: NWConnection, pair: SocketPair, logger pumpLog: Logger) async {
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
         await withTaskGroup(of: Void.self) { group in
             // NWConnection -> pumpFD

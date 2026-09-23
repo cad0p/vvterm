@@ -119,11 +119,12 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// The clock used for the issued-certificate validity checks.
     private let now: () -> Date
 
-    private let logger = Logger.forCategory("teleport-login")
+    private let logger: Logger
 
     init(
         httpClient: any TeleportHTTPClienting,
         keyRing: any TeleportKeyRingStoring,
+        logging: any TeleportLogging,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder(),
         keyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
@@ -131,6 +132,7 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     ) {
         self.httpClient = httpClient
         self.keyRing = keyRing
+        self.logger = logging.logger(category: "teleport-login")
         self.signer = signer
         self.webAuthnBuilder = webAuthnBuilder
         self.keyPairGenerator = keyPairGenerator

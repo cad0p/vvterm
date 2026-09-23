@@ -226,13 +226,20 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// Released exactly once per admitted connection by `respond`.
     private let activeConnections = OSAllocatedUnfairLock(initialState: 0)
 
+    /// The injected logging seam. Defaults to the package-owned default so
+    /// existing test call sites stay valid; the ceremony (the host-reachable
+    /// path) always injects the app logger.
+    private let logger: Logger
+
     init(
+        logger: Logger = DefaultTeleportLogging().logger(category: "TeleportBrowserMFA"),
         timeout: TimeInterval = 180,
         readTimeout: TimeInterval = 10,
         maxConcurrentConnections: Int = 16,
         startTimeout: TimeInterval = 15,
         listenerFactory: ((NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener)? = nil
     ) {
+        self.logger = logger
         self.timeout = timeout
         self.readTimeout = readTimeout
         self.maxConcurrentConnections = maxConcurrentConnections
@@ -293,7 +300,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 // a fresh ephemeral port.
                 v4.cancel()
                 lastIPv6Error = error
-                BrowserMFAListenerLog.logger.error(
+                logger.error(
                     "ipv6_loopback_bind_failed \(error.localizedDescription, privacy: .public) — retrying on a new port"
                 )
             }
@@ -311,7 +318,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             v4.cancel()
             throw error
         }
-        BrowserMFAListenerLog.logger.error(
+        logger.error(
             "ipv6_loopback_unavailable \(lastIPv6Error?.localizedDescription ?? "unknown", privacy: .public) — advertising localhost (IPv4 only)"
         )
         return finishStartup(v4: v4, v6: nil, port: boundPort.rawValue)
@@ -325,7 +332,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         self.port = port
         self.host = "localhost"
         self.clientCallbackURL = "http://localhost:\(port)/callback?secret_key=\(self.secretKeyHex)"
-        BrowserMFAListenerLog.logger.info(
+        logger.info(
             "ready listening on localhost:\(port, privacy: .public) v6=\(v6 != nil)"
         )
         return self.clientCallbackURL
@@ -452,7 +459,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                     return
                 }
                 guard let self else { return }
-                BrowserMFAListenerLog.logger.error("timeout no callback after \(timeout)s")
+                logger.error("timeout no callback after \(timeout)s")
                 // Route through the serialized `resume`: a callback racing
                 // the deadline must not resume the continuation twice.
                 self.resume(.failure(BrowserMFAListenerError.timedOut))
@@ -501,7 +508,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             return true
         }
         guard admitted else {
-            BrowserMFAListenerLog.logger.error(
+            logger.error(
                 "connection rejected: max \(self.maxConcurrentConnections) concurrent requests in flight"
             )
             conn.start(queue: .global(qos: .userInitiated))
@@ -533,7 +540,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 conn.cancel()
                 return
             }
-            BrowserMFAListenerLog.logger.error("request read timed out after \(self.readTimeout)s")
+            logger.error("request read timed out after \(self.readTimeout)s")
             self.respond(conn, status: 408, body: "request timed out")
         }
 
@@ -560,7 +567,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 return
             }
             if let error {
-                BrowserMFAListenerLog.logger.error("recv_error \(error.localizedDescription, privacy: .public)")
+                logger.error("recv_error \(error.localizedDescription, privacy: .public)")
                 if Self.claimConnection(claimed) {
                     self.respond(conn, status: 500, body: "recv error")
                 }
@@ -571,7 +578,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 accumulated.append(data)
             }
             guard accumulated.count <= Self.maxRequestBytes else {
-                BrowserMFAListenerLog.logger.error("request exceeds \(Self.maxRequestBytes) bytes; rejecting")
+                logger.error("request exceeds \(Self.maxRequestBytes) bytes; rejecting")
                 if Self.claimConnection(claimed) {
                     self.respond(conn, status: 413, body: "request too large")
                 }
@@ -651,7 +658,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             // `response` param carries no authenticated payload, so answer
             // 400 and keep waiting: the genuine AES-GCM callback or the
             // deadline decides the login.
-            BrowserMFAListenerLog.logger.error("callback ignored: missing ?response= param")
+            logger.error("callback ignored: missing ?response= param")
             respond(conn, status: 400, body: "missing response")
             return
         }
@@ -666,7 +673,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             }
             do {
                 let webauthnResp = try await self.decryptAndDecode(responseParam)
-                BrowserMFAListenerLog.logger.info("callback decrypted webauthn response (id=\(webauthnResp.id.prefix(16), privacy: .public)…)")
+                logger.info("callback decrypted webauthn response (id=\(webauthnResp.id.prefix(16), privacy: .public)…)")
                 // Respond to Safari with a "close this tab" page.
                 self.respond(conn, status: 200, body: self.closePageHTML)
                 self.resume(.success(webauthnResp))
@@ -676,13 +683,13 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 // process can send an arbitrary `response` value. Answer 400
                 // and keep waiting (same policy as the missing-param branch);
                 // the genuine callback or the deadline decides the login.
-                BrowserMFAListenerLog.logger.error("callback ignored: unauthenticated payload (\(reason, privacy: .private(mask: .hash)))")
+                logger.error("callback ignored: unauthenticated payload (\(reason, privacy: .private(mask: .hash)))")
                 self.respond(conn, status: 400, body: "unauthenticated response")
             } catch {
                 // The plaintext was sealed under our per-run key but could not
                 // be decoded: the server produced it, so the failure is
                 // terminal and the wait must observe it.
-                BrowserMFAListenerLog.logger.error("callback decrypt/decode failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("callback decrypt/decode failed: \(error.localizedDescription, privacy: .public)")
                 self.respond(conn, status: 500, body: "decrypt failed")
                 self.resume(.failure(error))
             }
@@ -995,12 +1002,4 @@ extension WebAuthnAssertionResponse {
         }
         return p
     }
-}
-
-// MARK: - Logging
-
-/// Shared logger for the Browser MFA listener. Uses VVTerm's logging convention
-/// (subsystem = bundle id, category = feature).
-nonisolated enum BrowserMFAListenerLog {
-    static let logger = Logger.forCategory("TeleportBrowserMFA")
 }

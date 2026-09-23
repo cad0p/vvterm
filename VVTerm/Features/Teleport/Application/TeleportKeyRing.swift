@@ -144,8 +144,6 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
 
 @MainActor
 final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
-    static let shared = TeleportKeyRing()
-
     /// The UserDefaults key for the encoded `[UUID: TeleportCredential]` map.
     private let credentialsKey = "vvterm.teleport.credentials"
 
@@ -161,10 +159,14 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
 
     @Published private(set) var credentials: [UUID: TeleportCredential] = [:]
 
-    private let logger = Logger.forCategory("teleport-keyring")
+    private let logger: Logger
 
-    init(signer: any TeleportSEPSigning = SecureEnclaveSigner()) {
+    init(
+        signer: any TeleportSEPSigning = SecureEnclaveSigner(),
+        logging: any TeleportLogging
+    ) {
         self.signer = signer
+        self.logger = logging.logger(category: "teleport-keyring")
         load()
     }
 
