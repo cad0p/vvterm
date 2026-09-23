@@ -213,7 +213,7 @@ If you obtain VVTerm via the App Store, App Store distribution terms apply to th
 Per-file licensing inside the source tree:
 
 - Fork-new files are MIT (`LICENSES/MIT.txt`) unless a file states otherwise. Each file's SPDX header is authoritative.
-- The files that port or adapt Teleport source keep `AGPL-3.0-or-later` (they are derivative works). They are enumerated with per-file derivation notes in [`docs/teleport-derived-files.txt`](docs/teleport-derived-files.txt); the license text is in [`LICENSES/AGPL-3.0-or-later.txt`](LICENSES/AGPL-3.0-or-later.txt) and the attribution is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) under "Teleport (ported portions)".
+- The files that still port or adapt Teleport source keep `AGPL-3.0-or-later` (they are derivative works). They are enumerated with per-file derivation notes in [`docs/teleport-derived-files.txt`](docs/teleport-derived-files.txt); the license text is in [`LICENSES/AGPL-3.0-or-later.txt`](LICENSES/AGPL-3.0-or-later.txt) and the attribution is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) under "Teleport (ported portions)". The package-movable Teleport client files were clean-room rewritten as independent MIT implementations of the documented public contract (Phase 1b Stage A) and are no longer part of that set.
 - AGPL-3.0 ↔ GPL-3.0 combination is permitted (GPLv3 §13), so the distributed aggregate remains GPL-3.0.
 
 `scripts/ci/check-license-headers.sh` enforces the split: an AGPL header outside the allowlist, or a stale allowlist entry, fails the required `build` CI job.
