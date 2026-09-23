@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # Mark-driven simulator screenshotter for the zmx scrollback repro.
 # Polls the bytemeter HTTP state endpoint (127.0.0.1:22233); whenever a NEW

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # SEP-WebAuthn spike — runs the Part A (software signer) and Part B (SEP
 # signer) end-to-end tests against a Teleport proxy on a macos-14 runner.

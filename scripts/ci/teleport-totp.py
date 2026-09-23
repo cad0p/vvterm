@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # teleport-totp.py — TOTP helpers for the VVTerm Teleport CI cluster
 # (issue #83, milestone M2).
