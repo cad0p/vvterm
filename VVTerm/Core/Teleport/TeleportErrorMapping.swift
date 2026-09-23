@@ -10,31 +10,27 @@
 //  `TeleportPackageError` escapes into the app's error handling: the
 //  `SSHConnectionRunner` classification (`error as? SSHError` →
 //  disconnect-before-retry) and `SSHErrorDiagnostics` rendering depend on
-//  seeing `SSHError`.
+//  seeing the host error type the package error replaced.
 //
 
 import Foundation
 
-extension SSHError {
-    /// Map a package error across the seam. `connectionFailed` keeps its
-    /// payload verbatim (byte-identical `errorDescription`); the keychain
-    /// case has no `SSHError` counterpart and renders as `.unknown` with the
-    /// same message.
-    init(teleportPackageError: TeleportPackageError) {
-        switch teleportPackageError {
-        case .connectionFailed(let message):
-            self = .connectionFailed(message)
-        case .keychain(let status):
-            self = .unknown("Keychain error: \(status)")
-        }
-    }
-}
-
 enum TeleportErrorMapping {
     /// Map any error thrown by package code into the host error space.
     /// Non-package errors pass through unchanged.
+    ///
+    /// Each case maps back to the exact host error it replaced on
+    /// `origin/main` — `SSHError.connectionFailed` for the transport, and
+    /// `KeychainError.unhandled` for the keychain — so `errorDescription`
+    /// stays byte-identical on every path (including the currently-dead
+    /// keychain path).
     static func map(_ error: Error) -> Error {
         guard let packageError = error as? TeleportPackageError else { return error }
-        return SSHError(teleportPackageError: packageError)
+        switch packageError {
+        case .connectionFailed(let message):
+            return SSHError.connectionFailed(message)
+        case .keychain(let status):
+            return KeychainError.unhandled(status)
+        }
     }
 }

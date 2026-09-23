@@ -44,9 +44,17 @@ struct TeleportErrorMappingTests {
         #expect(packageError.errorDescription == "Keychain error: \(status)")
 
         // The keychain case never crosses into `SSHSession` today; the host
-        // mapping is a safety net that keeps the message text.
+        // mapping is a safety net that maps back to the exact host error
+        // (`KeychainError.unhandled`), so the rendered description stays
+        // byte-identical instead of gaining an "Unknown error:" prefix.
         let mapped = TeleportErrorMapping.map(packageError)
-        #expect((mapped as? SSHError)?.errorDescription?.contains("Keychain error: \(status)") == true)
+        guard let keychainError = mapped as? KeychainError,
+              case .unhandled(let mappedStatus) = keychainError else {
+            Issue.record("expected KeychainError.unhandled, got \(mapped)")
+            return
+        }
+        #expect(mappedStatus == status)
+        #expect(keychainError.errorDescription == packageError.errorDescription)
     }
 
     @Test
