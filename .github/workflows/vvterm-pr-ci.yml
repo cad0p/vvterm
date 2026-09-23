@@ -381,12 +381,12 @@ jobs:
     # rebalance. gh-ruleset-main requires these exact names.
     name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
-    # Kill cap for wedged shards, not expected runtime: measured shard
-    # runtimes are 13-21m clean (2026-08-17/18); a failing run with in-step
-    # retry passes reached 32m21s on 2026-08-18 (PR #181 shard-2, 4 flaky
-    # failures) — so 35m keeps headroom over the observed worst while
-    # killing a true whole-session wedge ~10m sooner than the old 45m cap.
-    # The per-test 180s allowance (-test-timeouts-enabled YES) already
+    # Kill cap for wedged shards, not expected runtime: measured UI-shard
+    # walls were 13.6-28.9m across the five 2026-09-23 runs (13-21m clean
+    # shards; degraded attempts and in-step retries reach 27-29m) — 35m
+    # keeps headroom over the observed worst while killing a true
+    # whole-session wedge ~10m sooner than the old 45m cap. The per-test
+    # 300s allowance (-test-timeouts-enabled YES, see the Run UI tests step)
     # catches single hanging tests; this cap catches session-level wedges.
     # Raised 20→45 in ff3905b for a one-off spike; lowered 45→35 2026-08-18.
     timeout-minutes: 35
@@ -572,12 +572,24 @@ jobs:
           done
           echo "Shard test args:$ONLY_TESTING_ARGS"
 
-          # -test-timeouts-enabled + 180s execution allowance: a hanging test
+          # -test-timeouts-enabled + 300s execution allowance: a hanging test
           # is KILLED and recorded as a failure BY NAME ("Exceeded execution
           # time allowance") instead of wedging the shard until XCTest's own
           # launch/activity timeouts fire — hangs become identifiable,
-          # skippable tests instead of silent wall-clock burn. 180s = ~2x the
-          # slowest legitimate test (~91s observed on CI).
+          # skippable tests instead of silent wall-clock burn. 300s bounds a
+          # hang without killing a legitimate test: the slowest real test
+          # (testActiveTerminalPushPopPreservesListPositionAndSession) ran
+          # 185.8-245.1s across the five measured 2026-09-23 runs; the next
+          # longest is ~98s.
+          #
+          # Placement is load-bearing. A bare `-parallel-testing-enabled`
+          # consumes the FOLLOWING `-option` token as its optional YES/NO
+          # value, which silently made the timeout flags inert. Probe on
+          # Xcode 26.3: `xcodebuild test -scheme __nope__
+          # -parallel-testing-enabled -test-timeouts-enabled YES` →
+          # `error: Unknown build action 'YES'` (the timeout flag was eaten);
+          # the bare form without YES parses but drops the timeouts. Keep the
+          # timeout flags first and give both booleans explicit values.
           # Bounded retry for runner-init wedges: when 4+ shards boot simulators
           # simultaneously, the runner sometimes dies before any test executes
           # ("Failed to initialize for UI testing: Timed out waiting for AX
@@ -624,10 +636,10 @@ jobs:
               -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
               -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
               $ONLY_TESTING_ARGS \
-              -parallel-testing-enabled \
-              -test-timeouts-enabled \
-              -default-test-execution-time-allowance 180 \
-              -maximum-test-execution-time-allowance 180 \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 300 \
+              -maximum-test-execution-time-allowance 300 \
+              -parallel-testing-enabled YES \
               CODE_SIGNING_ALLOWED=NO \
               | tee "$RUNNER_TEMP/test.log"
             XC_EXIT=${PIPESTATUS[0]}
