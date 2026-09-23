@@ -127,6 +127,7 @@ struct ServerFormSheet: View {
     @ObservedObject var serverManager: ServerManager
     @ObservedObject private var storeManager = StoreManager.shared
     @EnvironmentObject private var appLockManager: AppLockManager
+    @Environment(\.teleportComposition) private var injectedTeleportComposition: TeleportComposition?
     let workspace: Workspace?
     let server: Server?
     let prefill: ServerFormPrefill?
@@ -1227,38 +1228,25 @@ struct ServerFormSheet: View {
     /// Construct the bootstrap coordinator with production dependencies.
     /// The coordinators are created fresh per sheet presentation so state
     /// doesn't leak between attempts.
+    /// The composition injected at the app root; `.shared` covers previews
+    /// and UI-test harnesses that don't inject one.
+    private var teleportComposition: TeleportComposition {
+        injectedTeleportComposition ?? TeleportComposition.shared
+    }
+
     @MainActor
     private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
-        TeleportBootstrapCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRingHost.shared,
-            safariPresenter: WebAuthenticationSessionPresenter.shared,
-            logging: AppTeleportLogging.shared,
-            signer: SecureEnclaveSigner()
-        )
+        teleportComposition.makeBootstrapCoordinator()
     }
 
     @MainActor
     private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
-        TeleportRegistrationCoordinator(
-            grpcClient: LiveTeleportGRPCClient(),
-            browserMFACeremony: LiveBrowserMFACeremony(),
-            keyRing: TeleportKeyRingHost.shared,
-            logging: AppTeleportLogging.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeRegistrationCoordinator()
     }
 
     @MainActor
     private func makeLoginCoordinator() -> TeleportLoginCoordinator {
-        TeleportLoginCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRingHost.shared,
-            logging: AppTeleportLogging.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeLoginCoordinator()
     }
 
     private func applyPrefill(_ prefill: ServerFormPrefill) {

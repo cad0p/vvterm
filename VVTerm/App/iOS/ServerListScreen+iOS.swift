@@ -18,6 +18,7 @@ struct ServerListScreen: View {
 
     @ObservedObject private var storeManager = StoreManager.shared
     @ObservedObject private var viewTabConfig = ViewTabConfigurationManager.shared
+    @Environment(\.teleportComposition) private var injectedTeleportComposition: TeleportComposition?
     @State private var showingAddServer = false
     @State private var showingAddWorkspace = false
     @State private var showingSettings = false
@@ -595,38 +596,25 @@ struct ServerListScreen: View {
         }
     }
 
+    /// The composition injected at the app root; `.shared` covers previews
+    /// and UI-test harnesses that don't inject one.
+    private var teleportComposition: TeleportComposition {
+        injectedTeleportComposition ?? TeleportComposition.shared
+    }
+
     @MainActor
     private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
-        TeleportBootstrapCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRingHost.shared,
-            safariPresenter: WebAuthenticationSessionPresenter.shared,
-            logging: AppTeleportLogging.shared,
-            signer: SecureEnclaveSigner()
-        )
+        teleportComposition.makeBootstrapCoordinator()
     }
 
     @MainActor
     private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
-        TeleportRegistrationCoordinator(
-            grpcClient: LiveTeleportGRPCClient(),
-            browserMFACeremony: LiveBrowserMFACeremony(),
-            keyRing: TeleportKeyRingHost.shared,
-            logging: AppTeleportLogging.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeRegistrationCoordinator()
     }
 
     @MainActor
     private func makeLoginCoordinator() -> TeleportLoginCoordinator {
-        TeleportLoginCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRingHost.shared,
-            logging: AppTeleportLogging.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeLoginCoordinator()
     }
 }
 
