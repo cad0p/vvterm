@@ -492,7 +492,16 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     }
 
     private func handlePostFailure(error: Error) async {
-        logger.error("POST failed: \(error.localizedDescription, privacy: .public)")
+        // A HeadlessError.http description embeds the raw response body, so
+        // log the status only — bodies can carry server-side detail (tokens,
+        // echoed request fields) that must not reach diagnostics exports.
+        let failureSummary: String
+        if case HeadlessError.http(let status, _) = error {
+            failureSummary = "HTTP \(status)"
+        } else {
+            failureSummary = error.localizedDescription
+        }
+        logger.error("POST failed: \(failureSummary, privacy: .public)")
 
         // Map the infrastructure error to the coordinator-specific enum.
         let mapped: TeleportBootstrapError

@@ -49,7 +49,7 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
 
     /// Credential id → SecKey, populated by `createKey`/`loadKey`.
     private var keys: [Data: SecKey] = [:]
-    private let queue = DispatchQueue(label: "vvterm.teleport.sep-signer")
+    private let queue = DispatchQueue(label: "vvterm.sep-webauthn.sep-signer")
 
     public init() {}
 

@@ -140,31 +140,46 @@ enum HeadlessLogin {
         var request = URLRequest(url: baseURL.appendingPathComponent("webapi/headless/login"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encodedBody(for: req)
 
+        let payload = try await send(request, over: session)
+        return try decodedResponse(from: payload)
+    }
+
+    /// Encode the request body, mapping an encoder failure onto the wire
+    /// error the callers already handle.
+    private static func encodedBody(for req: HeadlessLoginReq) throws -> Data {
         do {
-            request.httpBody = try JSONEncoder().encode(req)
+            return try JSONEncoder().encode(req)
         } catch {
             throw HeadlessError.decode(error.localizedDescription)
         }
+    }
 
-        let data: Data
-        let response: URLResponse
+    /// Perform the blocking POST and return the response payload. A non-200
+    /// status carries the response body so the caller can surface the server's
+    /// reason.
+    private static func send(_ request: URLRequest, over session: URLSession) async throws -> Data {
+        let payload: Data
+        let reply: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (payload, reply) = try await session.data(for: request)
         } catch {
             throw HeadlessError.transport(error.localizedDescription)
         }
-
-        guard let http = response as? HTTPURLResponse else {
+        guard let httpReply = reply as? HTTPURLResponse else {
             throw HeadlessError.transport("non-HTTP response")
         }
-        guard http.statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8) ?? "<binary>"
-            throw HeadlessError.http(status: http.statusCode, body: body)
+        guard httpReply.statusCode == 200 else {
+            let body = String(data: payload, encoding: .utf8) ?? "<binary>"
+            throw HeadlessError.http(status: httpReply.statusCode, body: body)
         }
+        return payload
+    }
 
+    private static func decodedResponse(from payload: Data) throws -> HeadlessLoginResponse {
         do {
-            return try JSONDecoder().decode(HeadlessLoginResponse.self, from: data)
+            return try JSONDecoder().decode(HeadlessLoginResponse.self, from: payload)
         } catch {
             throw HeadlessError.decode(error.localizedDescription)
         }

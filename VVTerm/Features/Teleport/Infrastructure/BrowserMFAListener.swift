@@ -3,7 +3,7 @@
 //  BrowserMFAListener.swift
 //  VVTerm
 //
-//  The loopback HTTP listener that receives the Browser MFA callback.
+//  The loopback HTTP endpoint that captures the Browser MFA approval redirect.
 //
 //  The existing-device registration ceremony opens Safari on the auth
 //  server's approval page. That page POSTs the signed WebAuthn assertion back
@@ -48,11 +48,11 @@ nonisolated enum BrowserMFAListenerError: Error, LocalizedError {
         case .listenerFailed(let message):
             return "listener failed: \(message)"
         case .notReady:
-            return "listener is not ready"
+            return "listener not ready"
         case .timedOut:
-            return "timed out waiting for the browser MFA callback"
+            return "timed out waiting for browser MFA callback"
         case .unauthenticatedCallback(let message):
-            return "unauthenticated callback: \(message)"
+            return "unauthenticated callback payload: \(message)"
         case .decodeFailed(let message):
             return "decode failed: \(message)"
         }
@@ -86,6 +86,20 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// How many times the IPv4 + IPv6 listener pair is retried on a fresh
     /// port before falling back to IPv4 only.
     private static let maxBindAttempts = 3
+
+    // MARK: Contract defaults
+
+    /// The default wait outlives the server's 180 s approval window, so a slow
+    /// approval is never cut off by the client.
+    static let defaultWaitTimeout: TimeInterval = 180
+    /// How long a connection may take to send its request head before it is
+    /// answered and dropped.
+    static let defaultReadTimeout: TimeInterval = 10
+    /// How long the bind pair may take to report ready before startup fails.
+    static let defaultStartTimeout: TimeInterval = 15
+    /// The admission cap: connections beyond this are answered 503 instead of
+    /// pinning sockets (a local slowloris cannot exhaust the process).
+    static let defaultMaxConcurrentConnections = 16
 
     private static let callbackPath = "/callback"
     private static let callbackPage = """
@@ -133,10 +147,10 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
 
     init(
         logger: Logger = Logger(subsystem: "Teleport", category: "TeleportBrowserMFA"),
-        timeout: TimeInterval = 180,
-        readTimeout: TimeInterval = 10,
-        startTimeout: TimeInterval = 15,
-        maxConcurrentConnections: Int = 16,
+        timeout: TimeInterval = BrowserMFAListener.defaultWaitTimeout,
+        readTimeout: TimeInterval = BrowserMFAListener.defaultReadTimeout,
+        startTimeout: TimeInterval = BrowserMFAListener.defaultStartTimeout,
+        maxConcurrentConnections: Int = BrowserMFAListener.defaultMaxConcurrentConnections,
         listenerFactory: @escaping (NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener = {
             try BrowserMFAListener.makeLoopbackListener(host: $0, port: $1)
         }
@@ -523,6 +537,11 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
 
         var proto = Proto_CredentialAssertionResponse()
         proto.type = assertion.type
+        // An authenticated-but-unparseable base64 field degrades to empty
+        // rather than throwing: the payload already passed AES-GCM, and the
+        // server re-verifies the WebAuthn signature over these fields, so an
+        // empty field cannot forge an approval. (Keeping the pre-rewrite
+        // degradation is a deliberate parity decision.)
         proto.rawID = Self.flexibleBase64(assertion.rawId) ?? Data()
         proto.id = assertion.id
 

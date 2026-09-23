@@ -38,11 +38,11 @@ nonisolated enum BrowserMFACeremonyError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noBrowserMFAChallenge:
-            return "the server did not return a BrowserMFAChallenge"
+            return "server did not return a BrowserMFAChallenge (is BrowserMFATSHRedirectURL set + does the user have a Browser WebAuthn device?)"
         case .safariFailed(let message):
-            return "Safari failed: \(message)"
+            return "Safari presentation failed: \(message)"
         case .listenerFailed(let message):
-            return "listener failed: \(message)"
+            return "loopback listener failed: \(message)"
         }
     }
 }
@@ -99,7 +99,9 @@ final class BrowserMFACeremony: NSObject {
                 browserMFATSHRedirectURL: callbackURL
             )
         } catch {
-            logger.error("browser MFA CreateAuthenticateChallenge failed: \(String(describing: error), privacy: .public)")
+            // The server's gRPC message can echo the redirect URL, which
+            // carries the per-run secret_key — log the error's shape only.
+            logger.error("browser MFA CreateAuthenticateChallenge failed: \(String(describing: type(of: error)), privacy: .public)")
             throw error
         }
 

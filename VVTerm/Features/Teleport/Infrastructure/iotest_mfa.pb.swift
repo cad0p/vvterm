@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+//
 // DO NOT EDIT.
 // swift-format-ignore-file
 // swiftlint:disable all
@@ -8,7 +10,6 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
-// SPDX-License-Identifier: MIT
 //
 //  iotest_mfa.proto
 //  VVTerm
@@ -350,11 +351,15 @@ public nonisolated struct Proto_AddMFADeviceSyncRequest: Sendable {
   fileprivate var _contextUser: Proto_ContextUser? = nil
 }
 
-/// AddMFADeviceSyncResponse is returned on a successful registration.
+/// AddMFADeviceSyncResponse is returned on a successful registration. The
+/// server's device field (1) is a serialized MFADevice; this client only
+/// needs the call to succeed, so it decodes the field opaquely.
 public nonisolated struct Proto_AddMFADeviceSyncResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
+
+  public var device: Data = Data()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -385,6 +390,8 @@ public nonisolated struct Proto_MFAAuthenticateChallenge: Sendable {
   public var hasWebauthnChallenge: Bool {self._webauthnChallenge != nil}
   /// Clears the value of `webauthnChallenge`. Subsequent reads from it will return its default value.
   public mutating func clearWebauthnChallenge() {self._webauthnChallenge = nil}
+
+  public var mfaRequired: Int32 = 0
 
   public var browserMfaChallenge: Proto_BrowserMFAChallenge {
     get {_browserMfaChallenge ?? Proto_BrowserMFAChallenge()}
@@ -570,6 +577,8 @@ public nonisolated struct Proto_CredentialDescriptor: Sendable {
   public var type: String = String()
 
   public var id: Data = Data()
+
+  public var transports: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1099,18 +1108,29 @@ nonisolated extension Proto_AddMFADeviceSyncRequest: SwiftProtobuf.Message, Swif
 
 nonisolated extension Proto_AddMFADeviceSyncResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}device\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    // Load everything into unknown fields
-    while try decoder.nextFieldNumber() != nil {}
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.device) }()
+      default: break
+      }
+    }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.device.isEmpty {
+      try visitor.visitSingularBytesField(value: self.device, fieldNumber: 1)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Proto_AddMFADeviceSyncResponse, rhs: Proto_AddMFADeviceSyncResponse) -> Bool {
+    if lhs.device != rhs.device {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1118,7 +1138,7 @@ nonisolated extension Proto_AddMFADeviceSyncResponse: SwiftProtobuf.Message, Swi
 
 nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateChallenge"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}totp\0\u{3}webauthn_challenge\0\u{4}\u{3}browser_mfa_challenge\0\u{c}\u{1}\u{1}")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}totp\0\u{3}webauthn_challenge\0\u{3}mfa_required\0\u{4}\u{2}browser_mfa_challenge\0\u{c}\u{1}\u{1}")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1128,6 +1148,7 @@ nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, Swi
       switch fieldNumber {
       case 2: try { try decoder.decodeSingularMessageField(value: &self._totp) }()
       case 3: try { try decoder.decodeSingularMessageField(value: &self._webauthnChallenge) }()
+      case 4: try { try decoder.decodeSingularInt32Field(value: &self.mfaRequired) }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._browserMfaChallenge) }()
       default: break
       }
@@ -1145,6 +1166,9 @@ nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, Swi
     try { if let v = self._webauthnChallenge {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     } }()
+    if self.mfaRequired != 0 {
+      try visitor.visitSingularInt32Field(value: self.mfaRequired, fieldNumber: 4)
+    }
     try { if let v = self._browserMfaChallenge {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     } }()
@@ -1154,6 +1178,7 @@ nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, Swi
   public static func ==(lhs: Proto_MFAAuthenticateChallenge, rhs: Proto_MFAAuthenticateChallenge) -> Bool {
     if lhs._totp != rhs._totp {return false}
     if lhs._webauthnChallenge != rhs._webauthnChallenge {return false}
+    if lhs.mfaRequired != rhs.mfaRequired {return false}
     if lhs._browserMfaChallenge != rhs._browserMfaChallenge {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -1456,7 +1481,7 @@ nonisolated extension Proto_TOTPResponse: SwiftProtobuf.Message, SwiftProtobuf._
 
 nonisolated extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".CredentialDescriptor"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}id\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}id\0\u{1}transports\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1466,6 +1491,7 @@ nonisolated extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftPr
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
       case 2: try { try decoder.decodeSingularBytesField(value: &self.id) }()
+      case 3: try { try decoder.decodeRepeatedStringField(value: &self.transports) }()
       default: break
       }
     }
@@ -1478,12 +1504,16 @@ nonisolated extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftPr
     if !self.id.isEmpty {
       try visitor.visitSingularBytesField(value: self.id, fieldNumber: 2)
     }
+    if !self.transports.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.transports, fieldNumber: 3)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Proto_CredentialDescriptor, rhs: Proto_CredentialDescriptor) -> Bool {
     if lhs.type != rhs.type {return false}
     if lhs.id != rhs.id {return false}
+    if lhs.transports != rhs.transports {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

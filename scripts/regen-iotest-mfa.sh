@@ -22,8 +22,11 @@
 #      already emits the modifiers — the normalization is idempotent and
 #      keeps an older generator from silently dropping them;
 #   3. verifies the MIT SPDX header (copied from the .proto's leading
-#      comments) and the expected declaration counts, so a regeneration that
-#      changes the schema shape fails loudly instead of drifting silently.
+#      comments), moves it to line 1 (protoc-gen-swift emits its own "DO NOT
+#      EDIT" preamble first, so the copied header would otherwise sit at line
+#      11 where leading-line license scanners miss it), and asserts the
+#      expected declaration counts, so a regeneration that changes the schema
+#      shape fails loudly instead of drifting silently.
 #
 # Requires: protoc + protoc-gen-swift on PATH (brew install protobuf
 # swift-protobuf).
@@ -50,12 +53,13 @@ fi
 
 protoc_version="$(protoc --version)"
 plugin_version="$(protoc-gen-swift --version)"
+# Exact matches, not prefixes: "libprotoc 36.2*" would also accept 36.20.
 case "$protoc_version" in
-  "libprotoc 36.2"*) ;;
+  "libprotoc 36.2") ;;
   *) echo "ERROR: protoc 36.2 required, found: $protoc_version" >&2; exit 1 ;;
 esac
 case "$plugin_version" in
-  "protoc-gen-swift 1.38.1"*) ;;
+  "protoc-gen-swift 1.38.1") ;;
   *) echo "ERROR: protoc-gen-swift 1.38.1 required, found: $plugin_version" >&2; exit 1 ;;
 esac
 
@@ -74,12 +78,30 @@ perl -0pi -e '
 ' "$PB"
 
 # The generator copies the .proto's leading comments into the Swift file, so
-# the MIT SPDX header rides along. Assert it, plus the schema shape, so a
-# schema change or a generator swap cannot pass silently.
+# the MIT SPDX header rides along — but after the generator's own "DO NOT
+# EDIT" preamble. Move it to line 1 so leading-line license tooling sees it.
 grep -q '^// SPDX-License-Identifier: MIT$' "$PB" || {
   echo "ERROR: $PB is missing the MIT SPDX header" >&2
   exit 1
 }
+perl -0pi -e '
+  s{^// SPDX-License-Identifier: MIT\n}{}m;
+  s{^}{// SPDX-License-Identifier: MIT\n//\n};
+' "$PB"
+head -1 "$PB" | grep -q '^// SPDX-License-Identifier: MIT$' || {
+  echo "ERROR: $PB SPDX header is not on line 1" >&2
+  exit 1
+}
+
+# Assert the schema shape, so a schema change or a generator swap cannot pass
+# silently. protoc-gen-swift 1.38.1 emits the SwiftProtobuf conformances inline
+# on the type declarations (no `extension Proto_*` blocks), which is why the
+# nonisolated normalization above only needs to cover the declarations.
+extensions="$(grep -c '^extension Proto_' "$PB" || true)"
+if [ "$extensions" -ne 0 ]; then
+  echo "ERROR: unexpected generated shape: $extensions `extension Proto_*` blocks (want 0); the nonisolated normalization does not cover them" >&2
+  exit 1
+fi
 structs="$(grep -c '^public nonisolated struct Proto_' "$PB")"
 enums="$(grep -c '^public nonisolated enum Proto_' "$PB")"
 package_consts="$(grep -c '^fileprivate nonisolated let _protobuf_package' "$PB")"

@@ -97,8 +97,12 @@ message AddMFADeviceSyncRequest {
   ContextUser context_user = 5;
 }
 
-// AddMFADeviceSyncResponse is returned on a successful registration.
-message AddMFADeviceSyncResponse {}
+// AddMFADeviceSyncResponse is returned on a successful registration. The
+// server's device field (1) is a serialized MFADevice; this client only
+// needs the call to succeed, so it decodes the field opaquely.
+message AddMFADeviceSyncResponse {
+  bytes device = 1;
+}
 
 // MARK: - Challenge responses
 
@@ -108,6 +112,7 @@ message MFAAuthenticateChallenge {
   reserved 1;
   TOTPChallenge totp = 2;
   CredentialAssertion webauthn_challenge = 3;
+  int32 mfa_required = 4;
   BrowserMFAChallenge browser_mfa_challenge = 6;
 }
 
@@ -159,6 +164,7 @@ message TOTPResponse {
 message CredentialDescriptor {
   string type = 1;
   bytes id = 2;
+  repeated string transports = 3;
 }
 
 // PublicKeyCredentialRequestOptions is the assertion challenge the

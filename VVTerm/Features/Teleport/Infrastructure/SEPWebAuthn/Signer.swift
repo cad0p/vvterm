@@ -49,7 +49,7 @@ public enum SignerError: Error, LocalizedError, CustomStringConvertible {
         case .keyCreationFailed(let message):
             return "key creation failed: \(message)"
         case .keyNotFound:
-            return "key not found"
+            return "credential not found"
         case .signingFailed(let message):
             return "signing failed: \(message)"
         case .invalidPublicKey(let message):
