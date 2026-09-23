@@ -45,7 +45,7 @@ Documentation-only changes can skip this.
 
 - `VVTerm PR CI` (`.github/workflows/vvterm-pr-ci.yml`): build → unit-tests + UI shards. Wall-clock target ≤ 20m; check per-shard runtimes with `gh run view <id> --json jobs`.
 - `VVTerm PR OTA` (`.github/workflows/vvterm-pr-ota.yml`): installable build for device smoke.
-- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — do not retry them away.
+- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — do not retry them away. Exception: pre-product runner state (unattached `UIScene`, zero delivered input — Case 2a, #225) is host state, not a test hang; the shard loop retries it up to twice before failing.
 
 ## 5. Report in the PR
 
