@@ -5,9 +5,9 @@ Secure-Enclave-backed EC-P256 key can register as a Teleport passwordless MFA
 device and log in via `/webapi/mfa/login/begin`+`/finish`. Runs entirely on a
 GitHub Actions `macos-14` runner — **no local Mac or iOS device required**.
 
-If this passes, Option 5 in
-[`2026-07-20-sep-key-bootstrap-not-asauthorization.md`](../../../../personal/github/cad0p/Goldmine/open-source/github/vvterm/decisions/2026-07-20-sep-key-bootstrap-not-asauthorization.md)
-is technically de-risked and the implementation session (1.6) can proceed.
+If this passes, Option 5 (a Secure Enclave P-256 key for Teleport passwordless
+MFA instead of the `ASAuthorization`/passkey flow) is technically de-risked and
+the implementation session (1.6) can proceed.
 
 ## What this proves
 
@@ -65,15 +65,22 @@ swift test                                 # fixture byte-comparison
   --signer software
 ```
 
-The fixture tests require the Go fixtures to be present. Regenerate them with:
+The fixture tests compare Swift output against the committed Go fixtures in
+`fixtures/expected/`. That directory is a **frozen vector**: the Go generator
+mints a fresh P-256 keypair and a fresh signature on every run, so the
+committed files are one matched set (public key, signature, attestation
+object) — not a reproducible derivation. Regenerating produces a new matched
+set, and all 8 files must be committed together. An absent fixture is a hard
+test failure, never a skip: the byte comparison is the acceptance oracle for
+wire-format-affecting refactors.
+
+Regenerate the fixtures with (the generator is self-contained — it inlines the
+one Teleport function it needs and does not read a Teleport checkout):
 
 ```bash
 cd spikes/sep-webauthn
-TELEPORT_SRC=/path/to/teleport ./fixtures/regenerate.sh
+./fixtures/regenerate.sh
 ```
-
-(`TELEPORT_SRC` defaults to `~/open-source/github/cad0p/teleport`, pinned
-`v18.9.1`.)
 
 ## Running in CI
 

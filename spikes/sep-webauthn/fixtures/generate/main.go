@@ -7,10 +7,12 @@
 //  their output against these fixtures to catch transcription errors in the
 //  CBOR / attestation / clientDataJSON building.
 //
-//  The fixtures use FIXED inputs (challenge, origin, rpID, credential ID,
-//  public key) so the output is deterministic. The signature is produced by
-//  a fixed P-256 private key (not the SEP — pure software, for portability),
-//  so even the signature is reproducible.
+//  The fixtures use FIXED inputs (challenge, origin, rpID, credential ID)
+//  but mint a FRESH P-256 keypair + signature on every run, so the output is
+//  NOT reproducible. The committed set under fixtures/expected/ is a frozen
+//  matched vector (public key, signature, attestation object) from one run;
+//  regenerating produces a new matched set that must be committed together.
+//  The signature is pure software P-256 (not the SEP), for portability.
 
 package main
 
@@ -52,8 +54,11 @@ func run() error {
 		return err
 	}
 
-	// Generate a FIXED P-256 keypair for deterministic signatures.
-	// In production we'd use the SEP, but for fixtures we need reproducibility.
+	// Generate a fresh P-256 keypair. The key is NOT fixed: every run mints a
+	// new key + signature, so the committed fixtures are a frozen vector, not
+	// a reproducible derivation. The committed pub_key_raw.bin /
+	// signature_create.der / attestation_object_create.cbor must therefore be
+	// regenerated and committed together.
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("generate key: %w", err)
