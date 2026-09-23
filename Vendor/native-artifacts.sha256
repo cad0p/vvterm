@@ -1,0 +1,9 @@
+951e4b6943887366715f1f2dd0f857c503550f570191ee2f59331e866a5a16bc  Vendor/libssh2/macos/lib/libssh2.a
+0d743e3205309d7059e082687f410eaf111afc4edb1669379551fa605f269044  Vendor/libssh2/macos/lib/libssl.a
+4f757500656a9cd26c77379b08241b3a8b1634b6c35ddb1f3881791308520935  Vendor/libssh2/macos/lib/libcrypto.a
+dc93d33fc78fc3df9bbf6f80f7ec8571bb357cc0c9884520f4602dcfd66609fd  Vendor/libssh2/ios/lib/libssh2.a
+573178abf40bd2c7392e23741c13ba7f5ce5b224fb01d114154ce33843356180  Vendor/libssh2/ios/lib/libssl.a
+ceb09ac721b77bf7f34b946add512d17b1925d10003a546fd14c34dbcbf5062d  Vendor/libssh2/ios/lib/libcrypto.a
+7466c51a0c11f3cdb7cdf116584313e606de00744efa16add516a1d36177eda6  Vendor/libssh2/ios-simulator/lib/libssh2.a
+d9550f96a3587283d3d2abdf188bf3f5e281ebfa66a24c0e85cdecf4973fcd9d  Vendor/libssh2/ios-simulator/lib/libssl.a
+f59a367c3d1d9e1903930390637cfc4bafa13965a83a45251ca0efb376e58382  Vendor/libssh2/ios-simulator/lib/libcrypto.a
