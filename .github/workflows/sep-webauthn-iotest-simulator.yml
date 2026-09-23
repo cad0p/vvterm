@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # SEP-WebAuthn IoTest — iOS Simulator smoke test for the 1.6a WKWebView
 # scaffolding. Boots a simulator, builds + installs + launches the iotest

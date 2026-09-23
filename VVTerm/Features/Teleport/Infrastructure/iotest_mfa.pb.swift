@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
 // DO NOT EDIT.
 // swift-format-ignore-file
 // swiftlint:disable all
@@ -18,7 +20,8 @@
 // the synthesized `==`/`hash(into:)`) nonisolated so `Sendable` is satisfied.
 // The file is generated but committed (not regenerated in CI), so this hand-
 // edit is acceptable; if `protoc` is rerun, reapply `nonisolated` to each
-// `extension Proto_*: SwiftProtobuf.Message, ...` declaration.
+// `extension Proto_*: SwiftProtobuf.Message, ...` declaration. Also reapply the
+// SPDX header at the top of this file (protoc does not emit it).
 
 /// Minimal standalone proto for the session 1.10/1.11 spike.
 /// Defines ONLY the messages needed for the gRPC calls:

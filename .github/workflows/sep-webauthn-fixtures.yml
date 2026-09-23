@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # SEP-WebAuthn fixture tests — runs `swift test` on the SEPWebAuthn package
 # WITHOUT an invite token. This is the byte-comparison regression guard for

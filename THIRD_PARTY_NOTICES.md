@@ -281,3 +281,45 @@ License: Apache License 2.0
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+## Teleport (ported portions)
+
+Source: https://github.com/gravitational/teleport
+Pinned version: v18.9.1
+Copyright: Gravitational, Inc. and contributors
+License: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)
+
+Portions of this repository are Swift/Go/Python ports or adaptations of
+Teleport source. AGPL-3.0 copyleft attaches to those derivative works, so they
+keep their `AGPL-3.0-or-later` SPDX headers and are excluded from the
+repository's MIT sweep. The full license text is in
+[`LICENSES/AGPL-3.0-or-later.txt`](LICENSES/AGPL-3.0-or-later.txt) (verbatim
+copy of the Teleport v18.9.1 `LICENSE`).
+
+The derived paths are enumerated in
+[`docs/teleport-derived-files.txt`](docs/teleport-derived-files.txt), which is
+also the allowlist enforced by `scripts/ci/check-license-headers.sh`:
+
+- `VVTerm/Features/Teleport/Infrastructure/HeadlessID.swift`
+- `VVTerm/Features/Teleport/Infrastructure/HeadlessLogin.swift`
+- `VVTerm/Features/Teleport/Infrastructure/BrowserMFAListener.swift`
+- `VVTerm/Features/Teleport/Infrastructure/BrowserMFACeremony.swift`
+- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Attestation.swift`
+- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Signer.swift`
+- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/WebAuthn.swift`
+- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/SecureEnclaveSigner.swift`
+- `VVTerm/Features/Teleport/UI/TeleportLiveCoordinators.swift`
+- `scripts/ci/teleport-webauthn.py`
+- `spikes/sep-webauthn/Sources/SEPWebAuthn/Attestation.swift`
+- `spikes/sep-webauthn/Sources/SEPWebAuthn/Signer.swift`
+- `spikes/sep-webauthn/Sources/SEPWebAuthn/WebAuthn.swift`
+- `spikes/sep-webauthn/Sources/SEPWebAuthn/SecureEnclaveSigner.swift`
+- `spikes/sep-webauthn/fixtures/generate/main.go`
+
+Per-file derivation notes (the Teleport source each file ports or mirrors) are
+recorded next to each entry in the allowlist.
+
+Aggregate licensing: the repository as distributed stays GPL-3.0 (`LICENSE`);
+AGPL-3.0 and GPL-3.0 combination is permitted by GPLv3 section 13. Fork-new
+files are MIT ([`LICENSES/MIT.txt`](LICENSES/MIT.txt)) unless a file states
+otherwise. See the `README.md` License section.

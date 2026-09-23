@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # simulator-smoke.sh — boot an iOS Simulator, build + install + launch the
 # iotest app, capture the unified log, and assert the expected probe markers

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # Provision the zmx side of the scrollback-reload repro rig. Runs on the
 # xcode-27 macOS runner ONLY (never on the dev box — the dev box's pi

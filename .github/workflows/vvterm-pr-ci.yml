@@ -141,6 +141,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check license headers
+        # Phase 0c gate: fails if an AGPL SPDX header appears outside
+        # docs/teleport-derived-files.txt, or if a listed file loses its AGPL
+        # header. First step of the required build job so a license violation
+        # fails before compilation; ~1s, no extra job or macOS slot.
+        run: ./scripts/ci/check-license-headers.sh
+
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
         uses: ./.github/actions/prepare-xcode-build
         with:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # teleport-server.sh — boot a REAL Teleport cluster for VVTerm integration
 # tests (issue #83, milestone M1).

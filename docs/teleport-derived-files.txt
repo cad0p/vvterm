@@ -1,0 +1,37 @@
+# Teleport-derived files — AGPL-3.0-or-later allowlist.
+#
+# Rule: every tracked file in this repository that carries an
+# "AGPL-3.0-or-later" SPDX license identifier must be listed below, one path
+# per line, as "<path>\t<reason>". Everything else in the fork is MIT unless a
+# file states otherwise. The AGPL marker is allowed only on these paths
+# because each one is a derivative work of Teleport (Gravitational, Inc. and
+# contributors, https://github.com/gravitational/teleport), whose AGPL-3.0
+# copyleft attaches to the ported expression.
+#
+# Enforced by scripts/ci/check-license-headers.sh (first step of the required
+# build job in .github/workflows/vvterm-pr-ci.yml). Adding an AGPL header
+# anywhere else fails CI; removing the header from a path listed here (stale
+# entry) also fails CI.
+#
+# See THIRD_PARTY_NOTICES.md ("Teleport (ported portions)"),
+# LICENSES/AGPL-3.0-or-later.txt, and the Phase 0c plan.
+#
+# Note: the literal SPDX marker must NOT appear in this header (checked by the
+# gate) so this file can never be mistaken for a documented AGPL source file.
+VVTerm/Features/Teleport/Infrastructure/HeadlessID.swift	Port of Teleport services.NewHeadlessAuthenticationID (lib/services/headlessauthn.go)
+VVTerm/Features/Teleport/Infrastructure/HeadlessLogin.swift	Ports Teleport lib/client/weblogin.go (HeadlessLoginReq) + clt.go (CLILoginResponse)
+VVTerm/Features/Teleport/Infrastructure/BrowserMFAListener.swift	Mirrors Teleport lib/client/sso/redirector.go (NewRedirector + server + callback + WaitForResponse)
+VVTerm/Features/Teleport/Infrastructure/BrowserMFACeremony.swift	Mirrors Teleport lib/client/sso/ceremony.go MFACeremony.Run
+VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Attestation.swift	Ports makeAttestationData + collectedClientData from Teleport lib/auth/touchid/api.go
+VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Signer.swift	Ports the WebAuthnSigner abstraction from Teleport lib/auth/touchid/api.go
+VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/WebAuthn.swift	Ports Register + Login from Teleport lib/auth/touchid/api.go
+VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/SecureEnclaveSigner.swift	Adapted from the spike source; mirrors Teleport register.m
+VVTerm/Features/Teleport/Infrastructure/iotest_mfa.proto	Proto IDL reproduces Teleport mfa/v1/mfa.proto + legacy/types/webauthn/webauthn.proto + authservice.proto messages (field numbers match v18.9.1)
+VVTerm/Features/Teleport/Infrastructure/iotest_mfa.pb.swift	Generated from iotest_mfa.proto (hand-modified nonisolated patch); derivative of the same Teleport proto IDL
+VVTerm/Features/Teleport/UI/TeleportLiveCoordinators.swift	Wires the concrete Infrastructure types ported from the spike
+scripts/ci/teleport-webauthn.py	Port of Teleport services.NewHeadlessAuthenticationID (matched to Teleport v16)
+spikes/sep-webauthn/Sources/SEPWebAuthn/Attestation.swift	Source of the app-side Attestation port (Teleport lib/auth/touchid/api.go)
+spikes/sep-webauthn/Sources/SEPWebAuthn/Signer.swift	Source of the app-side Signer port (Teleport lib/auth/touchid/api.go)
+spikes/sep-webauthn/Sources/SEPWebAuthn/WebAuthn.swift	Source of the app-side WebAuthn port (Teleport lib/auth/touchid/api.go)
+spikes/sep-webauthn/Sources/SEPWebAuthn/SecureEnclaveSigner.swift	Mirrors Teleport register.m; source of the app-side port
+spikes/sep-webauthn/fixtures/generate/main.go	ecdsaPublicKeyFromRaw inlined from Teleport lib/darwin.ECDSAPublicKeyFromRaw (v18.9.1)

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # Teleport E2E — real Teleport server + real SSH stack integration tests
 # (issue #83: milestone M1 = SSH path, M2 = TOTP server capability).
