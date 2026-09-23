@@ -18,8 +18,6 @@
 #
 # Note: the literal SPDX marker must NOT appear in this header (checked by the
 # gate) so this file can never be mistaken for a documented AGPL source file.
-VVTerm/Features/Teleport/Infrastructure/BrowserMFAListener.swift	Mirrors Teleport lib/client/sso/redirector.go (NewRedirector + server + callback + WaitForResponse)
-VVTerm/Features/Teleport/Infrastructure/BrowserMFACeremony.swift	Mirrors Teleport lib/client/sso/ceremony.go MFACeremony.Run
 VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Attestation.swift	Ports makeAttestationData + collectedClientData from Teleport lib/auth/touchid/api.go
 VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Signer.swift	Ports the WebAuthnSigner abstraction from Teleport lib/auth/touchid/api.go
 VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/WebAuthn.swift	Ports Register + Login from Teleport lib/auth/touchid/api.go

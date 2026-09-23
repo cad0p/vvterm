@@ -1,1005 +1,839 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //
 //  BrowserMFAListener.swift
 //  VVTerm
 //
-//  The loopback HTTP listener that receives the Browser MFA callback from
-//  Safari.
+//  The loopback HTTP listener that receives the Browser MFA callback.
 //
-//  Teleport's Browser MFA flow (lib/client/sso/redirector.go) requires the
-//  client to pass a `BrowserMFATSHRedirectURL` that validates to a loopback
-//  http(s) URL (lib/client/sso/redirector.go:ValidateClientRedirect). The
-//  server encrypts the WebAuthn assertion response with an AES-256-GCM key
-//  the client generated (lib/auth/internal/browsermfa/browser_mfa.go:
-//  EncryptBrowserMFAResponse), embeds the ciphertext in the redirect URL's
-//  `?response=` query param, and the Browser MFA SPA does
-//  window.location.replace(tshRedirectUrl). On iOS, Safari navigating to
-//  http://127.0.0.1:<port>/callback?... routes the request to an in-process
-//  NWListener — ASWebAuthenticationSession cannot intercept an http://
-//  loopback redirect (it only fires for custom schemes or iOS-17.4+ HTTPS
-//  associated-domain callbacks).
+//  The existing-device registration ceremony opens Safari on the auth
+//  server's approval page. That page POSTs the signed WebAuthn assertion back
+//  to a loopback URL the client chose before the ceremony started, so the
+//  listener must be up (and its port known) before `CreateAuthenticateChallenge`
+//  is called. The URL is advertised as `http://localhost:<port>/callback`:
+//  a literal loopback IP triggers Safari's "Not Secure Connection Warning",
+//  while `localhost` resolves to either family, so both `127.0.0.1` and `::1`
+//  are bound when the OS lets them share the port.
 //
-//  This class mirrors lib/client/sso/redirector.go (NewRedirector +
-//  startServer + callback + WaitForResponse):
-//    1. Generate an AES-256-GCM key (32 random bytes), hex-encode for the URL.
-//    2. Start NWListener on 127.0.0.1, port 0 (OS-assigned).
-//    3. Expose clientCallbackURL = "http://localhost:<port>/callback?secret_key=<hex>".
-//       (Always `localhost`, never a literal loopback IP: Safari's Not Secure
-//       Connection Warning (iOS 18.2+) flags `http://127.0.0.1:…` but not
-//       `http://localhost:…`. If the ::1 companion bind loses its port to
-//       another listener, the pair is retried on a fresh port; the URL still
-//       advertises `localhost` and the browser falls back to 127.0.0.1.)
-//    4. On GET/POST to /callback, read `response` query param, decrypt with
-//       the key, decode CLILoginResponse JSON, extract
-//       BrowserMFAWebauthnResponse (a CredentialAssertionResponse).
-//    5. Respond to Safari with a minimal "close this tab" HTML page.
-//    6. Resolve the continuation with the decoded response (or an error).
+//  The callback is not trusted just because it arrived on the loopback port —
+//  any local process can connect. The server seals the assertion with a
+//  per-run AES-256-GCM key whose raw bytes are the hex string in the URL
+//  query (`secret_key`), so the GCM tag is the authentication: a callback
+//  that does not open under the key is answered 400 and does not resolve the
+//  login. Only a payload that authenticates and then fails to decode is
+//  terminal.
 //
-//  The encrypted envelope is a JSON object {"ciphertext": <base64>,
-//  "nonce": <base64>} (Go's json.Marshal of []byte = base64). The AES-GCM
-//  key is the raw 32 bytes (NOT hex-decoded for crypto — hex is only the URL
-//  transport). See lib/secret/secret.go.
-//
-//  The decrypted plaintext is Go encoding/json output of CLILoginResponse
-//  (lib/auth/authclient/clt.go:1432) — NOT proto JSON. The inner
-//  BrowserMFAWebauthnResponse is a wantypes.CredentialAssertionResponse
-//  (lib/auth/webauthntypes/webauthn.go:112), a plain Go struct with json
-//  tags. Its binary fields are protocol.URLEncodedBase64
-//  (go-webauthn/webauthn/protocol/base64.go), which marshals as
-//  base64.RawURLEncoding (URL-safe, NO padding). We therefore decode with
-//  plain Codable structs + a custom base64url-no-padding Data decoder, then
-//  map into the proto types the rest of the spike expects.
+//  The listener never logs the secret key, the full callback URL, or the
+//  decrypted payload.
 //
 
 import Foundation
-import os.log
-import os
 import CryptoKit
 import Network
+import os.log
+
+#if canImport(Network)
 
 // MARK: - Errors
 
+/// Errors surfaced by `BrowserMFAListener`.
 nonisolated enum BrowserMFAListenerError: Error, LocalizedError {
     case listenerFailed(String)
     case notReady
     case timedOut
-    /// The callback payload did not authenticate: anything on the loopback
-    /// port can send an arbitrary `response` value, so a request that fails
-    /// envelope parsing, base64/nonce decoding, the short-ciphertext check,
-    /// or the AES-256-GCM tag check carries no proof it came from the server.
-    /// Such requests must not terminally resolve the login.
     case unauthenticatedCallback(String)
     case decodeFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .listenerFailed(let s): return "listener failed: \(s)"
-        case .notReady: return "listener not ready"
-        case .timedOut: return "timed out waiting for browser MFA callback"
-        case .unauthenticatedCallback(let s): return "unauthenticated callback payload: \(s)"
-        case .decodeFailed(let s): return "decode failed: \(s)"
+        case .listenerFailed(let message):
+            return "listener failed: \(message)"
+        case .notReady:
+            return "listener is not ready"
+        case .timedOut:
+            return "timed out waiting for the browser MFA callback"
+        case .unauthenticatedCallback(let message):
+            return "unauthenticated callback: \(message)"
+        case .decodeFailed(let message):
+            return "decode failed: \(message)"
         }
     }
-}
-
-// MARK: - The sealed envelope (matches lib/secret/secret.go sealedData)
-
-/// Go's json.Marshal of `[]byte` produces a base64 STRING, so both fields are
-/// base64-encoded strings in the JSON (not base64url, not raw bytes).
-private nonisolated struct SealedEnvelope: Decodable {
-    let ciphertext: String  // base64
-    let nonce: String       // base64
 }
 
 // MARK: - Listener
 
-/// A loopback HTTP listener for the Browser MFA callback.
+/// The Browser MFA loopback callback listener.
 ///
-/// Explicitly `nonisolated`: the app target defaults to MainActor
-/// isolation, which would otherwise make every member main-actor and route
-/// `waitForResponse()` (and its deadline) through the main run loop. The
-/// NWListener runs on its own queue and the callbacks (stateUpdateHandler,
-/// newConnectionHandler, connection.receive) fire on background queues, so
-/// the listener and its state are thread-safe independently of the main
-/// actor (`resumeLock` + `@unchecked Sendable`). The ceremony (which is
-/// @MainActor) creates it and awaits it via async functions; the only
-/// shared mutable state is the continuation, which is `Sendable`
-/// (CheckedContinuation is Sendable when the return type is Sendable —
-/// Proto_CredentialAssertionResponse is a struct of Data/String, hence
-/// Sendable).
+/// `nonisolated` + `@unchecked Sendable`: every piece of mutable state is
+/// guarded by `stateLock`, and the Network callbacks run on the private
+/// serial `ioQueue`.
 nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
 
-    /// The secret key (32 random bytes). Hex-encoded for the URL transport.
-    private(set) var secretKeyHex: String = ""
-    /// The raw 32 bytes (for AES-GCM).
-    private let secretKey: SymmetricKey
+    // MARK: Configuration
 
-    /// True while a `waitForResponse()` waiter has installed its
-    /// continuation. Read-only and lock-guarded so tests can synchronize a
-    /// cancellation handshake without a fixed sleep.
-    var isAwaitingResponse: Bool {
-        resumeLock.lock()
-        defer { resumeLock.unlock() }
-        return continuation != nil
-    }
-
-    /// The number of connections currently holding an admission slot.
-    /// Read-only and lock-guarded so tests can synchronize admission without
-    /// a fixed sleep.
-    var activeConnectionCount: Int {
-        activeConnections.withLock { $0 }
-    }
-
-    /// The callback URL to send to the server
-    /// (http://127.0.0.1:<port>/callback?secret_key=<hex>).
-    private(set) var clientCallbackURL: String = ""
-
-    /// The bound port (read after the listener is ready).
-    private(set) var port: UInt16 = 0
-
-    private var listener: NWListener?
-    /// The companion IPv6 loopback listener (same port as `listener`), so
-    /// `localhost` resolves on either family. Nil when the ::1 bind was
-    /// unavailable (the URL then advertises 127.0.0.1).
-    private var listenerV6: NWListener?
-    private var continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>?
-    /// The first resolution observed before `waitForResponse()` installed a
-    /// continuation. Delivered as soon as a waiter arrives, so a callback
-    /// (or the deadline) that beats the wait is not lost.
-    private var pendingResult: Result<Proto_CredentialAssertionResponse, Error>?
-    private let resumeLock = NSLock()
-    /// True once a terminal resolution has been recorded (delivered to a
-    /// waiter or buffered for the next one). Guards the exactly-once
-    /// semantics; readable so the resolution paths are testable.
-    private(set) var didResume = false
-
-    /// The response deadline (defaults.SSOCallbackTimeout is 120s in Teleport;
-    /// we use 180s to match the headless flow's blocking-POST timeout).
-    ///
-    /// A sleeping `Task`, not a `Timer`: `waitForResponse()` is nonisolated
-    /// async, so its body runs on a cooperative-pool thread whose
-    /// `RunLoop.current` is never pumped — a scheduled `Timer` would never
-    /// fire there. `Task.sleep` is executor-independent.
-    private var timeoutTask: Task<Void, Never>?
+    private let logger: Logger
     private let timeout: TimeInterval
-
-    /// The hostname we advertise in the callback URL. Always `localhost`,
-    /// never a literal loopback IP: Safari's Not Secure Connection Warning
-    /// (iOS 18.2+) flags `http://127.0.0.1:…` but not `http://localhost:…`,
-    /// and `localhost` resolves to 127.0.0.1 even when ::1 is not bound.
-    /// ValidateClientRedirect (lib/client/sso/redirector.go) accepts both
-    /// `localhost` and `127.0.0.1` for the http scheme.
-    private var host = "localhost"
-
-    /// Whether the ::1 companion listener is bound. Readable for tests: the
-    /// advertised URL is always `localhost`, so it no longer reveals which
-    /// loopback families are actually bound.
-    var hasIPv6LoopbackListener: Bool { listenerV6 != nil }
-
-    /// The largest request we buffer before rejecting the connection. The
-    /// genuine callback is a small GET whose payload lives in the
-    /// `response=` query param; CA-heavy clusters can push a sealed envelope
-    /// past the old single 64 KB read, so the ceiling is generous but
-    /// bounded.
-    private static let maxRequestBytes = 1 << 20
-
-    /// The HTTP header terminator: the real parse boundary. The response
-    /// payload lives in the request line's query string, so a GET is parsed
-    /// exactly when its headers complete (any `Content-Length` body is not
-    /// needed).
-    private static let headerTerminator = Data("\r\n\r\n".utf8)
-
-    /// The total read deadline for a single connection, armed when the
-    /// connection is accepted: a client that connects and then goes silent
-    /// (or stalls mid-request) must not pin the connection. The genuine
-    /// loopback callback arrives in one burst well inside this window.
-    private let readTimeout: TimeInterval
-
-    /// The deadline for the primary (`127.0.0.1`) listener to reach `.ready`.
-    /// `NWListener.start` is asynchronous, and on a loaded runner/device the
-    /// `.ready` transition can exceed the old hardcoded 5s; a start timeout
-    /// aborts the whole MFA ceremony, so the deadline is generous while still
-    /// bounded. Injectable so tests can pin it.
+    fileprivate let readTimeout: TimeInterval
     private let startTimeout: TimeInterval
-
-    /// The deadline for the secondary (`::1`) bind. This one is a fallback:
-    /// on failure the pair is retried on a fresh port (and ultimately the v4
-    /// listener is kept), so the deadline stays short.
-    private static let secondaryLoopbackStartTimeout: TimeInterval = 5
-
-    /// How many times the 127.0.0.1 + ::1 pair is bound before falling back to
-    /// IPv4-only. An OS-assigned IPv4 ephemeral port can already be in use on
-    /// ::1 (EADDRINUSE — observed on a real device), which is transient; a
-    /// fresh port almost always binds both families.
-    private static let loopbackBindAttempts = 3
-
-    /// Builds an `NWListener` for a loopback endpoint. Injectable so tests can
-    /// force the `::1` bind to fail and exercise the retry + IPv4-only paths
-    /// deterministically.
+    private let maxConcurrentConnections: Int
     private let listenerFactory: (NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener
 
-    /// The maximum number of connections buffered at once. The genuine
-    /// callback is a single small GET; a burst of connections is not part of
-    /// the ceremony and must not accumulate per-connection buffers.
-    private let maxConcurrentConnections: Int
-    /// The number of connections currently holding an admission slot.
-    /// Released exactly once per admitted connection by `respond`.
-    private let activeConnections = OSAllocatedUnfairLock(initialState: 0)
+    // MARK: Constants
 
-    /// The injected logging seam. Defaults to the package-owned default so
-    /// existing test call sites stay valid; the ceremony (the host-reachable
-    /// path) always injects the app logger.
-    private let logger: Logger
+    private static let secretKeyByteCount = 32
+    /// The largest request the listener buffers. Anything above this is
+    /// answered 413 instead of accumulating without bound.
+    static let maxRequestBytes = 1 << 20
+    /// How many times the IPv4 + IPv6 listener pair is retried on a fresh
+    /// port before falling back to IPv4 only.
+    private static let maxBindAttempts = 3
+
+    private static let callbackPath = "/callback"
+    private static let callbackPage = """
+        <!doctype html>
+        <html>
+        <head><meta charset="utf-8"><title>VVTerm</title></head>
+        <body>
+        <p>Approval received. You can close this tab and return to VVTerm.</p>
+        </body>
+        </html>
+        """
+
+    // MARK: State
+
+    private struct State {
+        var secretKey: Data?
+        var boundPort: UInt16 = 0
+        var hasIPv6 = false
+        var activeConnections = 0
+        var didResume = false
+        var isAwaiting = false
+        var cancelled = false
+        var pending: Result<Proto_CredentialAssertionResponse, Error>?
+        var continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>?
+        var listeners: [NWListener] = []
+        var connections: [ObjectIdentifier: BrowserMFAHTTPConnection] = [:]
+    }
+
+    private let stateLock = NSLock()
+    private var state = State()
+
+    /// Runs `body` with the state lock held. Kept synchronous so the lock
+    /// calls stay legal from async contexts (NSLock is unavailable there).
+    private func withState<T>(_ body: (inout State) -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body(&state)
+    }
+
+    private let ioQueue = DispatchQueue(label: "vvterm.teleport.browser-mfa.listener")
+    private let deadlineLock = NSLock()
+    private var deadlineTask: Task<Void, Never>?
+
+    // MARK: Init
 
     init(
-        logger: Logger = DefaultTeleportLogging().logger(category: "TeleportBrowserMFA"),
+        logger: Logger = Logger(subsystem: "Teleport", category: "TeleportBrowserMFA"),
         timeout: TimeInterval = 180,
         readTimeout: TimeInterval = 10,
-        maxConcurrentConnections: Int = 16,
         startTimeout: TimeInterval = 15,
-        listenerFactory: ((NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener)? = nil
+        maxConcurrentConnections: Int = 16,
+        listenerFactory: @escaping (NWEndpoint.Host, NWEndpoint.Port) throws -> NWListener = {
+            try BrowserMFAListener.makeLoopbackListener(host: $0, port: $1)
+        }
     ) {
         self.logger = logger
         self.timeout = timeout
         self.readTimeout = readTimeout
-        self.maxConcurrentConnections = maxConcurrentConnections
         self.startTimeout = startTimeout
-        self.listenerFactory = listenerFactory ?? Self.makeLoopbackListener
-        // Generate 32 random bytes for AES-256-GCM.
-        var keyBytes = [UInt8](repeating: 0, count: 32)
-        let status = SecRandomCopyBytes(kSecRandomDefault, 32, &keyBytes)
-        if status == errSecSuccess {
-            secretKey = SymmetricKey(data: Data(keyBytes))
-        } else {
-            // Fallback: CryptoKit's SymmetricKey(generator:) would be better,
-            // but Data(random bytes) + SymmetricKey(data:) is fine.
-            secretKey = SymmetricKey(size: .bits256)
-        }
+        self.maxConcurrentConnections = maxConcurrentConnections
+        self.listenerFactory = listenerFactory
         super.init()
-        // Pre-compute the hex representation of the key for the URL.
-        secretKeyHex = keyBytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Start the listener. Returns the client callback URL to send to the
-    /// server. Throws if the loopback listener fails to start.
+    deinit {
+        let (listeners, connections) = withState { state -> ([NWListener], [BrowserMFAHTTPConnection]) in
+            let listeners = state.listeners
+            state.listeners = []
+            let connections = Array(state.connections.values)
+            state.connections.removeAll()
+            return (listeners, connections)
+        }
+        for listener in listeners {
+            listener.cancel()
+        }
+        for connection in connections {
+            connection.closeFromOwner()
+        }
+        cancelDeadline()
+    }
+
+    // MARK: Test seams
+
+    /// The per-run AES-256-GCM key as lowercase hex (the `secret_key` query
+    /// value). Empty until `start()` generates it.
+    var secretKeyHex: String {
+        guard let key = withState({ $0.secretKey }) else { return "" }
+        return Self.hexString(key)
+    }
+
+    /// Whether a `waitForResponse()` continuation is currently installed.
+    var isAwaitingResponse: Bool {
+        withState { $0.isAwaiting }
+    }
+
+    /// How many connections are currently admitted (over-cap connections are
+    /// answered 503 and never counted).
+    var activeConnectionCount: Int {
+        withState { $0.activeConnections }
+    }
+
+    /// Whether the `::1` companion listener is bound.
+    var hasIPv6LoopbackListener: Bool {
+        withState { $0.hasIPv6 }
+    }
+
+    /// The bound IPv4 loopback port (0 before `start()`).
+    var port: UInt16 {
+        withState { $0.boundPort }
+    }
+
+    /// Whether the login has been resolved (by a callback, the deadline,
+    /// cancellation, or a test-driven `resume`).
+    var didResume: Bool {
+        withState { $0.didResume }
+    }
+
+    // MARK: Lifecycle
+
+    /// Generates the per-run key, binds the loopback listener(s), and returns
+    /// the client callback URL.
     ///
-    /// Binds 127.0.0.1 first on an OS-assigned port, then ::1 on the same
-    /// port, so the advertised `localhost` URL works whichever family Safari
-    /// resolves first (CI can pass on IPv4 while a device resolves ::1). If
-    /// the ::1 bind is unavailable (race / port reuse — EADDRINUSE), the pair
-    /// is retried on a fresh port; if every attempt fails, the v4 listener is
-    /// kept and the URL still advertises `localhost` (never 127.0.0.1, which
-    /// would trigger Safari's Not Secure Connection Warning).
+    /// - Throws: `BrowserMFAListenerError.listenerFailed` if the random key
+    ///   cannot be generated or no loopback listener can be bound.
     func start() async throws -> String {
-        var lastIPv6Error: Error?
-        for _ in 0..<Self.loopbackBindAttempts {
-            let v4 = try makeBoundListener(host: .ipv4(.loopback), port: .any)
-            let boundPort: NWEndpoint.Port
-            do {
-                boundPort = try await awaitListenerReady(v4, timeout: startTimeout)
-            } catch {
-                // Do not leak the not-yet-published v4 listener when the first
-                // await fails (timeout / start failure).
-                v4.cancel()
-                throw error
-            }
+        var keyBytes = [UInt8](repeating: 0, count: Self.secretKeyByteCount)
+        let rngStatus = SecRandomCopyBytes(kSecRandomDefault, keyBytes.count, &keyBytes)
+        guard rngStatus == errSecSuccess else {
+            throw BrowserMFAListenerError.listenerFailed(
+                "could not generate the callback key (OSStatus \(rngStatus))"
+            )
+        }
+        let secretKey = Data(keyBytes)
+        withState { $0.secretKey = secretKey }
 
+        var ipv4Listener: NWListener?
+        var ipv6Listener: NWListener?
+        var boundPort: UInt16 = 0
+
+        for _ in 0..<Self.maxBindAttempts {
             do {
-                let v6 = try makeBoundListener(host: .ipv6(.loopback), port: boundPort)
+                let ipv4 = try await startLoopbackListener(host: .ipv4(.loopback), port: .any)
                 do {
-                    _ = try await awaitListenerReady(v6, timeout: Self.secondaryLoopbackStartTimeout)
-                } catch {
-                    // The local listener is not yet published to `listenerV6`;
-                    // cancel it here so a failed ::1 bind does not leak it.
-                    v6.cancel()
-                    throw error
-                }
-                return finishStartup(v4: v4, v6: v6, port: boundPort.rawValue)
-            } catch {
-                // ::1 is unavailable on this port — release v4 and retry with
-                // a fresh ephemeral port.
-                v4.cancel()
-                lastIPv6Error = error
-                logger.error(
-                    "ipv6_loopback_bind_failed \(error.localizedDescription, privacy: .public) — retrying on a new port"
-                )
-            }
-        }
-
-        // Last resort: IPv4-only. The URL still advertises `localhost` — the
-        // hostname resolves to 127.0.0.1 even when ::1 is not bound, and a
-        // literal 127.0.0.1 URL would trigger Safari's Not Secure Connection
-        // Warning.
-        let v4 = try makeBoundListener(host: .ipv4(.loopback), port: .any)
-        let boundPort: NWEndpoint.Port
-        do {
-            boundPort = try await awaitListenerReady(v4, timeout: startTimeout)
-        } catch {
-            v4.cancel()
-            throw error
-        }
-        logger.error(
-            "ipv6_loopback_unavailable \(lastIPv6Error?.localizedDescription ?? "unknown", privacy: .public) — advertising localhost (IPv4 only)"
-        )
-        return finishStartup(v4: v4, v6: nil, port: boundPort.rawValue)
-    }
-
-    /// Publish the bound listeners and build the callback URL. The advertised
-    /// host is always `localhost`, never a literal loopback IP.
-    private func finishStartup(v4: NWListener, v6: NWListener?, port: UInt16) -> String {
-        self.listener = v4
-        self.listenerV6 = v6
-        self.port = port
-        self.host = "localhost"
-        self.clientCallbackURL = "http://localhost:\(port)/callback?secret_key=\(self.secretKeyHex)"
-        logger.info(
-            "ready listening on localhost:\(port, privacy: .public) v6=\(v6 != nil)"
-        )
-        return self.clientCallbackURL
-    }
-
-    /// Build a loopback `NWListener` via the injectable factory and wire its
-    /// connection handler.
-    private func makeBoundListener(host: NWEndpoint.Host, port: NWEndpoint.Port) throws -> NWListener {
-        let listener = try listenerFactory(host, port)
-        listener.newConnectionHandler = { [weak self] conn in
-            self?.handleConnection(conn)
-        }
-        return listener
-    }
-
-    /// Default listener factory: an `NWListener` bound to the given loopback
-    /// endpoint. Internal so tests can wrap it when injecting a failing `::1`
-    /// bind.
-    static func makeLoopbackListener(host: NWEndpoint.Host, port: NWEndpoint.Port) throws -> NWListener {
-        let params = NWParameters.tcp
-        params.requiredLocalEndpoint = .hostPort(host: host, port: port)
-        return try NWListener(using: params)
-    }
-
-    /// Start the listener and await `.ready` (or a failure / timeout).
-    private func awaitListenerReady(_ listener: NWListener, timeout: TimeInterval) async throws -> NWEndpoint.Port {
-        let resumed = OSAllocatedUnfairLock(initialState: false)
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<NWEndpoint.Port, Error>) in
-            func resumeOnce(_ result: Result<NWEndpoint.Port, Error>) {
-                let already = resumed.withLock { isResumed -> Bool in
-                    if isResumed { return true }
-                    isResumed = true
-                    return false
-                }
-                guard !already else { return }
-                cont.resume(with: result)
-            }
-
-            listener.stateUpdateHandler = { listenerState in
-                switch listenerState {
-                case .ready:
-                    if let port = listener.port {
-                        resumeOnce(.success(port))
-                    } else {
-                        resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("listener ready without a port")))
-                    }
-                case .failed(let error):
-                    resumeOnce(.failure(BrowserMFAListenerError.listenerFailed(error.localizedDescription)))
-                case .cancelled:
-                    resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("listener cancelled")))
-                default:
+                    let port = NWEndpoint.Port(rawValue: ipv4.port) ?? .any
+                    let ipv6 = try await startLoopbackListener(host: .ipv6(.loopback), port: port)
+                    ipv4Listener = ipv4.listener
+                    ipv6Listener = ipv6.listener
+                    boundPort = ipv4.port
                     break
+                } catch {
+                    // The pair cannot share the port; discard the IPv4
+                    // listener and try the pair again on a fresh port.
+                    ipv4.listener.cancel()
+                    continue
                 }
-            }
-            listener.start(queue: .global(qos: .userInitiated))
-            // `DispatchQueue.asyncAfter` is a dispatch timer on the global
-            // concurrent queue, so this deadline is run-loop independent
-            // (unlike `Timer.scheduledTimer`).
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
-                resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("listener start timed out after \(timeout)s")))
+            } catch {
+                continue
             }
         }
+
+        if ipv4Listener == nil {
+            let ipv4 = try await startLoopbackListener(host: .ipv4(.loopback), port: .any)
+            ipv4Listener = ipv4.listener
+            boundPort = ipv4.port
+        }
+
+        guard let ipv4Listener else {
+            throw BrowserMFAListenerError.listenerFailed("no loopback listener could be bound")
+        }
+
+        withState {
+            $0.listeners = [ipv4Listener] + (ipv6Listener.map { [$0] } ?? [])
+            $0.boundPort = boundPort
+            $0.hasIPv6 = ipv6Listener != nil
+        }
+
+        logger.info(
+            "browser MFA listener ready on localhost:\(boundPort) (ipv6: \(ipv6Listener != nil))"
+        )
+        return "http://localhost:\(boundPort)\(Self.callbackPath)?secret_key=\(Self.hexString(secretKey))"
     }
 
-    /// Wait for the callback to arrive. Resolves with the WebAuthn assertion
-    /// response, or an error on timeout.
+    /// Waits for the callback result.
     ///
-    /// Cancellation-aware: cancelling the awaiting task resolves the wait
-    /// with `CancellationError` through the serialized `resume`, so the
-    /// ceremony does not have to run out its deadline. The listener itself
-    /// stays up until the ceremony calls `cancel()`.
+    /// The wait resolves exactly once, through the same serialized path as
+    /// every other resolution (callback, deadline, cancellation, or a
+    /// test-driven `resume`). A result that arrived before the wait is
+    /// delivered immediately; a task cancelled before the wait throws
+    /// `CancellationError` instead of consuming a buffered result.
     func waitForResponse() async throws -> Proto_CredentialAssertionResponse {
         try await withTaskCancellationHandler {
-            try await waitForResponseIgnoringCancellation()
+            try await withCheckedThrowingContinuation { continuation in
+                let outcome = withState { state -> (immediate: Result<Proto_CredentialAssertionResponse, Error>?, armDeadline: Bool) in
+                    if Task.isCancelled {
+                        return (.failure(CancellationError()), false)
+                    }
+                    if state.cancelled {
+                        return (.failure(CancellationError()), false)
+                    }
+                    if let pending = state.pending {
+                        state.pending = nil
+                        return (pending, false)
+                    }
+                    if state.didResume {
+                        return (.failure(BrowserMFAListenerError.timedOut), false)
+                    }
+                    state.continuation = continuation
+                    state.isAwaiting = true
+                    return (nil, true)
+                }
+
+                if let immediate = outcome.immediate {
+                    continuation.resume(with: immediate)
+                } else if outcome.armDeadline {
+                    armDeadline()
+                }
+            }
         } onCancel: {
             resume(.failure(CancellationError()))
         }
     }
 
-    private func waitForResponseIgnoringCancellation() async throws -> Proto_CredentialAssertionResponse {
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Proto_CredentialAssertionResponse, Error>) in
-            resumeLock.lock()
-            // A callback or the deadline may already have resolved the
-            // listener before this call (a local process can reach the port
-            // first, or the deadline can fire while the ceremony is still
-            // starting). Deliver the buffered result instead of waiting for
-            // a second resolution that will never come.
-            if let pending = pendingResult {
-                pendingResult = nil
-                resumeLock.unlock()
-                // A cancellation that raced the buffered resolution must
-                // win: a cancelled login must not complete from a result
-                // that arrived before the wait started.
-                if Task.isCancelled {
-                    cont.resume(throwing: CancellationError())
-                } else {
-                    cont.resume(with: pending)
-                }
-                return
-            }
-            guard !didResume, continuation == nil else {
-                // Already terminally resolved with no buffered result (a
-                // previous waiter consumed it), or a second concurrent wait:
-                // fail closed instead of overwriting and leaking the first
-                // continuation.
-                resumeLock.unlock()
-                cont.resume(throwing: BrowserMFAListenerError.listenerFailed(
-                    "the listener was already resolved"
-                ))
-                return
-            }
-            continuation = cont
-            // Install the deadline while still holding the lock, so a
-            // callback cannot resolve the wait between the continuation and
-            // the task that `resume`/`cancel` later disarm. If Safari never
-            // redirects (user cancels, HTTPS-Only blocks it, etc.), fail
-            // gracefully.
-            let timeout = self.timeout
-            timeoutTask = Task { [weak self] in
-                do {
-                    try await Task.sleep(for: .seconds(timeout))
-                } catch {
-                    // Disarmed by `resume`/`cancel`: a resolution won.
-                    return
-                }
-                guard let self else { return }
-                logger.error("timeout no callback after \(timeout)s")
-                // Route through the serialized `resume`: a callback racing
-                // the deadline must not resume the continuation twice.
-                self.resume(.failure(BrowserMFAListenerError.timedOut))
-                self.cancel()
-            }
-            resumeLock.unlock()
-        }
-    }
-
-    /// Stop the listeners + cancel the timeout. Idempotent; callers resolve
-    /// the wait before cancelling, so an installed continuation is left for
-    /// `resume` to resolve.
-    func cancel() {
-        resumeLock.lock()
-        timeoutTask?.cancel()
-        timeoutTask = nil
-        // Resolve an installed waiter now: after cancel there is no callback
-        // and no deadline left, so leaving the continuation installed would
-        // hang the caller. Latch the terminal state so a later
-        // `waitForResponse()` fails fast instead of arming a deadline on a
-        // torn-down listener.
-        let continuation = self.continuation
-        self.continuation = nil
-        didResume = true
-        // Drop any buffered result: a cancelled listener must not deliver a
-        // resolution from a different ceremony.
-        pendingResult = nil
-        resumeLock.unlock()
-        continuation?.resume(throwing: CancellationError())
-        listener?.cancel()
-        listener = nil
-        listenerV6?.cancel()
-        listenerV6 = nil
-    }
-
-    // MARK: - Connection handling
-
-    private func handleConnection(_ conn: NWConnection) {
-        // Admission control: bound the number of per-connection buffers a
-        // local caller can pin during the ceremony. The listener is
-        // loopback-only, but another process on the same host can still
-        // connect; excess connections get 503 and are dropped immediately.
-        let admitted = activeConnections.withLock { count -> Bool in
-            guard count < maxConcurrentConnections else { return false }
-            count += 1
-            return true
-        }
-        guard admitted else {
-            logger.error(
-                "connection rejected: max \(self.maxConcurrentConnections) concurrent requests in flight"
-            )
-            conn.start(queue: .global(qos: .userInitiated))
-            // Read (and discard) the request before answering. Answering a
-            // connection that still has unread inbound data makes the kernel
-            // close it with RST, which can discard the 503 before the client
-            // reads it. The drain is bounded and never accumulates.
-            drainRejectedRequest(conn) { [weak self] in
-                guard let self else {
-                    conn.cancel()
-                    return
-                }
-                self.writeResponse(conn, status: 503, body: "too many concurrent requests")
-            }
-            return
-        }
-
-        conn.start(queue: .global(qos: .userInitiated))
-        // Exactly one exit path answers each connection: the request parser,
-        // the idle deadline, and a listener teardown race to claim it. The
-        // loser is discarded instead of sending a second response.
-        let claimed = OSAllocatedUnfairLock(initialState: false)
-
-        // A client that connects and then goes silent (or stalls mid-request)
-        // must not pin the connection.
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + readTimeout) { [weak self] in
-            guard Self.claimConnection(claimed) else { return }
-            guard let self else {
-                conn.cancel()
-                return
-            }
-            logger.error("request read timed out after \(self.readTimeout)s")
-            self.respond(conn, status: 408, body: "request timed out")
-        }
-
-        readRequest(on: conn, accumulated: Data(), claimed: claimed)
-    }
-
-    /// Read the request in fragments and parse it only once the HTTP header
-    /// terminator (`\r\n\r\n`) has arrived. The callback URL lives in the
-    /// request line, so parsing a partial buffer previously misclassified a
-    /// genuine callback as unauthenticated whenever a TCP split or a
-    /// CA-heavy envelope crossed the single 64 KB read.
-    private func readRequest(
-        on conn: NWConnection,
-        accumulated: Data,
-        claimed: OSAllocatedUnfairLock<Bool>
-    ) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self else {
-                // The listener was torn down mid-handler; close the
-                // connection instead of leaving it dangling.
-                if Self.claimConnection(claimed) {
-                    conn.cancel()
-                }
-                return
-            }
-            if let error {
-                logger.error("recv_error \(error.localizedDescription, privacy: .public)")
-                if Self.claimConnection(claimed) {
-                    self.respond(conn, status: 500, body: "recv error")
-                }
-                return
-            }
-            var accumulated = accumulated
-            if let data, !data.isEmpty {
-                accumulated.append(data)
-            }
-            guard accumulated.count <= Self.maxRequestBytes else {
-                logger.error("request exceeds \(Self.maxRequestBytes) bytes; rejecting")
-                if Self.claimConnection(claimed) {
-                    self.respond(conn, status: 413, body: "request too large")
-                }
-                return
-            }
-            if let headerEnd = accumulated.range(of: Self.headerTerminator) {
-                // Headers are complete: the request line is the real
-                // boundary. Parse only the header bytes, so a trailing body
-                // cannot affect request-line extraction.
-                guard Self.claimConnection(claimed) else { return }
-                self.parseRequest(Data(accumulated[..<headerEnd.lowerBound]), conn: conn)
-                return
-            }
-            if isComplete {
-                // The peer closed before finishing the headers.
-                if Self.claimConnection(claimed) {
-                    self.respond(conn, status: 400, body: "incomplete request")
-                }
-                return
-            }
-            self.readRequest(on: conn, accumulated: accumulated, claimed: claimed)
-        }
-    }
-
-    /// Parse the request line out of a complete header block and dispatch
-    /// the `/callback` URL. The first claimer of the connection owns the
-    /// response on every path (404/400/…).
-    private func parseRequest(_ headers: Data, conn: NWConnection) {
-        guard let request = String(data: headers, encoding: .utf8) else {
-            respond(conn, status: 400, body: "bad request")
-            return
-        }
-        // Parse the request line + headers. We only need the URL.
-        let firstLine = request.split(separator: "\r\n", maxSplits: 1).first ?? Substring(request)
-        // "GET /callback?response=...&secret_key=... HTTP/1.1"
-        let parts = firstLine.split(separator: " ")
-        guard parts.count >= 2 else {
-            respond(conn, status: 400, body: "bad request line")
-            return
-        }
-        let pathAndQuery = String(parts[1])
-        handleCallback(pathAndQuery: pathAndQuery, conn: conn)
-    }
-
-    /// Atomically claims the one terminal action for a connection. Returns
-    /// true exactly once: the first caller owns the response, later exit
-    /// paths are discarded.
-    private static func claimConnection(_ claimed: OSAllocatedUnfairLock<Bool>) -> Bool {
-        claimed.withLock { isClaimed -> Bool in
-            if isClaimed { return false }
-            isClaimed = true
-            return true
-        }
-    }
-
-    private func handleCallback(pathAndQuery: String, conn: NWConnection) {
-        // We expect: /callback?response=<ciphertext>&secret_key=<hex>
-        // (or ?secret_key=...&response=... — order may vary.)
-        guard let questionIdx = pathAndQuery.firstIndex(of: "?") else {
-            respond(conn, status: 404, body: "not found")
-            return
-        }
-        let path = String(pathAndQuery[pathAndQuery.startIndex..<questionIdx])
-        guard path == "/callback" else {
-            respond(conn, status: 404, body: "not found")
-            return
-        }
-        let query = String(pathAndQuery[pathAndQuery.index(after: questionIdx)...])
-        // URLComponents(query:) doesn't exist; parse the query string by
-        // prefixing with "?" so URLComponents treats it as a relative URL
-        // with a query component.
-        let params = URLComponents(string: "?" + query)?.queryItems ?? []
-        let responseParam = params.first(where: { $0.name == "response" })?.value
-
-        guard let responseParam, !responseParam.isEmpty else {
-            // Anything on the loopback port can send this request. A missing
-            // `response` param carries no authenticated payload, so answer
-            // 400 and keep waiting: the genuine AES-GCM callback or the
-            // deadline decides the login.
-            logger.error("callback ignored: missing ?response= param")
-            respond(conn, status: 400, body: "missing response")
-            return
-        }
-
-        // The response param is URL-decoded by URLComponents (it was set by
-        // url.Values.Encode in Go, which percent-encodes the JSON). It's the
-        // JSON envelope {"ciphertext": <base64>, "nonce": <base64>}.
-        Task { [weak self] in
-            guard let self else {
-                conn.cancel()
-                return
-            }
-            do {
-                let webauthnResp = try await self.decryptAndDecode(responseParam)
-                logger.info("callback decrypted webauthn response (id=\(webauthnResp.id.prefix(16), privacy: .public)…)")
-                // Respond to Safari with a "close this tab" page.
-                self.respond(conn, status: 200, body: self.closePageHTML)
-                self.resume(.success(webauthnResp))
-            } catch BrowserMFAListenerError.unauthenticatedCallback(let reason) {
-                // The payload did not authenticate against our per-run key, so
-                // it carries no proof it came from the server: any local
-                // process can send an arbitrary `response` value. Answer 400
-                // and keep waiting (same policy as the missing-param branch);
-                // the genuine callback or the deadline decides the login.
-                logger.error("callback ignored: unauthenticated payload (\(reason, privacy: .private(mask: .hash)))")
-                self.respond(conn, status: 400, body: "unauthenticated response")
-            } catch {
-                // The plaintext was sealed under our per-run key but could not
-                // be decoded: the server produced it, so the failure is
-                // terminal and the wait must observe it.
-                logger.error("callback decrypt/decode failed: \(error.localizedDescription, privacy: .public)")
-                self.respond(conn, status: 500, body: "decrypt failed")
-                self.resume(.failure(error))
-            }
-        }
-    }
-
-    /// Decrypt the AES-256-GCM envelope and decode the CLILoginResponse +
-    /// BrowserMFAWebauthnResponse inside.
-    ///
-    /// Failures split into two classes: everything up to and including the
-    /// AES-256-GCM open throws `.unauthenticatedCallback` (the payload was
-    /// not produced by the server holding our per-run key), while a decode
-    /// failure *after* a successful open throws `.decodeFailed` (the server
-    /// sealed a malformed plaintext). Only the authenticated class is
-    /// terminal for the login.
-    ///
-    /// The final mapping into the generated proto message runs on the main
-    /// actor: those types are main-actor isolated under the app target's
-    /// default isolation. The hop is one per callback and keeps this
-    /// listener's I/O and crypto off the main actor.
-    private func decryptAndDecode(_ responseParam: String) async throws -> Proto_CredentialAssertionResponse {
-        // 1. Parse the JSON envelope {ciphertext: base64, nonce: base64}.
-        //    Go's json.Marshal of []byte = base64 string.
-        guard let envelopeData = responseParam.data(using: .utf8) else {
-            throw BrowserMFAListenerError.unauthenticatedCallback("envelope not utf8")
-        }
-        let envelope: SealedEnvelope
-        do {
-            envelope = try JSONDecoder().decode(SealedEnvelope.self, from: envelopeData)
-        } catch {
-            throw BrowserMFAListenerError.unauthenticatedCallback("envelope JSON: \(error.localizedDescription)")
-        }
-        guard let ciphertextPlusTag = Data(base64Encoded: envelope.ciphertext),
-              let nonceData = Data(base64Encoded: envelope.nonce) else {
-            throw BrowserMFAListenerError.unauthenticatedCallback("ciphertext/nonce not base64")
-        }
-        // 2. AES-256-GCM decrypt.
-        //    Go's aesgcm.Seal(nil, nonce, plaintext, nil) returns
-        //    ciphertext || tag (the 16-byte GCM tag is appended to the
-        //    ciphertext). The envelope stores this concatenated blob in the
-        //    "ciphertext" field, and the nonce separately. CryptoKit's
-        //    AES.GCM.SealedBox(nonce:ciphertext:tag:) expects them
-        //    separately, so we split the last 16 bytes off as the tag.
-        let gcmTagLength = 16
-        guard ciphertextPlusTag.count > gcmTagLength else {
-            throw BrowserMFAListenerError.unauthenticatedCallback("ciphertext too short")
-        }
-        let ciphertext = ciphertextPlusTag.prefix(ciphertextPlusTag.count - gcmTagLength)
-        let tag = ciphertextPlusTag.suffix(gcmTagLength)
-        let plaintext: Data
-        do {
-            let sealed = try AES.GCM.SealedBox(nonce: AES.GCM.Nonce(data: nonceData),
-                                               ciphertext: ciphertext,
-                                               tag: tag)
-            plaintext = try AES.GCM.open(sealed, using: secretKey)
-        } catch {
-            throw BrowserMFAListenerError.unauthenticatedCallback("open: \(error.localizedDescription)")
-        }
-        // 3. Decode the decrypted CLILoginResponse JSON.
-        //
-        //    IMPORTANT: this is Go encoding/json output of the
-        //    CLILoginResponse struct (lib/auth/authclient/clt.go:1432),
-        //    NOT proto JSON. The inner BrowserMFAWebauthnResponse is a
-        //    wantypes.CredentialAssertionResponse (a plain Go struct),
-        //    and its binary fields are protocol.URLEncodedBase64, which
-        //    marshals as base64.RawURLEncoding (URL-safe, no padding).
-        //    SwiftProtobuf JSON decoding cannot handle either of these
-        //    (it expects proto field names + padded base64), so we decode
-        //    with plain Codable structs and map into the proto type.
-        do {
-            let loginResp = try JSONDecoder().decode(CLIResponsePayload.self, from: plaintext)
-            guard let webauthn = loginResp.browserMFAWebauthnResponse else {
-                throw BrowserMFAListenerError.decodeFailed("no browser_mfa_webauthn_response field")
-            }
-            return await MainActor.run { webauthn.intoProto() }
-        } catch {
-            throw BrowserMFAListenerError.decodeFailed("CLILoginResponse: \(error.localizedDescription)")
-        }
-    }
-
-    /// The single serialized resolution entry point. The first result wins:
-    /// it is delivered to a waiting continuation, or buffered until
-    /// `waitForResponse()` installs one. Later results (a second callback, a
-    /// deadline after a callback, a success after a failure) are discarded,
-    /// so the wait can never observe two resolutions.
-    ///
-    /// Internal rather than private so tests can drive the state machine
-    /// without a socket.
+    /// Resolves the login with `result` exactly once. Later results are
+    /// discarded; a result arriving before `waitForResponse()` is buffered.
     func resume(_ result: Result<Proto_CredentialAssertionResponse, Error>) {
-        resumeLock.lock()
-        guard !didResume else {
-            resumeLock.unlock()
-            return
-        }
-        didResume = true
-        timeoutTask?.cancel()
-        timeoutTask = nil
-        let continuation = self.continuation
-        self.continuation = nil
-        if continuation == nil {
-            pendingResult = result
-        }
-        resumeLock.unlock()
-        guard let continuation else { return }
-        switch result {
-        case .success(let resp): continuation.resume(returning: resp)
-        case .failure(let err): continuation.resume(throwing: err)
-        }
-    }
-
-    // MARK: - HTTP response
-
-    private func respond(_ conn: NWConnection, status: Int, body: String) {
-        // Every admitted connection answers exactly once (guarded by
-        // `claimConnection`), so this is the single point that releases its
-        // admission slot.
-        defer { releaseAdmission() }
-        writeResponse(conn, status: status, body: body)
-    }
-
-    /// Write an HTTP response without touching the admission counter: used
-    /// for the over-cap rejection, which never acquired a slot.
-    private func writeResponse(_ conn: NWConnection, status: Int, body: String) {
-        let reason: String
-        switch status {
-        case 200: reason = "OK"
-        case 400: reason = "Bad Request"
-        case 404: reason = "Not Found"
-        case 408: reason = "Request Timeout"
-        case 413: reason = "Payload Too Large"
-        case 500: reason = "Internal Server Error"
-        case 503: reason = "Service Unavailable"
-        default: reason = "OK"
-        }
-        let response = "HTTP/1.1 \(status) \(reason)\r\n" +
-                       "Content-Type: text/html; charset=utf-8\r\n" +
-                       "Content-Length: \(body.utf8.count)\r\n" +
-                       "Connection: close\r\n" +
-                       "Access-Control-Allow-Origin: *\r\n" +
-                       "\r\n\(body)"
-        let data = response.data(using: .utf8) ?? Data()
-        conn.send(content: data, completion: .contentProcessed { _ in
-            conn.cancel()
-        })
-    }
-
-    /// Discard an over-cap connection's request without buffering it, then
-    /// invoke `completion` so the caller can send a final response. Bounded
-    /// by `maxRequestBytes` and `readTimeout`; a read error (client gone)
-    /// completes immediately. Only a 3-byte window is retained to detect the
-    /// header terminator across fragment boundaries.
-    private func drainRejectedRequest(_ conn: NWConnection, completion: @escaping () -> Void) {
-        let finished = OSAllocatedUnfairLock(initialState: false)
-        func finish() {
-            let already = finished.withLock { isDone -> Bool in
-                if isDone { return true }
-                isDone = true
-                return false
+        let continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>? = withState { state in
+            guard !state.didResume else { return nil }
+            state.didResume = true
+            if let installed = state.continuation {
+                state.continuation = nil
+                state.isAwaiting = false
+                return installed
             }
-            guard !already else { return }
-            completion()
+            state.pending = result
+            return nil
         }
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + readTimeout) {
-            finish()
+
+        cancelDeadline()
+        continuation?.resume(with: result)
+    }
+
+    /// Tears the listener down and resolves an installed wait promptly with
+    /// `CancellationError`. Later waits fail fast instead of arming a new
+    /// deadline.
+    func cancel() {
+        let teardown = withState { state -> (continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>?, listeners: [NWListener], connections: [BrowserMFAHTTPConnection]) in
+            state.cancelled = true
+            state.didResume = true
+            state.pending = nil
+            let continuation = state.continuation
+            state.continuation = nil
+            state.isAwaiting = false
+            let listeners = state.listeners
+            state.listeners = []
+            let connections = Array(state.connections.values)
+            state.connections.removeAll()
+            state.activeConnections = 0
+            return (continuation, listeners, connections)
         }
-        var drained = 0
-        var tail = Data()
-        func readMore() {
-            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
-                if error != nil {
-                    finish()
-                    return
-                }
-                if let data, !data.isEmpty {
-                    drained += data.count
-                    var window = tail
-                    window.append(data)
-                    if window.range(of: Self.headerTerminator) != nil || drained >= Self.maxRequestBytes {
-                        finish()
-                        return
-                    }
-                    tail = window.count > 3 ? Data(window.suffix(3)) : window
-                }
-                if isComplete {
-                    finish()
-                    return
-                }
-                readMore()
+
+        cancelDeadline()
+        for listener in teardown.listeners {
+            listener.cancel()
+        }
+        for connection in teardown.connections {
+            connection.closeFromOwner()
+        }
+        teardown.continuation?.resume(throwing: CancellationError())
+    }
+
+    // MARK: Binding
+
+    /// Builds a loopback `NWListener` bound to `host`:`port`. Exposed so
+    /// tests can inject a factory that fails a chosen family.
+    static func makeLoopbackListener(
+        host: NWEndpoint.Host,
+        port: NWEndpoint.Port
+    ) throws -> NWListener {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: host, port: port)
+        parameters.allowLocalEndpointReuse = true
+        return try NWListener(using: parameters)
+    }
+
+    /// Creates, configures, starts, and awaits readiness of one loopback
+    /// listener.
+    private func startLoopbackListener(
+        host: NWEndpoint.Host,
+        port: NWEndpoint.Port
+    ) async throws -> (listener: NWListener, port: UInt16) {
+        let listener: NWListener
+        do {
+            listener = try listenerFactory(host, port)
+        } catch {
+            throw BrowserMFAListenerError.listenerFailed("\(error)")
+        }
+
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection)
+        }
+        listener.start(queue: ioQueue)
+
+        let deadline = ContinuousClock.now + .seconds(startTimeout)
+        while ContinuousClock.now < deadline {
+            if let boundPort = listener.port, listener.state == .ready {
+                return (listener, boundPort.rawValue)
+            }
+            switch listener.state {
+            case .failed(let error):
+                throw BrowserMFAListenerError.listenerFailed("\(error)")
+            case .cancelled:
+                throw BrowserMFAListenerError.listenerFailed("listener was cancelled while starting")
+            default:
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        listener.cancel()
+        throw BrowserMFAListenerError.listenerFailed("listener did not become ready in \(startTimeout)s")
+    }
+
+    // MARK: Connections
+
+    /// Admits a connection or answers it 503 when the admission cap is hit.
+    fileprivate func accept(_ connection: NWConnection) {
+        let admitted = withState { state -> Bool in
+            if state.cancelled { return false }
+            if state.activeConnections >= maxConcurrentConnections { return false }
+            state.activeConnections += 1
+            return true
+        }
+
+        let handler = BrowserMFAHTTPConnection(
+            listener: self,
+            connection: connection,
+            queue: ioQueue,
+            admitted: admitted
+        )
+        // Retain the handler until its connection closes: the receive/send
+        // callbacks hold it weakly so a finished connection can be released.
+        withState { $0.connections[ObjectIdentifier(handler)] = handler }
+        handler.start()
+    }
+
+    /// Called by a connection once it is done; releases its admission slot
+    /// and its retain slot.
+    fileprivate func connectionClosed(_ handler: BrowserMFAHTTPConnection) {
+        withState { state in
+            let wasTracked = state.connections.removeValue(forKey: ObjectIdentifier(handler)) != nil
+            if wasTracked, handler.admitted, state.activeConnections > 0 {
+                state.activeConnections -= 1
             }
         }
-        readMore()
     }
 
-    /// Release one admission slot. Called exactly once per admitted
-    /// connection from `respond`; the over-cap rejection path never
-    /// acquires a slot and never releases one.
-    private func releaseAdmission() {
-        activeConnections.withLock { count in
-            if count > 0 { count -= 1 }
+    /// Answers a parsed request. A non-nil `resolution` resolves the login.
+    fileprivate func handle(_ request: BrowserMFARequest) -> BrowserMFACallbackResult {
+        guard request.method == "GET" || request.method == "POST" else {
+            return BrowserMFACallbackResult(status: 405, body: "Method not allowed", resolution: nil)
+        }
+        guard request.path == Self.callbackPath else {
+            return BrowserMFACallbackResult(status: 404, body: "Not found", resolution: nil)
+        }
+        guard request.query["secret_key"] == secretKeyHex else {
+            return BrowserMFACallbackResult(status: 400, body: "Invalid callback", resolution: nil)
+        }
+        guard let responseValue = request.query["response"] else {
+            // A bare callback is not authenticated and must not terminate the
+            // login; the genuine callback (or the deadline) still can.
+            return BrowserMFACallbackResult(status: 400, body: "Missing response", resolution: nil)
+        }
+
+        do {
+            let assertion = try decrypt(responseValue)
+            return BrowserMFACallbackResult(
+                status: 200,
+                body: Self.callbackPage,
+                resolution: .success(assertion)
+            )
+        } catch BrowserMFACallbackError.unauthenticated {
+            logger.error("browser MFA callback rejected: envelope authentication failed")
+            return BrowserMFACallbackResult(status: 400, body: "Invalid callback", resolution: nil)
+        } catch {
+            logger.error("browser MFA callback failed: authenticated payload could not be decoded")
+            return BrowserMFACallbackResult(
+                status: 500,
+                body: "Invalid response",
+                resolution: .failure(
+                    BrowserMFAListenerError.decodeFailed("browser MFA payload could not be decoded")
+                )
+            )
         }
     }
 
-    private let closePageHTML = """
-    <!DOCTYPE html>
-    <html><head><title>VVTerm</title></head>
-    <body style="font-family:-apple-system,sans-serif;text-align:center;padding:2em">
-    <h2>✅ Done</h2>
-    <p>You can close this tab and return to VVTerm.</p>
-    </body></html>
-    """
+    // MARK: Decryption
+
+    private enum BrowserMFACallbackError: Error {
+        /// The envelope did not authenticate (or could not even be read).
+        /// Answered 400, never terminal.
+        case unauthenticated
+        /// The envelope authenticated but its plaintext is not a usable login
+        /// response. Terminal.
+        case malformed
+    }
+
+    /// Opens the `{ciphertext, nonce}` envelope under the per-run key and maps
+    /// the Go CLI login response into the proto assertion.
+    private func decrypt(_ responseValue: String) throws -> Proto_CredentialAssertionResponse {
+        guard let secretKey = withState({ $0.secretKey }) else {
+            throw BrowserMFACallbackError.unauthenticated
+        }
+
+        guard let envelopeData = responseValue.data(using: .utf8),
+              let envelope = try? JSONDecoder().decode(BrowserMFASealedEnvelope.self, from: envelopeData),
+              let sealed = Data(base64Encoded: envelope.ciphertext),
+              let nonceData = Data(base64Encoded: envelope.nonce),
+              sealed.count >= 16,
+              let nonce = try? AES.GCM.Nonce(data: nonceData),
+              let box = try? AES.GCM.SealedBox(
+                  nonce: nonce,
+                  ciphertext: sealed.dropLast(16),
+                  tag: sealed.suffix(16)
+              ),
+              let plaintext = try? AES.GCM.open(box, using: SymmetricKey(data: secretKey))
+        else {
+            throw BrowserMFACallbackError.unauthenticated
+        }
+
+        guard let payload = try? JSONDecoder().decode(BrowserMFACLILoginResponse.self, from: plaintext),
+              let assertion = payload.browserMFAWebauthnResponse
+        else {
+            throw BrowserMFACallbackError.malformed
+        }
+
+        var proto = Proto_CredentialAssertionResponse()
+        proto.type = assertion.type
+        proto.rawID = Self.flexibleBase64(assertion.rawId) ?? Data()
+        proto.id = assertion.id
+
+        var response = Proto_AuthenticatorAssertionResponse()
+        response.clientDataJson = Self.flexibleBase64(assertion.response.clientDataJSON) ?? Data()
+        response.authenticatorData = Self.flexibleBase64(assertion.response.authenticatorData) ?? Data()
+        response.signature = Self.flexibleBase64(assertion.response.signature) ?? Data()
+        if let userHandle = assertion.response.userHandle {
+            response.userHandle = Self.flexibleBase64(userHandle) ?? Data()
+        }
+        proto.response = response
+        return proto
+    }
+
+    // MARK: Deadline
+
+    private func armDeadline() {
+        let timeout = self.timeout
+        let task = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.resume(.failure(BrowserMFAListenerError.timedOut))
+        }
+
+        deadlineLock.lock()
+        let previous = deadlineTask
+        deadlineTask = task
+        deadlineLock.unlock()
+        previous?.cancel()
+    }
+
+    private func cancelDeadline() {
+        deadlineLock.lock()
+        let task = deadlineTask
+        deadlineTask = nil
+        deadlineLock.unlock()
+        task?.cancel()
+    }
+
+    // MARK: Helpers
+
+    /// Decodes standard or URL-safe base64, with or without padding. The
+    /// server's CLI response uses base64url without padding, but accepting
+    /// the padded standard alphabet too keeps the listener tolerant of
+    /// proxies that re-encode.
+    private static func flexibleBase64(_ string: String) -> Data? {
+        var normalized = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = normalized.count % 4
+        if remainder > 0 {
+            normalized += String(repeating: "=", count: 4 - remainder)
+        }
+        return Data(base64Encoded: normalized)
+    }
+
+    private static func hexString(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
 }
 
-// MARK: - CLILoginResponse Codable types (Go encoding/json decode)
+// MARK: - Request parsing
 
-/// The decrypted Browser MFA callback payload. This mirrors the Go
-/// `CLILoginResponse` struct (lib/auth/authclient/clt.go:1432) — it is
-/// produced by `json.Marshal` (Go encoding/json), NOT proto JSON, so we
-/// decode with plain `Codable` structs. We only declare the one field the
-/// spike needs; the rest (`username`, `cert`, `host_signers`, …) are
-/// silently ignored by `JSONDecoder`.
-private nonisolated struct CLIResponsePayload: Decodable {
-    /// `browser_mfa_webauthn_response` in the JSON (Go struct tag).
-    let browserMFAWebauthnResponse: WebAuthnAssertionResponse?
+/// One parsed HTTP request. `query` values are percent-decoded.
+nonisolated private struct BrowserMFARequest {
+    let method: String
+    let path: String
+    let query: [String: String]
+}
+
+/// What the listener answers for a parsed request, plus an optional
+/// resolution for the waiting login.
+nonisolated private struct BrowserMFACallbackResult {
+    let status: Int
+    let body: String
+    let resolution: Result<Proto_CredentialAssertionResponse, Error>?
+}
+
+/// The `{"ciphertext": <std-base64>, "nonce": <std-base64>}` envelope the
+/// server produces. `ciphertext` carries the 16-byte GCM tag appended to the
+/// ciphertext (Go's `aesgcm.Seal` shape).
+nonisolated private struct BrowserMFASealedEnvelope: Decodable {
+    let ciphertext: String
+    let nonce: String
+}
+
+/// The decrypted Go CLI login response, reduced to the fields the listener
+/// needs. Go's `webauthntypes` structs flatten the embedded
+/// `PublicKeyCredential` + `AuthenticatorAssertionResponse` fields into one
+/// JSON object, so `id`/`type`/`rawId`/`response` all live at the top level.
+nonisolated private struct BrowserMFACLILoginResponse: Decodable {
+    let browserMFAWebauthnResponse: BrowserMFAAssertion?
 
     enum CodingKeys: String, CodingKey {
         case browserMFAWebauthnResponse = "browser_mfa_webauthn_response"
     }
 }
 
-/// Mirrors `wantypes.CredentialAssertionResponse`
-/// (lib/auth/webauthntypes/webauthn.go:112). The embedding mirrors the Go
-/// struct: `PublicKeyCredential` (which embeds `Credential`) + `response`.
-/// Binary fields are `protocol.URLEncodedBase64` (base64.RawURLEncoding —
-/// URL-safe, no padding), decoded via `URLSafeBase64Data` below.
-private nonisolated struct WebAuthnAssertionResponse: Decodable {
-    let id: String?
-    let type: String?
-    let rawID: URLSafeBase64Data?
-    let response: AssertionResponse?
+nonisolated private struct BrowserMFAAssertion: Decodable {
+    let id: String
+    let type: String
+    let rawId: String
+    let response: BrowserMFAAssertionResponse
 
-    enum CodingKeys: String, CodingKey {
-        // Go json tags: id, type, rawId, response.
-        case id, type, rawID = "rawId", response
+    nonisolated struct BrowserMFAAssertionResponse: Decodable {
+        let clientDataJSON: String
+        let authenticatorData: String
+        let signature: String
+        let userHandle: String?
     }
 }
 
-/// Mirrors `wantypes.AuthenticatorAssertionResponse`
-/// (lib/auth/webauthntypes/webauthn.go:127). Embeds `AuthenticatorResponse`
-/// (which carries `clientDataJSON`) + the assertion-specific binary fields.
-private nonisolated struct AssertionResponse: Decodable {
-    let clientDataJSON: URLSafeBase64Data?
-    let authenticatorData: URLSafeBase64Data?
-    let signature: URLSafeBase64Data?
-    let userHandle: URLSafeBase64Data?
-}
+// MARK: - Connection
 
-/// A base64url-no-padding `Data` wrapper matching Go's
-/// `protocol.URLEncodedBase64` (go-webauthn/webauthn/protocol/base64.go:
-/// `base64.RawURLEncoding`). Swift's `Data(base64Encoded:)` only accepts
-/// padded standard base64, so we add padding (if needed) before decoding.
-/// We also accept standard base64 (with `+`/`/`) as a fallback, since older
-/// Teleport builds may emit it.
-private nonisolated struct URLSafeBase64Data: Decodable {
-    let data: Data
+/// Handles one admitted loopback connection: accumulates the request, applies
+/// the size and read-time limits, then answers and resolves.
+nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
 
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-        data = URLSafeBase64Data.decode(raw) ?? Data()
+    private let listener: BrowserMFAListener
+    private let connection: NWConnection
+    private let queue: DispatchQueue
+    let admitted: Bool
+
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var finished = false
+    private var deadline: DispatchWorkItem?
+
+    init(
+        listener: BrowserMFAListener,
+        connection: NWConnection,
+        queue: DispatchQueue,
+        admitted: Bool
+    ) {
+        self.listener = listener
+        self.connection = connection
+        self.queue = queue
+        self.admitted = admitted
     }
 
-    /// Decode a base64url (no padding) or standard base64 string to `Data`.
-    static func decode(_ string: String) -> Data? {
-        // First try base64url without padding (Go's RawURLEncoding).
-        // `Data(base64Encoded:options:)` with `.urlSafe` accepts unpadded
-        // input on Apple platforms, but we add padding defensively so the
-        // decode is robust across OS versions.
-        var s = string.replacingOccurrences(of: "-", with: "+")
-                      .replacingOccurrences(of: "_", with: "/")
-        let mod = s.count % 4
-        if mod != 0 {
-            s.append(String(repeating: "=", count: 4 - mod))
+    /// Starts the connection. Admitted connections arm the non-resetting read
+    /// deadline and start reading; over-cap connections are answered 503
+    /// immediately and never counted.
+    func start() {
+        connection.start(queue: queue)
+
+        guard admitted else {
+            finish(status: 503, body: "Too many connections", resolution: nil)
+            return
         }
-        return Data(base64Encoded: s)
-    }
-}
 
-// MARK: - Mapping to the proto types the ceremony/runner consume
-
-extension WebAuthnAssertionResponse {
-    /// Map the Codable-decoded response into the proto type
-    /// (`Proto_CredentialAssertionResponse`) the rest of the spike expects.
-    /// Missing fields default to empty (matching proto3 semantics).
-    ///
-    /// Main-actor because the generated proto messages are main-actor
-    /// isolated under the app target's default isolation.
-    @MainActor
-    func intoProto() -> Proto_CredentialAssertionResponse {
-        var p = Proto_CredentialAssertionResponse()
-        p.id = id ?? ""
-        p.type = type ?? ""
-        p.rawID = rawID?.data ?? Data()
-        if let response {
-            var r = Proto_AuthenticatorAssertionResponse()
-            r.clientDataJson = response.clientDataJSON?.data ?? Data()
-            r.authenticatorData = response.authenticatorData?.data ?? Data()
-            r.signature = response.signature?.data ?? Data()
-            r.userHandle = response.userHandle?.data ?? Data()
-            p.response = r
+        let item = DispatchWorkItem { [weak self] in
+            self?.finish(status: 408, body: "Request timed out", resolution: nil)
         }
-        return p
+        lock.lock()
+        deadline = item
+        lock.unlock()
+        queue.asyncAfter(deadline: .now() + listener.readTimeout, execute: item)
+        receiveMore()
+    }
+
+    /// Cancels the connection when the listener tears down. The connection is
+    /// no longer tracked, so this must not touch the listener's counters.
+    func closeFromOwner() {
+        lock.lock()
+        if finished {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let item = deadline
+        deadline = nil
+        lock.unlock()
+        item?.cancel()
+        connection.cancel()
+    }
+
+    private func receiveMore() {
+        connection.receive(
+            minimumIncompleteLength: 1,
+            maximumLength: 64 * 1024
+        ) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+
+            if let data, !data.isEmpty {
+                self.lock.lock()
+                self.buffer.append(data)
+                let exceeded = self.buffer.count > BrowserMFAListener.maxRequestBytes
+                let request = exceeded ? nil : Self.parseRequest(self.buffer)
+                self.lock.unlock()
+
+                if exceeded {
+                    self.finish(status: 413, body: "Request too large", resolution: nil)
+                    return
+                }
+                if let request {
+                    let result = self.listener.handle(request)
+                    self.finish(status: result.status, body: result.body, resolution: result.resolution)
+                    return
+                }
+            }
+
+            if error != nil || isComplete {
+                self.finish(status: 400, body: "Incomplete request", resolution: nil)
+                return
+            }
+            self.receiveMore()
+        }
+    }
+
+    private func finish(
+        status: Int,
+        body: String,
+        resolution: Result<Proto_CredentialAssertionResponse, Error>?
+    ) {
+        lock.lock()
+        if finished {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let item = deadline
+        deadline = nil
+        lock.unlock()
+        item?.cancel()
+
+        let contentType = status == 200 ? "text/html; charset=utf-8" : "text/plain; charset=utf-8"
+        let payload = Self.httpResponse(status: status, body: body, contentType: contentType)
+        connection.send(content: payload, completion: .contentProcessed { [weak self] _ in
+            self?.close()
+        })
+
+        if let resolution {
+            listener.resume(resolution)
+        }
+    }
+
+    private func close() {
+        connection.cancel()
+        listener.connectionClosed(self)
+    }
+
+    // MARK: Parsing
+
+    private static func parseRequest(_ data: Data) -> BrowserMFARequest? {
+        guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        guard let head = String(data: data[..<headerEnd.lowerBound], encoding: .utf8) else { return nil }
+        let lines = head.components(separatedBy: "\r\n")
+        guard let requestLine = lines.first else { return nil }
+        let parts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 2 else { return nil }
+
+        let method = String(parts[0]).uppercased()
+        let target = String(parts[1])
+        let (path, query) = splitTarget(target)
+        return BrowserMFARequest(method: method, path: path, query: query)
+    }
+
+    private static func splitTarget(_ target: String) -> (String, [String: String]) {
+        guard let questionMark = target.firstIndex(of: "?") else {
+            return (target, [:])
+        }
+        let path = String(target[..<questionMark])
+        let queryString = String(target[target.index(after: questionMark)...])
+        var query: [String: String] = [:]
+        for pair in queryString.split(separator: "&", omittingEmptySubsequences: true) {
+            guard let equals = pair.firstIndex(of: "=") else { continue }
+            let name = decodePercent(String(pair[..<equals]))
+            let value = decodePercent(String(pair[pair.index(after: equals)...]))
+            query[name] = value
+        }
+        return (path, query)
+    }
+
+    /// Percent-decodes one query component. `+` is left as a literal plus:
+    /// the sealed envelope's standard-base64 value can contain `+`, and the
+    /// compact JSON payload has no spaces for a form encoder to turn into
+    /// `+` in the first place.
+    private static func decodePercent(_ value: String) -> String {
+        value.removingPercentEncoding ?? value
+    }
+
+    private static func httpResponse(status: Int, body: String, contentType: String) -> Data {
+        let bodyData = Data(body.utf8)
+        var head = "HTTP/1.1 \(status) \(reason(status))\r\n"
+        head += "Content-Type: \(contentType)\r\n"
+        head += "Content-Length: \(bodyData.count)\r\n"
+        head += "Connection: close\r\n"
+        head += "\r\n"
+        var payload = Data(head.utf8)
+        payload.append(bodyData)
+        return payload
+    }
+
+    private static func reason(_ status: Int) -> String {
+        switch status {
+        case 200: return "OK"
+        case 400: return "Bad Request"
+        case 404: return "Not Found"
+        case 405: return "Method Not Allowed"
+        case 408: return "Request Timeout"
+        case 413: return "Payload Too Large"
+        case 500: return "Internal Server Error"
+        case 503: return "Service Unavailable"
+        default: return "Status"
+        }
     }
 }
+
+#endif // canImport(Network)
