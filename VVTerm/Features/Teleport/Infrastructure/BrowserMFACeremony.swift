@@ -29,12 +29,6 @@
 
 import Foundation
 import os.log
-import AuthenticationServices
-#if canImport(UIKit)
-import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
 #if canImport(Network)
 import Network
 #endif
@@ -59,8 +53,8 @@ enum BrowserMFACeremonyError: Error, LocalizedError {
 
 /// Runs the Browser MFA assertion ceremony.
 ///
-/// `@MainActor` because it presents ASWebAuthenticationSession (Face ID /
-/// Safari must be on the main thread).
+/// `@MainActor` because it presents the in-app browser session (Safari must
+/// be on the main thread).
 @MainActor
 final class BrowserMFACeremony: NSObject {
 
@@ -69,16 +63,21 @@ final class BrowserMFACeremony: NSObject {
     private let logging: any TeleportLogging
     private let logger: Logger
 
-    /// The ASWebAuthenticationSession (kept alive so it isn't deallocated
-    /// while the Safari sheet is presented).
-    private var webAuthSession: ASWebAuthenticationSession?
+    /// The injected browser presenter (owns `ASWebAuthenticationSession` +
+    /// the callback scheme + the presentation anchor).
+    private let presenter: any BrowserMFAPresenting
+
+    /// The live browser session (kept alive so it isn't deallocated while the
+    /// Safari sheet is presented).
+    private var webAuthSession: (any BrowserMFASessionHandle)?
 
     /// The loopback listener.
     private var listener: BrowserMFAListener?
 
-    init(logging: any TeleportLogging) {
+    init(logging: any TeleportLogging, presenter: any BrowserMFAPresenting) {
         self.logging = logging
         self.logger = logging.logger(category: "TeleportBrowserMFA")
+        self.presenter = presenter
         super.init()
     }
 
@@ -158,10 +157,10 @@ final class BrowserMFACeremony: NSObject {
         // Log only the request-id prefix (as above): the full id is a bearer
         // for the MFA challenge and must not land in diagnostics reports.
         logger.info("open_safari https://\(host, privacy: .public)/web/mfa/browser/\(requestID.prefix(16), privacy: .public)…")
-        // We use ASWebAuthenticationSession to present Safari in-app. The
-        // callback scheme "vvterm" is set but won't fire for the loopback
+        // We present Safari in-app via the injected presenter (the callback
+        // scheme "vvterm" is set host-side but won't fire for the loopback
         // redirect — we cancel the session after the listener receives the
-        // callback. (See session 1.11 results note Q3.)
+        // callback). (See session 1.11 results note Q3.)
         await openSafari(url: URL(string: browserMFAURL)!)
 
         // ── 5. Await the listener ─────────────────────────────────────────
@@ -197,54 +196,27 @@ final class BrowserMFACeremony: NSObject {
 
     // MARK: - Safari presentation
 
-    /// Open the URL via ASWebAuthenticationSession. Presents Safari in-app.
-    /// The completion handler is a no-op for the response — we don't use it
-    /// (the loopback redirect is not intercepted by ASWebAuth; the listener
-    /// is the actual response channel). We only need to know Safari opened.
+    /// Present the URL via the injected browser presenter. The completion
+    /// handler is a no-op for the response — we don't use it (the loopback
+    /// redirect is not intercepted by ASWebAuth; the listener is the actual
+    /// response channel). We only need to know the session started; the
+    /// completion logs stay here in the ceremony.
     private func openSafari(url: URL) async {
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            // Capture the logger by value: the completion handler runs on an
-            // arbitrary queue and must not retain the ceremony through `self`.
-            let logger = self.logger
-            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "vvterm") { _, error in
-                // This fires if the user dismisses the Safari sheet, or if
-                // the web UI happens to redirect to vvterm:// (it won't for
-                // Browser MFA — the redirect is http://127.0.0.1:...). We log
-                // it but don't resume — the continuation was already resumed
-                // on start(), and the listener is the real gate.
-                if let error {
-                    logger.info("safari_callback error: \(error.localizedDescription, privacy: .public)")
-                } else {
-                    logger.info("safari_callback session ended (dismissed or redirected to vvterm://)")
-                }
+        // Capture the logger by value: the completion handler runs on an
+        // arbitrary queue and must not retain the ceremony through `self`.
+        let logger = self.logger
+        let session = await presenter.present(url: url) { error in
+            // This fires if the user dismisses the Safari sheet, or if the
+            // web UI happens to redirect to vvterm:// (it won't for Browser
+            // MFA — the redirect is http://127.0.0.1:...). We log it but
+            // don't resume — the listener is the real gate.
+            if let error {
+                logger.info("safari_callback error: \(error.localizedDescription, privacy: .public)")
+            } else {
+                logger.info("safari_callback session ended (dismissed or redirected to vvterm://)")
             }
-            session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = true
-            webAuthSession = session
-            let started = session.start()
-            logger.info("safari_started \(started)")
-            // Resume immediately — we only care that Safari opened. The
-            // listener (already started) is the real gate.
-            continuation.resume()
         }
-    }
-}
-
-// MARK: - ASWebAuthenticationPresentationContextProviding
-
-extension BrowserMFACeremony: ASWebAuthenticationPresentationContextProviding {
-    @MainActor
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        #if os(macOS)
-        return NSApp.keyWindow ?? ASPresentationAnchor()
-        #else
-        guard let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }),
-              let window = scene.windows.first else {
-            return ASPresentationAnchor()
-        }
-        return window
-        #endif
+        logger.info("safari_started \(session.didStart)")
+        webAuthSession = session
     }
 }

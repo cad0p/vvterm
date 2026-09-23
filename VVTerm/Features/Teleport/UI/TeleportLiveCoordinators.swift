@@ -284,18 +284,24 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
 /// bogus `localhost:0` URL is rejected by Teleport's
 /// `ValidateClientRedirect` → "unable to create MFA challenges" (gRPC code 7)
 /// — that was the live-device regression.
+@MainActor
 final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
     private let logging: any TeleportLogging
+    private let presenter: any BrowserMFAPresenting
 
-    init(logging: any TeleportLogging = AppTeleportLogging.shared) {
+    init(
+        logging: any TeleportLogging = AppTeleportLogging.shared,
+        presenter: (any BrowserMFAPresenting)? = nil
+    ) {
         self.logging = logging
+        self.presenter = presenter ?? LiveBrowserMFAPresenter()
     }
 
     func run(
         grpcClient: any TeleportGRPCClienting,
         host: String
     ) async throws -> Proto_BrowserMFAResponse {
-        let ceremony = BrowserMFACeremony(logging: logging)
+        let ceremony = BrowserMFACeremony(logging: logging, presenter: presenter)
         return try await ceremony.run(grpcClient: grpcClient, host: host)
     }
 }

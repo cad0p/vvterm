@@ -104,7 +104,7 @@ struct TeleportLoggingSeamTests {
     @Test
     func browserMFACeremonyRequestsCeremonyCategory() {
         let spy = SpyTeleportLogging()
-        _ = BrowserMFACeremony(logging: spy)
+        _ = BrowserMFACeremony(logging: spy, presenter: RecordingBrowserMFAPresenter())
         #expect(spy.categories == ["TeleportBrowserMFA"])
     }
 
