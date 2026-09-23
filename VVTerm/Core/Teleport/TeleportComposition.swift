@@ -44,6 +44,11 @@ final class TeleportComposition {
         self.browserMFAPresenter = browserMFAPresenter ?? LiveBrowserMFAPresenter()
     }
 
+    /// The credential store every factory hands to its coordinators (the
+    /// single host keyring). Exposed so the seam test locks "stateless seams
+    /// stay shared" without constructing production state.
+    var credentialStore: any TeleportCredentialStore { keyRing }
+
     // MARK: - Per-presentation factories
 
     /// A fresh Phase-1 bootstrap coordinator (per sheet presentation).

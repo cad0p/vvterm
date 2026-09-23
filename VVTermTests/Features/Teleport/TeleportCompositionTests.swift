@@ -47,8 +47,15 @@ struct TeleportCompositionTests {
     }
 
     @Test
-    func sharedCompositionIsAStableSingleton() {
-        #expect(TeleportComposition.shared === TeleportComposition.shared)
+    func sharedCompositionSharesStatelessSeamsAndMintsFreshClients() {
+        // The shared composition must keep the stateless seams shared (one
+        // credential store = the single host keyring) while minting a fresh
+        // stateful client graph per presentation (the gRPC client sweeps +
+        // deletes keychain identities).
+        let composition = TeleportComposition.shared
+        #expect(composition.credentialStore as? TeleportKeyRing === TeleportKeyRingHost.shared)
+        #expect(composition.makeRegistrationCoordinator() !== composition.makeRegistrationCoordinator())
+        #expect(composition.makeBootstrapCoordinator() !== composition.makeBootstrapCoordinator())
     }
 }
 #endif

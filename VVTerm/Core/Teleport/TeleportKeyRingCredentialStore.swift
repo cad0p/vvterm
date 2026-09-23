@@ -33,6 +33,12 @@ final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked 
         self.keyRingProvider = keyRingProvider
     }
 
+    /// The keyring this adapter resolves, on the main actor. Exposed so the
+    /// seam test can assert the production default resolves the single host
+    /// instance without mutating production state.
+    @MainActor
+    var resolvedKeyRing: TeleportKeyRing { keyRingProvider() }
+
     // MARK: - Reads
 
     func clusterTLSState(for clusterId: UUID) async -> TeleportClusterTLSState? {

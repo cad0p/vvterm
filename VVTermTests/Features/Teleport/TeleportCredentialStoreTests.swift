@@ -78,16 +78,11 @@ struct TeleportCredentialStoreTests {
     func defaultAdapterResolvesTheSingleHostKeyRing() async {
         // The production default must resolve `TeleportKeyRingHost.shared`,
         // so a coordinator write is visible to the UI and the SSH session.
+        // Identity-only assertion: this test must not mutate production
+        // state (the write→read round-trip above uses a suite-scoped
+        // keyring).
         let store = TeleportKeyRingCredentialStore()
-        let clusterId = UUID()
-        await store.storeBootstrapCert(
-            "host-roundtrip-pem",
-            validBefore: Date().addingTimeInterval(3600),
-            for: clusterId
-        )
-        defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
-        #expect(TeleportKeyRingHost.shared.liveCertPEM(for: clusterId) == "host-roundtrip-pem")
-        #expect(await store.liveCertPEM(for: clusterId) == "host-roundtrip-pem")
+        #expect(store.resolvedKeyRing === TeleportKeyRingHost.shared)
     }
 }
 #endif
