@@ -290,10 +290,50 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    /// The failure path: a `HeadlessError.http` carries the server's raw
+    /// response body, which must not reach the log. Pins the status-only
+    /// redaction in `handlePostFailure` (the round-1 security finding).
+    func testTeleportBootstrapCoordinator_httpFailureLogsTheStatusNotTheBody() async throws {
+        let logging = SpySubsystemLogging()
+        let http = MockTeleportHTTPClient()
+        let bodyMarker = "server-response-body-marker"
+        http.scriptedHeadlessResponse = nil
+        http.scriptedHeadlessError = HeadlessError.http(status: 403, body: bodyMarker)
+
+        let coordinator = TeleportBootstrapCoordinator(
+            httpClient: http,
+            keyRing: MockTeleportKeyRing(),
+            safariPresenter: nil,
+            logging: logging,
+            signer: MockSEPKeySigner(outcome: .success),
+            sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            tlsKeyPairGenerator: try TeleportFixtureSupport.makeFixedTLSGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"))
+
+        let messages = try await waitForLog(subsystem: logging.subsystem, containing: "POST failed")
+        XCTAssertTrue(
+            messages.contains(where: { $0.contains("POST failed: HTTP 403") }),
+            "the failure log must carry the status; saw: \(messages)"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(bodyMarker),
+                "the HTTP response body leaked into a log payload: \(message)"
+            )
+        }
+    }
+
     /// The unified log does not apply privacy masking on the iOS Simulator, so
     /// the runtime readback above cannot distinguish an annotated
     /// interpolation from a bare one. Pin the annotation form at the source
     /// level: every interpolation of the headless id must be private.
+    ///
+    /// Limitation (round-2 NIT): the filter keys on the two known log
+    /// literals, so a future headless-id log without either literal (e.g. a
+    /// bare `logger.info("starting \(headlessID)")`) is invisible here. The
+    /// exact-count assertion still catches additions to the pinned literals.
     func testTeleportBootstrapCoordinator_headlessIDLogsArePrivacyAnnotated() throws {
         let sourceURL = repositoryRoot()
             .appendingPathComponent("VVTerm/Features/Teleport/Application/TeleportBootstrapCoordinator.swift")

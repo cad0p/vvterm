@@ -49,6 +49,22 @@ nonisolated enum BrowserMFACeremonyError: Error, LocalizedError {
 
 // MARK: - Ceremony
 
+/// A redaction-safe rendering of a gRPC failure: the case (and status, where
+/// present) without the server's message, which can echo the redirect URL and
+/// its per-run `secret_key`.
+private extension GRPCError {
+    var redactedDescription: String {
+        switch self {
+        case .transport: return "transport"
+        case .tls: return "tls"
+        case .http2: return "http2"
+        case .grpc(let status, _): return "grpc(status: \(status))"
+        case .decode: return "decode"
+        case .timeout: return "timeout"
+        }
+    }
+}
+
 /// Runs one Browser MFA ceremony for the authenticated user.
 @MainActor
 final class BrowserMFACeremony: NSObject {
@@ -101,7 +117,9 @@ final class BrowserMFACeremony: NSObject {
         } catch {
             // The server's gRPC message can echo the redirect URL, which
             // carries the per-run secret_key — log the error's shape only.
-            logger.error("browser MFA CreateAuthenticateChallenge failed: \(String(describing: type(of: error)), privacy: .public)")
+            let shape = (error as? GRPCError)?.redactedDescription
+                ?? String(describing: type(of: error))
+            logger.error("browser MFA CreateAuthenticateChallenge failed: \(shape, privacy: .public)")
             throw error
         }
 
