@@ -5,9 +5,9 @@ Secure-Enclave-backed EC-P256 key can register as a Teleport passwordless MFA
 device and log in via `/webapi/mfa/login/begin`+`/finish`. Runs entirely on a
 GitHub Actions `macos-14` runner — **no local Mac or iOS device required**.
 
-If this passes, Option 5 in
-[`2026-07-20-sep-key-bootstrap-not-asauthorization.md`](../../../../personal/github/cad0p/Goldmine/open-source/github/vvterm/decisions/2026-07-20-sep-key-bootstrap-not-asauthorization.md)
-is technically de-risked and the implementation session (1.6) can proceed.
+If this passes, Option 5 (a Secure Enclave P-256 key for Teleport passwordless
+MFA instead of the `ASAuthorization`/passkey flow) is technically de-risked and
+the implementation session (1.6) can proceed.
 
 ## What this proves
 

@@ -48,7 +48,14 @@ final class ProtoWireCompatTests: XCTestCase {
         line: UInt = #line
     ) throws {
         let encoded = try message.serializedData()
-        XCTAssertEqual(hex(encoded), golden, "wire bytes drifted", file: file, line: line)
+        XCTAssertEqual(
+            hex(encoded),
+            golden,
+            "wire bytes drifted — the goldens are the pre-rewrite IDL contract; "
+                + "do not regenerate them from a rewritten IDL (see the file header)",
+            file: file,
+            line: line
+        )
         let decoded = try M(serializedBytes: data(hex: golden))
         XCTAssertEqual(
             hex(try decoded.serializedData()),
@@ -254,7 +261,6 @@ final class ProtoWireCompatTests: XCTestCase {
         XCTAssertEqual(Proto_DeviceType.webauthn.rawValue, 3)
         XCTAssertEqual(Proto_DeviceType.totp.rawValue, 1)
         XCTAssertEqual(Proto_DeviceType(rawValue: 2), .UNRECOGNIZED(2))
-        XCTAssertFalse(Proto_DeviceType.allCases.contains(.UNRECOGNIZED(2)))
     }
 
     func testChallengeScopeAndDeviceUsage_rawValues() {

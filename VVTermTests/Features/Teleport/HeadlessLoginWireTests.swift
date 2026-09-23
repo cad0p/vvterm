@@ -13,8 +13,10 @@
 //      `.transport(localizedDescription)`, `.decode`) against a real loopback
 //      HTTP server, so the actual shared `TeleportTrustSession.session` path
 //      is exercised;
-//    - the effective timeout (>= the 180 s server-side block) of the shared
-//      session that `post` actually uses.
+//    - the shared trust session's request/resource timeout constants
+//      (200 s >= the 180 s server-side block). This pins the shared session
+//      configuration, not which session `post` uses — making that link
+//      observable is a rewrite acceptance item.
 //
 //  Note: `URLProtocol.registerClass` does NOT intercept `URLSession` on this
 //  OS (verified: a fresh ephemeral session still hit the network, while an
@@ -81,7 +83,9 @@ final class LoopbackHTTPServer {
 
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
+            self.lock.lock()
             self.connections.append(connection)
+            self.lock.unlock()
             connection.start(queue: self.queue)
             self.receive(on: connection, buffer: Data())
         }
@@ -114,10 +118,13 @@ final class LoopbackHTTPServer {
 
     func stop() {
         listener.cancel()
-        for connection in connections {
+        lock.lock()
+        let openConnections = connections
+        connections.removeAll()
+        lock.unlock()
+        for connection in openConnections {
             connection.cancel()
         }
-        connections.removeAll()
     }
 
     deinit {
@@ -384,25 +391,21 @@ final class HeadlessLoginWireTests: XCTestCase {
 
     func testPost_mapsURLSessionErrorsToTransport() async throws {
         // Nothing listens on 127.0.0.1:1 (privileged port), so URLSession
-        // fails. Capture the raw URLSession error for the same request and
-        // assert `post` wraps exactly its localizedDescription.
+        // fails. Assert the `.transport` case shape and that the underlying
+        // URLSession message is surfaced; the exact text is locale- and
+        // session-configuration-sensitive, so it is deliberately not pinned.
         let deadURL = URL(string: "http://127.0.0.1:1")!
-        let probe = URLSession(configuration: .ephemeral)
-        var rawMessage: String?
-        do {
-            _ = try await probe.data(
-                for: URLRequest(url: deadURL.appendingPathComponent("webapi/headless/login"))
-            )
-        } catch {
-            rawMessage = error.localizedDescription
-        }
-        let expected = try XCTUnwrap(rawMessage, "expected the dead-port request to fail")
-
         do {
             _ = try await HeadlessLogin.post(baseURL: deadURL, req: Self.makeRequest())
             XCTFail("expected HeadlessError.transport")
         } catch let error as HeadlessError {
-            XCTAssertEqual(error.errorDescription, "transport: \(expected)")
+            guard case .transport(let message) = error else {
+                return XCTFail("expected .transport, got \(error)")
+            }
+            XCTAssertFalse(
+                message.isEmpty,
+                "transport must carry the underlying URLSession message"
+            )
         }
     }
 
@@ -419,12 +422,12 @@ final class HeadlessLoginWireTests: XCTestCase {
         }
     }
 
-    // MARK: - Effective session / timeout
+    // MARK: - Shared trust session configuration
 
-    func testPost_usesTheSharedTrustSessionWithAtLeast180sTimeout() {
-        // `HeadlessLogin.post` builds a local URLSessionConfiguration but never
-        // uses it — the effective session is TeleportTrustSession.session. The
-        // shared session must outlast the server's 180 s blocking window.
+    func testSharedTrustSessionConfiguration_pinsThe200sTimeouts() {
+        // This pins the shared trust session's configuration (200 s > the
+        // 180 s blocking window the server holds), not which session
+        // `HeadlessLogin.post` uses — see the rewrite acceptance list.
         let config = TeleportTrustSession.session.configuration
         XCTAssertGreaterThanOrEqual(config.timeoutIntervalForRequest, 180)
         XCTAssertGreaterThanOrEqual(config.timeoutIntervalForResource, 180)

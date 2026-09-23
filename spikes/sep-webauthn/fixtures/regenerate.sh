@@ -47,8 +47,8 @@ EOF
 mkdir -p gen
 cp "$SCRIPT_DIR/generate/main.go" gen/main.go
 
-# Download fxamacker/cbor (the only external dep — the teleport replace
-# brings the rest in-tree).
+# Download fxamacker/cbor (the only external dep; the generator is
+# self-contained and brings nothing else in-tree).
 echo "→ go mod tidy"
 go mod tidy 2>&1 | sed 's/^/  /' || true
 

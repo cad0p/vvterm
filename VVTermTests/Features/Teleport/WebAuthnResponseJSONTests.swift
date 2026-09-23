@@ -180,8 +180,10 @@ final class WebAuthnResponseJSONTests: XCTestCase {
         let nilInner = try XCTUnwrap(nilObject["response"] as? [String: Any])
         XCTAssertNil(nilInner["userHandle"], "nil userHandle must be omitted")
 
-        // An empty (non-nil) handle is a present empty string — Go's `[]byte{}`
-        // marshals as "".
+        // An empty (non-nil) handle is a present empty string. Go's
+        // `omitempty` omits empty slices too, but the pinned Swift shape
+        // (nil omitted, empty Data() present as "") is what the server
+        // accepts either way.
         let emptyHandle = try WebAuthn.login(
             origin: Self.origin,
             rpID: Self.rpID,

@@ -244,7 +244,7 @@ jobs:
           # 1. This push's OTA archive run (vvterm-pr-ota.yml, pull_request event).
           ota_run="$(gh run list --repo "$REPO" --workflow vvterm-pr-ota.yml \
             --event pull_request --commit "$HEAD_SHA" \
-            --json databaseId --jq '.[0].databaseId // empty')"
+            --json databaseId --jq '.[0].databaseId // empty' || true)"
           if [[ -z "$ota_run" ]]; then
             echo "::notice::No VVTerm PR OTA run for $HEAD_SHA — publish gate skipped."
             exit 0
@@ -262,7 +262,11 @@ jobs:
             echo "::warning::OTA archive run $ota_run did not complete within 40m — releasing unit-tests."
             exit 0
           fi
-          ota_end="$(gh api "repos/$REPO/actions/runs/$ota_run" --jq '.updated_at')"
+          ota_end="$(gh api "repos/$REPO/actions/runs/$ota_run" --jq '.updated_at' || true)"
+          if [[ -z "$ota_end" ]]; then
+            echo "::warning::Could not read the OTA archive completion time — releasing unit-tests."
+            exit 0
+          fi
           echo "OTA archive completed at $ota_end"
 
           # 3. Find the ios-adhoc-pr run this completion spawned. workflow_run
@@ -273,7 +277,7 @@ jobs:
             publish_run="$(gh run list --repo "$REPO" --workflow ios-adhoc-pr.yml \
               --event workflow_run --limit 100 \
               --json databaseId,createdAt \
-              --jq "[.[] | select(.createdAt >= \"$ota_end\")] | sort_by(.createdAt) | .[0].databaseId // empty")"
+              --jq "[.[] | select(.createdAt >= \"$ota_end\")] | sort_by(.createdAt) | .[0].databaseId // empty" || true)"
             [[ -n "$publish_run" ]] && break
             sleep 10
           done

@@ -1,0 +1,4 @@
+# Byte-exact oracle: never apply EOL conversion, diff, or merge these files as
+# text. `FixtureTests` compares them byte-for-byte, so a checkout that
+# normalizes line endings would produce spurious failures.
+* binary
