@@ -5,13 +5,14 @@
 //
 //  Pins `TeleportBootstrapCoordinator.handlePostFailure` — the load-bearing
 //  error mapping from the Phase-1 blocking POST to the bootstrap sheet's
-//  recovery UX. In particular `HeadlessError.transport("…timed out…")` must
-//  become `.failed(.timeout)` (the mapping is a localizedDescription string
-//  match on the URLSession error the transport wraps).
+//  recovery UX. In particular `HeadlessError.transport(_, code: .timedOut)`
+//  must become `.failed(.timeout)` (the mapping classifies on the carried
+//  `URLError.Code`, not on the OS-localized message).
 //
-//  The login coordinator has an inert copy of the timeout branch; the
-//  bootstrap coordinator is the one that runs for the headless POST, so this
-//  suite drives the real coordinator end-to-end with a scripted HTTP client.
+//  The login coordinator collapses every transport failure to `.networkLost`
+//  (it has no timeout branch); the bootstrap coordinator is the one that runs
+//  for the headless POST, so this suite drives the real coordinator end-to-end
+//  with a scripted HTTP client.
 
 #if DEBUG
 import XCTest
@@ -48,23 +49,38 @@ final class TeleportBootstrapCoordinatorTimeoutTests: XCTestCase {
 
     func testTransportTimeout_mapsToFailedTimeout() async {
         let coordinator = await driveFailure(
-            HeadlessError.transport("The request timed out.")
+            HeadlessError.transport("The request timed out.", code: .timedOut)
         )
         XCTAssertEqual(coordinator.state, .failed(.timeout))
     }
 
-    func testTransportTimeout_isCaseInsensitive() async {
-        // URLSession's localizedDescription casing varies by platform/locale
-        // (e.g. "…Timed Out…"); the mapping lowercases before matching.
-        let coordinator = await driveFailure(
-            HeadlessError.transport("The request TIMED OUT while waiting")
+    /// The classification must not read the OS-localized message: a German
+    /// timeout description still maps to `.timeout`, and a foreign-language
+    /// non-timeout still maps to `.networkLost`.
+    func testTransportTimeout_isLocaleIndependent() async {
+        let timedOut = await driveFailure(
+            HeadlessError.transport(
+                "Der Vorgang hat das Zeitlimit überschritten.",
+                code: .timedOut
+            )
         )
-        XCTAssertEqual(coordinator.state, .failed(.timeout))
+        XCTAssertEqual(timedOut.state, .failed(.timeout))
+
+        let networkLost = await driveFailure(
+            HeadlessError.transport(
+                "Die Verbindung zum Server ist fehlgeschlagen.",
+                code: .cannotConnectToHost
+            )
+        )
+        XCTAssertEqual(networkLost.state, .failed(.networkLost))
     }
 
     func testTransportNetworkLoss_mapsToNetworkLost() async {
         let coordinator = await driveFailure(
-            HeadlessError.transport("The Internet connection appears to be offline.")
+            HeadlessError.transport(
+                "The Internet connection appears to be offline.",
+                code: .notConnectedToInternet
+            )
         )
         XCTAssertEqual(coordinator.state, .failed(.networkLost))
     }

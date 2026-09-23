@@ -55,7 +55,7 @@ struct TeleportHTTPClient {
         req.httpMethod = "GET"
         let (data, response) = try await TeleportTrustSession.session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
-            throw HeadlessError.transport("non-HTTP response")
+            throw HeadlessError.transport("non-HTTP response", code: nil)
         }
         guard http.statusCode == 200 else {
             let body = String(data: data, encoding: .utf8) ?? "<binary>"

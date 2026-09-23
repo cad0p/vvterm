@@ -365,14 +365,12 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// Map an HTTP/URLSession error to a `TeleportLoginError`.
     private func mapHTTPError(_ error: Error) -> TeleportLoginError {
         // The concrete HTTP client wraps URLSession errors in HeadlessError
-        // (shared with Phase 1). We string-match because HeadlessError's
-        // cases aren't exhaustive here (the parallel agent may add cases).
+        // (shared with Phase 1). Phase 3 has no timeout-specific UX, so every
+        // transport failure is a network loss — classified on the case, not
+        // on the OS-localized message.
         if let headlessError = error as? HeadlessError {
             switch headlessError {
-            case .transport(let m):
-                if m.lowercased().contains("timed out") {
-                    return .networkLost
-                }
+            case .transport:
                 return .networkLost
             case .http(let status, let body):
                 return .server("HTTP \(status): \(body)")

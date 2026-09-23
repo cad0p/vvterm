@@ -92,7 +92,11 @@ struct HeadlessLoginResponse: Decodable {
 
 /// Errors surfaced by the headless login call.
 enum HeadlessError: LocalizedError {
-    case transport(String)
+    /// A URLSession-level failure. `code` carries the underlying
+    /// `URLError.Code` when the failure was a `URLError` (nil for a
+    /// non-HTTP response), so callers can classify timeouts without
+    /// reading the OS-localized `message`.
+    case transport(String, code: URLError.Code?)
     case http(status: Int, body: String)
     case decode(String)
     case noCert
@@ -100,7 +104,7 @@ enum HeadlessError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .transport(let message):
+        case .transport(let message, _):
             return "transport: \(message)"
         case .http(let status, let body):
             return "HTTP \(status): \(body)"
@@ -130,8 +134,9 @@ enum HeadlessLogin {
     ///   - req: the request body.
     ///   - session: the URLSession to use. Production callers rely on the
     ///     default; tests inject a stub to observe the request.
-    /// - Throws: `HeadlessError.transport` for URLSession failures,
-    ///   `.http` for any non-200 status, `.decode` for an unreadable body.
+    /// - Throws: `HeadlessError.transport` for URLSession failures (carrying
+    ///   the underlying `URLError.Code` when available), `.http` for any
+    ///   non-200 status, `.decode` for an unreadable body.
     static func post(
         baseURL: URL,
         req: HeadlessLoginReq,
@@ -165,10 +170,13 @@ enum HeadlessLogin {
         do {
             (payload, reply) = try await session.data(for: request)
         } catch {
-            throw HeadlessError.transport(error.localizedDescription)
+            throw HeadlessError.transport(
+                error.localizedDescription,
+                code: (error as? URLError)?.code
+            )
         }
         guard let httpReply = reply as? HTTPURLResponse else {
-            throw HeadlessError.transport("non-HTTP response")
+            throw HeadlessError.transport("non-HTTP response", code: nil)
         }
         guard httpReply.statusCode == 200 else {
             let body = String(data: payload, encoding: .utf8) ?? "<binary>"
