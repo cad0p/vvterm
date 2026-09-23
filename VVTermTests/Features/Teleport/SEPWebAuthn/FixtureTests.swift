@@ -15,12 +15,14 @@
 //       `spikes/sep-webauthn/fixtures/expected/`.
 //
 //  The 8 fixtures under `spikes/sep-webauthn/fixtures/expected/` are COMMITTED
-//  test data. They are a frozen vector: the Go generator
-//  (`spikes/sep-webauthn/fixtures/generate/main.go`) mints a fresh P-256 key
-//  and a fresh signature on every run, so the committed files are one matched
-//  (public key, signature, attestation object) set — NOT a reproducible
-//  derivation. Regenerating produces a new matched set that must be committed
-//  together (`spikes/sep-webauthn/fixtures/regenerate.sh`).
+//  test data and FULLY REPRODUCIBLE: the Go generator
+//  (`spikes/sep-webauthn/fixtures/generate/main.go`) derives a fixed P-256 key
+//  from a domain-separated seed and signs with RFC 6979 deterministic ECDSA,
+//  so a fresh generator run byte-matches the committed set. The
+//  `SEP-WebAuthn fixture tests` workflow proves it with the fail-closed
+//  `spikes/sep-webauthn/fixtures/check-provenance.sh` before regenerating in
+//  place. If the generator changes, regenerate and commit all 8 files together
+//  (`spikes/sep-webauthn/fixtures/regenerate.sh`).
 //
 //  An absent fixture is a HARD FAILURE (`XCTFail` + throw), never a skip:
 //  this byte comparison is the acceptance oracle for the clean-room rewrite
@@ -186,9 +188,9 @@ final class FixtureTests: XCTestCase {
 
     func testAttestationObject_matchesGoFixture() throws {
         // Compare the full attestation object CBOR against the Go-generated
-        // fixture. The committed fixture set was produced by one generator run
-        // (fresh key + signature), and includes both the signature and the
-        // full attObj under fixtures/expected/.
+        // fixture. The committed fixture set is the deterministic generator's
+        // output (fixed key + RFC 6979 signature), and includes both the
+        // signature and the full attObj under fixtures/expected/.
         //
         // We reproduce the same authData (via the fixed test inputs) and
         // pass the committed Go signature into buildAttestationObjectCBOR,
