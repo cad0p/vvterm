@@ -1,69 +1,44 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //
 //  Signer.swift
-//  SEPWebAuthn
+//  VVTerm
 //
-//  Ports the `WebAuthnSigner` abstraction from Teleport's
-//  lib/auth/touchid/api.go. The Go code uses an implicit `native` interface
-//  (Register / Authenticate / FindCredentials). The spike only needs:
+//  The signer abstraction shared by the WebAuthn builder and the Secure
+//  Enclave key lifecycle.
 //
-//    - create a P-256 keypair (returns id + raw public key bytes)
-//    - sign a digest with the private key
+//  A signer owns a P-256 key and produces two things the WebAuthn builder
+//  needs: the public key in ANSI X9.63 form (`0x04 || X || Y`) and DER
+//  ECDSA signatures over `SHA-256(message)`. The server verifies the
+//  signature against the public key it registered, so both the key encoding
+//  and the single-hash convention are wire contracts.
 //
-//  Two implementations:
-//    - SoftwareSigner       (Part A — CryptoKit P256, no SEP)
-//    - SecureEnclaveSigner  (Part B — SecKey* + kSecAttrTokenIDSecureEnclave)
 
 import Foundation
+import Security
 
-/// A signing primitive abstracting `native.Register` + `native.Authenticate`.
-///
-/// The Go `native.Register` returns a `CredentialInfo` whose `publicKeyRaw` is
-/// the ANSI X9.63 representation (`0x04 || X || Y`) from
-/// `SecKeyCopyExternalRepresentation`. The software signer produces the same
-/// 65-byte shape so the downstream `ECDSAPublicKeyFromRaw`-equivalent parsing
-/// (here done inline) works identically.
+/// A WebAuthn credential signer.
 public protocol WebAuthnSigner: AnyObject {
-    /// Human-readable label for log output ("software" / "sep").
+    /// A short human-readable label for diagnostics (`sep`, `software`, ...).
     var label: String { get }
 
-    /// Create a new P-256 keypair and return `(credentialID, publicKeyRaw)`.
+    /// Creates a fresh P-256 credential.
     ///
-    /// `credentialID` is an opaque identifier for the key — the Go path uses
-    /// the key's `kSecAttrApplicationLabel` (a random 32-byte value). The
-    /// spike uses a random 32-byte value; it is later emitted verbatim as the
-    /// WebAuthn credential `id` (then base64url-encoded as `rawId`).
-    ///
-    /// `publicKeyRaw` MUST be the ANSI X9.63 form `0x04 || X(32) || Y(32)` —
-    /// 65 bytes — to match `SecKeyCopyExternalRepresentation`'s output and
-    /// what `darwin.ECDSAPublicKeyFromRaw` expects.
+    /// - Returns: the credential id and the public key in X9.63 form
+    ///   (`0x04 || X(32) || Y(32)`, 65 bytes).
     func createKey() throws -> (credentialID: Data, publicKeyRaw: Data)
 
-    /// Sign the WebAuthn message `authData || clientDataHash`.
+    /// Signs `SHA-256(message)` with the credential's private key.
     ///
-    /// The server (go-webauthn EC2PublicKeyData.Verify) computes
-    /// `sha256(message)` and verifies the signature against it. Each signer
-    /// is responsible for hashing `message` exactly once before signing:
-    ///
-    ///   - SoftwareSigner uses CryptoKit's `signature(for: Data)`, which
-    ///     hashes internally → signs sha256(message).
-    ///   - SecureEnclaveSigner computes sha256(message) then signs the
-    ///     digest directly via `.ecdsaSignatureDigestX962SHA256` (matching
-    ///     authenticate.m:58).
-    ///
-    /// Both produce a signature over sha256(authData || clientDataHash),
-    /// which is what the server expects.
-    ///
-    /// Returns the raw ECDSA signature in ASN.1 DER
-    /// `SEQUENCE { r INTEGER, s INTEGER }` form — this is what
-    /// `SecKeyCreateSignature` returns and what Teleport's `native.Authenticate`
-    /// returns to `api.go:Register` / `api.go:Login`.
+    /// - Returns: a DER-encoded ECDSA signature (`SEQUENCE { r, s }`).
     func sign(message: Data, credentialID: Data) throws -> Data
 }
 
-// MARK: - Errors
-
-public enum SignerError: Error, CustomStringConvertible {
+/// Errors surfaced by the signer implementations.
+///
+/// `LocalizedError` so `error.localizedDescription` carries the wrapped
+/// system message (the login coordinator maps Face ID cancel/lockout/
+/// not-enrolled from those substrings).
+public enum SignerError: Error, LocalizedError, CustomStringConvertible {
     case keyCreationFailed(String)
     case keyNotFound
     case signingFailed(String)
@@ -71,24 +46,27 @@ public enum SignerError: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .keyCreationFailed(let m):  return "key creation failed: \(m)"
-        case .keyNotFound:              return "credential not found"
-        case .signingFailed(let m):     return "signing failed: \(m)"
-        case .invalidPublicKey(let m):  return "invalid public key: \(m)"
+        case .keyCreationFailed(let message):
+            return "key creation failed: \(message)"
+        case .keyNotFound:
+            return "key not found"
+        case .signingFailed(let message):
+            return "signing failed: \(message)"
+        case .invalidPublicKey(let message):
+            return "invalid public key: \(message)"
         }
     }
+
+    public var errorDescription: String? { description }
 }
 
-// MARK: - credentialID generation (shared)
-
-/// 32 random bytes — mirrors the Go `native.Register` path which uses
-/// `kSecAttrApplicationLabel` set to a random `NSData` value. (In production
-/// Teleport uses `uuid.NewString()` — a 36-char string — as the credential
-/// ID; the spike uses a 32-byte random value, base64url-encoded, which is
-/// equally opaque and round-trips cleanly as the WebAuthn `id`/`rawId`.)
+/// Generates a fresh 32-byte credential id.
+///
+/// `precondition` on RNG failure: a credential id that silently degrades to
+/// zeros would make two devices collide.
 func newCredentialID() -> Data {
     var bytes = [UInt8](repeating: 0, count: 32)
     let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-    precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
+    precondition(status == errSecSuccess, "SecRandomCopyBytes failed with OSStatus \(status)")
     return Data(bytes)
 }

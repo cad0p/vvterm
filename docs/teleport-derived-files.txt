@@ -18,10 +18,6 @@
 #
 # Note: the literal SPDX marker must NOT appear in this header (checked by the
 # gate) so this file can never be mistaken for a documented AGPL source file.
-VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Attestation.swift	Ports makeAttestationData + collectedClientData from Teleport lib/auth/touchid/api.go
-VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Signer.swift	Ports the WebAuthnSigner abstraction from Teleport lib/auth/touchid/api.go
-VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/WebAuthn.swift	Ports Register + Login from Teleport lib/auth/touchid/api.go
-VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/SecureEnclaveSigner.swift	Adapted from the spike source; mirrors Teleport register.m
 VVTerm/Features/Teleport/UI/TeleportLiveCoordinators.swift	Wires the concrete Infrastructure types ported from the spike
 scripts/ci/teleport-webauthn.py	Port of Teleport services.NewHeadlessAuthenticationID (matched to Teleport v16)
 spikes/sep-webauthn/Sources/SEPWebAuthn/Attestation.swift	Source of the app-side Attestation port (Teleport lib/auth/touchid/api.go)
