@@ -109,6 +109,18 @@ struct TeleportLoggingSeamTests {
     }
 
     @Test
+    func grpcClientRequestsBothClientAndTransportCategories() {
+        // Regression guard: the client's own lines stay on `teleport-grpc`,
+        // while the transport lines (tls_setup / tls_challenge / conn_* /
+        // grpc_identity_deleted) must keep `origin/main`'s `TeleportGRPC`
+        // category — `DiagnosticsExporter` filters by subsystem, and the
+        // category is the diagnostics surface agents read.
+        let spy = SpyTeleportLogging()
+        _ = LiveTeleportGRPCClient(logging: spy)
+        #expect(spy.categories == ["teleport-grpc", "TeleportGRPC"])
+    }
+
+    @Test
     func defaultLoggingBuildsALoggerForAnyCategory() {
         // The package-owned default must not throw or trap; it is the
         // test/non-app host fallback.

@@ -135,19 +135,25 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
 /// a Phase-2 registration run; `disconnect()` closes it.
 final class LiveTeleportGRPCClient: TeleportGRPCClienting {
     private var connection: TeleportGRPCConnection?
-    private let logging: any TeleportLogging
+    /// The client's own log lines (dial parameters / failures / lifecycle),
+    /// category `teleport-grpc` (unchanged from `origin/main`).
     private let logger: Logger
+    /// The transport-layer logger, category `TeleportGRPC` — byte-identical
+    /// to `origin/main`'s `GRPCTransportLog.logger`, which owned the
+    /// `tls_setup` / `tls_challenge` / `conn_*` / `grpc_identity_deleted`
+    /// lines inside `GRPCTransport`.
+    private let transportLogger: Logger
 
     init(logging: any TeleportLogging = AppTeleportLogging.shared) {
-        self.logging = logging
         self.logger = logging.logger(category: "teleport-grpc")
+        self.transportLogger = logging.logger(category: "TeleportGRPC")
         // Bound leaks from a previous process that never reached
         // `disconnect()` (crash / force-quit): remove leftover per-connect
         // identities before creating a new one. The sweep is a no-op after
         // the first call per process, so the repeated client construction
         // from SwiftUI state initialization is cheap and cannot delete
         // another live client's in-flight identity.
-        GRPCClientIdentity.deleteStaleIdentities(logger: logger)
+        GRPCClientIdentity.deleteStaleIdentities(logger: transportLogger)
     }
 
     deinit {
@@ -189,7 +195,7 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
                 privateKey: privateKey,
                 clusterName: clusterName,
                 clusterCAPEMs: clusterCAPEMs,
-                logger: logger
+                logger: transportLogger
             )
         } catch {
             // Surface the concrete error (NWError/TLS) rather than letting the
