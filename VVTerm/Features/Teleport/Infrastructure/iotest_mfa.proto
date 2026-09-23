@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
 // Minimal standalone proto for the session 1.10/1.11 spike.
 // Defines ONLY the messages needed for the gRPC calls:
 //   CreateAuthenticateChallenge, CreateRegisterChallenge, AddMFADeviceSync.
