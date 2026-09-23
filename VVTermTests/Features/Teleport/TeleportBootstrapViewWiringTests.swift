@@ -65,6 +65,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
             httpClient: http,
             keyRing: keyRing,
             safariPresenter: safari,
+            logging: DefaultTeleportLogging(),
             // MockSEPKeySigner conforms to TeleportSEPSigning; the bootstrap
             // coordinator keeps a signer for symmetry but doesn't use it in
             // Phase 1, so a default mock is fine.
@@ -128,6 +129,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 httpClient: http,
                 keyRing: keyRing,
                 safariPresenter: safari,
+                logging: DefaultTeleportLogging(),
                 signer: MockSEPKeySigner(outcome: .success),
                 sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
                 tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),
@@ -201,6 +203,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
                 httpClient: http,
                 keyRing: keyRing,
                 safariPresenter: safari,
+                logging: DefaultTeleportLogging(),
                 signer: MockSEPKeySigner(outcome: .success),
                 sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
                 tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),

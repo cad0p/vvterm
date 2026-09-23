@@ -49,6 +49,7 @@ struct TeleportCertBindingCoordinatorTests {
         return TeleportLoginCoordinator(
             httpClient: http,
             keyRing: keyRing,
+            logging: DefaultTeleportLogging(),
             signer: signer,
             keyPairGenerator: FixedTeleportSSHKeyPairGenerator(publicKey: publicKey),
             now: now
@@ -266,6 +267,7 @@ struct TeleportCertBindingCoordinatorTests {
             httpClient: http,
             keyRing: keyRing,
             safariPresenter: nil,
+            logging: DefaultTeleportLogging(),
             signer: MockSEPKeySigner(outcome: .success),
             sshKeyPairGenerator: FixedTeleportSSHKeyPairGenerator(publicKey: publicKey),
             tlsKeyPairGenerator: try TeleportFixtureSupport.makeFixedTLSGenerator(),
@@ -290,6 +292,31 @@ struct TeleportCertBindingCoordinatorTests {
         #expect(coordinator.state == .success)
         #expect(keyRing.liveCertPEM(for: cluster.id) == TeleportFixtureSupport.fixedIssuedUserCert)
         #expect(keyRing.clusterTLSState(for: cluster.id) != nil)
+    }
+
+    @Test
+    func bootstrapKeychainFailureStillPersistsCertAndTLSStateAndSucceeds() async throws {
+        // A failing `storeEd25519PrivateKey` (keychain) must be non-fatal:
+        // the cert + cluster TLS state still persist and the coordinator
+        // still reaches `.success`. The SSH connect will fail with
+        // teleportCertMissing and surface the re-bootstrap UX.
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+
+        let coordinator = try makeBootstrapCoordinator(
+            http: http,
+            keyRing: keyRing,
+            publicKey: TeleportFixtureSupport.fixedSSHPublicKey
+        )
+        await coordinator.begin(cluster: cluster)
+
+        #expect(coordinator.state == .success)
+        #expect(keyRing.liveCertPEM(for: cluster.id) == TeleportFixtureSupport.fixedIssuedUserCert)
+        #expect(keyRing.clusterTLSState(for: cluster.id) != nil)
+        #expect(keyRing.liveEd25519PrivateKey(for: cluster.id) == nil)
     }
 
     @Test

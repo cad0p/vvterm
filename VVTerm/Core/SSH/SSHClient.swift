@@ -182,6 +182,22 @@ actor SSHClient {
 
     private var session: SSHSession?
     private let logger = Logger.forCategory("SSH")
+    /// The Teleport logging seam forwarded into every `SSHSession` (and from
+    /// there into `SSHTLSTransport`). Defaulted so the synthesized `init()`
+    /// keeps every bare `SSHClient()` call site compiling; the app injects
+    /// `AppTeleportLogging.shared`, tests can inject a spy.
+    var teleportLogging: any TeleportLogging = AppTeleportLogging.shared
+    /// The Teleport credential store forwarded into every `SSHSession`.
+    /// Defaulted so the synthesized `init()` keeps every bare `SSHClient()`
+    /// call site compiling; the default adapter resolves the single host
+    /// keyring (`TeleportKeyRingHost.shared`), so coordinators and the SSH
+    /// session always see the same object + in-memory state.
+    var teleportCredentialStore: any TeleportCredentialStore = TeleportKeyRingCredentialStore()
+    /// The Teleport channel transport factory forwarded into every
+    /// `SSHSession` (D6 #3/#4). Defaulted so the synthesized `init()` keeps
+    /// every bare `SSHClient()` call site compiling; the default builds the
+    /// host-side libssh2 channel bridge.
+    var teleportTransportFactory: any TeleportChannelTransportFactory = SSHProxySubsystemTransportFactory()
     private var keepAliveTask: Task<Void, Never>?
     private var connectTask: Task<SSHSession, Error>?
     private var pendingConnectSession: SSHSession?
@@ -280,7 +296,13 @@ actor SSHClient {
             teleportNodeName: server.name
         )
 
-        let pendingSession = SSHSession(config: config, startupTrace: startupTrace)
+        let pendingSession = SSHSession(
+            config: config,
+            startupTrace: startupTrace,
+            teleportLogging: teleportLogging,
+            teleportCredentialStore: teleportCredentialStore,
+            teleportTransportFactory: teleportTransportFactory
+        )
         pendingConnectSession = pendingSession
 
         let task = Task { [connectTimeout] () -> SSHSession in
@@ -1604,8 +1626,9 @@ actor SSHSession {
     /// proxy-subsystem channel to the inner libssh2 session's FD. Retained
     /// for the inner session's lifetime so its pump keeps forwarding bytes
     /// between the outer channel and the inner socketpair. Closed in
-    /// `cleanup` (before the inner session is freed).
-    private var innerTransport: SSHProxySubsystemTransport?
+    /// `cleanup` (before the inner session is freed). Stored through the
+    /// package-movable `TeleportChannelTransport` seam.
+    private var innerTransport: (any TeleportChannelTransport)?
     /// The outer (proxy) session channel that carries the proxy-subsystem
     /// tunnel. Retained so `cleanup` can free it after the inner session is
     /// torn down (the pump reads/writes this channel).
@@ -1630,6 +1653,19 @@ actor SSHSession {
     private var connectedPeerAddress: String?
     private let logger = Logger.forCategory("SSHSession")
     private let startupTrace: SSHStartupTrace?
+    /// The Teleport logging seam (forwarded to `SSHTLSTransport`). Injected
+    /// through `SSHClient`; defaulted so direct `SSHSession` construction in
+    /// tests keeps compiling.
+    private let teleportLogging: any TeleportLogging
+    /// The Teleport credential store (cluster TLS state + cert/key reads).
+    /// Injected through `SSHClient`; defaulted so direct `SSHSession`
+    /// construction in tests keeps compiling. The default resolves the
+    /// single host keyring, so the UI and the session share state.
+    private let teleportCredentialStore: any TeleportCredentialStore
+    /// The Teleport channel transport factory (D6 #3/#4). Injected through
+    /// `SSHClient`; defaulted so direct `SSHSession` construction in tests
+    /// keeps compiling.
+    private let teleportTransportFactory: any TeleportChannelTransportFactory
 
     /// Atomic socket storage for emergency abort from any thread
     private let atomicSocket = AtomicSocket()
@@ -1646,8 +1682,9 @@ actor SSHSession {
     /// pump closures (`makeForChannel`) and acquired here in `sendKeepAlive`
     /// (and any other outer-session caller) so off-actor pump access and
     /// actor-isolated access never overlap. See `SessionMutex` for the race
-    /// rationale.
-    private let outerSessionMutex = SessionMutex()
+    /// rationale. Stored through the package-movable `TeleportSessionMutex`
+    /// seam.
+    private let outerSessionMutex: any TeleportSessionMutex
 
     /// Session-specific auth callback context passed to libssh2 session abstract pointer.
     private let keyboardInteractiveContext = KeyboardInteractiveContext()
@@ -1660,9 +1697,20 @@ actor SSHSession {
     private var discardedShellStartupChannelCount = 0
     #endif
 
-    init(config: SSHSessionConfig, startupTrace: SSHStartupTrace? = nil) {
+    init(
+        config: SSHSessionConfig,
+        startupTrace: SSHStartupTrace? = nil,
+        teleportLogging: any TeleportLogging = AppTeleportLogging.shared,
+        teleportCredentialStore: any TeleportCredentialStore = TeleportKeyRingCredentialStore(),
+        teleportTransportFactory: any TeleportChannelTransportFactory = SSHProxySubsystemTransportFactory(),
+        teleportSessionMutex: any TeleportSessionMutex = SessionMutex()
+    ) {
         self.config = config
         self.startupTrace = startupTrace
+        self.teleportLogging = teleportLogging
+        self.teleportCredentialStore = teleportCredentialStore
+        self.teleportTransportFactory = teleportTransportFactory
+        self.outerSessionMutex = teleportSessionMutex
     }
 
     var isConnected: Bool {
@@ -1957,8 +2005,7 @@ actor SSHSession {
     /// without the cluster CA.
     private func connectTeleportTLS() async throws -> Int32 {
         let clusterId = config.credentials.serverId
-        let keyRing = TeleportKeyRing.shared
-        guard let tlsState = await keyRing.clusterTLSState(for: clusterId) else {
+        guard let tlsState = await teleportCredentialStore.clusterTLSState(for: clusterId) else {
             logger.error(
                 "teleport TLS state missing for cluster \(clusterId.uuidString, privacy: .public) — re-bootstrap required"
             )
@@ -1973,7 +2020,8 @@ actor SSHSession {
             host: config.dialHost,
             port: config.dialPort,
             clusterName: tlsState.clusterName,
-            clusterCAPEMs: tlsState.clusterCAPEMs
+            clusterCAPEMs: tlsState.clusterCAPEMs,
+            logging: teleportLogging
         )
         let fd: Int32
         do {
@@ -1981,9 +2029,11 @@ actor SSHSession {
         } catch {
             // connect() already cleaned up its own FDs + NWConnection on
             // failure (see SSHTLSTransport.connect). Close once more to be
-            // safe, then rethrow — don't retain the transport.
+            // safe, then rethrow — don't retain the transport. Map the
+            // package error into the host space so the app's
+            // `error as? SSHError` classification keeps working.
             await transport.close()
-            throw error
+            throw TeleportErrorMapping.map(error)
         }
         tlsTransport = transport
         let dialPort = config.dialPort
@@ -2067,10 +2117,9 @@ actor SSHSession {
             // throw `teleportCertMissing` so the UI layer can trigger the
             // `TeleportLoginCoordinator` flow.
             let clusterId = config.credentials.serverId
-            let keyRing = TeleportKeyRing.shared
-            guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
+            guard let certPEM = await teleportCredentialStore.liveCertPEM(for: clusterId),
                   let certData = certPEM.data(using: .utf8),
-                  let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {
+                  let keyData = await teleportCredentialStore.liveEd25519PrivateKey(for: clusterId) else {
                 logger.error("No live Teleport cert or ed25519 key for cluster \(clusterId.uuidString, privacy: .public)")
                 throw SSHError.teleportCertMissing
             }
@@ -2256,7 +2305,7 @@ actor SSHSession {
     ) async throws {
         let checkingKeys: [String]
         if config.authMethod == .faceIDTeleport {
-            checkingKeys = await TeleportKeyRing.shared
+            checkingKeys = await teleportCredentialStore
                 .clusterTLSState(for: config.credentials.serverId)?
                 .hostCACheckingKeys ?? []
         } else {
@@ -2265,7 +2314,7 @@ actor SSHSession {
 
         let knownFingerprint = KnownHostsManager.shared.entry(for: host, port: port)?.fingerprint
         let decision = HostKeyTrustPolicy.decide(
-            authMethod: config.authMethod,
+            isTeleport: config.authMethod == .faceIDTeleport,
             fingerprint: fingerprint,
             keyType: keyType,
             knownFingerprint: knownFingerprint,
@@ -3286,10 +3335,10 @@ actor SSHSession {
         //    The pump starts before start() returns the FD, so the target
         //    node's banner is forwarded as soon as it arrives.
         let handshakeToken = startupTrace?.begin(.teleportInnerHandshake)
-        let transport = SSHProxySubsystemTransport.makeForChannel(
+        let transport = teleportTransportFactory.makeChannelTransport(
             channel: outerChannel,
             outerSession: outerSession,
-            outerSessionMutex: outerSessionMutex
+            mutex: outerSessionMutex
         )
         let innerFD: Int32
         do {
@@ -3642,10 +3691,9 @@ actor SSHSession {
     /// TODO: parse cert ValidPrincipals for the inner-session OS login.
     private func authenticateInner(session: OpaquePointer) async throws {
         let clusterId = config.credentials.serverId
-        let keyRing = TeleportKeyRing.shared
-        guard let certPEM = await keyRing.liveCertPEM(for: clusterId),
+        guard let certPEM = await teleportCredentialStore.liveCertPEM(for: clusterId),
               let certData = certPEM.data(using: .utf8),
-              let keyData = await keyRing.liveEd25519PrivateKey(for: clusterId) else {
+              let keyData = await teleportCredentialStore.liveEd25519PrivateKey(for: clusterId) else {
             logger.error("No live Teleport cert or ed25519 key for inner cluster \(clusterId.uuidString, privacy: .public)")
             throw SSHError.teleportCertMissing
         }

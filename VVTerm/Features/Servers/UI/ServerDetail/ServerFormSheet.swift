@@ -127,6 +127,7 @@ struct ServerFormSheet: View {
     @ObservedObject var serverManager: ServerManager
     @ObservedObject private var storeManager = StoreManager.shared
     @EnvironmentObject private var appLockManager: AppLockManager
+    @Environment(\.teleportComposition) private var injectedTeleportComposition: TeleportComposition?
     let workspace: Workspace?
     let server: Server?
     let prefill: ServerFormPrefill?
@@ -976,7 +977,7 @@ struct ServerFormSheet: View {
     @ViewBuilder
     private var teleportSetupButton: some View {
         if let server = server {
-            let readiness = TeleportKeyRing.shared.readiness(for: server.id)
+            let readiness = TeleportKeyRingHost.shared.readiness(for: server.id)
             switch readiness {
             case .ready:
                 Label {
@@ -1227,35 +1228,25 @@ struct ServerFormSheet: View {
     /// Construct the bootstrap coordinator with production dependencies.
     /// The coordinators are created fresh per sheet presentation so state
     /// doesn't leak between attempts.
+    /// The composition injected at the app root; `.shared` covers previews
+    /// and UI-test harnesses that don't inject one.
+    private var teleportComposition: TeleportComposition {
+        injectedTeleportComposition ?? TeleportComposition.shared
+    }
+
     @MainActor
     private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
-        TeleportBootstrapCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
-            safariPresenter: WebAuthenticationSessionPresenter.shared,
-            signer: SecureEnclaveSigner()
-        )
+        teleportComposition.makeBootstrapCoordinator()
     }
 
     @MainActor
     private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
-        TeleportRegistrationCoordinator(
-            grpcClient: LiveTeleportGRPCClient(),
-            browserMFACeremony: LiveBrowserMFACeremony(),
-            keyRing: TeleportKeyRing.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeRegistrationCoordinator()
     }
 
     @MainActor
     private func makeLoginCoordinator() -> TeleportLoginCoordinator {
-        TeleportLoginCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeLoginCoordinator()
     }
 
     private func applyPrefill(_ prefill: ServerFormPrefill) {

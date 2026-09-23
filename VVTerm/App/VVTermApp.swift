@@ -37,6 +37,11 @@ struct VVTermApp: App {
     @StateObject private var terminalThemeManager = TerminalThemeManager.shared
     @StateObject private var terminalAccessoryPreferencesManager = TerminalAccessoryPreferencesManager.shared
 
+    /// The single Teleport composition root (host seams + per-presentation
+    /// factories). Injected into the view tree below; the leaf screens read
+    /// the same instance from the environment.
+    private let teleportComposition = TeleportComposition.shared
+
     // Welcome screen flag
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
 
@@ -260,6 +265,7 @@ struct VVTermApp: App {
                     .adaptiveSoftScrollEdges()
                     .environment(\.locale, appLocale)
                     .environment(\.privacyModeEnabled, privacyModeEnabled)
+                    .environment(\.teleportComposition, teleportComposition)
                     .onAppear {
                         AppLanguage.applySelection(appLanguage)
                         // Skip ServerManager access under UI test harnesses —

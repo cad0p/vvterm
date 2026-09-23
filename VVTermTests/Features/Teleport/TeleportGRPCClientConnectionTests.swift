@@ -243,13 +243,13 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
     /// Deleting an identity that was never inserted must be a no-op (no
     /// throw, no crash, no entitlement dependency).
     func testGRPCIdentityDeletionOfAbsentItemsIsSafe() {
-        GRPCClientIdentity.deleteKeychainItems(label: GRPCClientIdentity.makeLabel())
+        GRPCClientIdentity.deleteKeychainItems(label: GRPCClientIdentity.makeLabel(), logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
     }
 
     /// The startup sweep runs before a new registration client does any
     /// work; it must be safe when the keychain holds no vvterm identities.
     func testGRPCIdentitySweepIsSafe() {
-        GRPCClientIdentity.deleteStaleIdentities()
+        GRPCClientIdentity.deleteStaleIdentities(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
     }
 
     /// The sweep is a full keychain query triggered by SwiftUI state
@@ -262,9 +262,9 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
             GRPCClientIdentity.resetSweepGateForTesting()
         }
 
-        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting())
+        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")))
         XCTAssertFalse(
-            GRPCClientIdentity.deleteStaleIdentities(),
+            GRPCClientIdentity.deleteStaleIdentities(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")),
             "a second sweep in the same process must be skipped"
         )
     }
@@ -279,11 +279,11 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
         }
 
         GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in nil }
-        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting())
+        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")))
 
         GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in [] }
         XCTAssertTrue(
-            GRPCClientIdentity.deleteStaleIdentities(),
+            GRPCClientIdentity.deleteStaleIdentities(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")),
             "a failed enumeration must leave the gate open for a later retry"
         )
     }
@@ -299,10 +299,10 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
         let freshLabel = GRPCClientIdentity.makeLabel() + "-fresh"
         let foreignLabel = "vvterm-unrelated-\(UUID().uuidString)"
         defer {
-            GRPCClientIdentity.deleteKeychainItems(label: staleLabel)
-            GRPCClientIdentity.deleteKeychainItems(label: liveLabel)
-            GRPCClientIdentity.deleteKeychainItems(label: freshLabel)
-            GRPCClientIdentity.deleteKeychainItems(label: foreignLabel)
+            GRPCClientIdentity.deleteKeychainItems(label: staleLabel, logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
+            GRPCClientIdentity.deleteKeychainItems(label: liveLabel, logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
+            GRPCClientIdentity.deleteKeychainItems(label: freshLabel, logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
+            GRPCClientIdentity.deleteKeychainItems(label: foreignLabel, logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
         }
 
         try Self.insertKey(label: staleLabel)
@@ -311,7 +311,7 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
         try Self.insertKey(label: foreignLabel)
         GRPCClientIdentity.registerLiveLabel(liveLabel)
 
-        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting())
+        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")))
 
         XCTAssertEqual(Self.keyStatus(label: staleLabel), errSecItemNotFound)
         XCTAssertEqual(Self.keyStatus(label: liveLabel), errSecSuccess)
@@ -330,7 +330,7 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
         GRPCClientIdentity.registerLiveLabel(label)
         XCTAssertTrue(GRPCClientIdentity.isLiveLabel(label))
 
-        GRPCClientIdentity.deleteKeychainItems(label: label)
+        GRPCClientIdentity.deleteKeychainItems(label: label, logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"))
 
         XCTAssertFalse(GRPCClientIdentity.isLiveLabel(label))
     }
@@ -358,7 +358,8 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
                 privateKey: key,
                 clusterName: "ci-cluster",
                 clusterCAPEMs: [],
-                identityBuilder: { _, _ in
+                logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"),
+                identityBuilder: { _, _, _ in
                     builderInvocations += 1
                     throw GRPCError.tls("identity builder must not run")
                 }
@@ -402,7 +403,8 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
                 privateKey: key,
                 clusterName: "ci-cluster",
                 clusterCAPEMs: [caPEM],
-                identityBuilder: { _, _ in throw GRPCError.tls("builder-ran") }
+                logger: DefaultTeleportLogging().logger(category: "TeleportGRPC"),
+                identityBuilder: { _, _, _ in throw GRPCError.tls("builder-ran") }
             )
             XCTFail("make should have thrown from the injected builder")
         } catch let error as GRPCError {

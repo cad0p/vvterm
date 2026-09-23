@@ -9,6 +9,7 @@ struct ServerSidebarView: View {
 
     @ObservedObject private var storeManager = StoreManager.shared
     @ObservedObject private var tabManager = TerminalTabManager.shared
+    @Environment(\.teleportComposition) private var injectedTeleportComposition: TeleportComposition?
     #if os(macOS)
     @EnvironmentObject private var commandBridge: MacShellCommandBridge
     #endif
@@ -181,7 +182,7 @@ struct ServerSidebarView: View {
                                     teleportSetupServer = srv
                                     teleportSetupReadiness = readiness
                                 },
-                                keyRing: TeleportKeyRing.shared
+                                keyRing: TeleportKeyRingHost.shared
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -793,35 +794,25 @@ struct ServerSidebarView: View {
         }
     }
 
+    /// The composition injected at the app root; `.shared` covers previews
+    /// and UI-test harnesses that don't inject one.
+    private var teleportComposition: TeleportComposition {
+        injectedTeleportComposition ?? TeleportComposition.shared
+    }
+
     @MainActor
     private func makeBootstrapCoordinator() -> TeleportBootstrapCoordinator {
-        TeleportBootstrapCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
-            safariPresenter: WebAuthenticationSessionPresenter.shared,
-            signer: SecureEnclaveSigner()
-        )
+        teleportComposition.makeBootstrapCoordinator()
     }
 
     @MainActor
     private func makeRegistrationCoordinator() -> TeleportRegistrationCoordinator {
-        TeleportRegistrationCoordinator(
-            grpcClient: LiveTeleportGRPCClient(),
-            browserMFACeremony: LiveBrowserMFACeremony(),
-            keyRing: TeleportKeyRing.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeRegistrationCoordinator()
     }
 
     @MainActor
     private func makeLoginCoordinator() -> TeleportLoginCoordinator {
-        TeleportLoginCoordinator(
-            httpClient: LiveTeleportHTTPClient(),
-            keyRing: TeleportKeyRing.shared,
-            signer: SecureEnclaveSigner(),
-            webAuthnBuilder: TeleportWebAuthnBuilder()
-        )
+        teleportComposition.makeLoginCoordinator()
     }
 
     private func handleSavedServer(_ server: Server, originalServer: Server) {

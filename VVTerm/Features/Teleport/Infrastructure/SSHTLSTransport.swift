@@ -83,17 +83,20 @@ actor SSHTLSTransport {
     private var socketPair: SocketPair?
     private var pumpTask: Task<Void, Never>?
 
-    private let logger = Logger.forCategory("SSH-TLS-Transport")
-    private static let tlsLogger = Logger.forCategory("SSH-TLS-Transport")
+    private let logger: Logger
+    private nonisolated let logging: any TeleportLogging
 
     init(host: String,
          port: Int,
          clusterName: String,
-         clusterCAPEMs: [String]) {
+         clusterCAPEMs: [String],
+         logging: any TeleportLogging) {
         self.host = host
         self.port = port
         self.clusterName = clusterName
         self.clusterCAPEMs = clusterCAPEMs
+        self.logging = logging
+        self.logger = logging.logger(category: "SSH-TLS-Transport")
     }
 
     // MARK: - TLS options (static, testable)
@@ -113,13 +116,14 @@ actor SSHTLSTransport {
     static func makeTLSOptions(
         clusterName: String,
         clusterCAPEMs: [String],
-        dialHost: String
+        dialHost: String,
+        logger: Logger
     ) throws -> NWProtocolTLS.Options {
         guard !clusterName.isEmpty else {
-            throw SSHError.connectionFailed("SSHTLSTransport: empty cluster name")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: empty cluster name")
         }
         guard !dialHost.isEmpty else {
-            throw SSHError.connectionFailed("SSHTLSTransport: empty dial host")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: empty dial host")
         }
 
         let tlsOpts = NWProtocolTLS.Options()
@@ -149,7 +153,7 @@ actor SSHTLSTransport {
         // the SSH route (or absent — Teleport ≤ v16 does not echo it).
         let anchors = TeleportTLSTrust.anchors(fromPEMs: clusterCAPEMs)
         guard !anchors.isEmpty else {
-            throw SSHError.connectionFailed(
+            throw TeleportPackageError.connectionFailed(
                 "SSHTLSTransport: no usable cluster CA trust anchors (input \(clusterCAPEMs.count) PEMs)"
             )
         }
@@ -160,7 +164,7 @@ actor SSHTLSTransport {
                 anchors: anchors,
                 serverNames: serverNames,
                 allowedALPNs: [alpnProtocol],
-                logger: Self.tlsLogger
+                logger: logger
             ),
             .global()
         )
@@ -176,14 +180,14 @@ actor SSHTLSTransport {
     /// both FDs and must `close()` them.
     ///
     /// - Returns: a `SocketPair` with two valid (>= 0) FDs.
-    /// - Throws: `SSHError.connectionFailed` if `socketpair(2)` fails.
+    /// - Throws: `TeleportPackageError.connectionFailed` if `socketpair(2)` fails.
     static func makeSocketPair() throws -> SocketPair {
         var fds: [Int32] = [0, 0]
         // SOCK_STREAM is an Int32 constant on Darwin (not an option-set),
         // so no .rawValue.
         let result = Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, &fds)
         guard result == 0, fds[0] >= 0, fds[1] >= 0 else {
-            throw SSHError.connectionFailed("SSHTLSTransport: socketpair failed (errno \(errno))")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: socketpair failed (errno \(errno))")
         }
         // Non-blocking ends: the libssh2 session runs in non-blocking mode
         // (EAGAIN-loop handshake + non-blocking I/O) and the pump loops
@@ -209,14 +213,15 @@ actor SSHTLSTransport {
         let tlsOpts = try Self.makeTLSOptions(
             clusterName: clusterName,
             clusterCAPEMs: clusterCAPEMs,
-            dialHost: host
+            dialHost: host,
+            logger: logger
         )
 
         let params = NWParameters(tls: tlsOpts)
 
         let hostPort = NWEndpoint.Port(rawValue: UInt16(port))
         guard let hostPort else {
-            throw SSHError.connectionFailed("SSHTLSTransport: invalid port \(port)")
+            throw TeleportPackageError.connectionFailed("SSHTLSTransport: invalid port \(port)")
         }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: hostPort)
         let connection = NWConnection(to: endpoint, using: params)
@@ -252,7 +257,11 @@ actor SSHTLSTransport {
         // server as soon as the TLS tunnel is up.
         pumpTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            await self.runPump(connection: connection, pair: pair)
+            await self.runPump(
+                connection: connection,
+                pair: pair,
+                logger: self.logging.logger(category: "SSH-TLS-Pump")
+            )
         }
 
         // Wait for the connection to be ready (TLS handshake complete).
@@ -269,7 +278,7 @@ actor SSHTLSTransport {
             Darwin.close(pair.libssh2FD)
             Darwin.close(pair.pumpFD)
             socketPair = nil
-            throw SSHError.connectionFailed("TLS transport connect failed: \(error.localizedDescription)")
+            throw TeleportPackageError.connectionFailed("TLS transport connect failed: \(error.localizedDescription)")
         }
 
         return pair.libssh2FD
@@ -346,7 +355,7 @@ actor SSHTLSTransport {
                         return false
                     }
                     if !already {
-                        continuation.resume(throwing: SSHError.connectionFailed("TLS transport cancelled"))
+                        continuation.resume(throwing: TeleportPackageError.connectionFailed("TLS transport cancelled"))
                     }
                 default:
                     break
@@ -367,8 +376,7 @@ actor SSHTLSTransport {
     /// `nonisolated` so the blocking `read()`/`write()` on the pump FD run on
     /// the detached task's thread without hopping onto the actor (which would
     /// serialize + stall the pump).
-    nonisolated private func runPump(connection: NWConnection, pair: SocketPair) async {
-        let pumpLog = Logger.forCategory("SSH-TLS-Pump")
+    nonisolated private func runPump(connection: NWConnection, pair: SocketPair, logger pumpLog: Logger) async {
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
         await withTaskGroup(of: Void.self) { group in
             // NWConnection -> pumpFD

@@ -120,8 +120,8 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
     /// `BrowserMFACeremony` in production; injectable for tests.
     private let browserMFACeremony: any BrowserMFACeremonyRunning
 
-    /// The injected key ring (stores the credentialID + userHandle).
-    private let keyRing: any TeleportKeyRingStoring
+    /// The injected credential store (stores the credentialID + userHandle).
+    private let keyRing: any TeleportCredentialStore
 
     /// The injected SEP signer (creates the persistent SEP key + signs the
     /// WebAuthn registration response). Defaults to a real
@@ -133,18 +133,20 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
     /// a mock that returns a scripted response. Defaults to the real impl.
     private let webAuthnBuilder: any TeleportWebAuthnBuilding
 
-    private let logger = Logger.forCategory("teleport-registration")
+    private let logger: Logger
 
     init(
         grpcClient: any TeleportGRPCClienting,
         browserMFACeremony: any BrowserMFACeremonyRunning,
-        keyRing: any TeleportKeyRingStoring,
+        keyRing: any TeleportCredentialStore,
+        logging: any TeleportLogging,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder()
     ) {
         self.grpcClient = grpcClient
         self.browserMFACeremony = browserMFACeremony
         self.keyRing = keyRing
+        self.logger = logging.logger(category: "teleport-registration")
         self.signer = signer
         self.webAuthnBuilder = webAuthnBuilder
     }
@@ -342,7 +344,7 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
         }
 
         // ── Success: persist the credentialID + userHandle ──────────────
-        keyRing.storeRegisteredSEPKey(
+        await keyRing.storeRegisteredSEPKey(
             credentialID: credentialID,
             userHandle: userHandle,
             publicKeyRaw: publicKeyRaw,

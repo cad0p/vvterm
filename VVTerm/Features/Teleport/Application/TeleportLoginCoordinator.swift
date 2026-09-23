@@ -100,9 +100,9 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// to the shared `TeleportHTTPClient` in production; injectable for tests.
     private let httpClient: any TeleportHTTPClienting
 
-    /// The injected key ring (reads the credentialID + userHandle; stores
-    /// the fresh cert).
-    private let keyRing: any TeleportKeyRingStoring
+    /// The injected credential store (reads the credentialID + userHandle;
+    /// stores the fresh cert).
+    private let keyRing: any TeleportCredentialStore
 
     /// The injected SEP signer (loads the persistent SEP key + signs the
     /// WebAuthn assertion). Defaults to a real `SecureEnclaveSigner`; UI
@@ -119,11 +119,12 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// The clock used for the issued-certificate validity checks.
     private let now: () -> Date
 
-    private let logger = Logger.forCategory("teleport-login")
+    private let logger: Logger
 
     init(
         httpClient: any TeleportHTTPClienting,
-        keyRing: any TeleportKeyRingStoring,
+        keyRing: any TeleportCredentialStore,
+        logging: any TeleportLogging,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         webAuthnBuilder: any TeleportWebAuthnBuilding = TeleportWebAuthnBuilder(),
         keyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
@@ -131,6 +132,7 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     ) {
         self.httpClient = httpClient
         self.keyRing = keyRing
+        self.logger = logging.logger(category: "teleport-login")
         self.signer = signer
         self.webAuthnBuilder = webAuthnBuilder
         self.keyPairGenerator = keyPairGenerator
@@ -144,12 +146,12 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // ── Load the registered SEP key + userHandle ────────────────────
         // The credentialID + userHandle were persisted at Phase 2. The SEP
         // key itself is in the Secure Enclave (loaded via loadKey).
-        guard let credentialID = keyRing.registeredCredentialID(for: cluster.id) else {
+        guard let credentialID = await keyRing.registeredCredentialID(for: cluster.id) else {
             logger.error("no registered SEP key for cluster \(cluster.id.uuidString, privacy: .public)")
             state = .failed(.noRegisteredKey)
             return
         }
-        let userHandle = keyRing.registeredUserHandle(for: cluster.id)
+        let userHandle = await keyRing.registeredUserHandle(for: cluster.id)
         if userHandle == nil {
             logger.error("no registered userHandle for cluster \(cluster.id.uuidString, privacy: .public)")
             state = .failed(.noRegisteredKey)
@@ -312,12 +314,12 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // TLS-leg trust anchors. Additions cannot evict a pinned key; first
         // capture remains TOFU, an accepted risk.
         if let hostSigners = finishResp.hostSigners, let first = hostSigners.first {
-            let pinnedClusterName = keyRing.clusterTLSState(for: cluster.id)?.clusterName
+            let pinnedClusterName = await keyRing.clusterTLSState(for: cluster.id)?.clusterName
             if TeleportHostKeyUpdatePolicy.matchesPinnedCluster(
                 domainName: first.domainName,
                 pinnedClusterName: pinnedClusterName
             ) {
-                let update = keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
+                let update = await keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
                 if update == .rejectedWouldDropPinnedKeys {
                     logger.error(
                         "Host CA key refresh rejected for cluster \(cluster.id.uuidString, privacy: .public) — pinned anchors kept; re-bootstrap required"
@@ -333,10 +335,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // Store the fresh cert in the key ring. Readiness flips to `ready`.
         // Also store the ed25519 private key — the SSHClient cert seam
         // fetches it via `liveEd25519PrivateKey` to feed libssh2.
-        keyRing.storeLoginCert(certPEM, validBefore: certValidBefore, for: cluster.id)
+        await keyRing.storeLoginCert(certPEM, validBefore: certValidBefore, for: cluster.id)
         if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
             do {
-                try keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
+                try await keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
             } catch {
                 logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
                 // Non-fatal — the cert is stored, so readiness is correct.

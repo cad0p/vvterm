@@ -56,7 +56,8 @@ struct SSHTLSTransportTests {
         let opts = try SSHTLSTransport.makeTLSOptions(
             clusterName: "teleport.pcad.it",
             clusterCAPEMs: [try Self.loopbackCAPEM],
-            dialHost: "teleport.pcad.it"
+            dialHost: "teleport.pcad.it",
+            logger: DefaultTeleportLogging().logger(category: "SSH-TLS-Transport")
         )
         // The options object is non-nil (would throw on failure). We can't
         // introspect sec_protocol_options ALPN directly, but construction
@@ -70,7 +71,8 @@ struct SSHTLSTransportTests {
             try SSHTLSTransport.makeTLSOptions(
                 clusterName: "",
                 clusterCAPEMs: [try Self.loopbackCAPEM],
-                dialHost: "teleport.pcad.it"
+                dialHost: "teleport.pcad.it",
+                logger: DefaultTeleportLogging().logger(category: "SSH-TLS-Transport")
             )
         }
     }
@@ -81,7 +83,8 @@ struct SSHTLSTransportTests {
             try SSHTLSTransport.makeTLSOptions(
                 clusterName: "teleport.pcad.it",
                 clusterCAPEMs: [try Self.loopbackCAPEM],
-                dialHost: ""
+                dialHost: "",
+                logger: DefaultTeleportLogging().logger(category: "SSH-TLS-Transport")
             )
         }
     }
@@ -94,14 +97,16 @@ struct SSHTLSTransportTests {
             try SSHTLSTransport.makeTLSOptions(
                 clusterName: "teleport.pcad.it",
                 clusterCAPEMs: ["not a pem", "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----"],
-                dialHost: "teleport.pcad.it"
+                dialHost: "teleport.pcad.it",
+                logger: DefaultTeleportLogging().logger(category: "SSH-TLS-Transport")
             )
         }
         #expect(throws: (any Error).self) {
             try SSHTLSTransport.makeTLSOptions(
                 clusterName: "teleport.pcad.it",
                 clusterCAPEMs: [],
-                dialHost: "teleport.pcad.it"
+                dialHost: "teleport.pcad.it",
+                logger: DefaultTeleportLogging().logger(category: "SSH-TLS-Transport")
             )
         }
     }
@@ -166,6 +171,52 @@ struct SSHTLSTransportTests {
         await Self.expectConnectThrows(transport)
     }
 
+    @Test
+    func loopbackTransportFailureMapsToSSHErrorConnectionFailed() async throws {
+        // The package transport throws `TeleportPackageError`; `SSHSession`
+        // maps it across the seam so the app's `error as? SSHError`
+        // classification (disconnect-before-retry) still fires. Assert both
+        // halves: the raw package error + the mapped host error, with the
+        // same payload and the same user-visible description.
+        let identity = try LoopbackTLSServerTestSupport.identity(named: "self-signed.p12")
+        let server = try LoopbackTLSServer(
+            identity: identity,
+            alpnProtocols: [SSHTLSTransport.alpnProtocol, "h2"]
+        )
+        defer { server.stop() }
+
+        let transport = Self.transport(server: server, caPEM: Self.loopbackCAPEMUnchecked)
+        var packageError: TeleportPackageError?
+        do {
+            let fd = try await transport.connect()
+            Darwin.close(fd)
+        } catch let error as TeleportPackageError {
+            packageError = error
+        } catch {
+            Issue.record("expected TeleportPackageError, got \(error)")
+        }
+        await transport.close()
+
+        guard case .connectionFailed(let message)? = packageError else {
+            Issue.record("expected TeleportPackageError.connectionFailed")
+            return
+        }
+        #expect(message.hasPrefix("TLS transport connect failed: "))
+
+        let mapped = TeleportErrorMapping.map(packageError!)
+        guard let sshError = mapped as? SSHError,
+              case .connectionFailed(let mappedMessage) = sshError else {
+            Issue.record("expected SSHError.connectionFailed, got \(mapped)")
+            return
+        }
+        #expect(mappedMessage == message)
+        #expect(sshError.errorDescription == packageError?.errorDescription)
+        // The SSHConnectionRunner classification treats `.connectionFailed`
+        // as disconnect-before-retry; the mapped error must not fall through
+        // the `error as? SSHError` cast.
+        #expect(sshError.allowsAutomaticReconnectRetry)
+    }
+
     // MARK: - Socketpair plumbing
 
     @Test
@@ -224,7 +275,8 @@ struct SSHTLSTransportTests {
             host: "127.0.0.1",
             port: Int(server.port),
             clusterName: "ci-cluster",
-            clusterCAPEMs: [caPEM]
+            clusterCAPEMs: [caPEM],
+            logging: DefaultTeleportLogging()
         )
     }
 

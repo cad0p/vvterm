@@ -118,9 +118,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// shared `TeleportHTTPClient` in production; injectable for tests.
     private let httpClient: any TeleportHTTPClienting
 
-    /// The injected key ring (stores the cert + metadata). Defaults to
-    /// `TeleportKeyRing.shared`.
-    private let keyRing: any TeleportKeyRingStoring
+    /// The injected credential store (stores the cert + metadata). In
+    /// production this is the host-side `TeleportKeyRingHost.shared` provider
+    /// exposed through the `TeleportCredentialStore` seam.
+    private let keyRing: any TeleportCredentialStore
 
     /// The injected Safari presenter (wraps ASWebAuthenticationSession).
     private let safariPresenter: (any WebAuthenticationSessionPresenting)?
@@ -159,7 +160,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// pub key). Used to build the Safari URL.
     private var headlessID: String = ""
 
-    private let logger = Logger.forCategory("teleport-bootstrap")
+    private let logger: Logger
 
     /// The result of a successful Phase 1 bootstrap. Passed to the Phase 2
     /// registration coordinator (the cert authenticates the gRPC dial).
@@ -181,8 +182,9 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
     init(
         httpClient: any TeleportHTTPClienting,
-        keyRing: any TeleportKeyRingStoring,
+        keyRing: any TeleportCredentialStore,
         safariPresenter: (any WebAuthenticationSessionPresenting)?,
+        logging: any TeleportLogging,
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         sshKeyPairGenerator: any TeleportSSHKeyPairGenerating = LiveTeleportSSHKeyPairGenerator(),
         tlsKeyPairGenerator: any TeleportTLSKeyPairGenerating = LiveTeleportTLSKeyPairGenerator(),
@@ -191,6 +193,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         self.httpClient = httpClient
         self.keyRing = keyRing
         self.safariPresenter = safariPresenter
+        self.logger = logging.logger(category: "teleport-bootstrap")
         self.signer = signer
         self.sshKeyPairGenerator = sshKeyPairGenerator
         self.tlsKeyPairGenerator = tlsKeyPairGenerator
@@ -454,10 +457,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // `needsRegistration` (cert present, no SEP key yet). Also store
         // the ed25519 private key — the SSHClient cert seam fetches it via
         // `liveEd25519PrivateKey` to feed libssh2 at connect time.
-        keyRing.storeBootstrapCert(certPEM, validBefore: certValidBefore, for: cluster.id)
+        await keyRing.storeBootstrapCert(certPEM, validBefore: certValidBefore, for: cluster.id)
         if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
             do {
-                try keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
+                try await keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
             } catch {
                 logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
                 // Non-fatal — the cert is stored, so readiness is correct.
@@ -477,7 +480,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
             clusterCAPEMs: clusterCAPEMs,
             hostCACheckingKeys: hostCACheckingKeys
         )
-        keyRing.storeClusterTLSState(tlsState, for: cluster.id)
+        await keyRing.storeClusterTLSState(tlsState, for: cluster.id)
 
         logger.info("bootstrap succeeded — cert \(certPEM.count) chars, tls_cert \(tlsCertPEM.count) chars")
         state = .success

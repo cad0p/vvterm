@@ -113,6 +113,10 @@ final class SessionMutex: @unchecked Sendable {
     }
 }
 
+/// Host-side conformance: the bridge pump + `SSHSession` share this mutex
+/// through the package-movable `TeleportSessionMutex` seam.
+extension SessionMutex: TeleportSessionMutex {}
+
 /// Closes the pump end of the socketpair exactly once, waking blocked readers.
 ///
 /// Two close paths race on the pump FD: a pump loop that sees EOF/error closes
@@ -528,7 +532,7 @@ extension SSHProxySubsystemTransport {
     static func makeForChannel(
         channel: OpaquePointer,
         outerSession: OpaquePointer?,
-        outerSessionMutex: SessionMutex
+        outerSessionMutex: any TeleportSessionMutex
     ) -> SSHProxySubsystemTransport {
         // A standalone cancellation token (NOT the transport) captured by the
         // channel I/O closures. This avoids a retain cycle: the closures are
@@ -592,6 +596,27 @@ extension SSHProxySubsystemTransport {
             cancelToken: cancelToken
         )
         return transport
+    }
+}
+
+/// Host-side conformance: `SSHSession` stores the bridge through the
+/// package-movable `TeleportChannelTransport` seam.
+extension SSHProxySubsystemTransport: TeleportChannelTransport {}
+
+/// The live `TeleportChannelTransportFactory` over the libssh2 channel
+/// bridge. Stateless; the defaulted `SSHClient.teleportTransportFactory`
+/// value, so the seam is genuinely exercised on the production path.
+struct SSHProxySubsystemTransportFactory: TeleportChannelTransportFactory {
+    func makeChannelTransport(
+        channel: OpaquePointer,
+        outerSession: OpaquePointer?,
+        mutex: any TeleportSessionMutex
+    ) -> any TeleportChannelTransport {
+        SSHProxySubsystemTransport.makeForChannel(
+            channel: channel,
+            outerSession: outerSession,
+            outerSessionMutex: mutex
+        )
     }
 }
 

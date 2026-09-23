@@ -46,106 +46,11 @@ import os.log
 /// userHandle, cert PEM, expiry) in UserDefaults so the key can be located
 /// and the cert can be presented to `SSHClient` without a network round-trip.
 ///
-/// Protocol-backed so UI tests can inject a `MockTeleportKeyRing` (e.g. to
-/// script the `needsLogin` ↔ `ready` flip without a real keychain). The
-/// `Live` impl is the `TeleportKeyRing` class; the protocol is
-/// `TeleportKeyRingStoring`.
+/// Conforms to the package-movable `TeleportCredentialStore` (the plain
+/// `Sendable` seam) in this file; the host-side observation protocol
+/// (`TeleportKeyRingStoring`) is declared in `Core/Teleport`.
 @MainActor
-protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
-    /// All known credentials, keyed by cluster ID.
-    var credentials: [UUID: TeleportCredential] { get }
-
-    /// Compute the derived readiness state for a cluster (no network).
-    func readiness(for clusterId: UUID) -> TeleportDeviceReadiness
-
-    /// Store a Phase-1 bootstrap cert (pre-registration). The cert is valid
-    /// for a short window; `hasLiveCert` is set so readiness flips to
-    /// `needsRegistration` (not `needsBootstrap`).
-    func storeBootstrapCert(_ certPEM: String, validBefore: Date, for clusterId: UUID)
-
-    /// Store the SEP key metadata captured at Phase 2 registration. The SEP
-    /// key itself is already in the Secure Enclave (created by
-    /// `SecureEnclaveSigner.createKey`); this records the lookup metadata.
-    func storeRegisteredSEPKey(
-        credentialID: Data,
-        userHandle: Data,
-        publicKeyRaw: Data,
-        deviceName: String,
-        for clusterId: UUID
-    )
-
-    /// Store a Phase-3 login cert (post-registration). Overwrites any prior
-    /// cert; `hasLiveCert` is set so readiness flips to `ready`.
-    func storeLoginCert(_ certPEM: String, validBefore: Date, for clusterId: UUID)
-
-    /// The live cert PEM for a cluster, or nil if no valid cert.
-    func liveCertPEM(for clusterId: UUID) -> String?
-
-    /// The registered SEP key's credentialID for a cluster, or nil if not
-    /// registered. Used by the login coordinator to load the SEP key.
-    func registeredCredentialID(for clusterId: UUID) -> Data?
-
-    /// The registered userHandle for a cluster (UTF-8 bytes), or nil.
-    /// Required by the server's passwordless login verify path.
-    func registeredUserHandle(for clusterId: UUID) -> Data?
-
-    /// The cluster name (from host_signers[0].domain_name) + cluster TLS CA
-    /// certs (from host_signers[0].tls_certs) captured at Phase 1 bootstrap.
-    /// Required by the SSH TLS+ALPN transport (`SSHTLSTransport`) to verify
-    /// the Teleport proxy's TLS cert when dialing SSH on port 443 (TLS
-    /// Routing, ALPN `teleport-proxy-ssh`). The SSH path fetches this to
-    /// build the NWProtocolTLS.Options trust anchors — same cluster CA
-    /// the gRPC path uses for the auth-service ALPN dial.
-    ///
-    /// NOT CloudKit-synced (per-device) — mirrors the ed25519 private key.
-    /// A server that arrives via iCloud on a fresh device has no cluster
-    /// CA until the user completes the per-device bootstrap.
-    func clusterTLSState(for clusterId: UUID) -> TeleportClusterTLSState?
-
-    /// Store the cluster name + TLS CA certs for a cluster. Called by the
-    /// bootstrap coordinator when Phase 1 returns host_signers. Overwrites
-    /// any prior state.
-    func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID)
-
-    /// Refresh the Host CA checking keys captured for a cluster.
-    ///
-    /// Additions-only: a refresh that would drop a currently pinned key is
-    /// rejected (the pinned anchors are kept) because the login/finish
-    /// channel is not authenticated for anchor rotation. A legitimate
-    /// Teleport CA rotation publishes the old + new keys during the
-    /// AdditionalTrustedKeys window, so rotations are additions-first.
-    ///
-    /// - Returns: whether the refresh was applied, rejected, or a no-op.
-    func updateClusterHostKeys(_ checkingKeys: [String], for clusterId: UUID) -> TeleportHostKeyUpdateResult
-
-    /// The ed25519 private key (OpenSSH PEM format) paired with the live
-    /// cert, or nil if none. Stored in the keychain (NOT UserDefaults —
-    /// the private key is secret). The coordinators store this alongside
-    /// the cert at Phase 1 (bootstrap) and Phase 3 (login); the SSHClient
-    /// cert seam fetches it to feed `libssh2_userauth_publickey_frommemory`.
-    ///
-    /// The key is per-device (NOT CloudKit-synced) — like the SEP key, each
-    /// device generates its own ed25519 keypair when it bootstraps. A server
-    /// that arrives via iCloud on a fresh device has no private key until the
-    /// user completes the per-device setup.
-    func liveEd25519PrivateKey(for clusterId: UUID) -> Data?
-
-    /// Store the ed25519 private key (OpenSSH PEM bytes) for a cluster.
-    /// Called by the bootstrap/login coordinators when a cert is issued.
-    /// Overwrites any prior key. NOT synced to iCloud (per-device).
-    func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws
-
-    /// Clear all credential state for a cluster (metadata only — the SEP key
-    /// itself is removed via `SecureEnclaveSigner.deleteKey`, which the
-    /// coordinator calls separately). Used when the user deletes the MFA
-    /// device from the Teleport portal and re-registers.
-    func clear(for clusterId: UUID)
-}
-
-@MainActor
-final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
-    static let shared = TeleportKeyRing()
-
+final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
     /// The UserDefaults key for the encoded `[UUID: TeleportCredential]` map.
     private let credentialsKey = "vvterm.teleport.credentials"
 
@@ -159,12 +64,23 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
     /// UI tests inject a `MockSEPKeySigner`.
     private let signer: any TeleportSEPSigning
 
+    /// The persistence config: keychain service + defaults store. The host
+    /// passes `TeleportKeychainConfig.vvterm`; package tests pass a
+    /// suite-scoped `UserDefaults` and a test service.
+    private let config: TeleportKeychainConfig
+
     @Published private(set) var credentials: [UUID: TeleportCredential] = [:]
 
-    private let logger = Logger.forCategory("teleport-keyring")
+    private let logger: Logger
 
-    init(signer: any TeleportSEPSigning = SecureEnclaveSigner()) {
+    init(
+        signer: any TeleportSEPSigning = SecureEnclaveSigner(),
+        logging: any TeleportLogging,
+        config: TeleportKeychainConfig
+    ) {
         self.signer = signer
+        self.logger = logging.logger(category: "teleport-keyring")
+        self.config = config
         load()
     }
 
@@ -305,10 +221,11 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
     /// UserDefaults) because it's secret. NOT CloudKit-synced — each device
     /// generates its own keypair at bootstrap.
     ///
-    /// Format: service = `app.vivy.vvterm` (same as KeychainManager),
-    /// account = `vvterm.teleport.sshkey.<clusterId>`. The clusterId is the
+    /// Format: service = `config.keychainService` (the app passes the same
+    /// service `KeychainManager` uses), account =
+    /// `vvterm.teleport.sshkey.<clusterId>`. The clusterId is the
     /// `Server.id` (Teleport clusters are stored as Server records).
-    private static let sshKeyService = "app.vivy.vvterm"
+    private var sshKeyService: String { config.keychainService }
     private static func sshKeyAccount(for clusterId: UUID) -> String {
         "vvterm.teleport.sshkey.\(clusterId.uuidString)"
     }
@@ -316,7 +233,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
     func liveEd25519PrivateKey(for clusterId: UUID) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.sshKeyService,
+            kSecAttrService as String: sshKeyService,
             kSecAttrAccount as String: Self.sshKeyAccount(for: clusterId),
             kSecReturnData as String: kCFBooleanTrue as Any,
             kSecMatchLimit as String: kSecMatchLimitOne
@@ -336,7 +253,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         let account = Self.sshKeyAccount(for: clusterId)
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.sshKeyService,
+            kSecAttrService as String: sshKeyService,
             kSecAttrAccount as String: account
         ]
         // Delete any prior key first (idempotent).
@@ -347,7 +264,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
             logger.error("storeEd25519PrivateKey SecItemAdd: OSStatus \(status)")
-            throw KeychainError.unhandled(status)
+            throw TeleportPackageError.keychain(status)
         }
         logger.info("stored ed25519 private key for cluster \(clusterId.uuidString, privacy: .public)")
     }
@@ -358,7 +275,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         // Also delete the ed25519 private key from the keychain.
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.sshKeyService,
+            kSecAttrService as String: sshKeyService,
             kSecAttrAccount as String: Self.sshKeyAccount(for: clusterId)
         ]
         SecItemDelete(query as CFDictionary)
@@ -411,7 +328,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
     // MARK: - Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: credentialsKey) else {
+        guard let data = config.defaults.data(forKey: credentialsKey) else {
             return
         }
         // Encode as `[String: TeleportCredential]` (UUID keys aren't directly
@@ -431,7 +348,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         )
 
         // Load cluster TLS state too.
-        if let tlsData = UserDefaults.standard.data(forKey: clusterTLSStateKey),
+        if let tlsData = config.defaults.data(forKey: clusterTLSStateKey),
            let tlsDecoded = try? JSONDecoder().decode(
             [String: TeleportClusterTLSState].self,
             from: tlsData
@@ -451,7 +368,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         )
         do {
             let data = try JSONEncoder().encode(encoded)
-            UserDefaults.standard.set(data, forKey: credentialsKey)
+            config.defaults.set(data, forKey: credentialsKey)
         } catch {
             logger.error("failed to encode credentials: \(error.localizedDescription, privacy: .public)")
         }
@@ -463,7 +380,7 @@ final class TeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         )
         do {
             let data = try JSONEncoder().encode(encoded)
-            UserDefaults.standard.set(data, forKey: clusterTLSStateKey)
+            config.defaults.set(data, forKey: clusterTLSStateKey)
         } catch {
             logger.error("failed to encode cluster TLS state: \(error.localizedDescription, privacy: .public)")
         }

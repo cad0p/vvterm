@@ -34,7 +34,7 @@ import Foundation
 /// matrix (ready / needsLogin / needsRegistration / needsBootstrap /
 /// cross-device).
 @MainActor
-final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
+final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, TeleportCredentialStore {
     /// A scripted fixture for a single cluster's credential state.
     struct Fixture {
         /// Whether a bootstrap cert (PEM) is present.
@@ -194,7 +194,15 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring {
         ed25519PrivateKeys[clusterId]
     }
 
+    /// When set, `storeEd25519PrivateKey` throws this instead of storing.
+    /// Lets tests script the non-fatal keychain-failure path (the cert +
+    /// TLS state must still persist).
+    var storeEd25519PrivateKeyError: Error?
+
     func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
+        if let storeEd25519PrivateKeyError {
+            throw storeEd25519PrivateKeyError
+        }
         ed25519PrivateKeys[clusterId] = pemData
     }
 

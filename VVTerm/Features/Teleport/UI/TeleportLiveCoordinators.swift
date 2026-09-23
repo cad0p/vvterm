@@ -135,16 +135,25 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
 /// a Phase-2 registration run; `disconnect()` closes it.
 final class LiveTeleportGRPCClient: TeleportGRPCClienting {
     private var connection: TeleportGRPCConnection?
-    private let logger = Logger.forCategory("teleport-grpc")
+    /// The client's own log lines (dial parameters / failures / lifecycle),
+    /// category `teleport-grpc` (unchanged from `origin/main`).
+    private let logger: Logger
+    /// The transport-layer logger, category `TeleportGRPC` — byte-identical
+    /// to `origin/main`'s `GRPCTransportLog.logger`, which owned the
+    /// `tls_setup` / `tls_challenge` / `conn_*` / `grpc_identity_deleted`
+    /// lines inside `GRPCTransport`.
+    private let transportLogger: Logger
 
-    init() {
+    init(logging: any TeleportLogging = AppTeleportLogging.shared) {
+        self.logger = logging.logger(category: "teleport-grpc")
+        self.transportLogger = logging.logger(category: "TeleportGRPC")
         // Bound leaks from a previous process that never reached
         // `disconnect()` (crash / force-quit): remove leftover per-connect
         // identities before creating a new one. The sweep is a no-op after
         // the first call per process, so the repeated client construction
         // from SwiftUI state initialization is cheap and cannot delete
         // another live client's in-flight identity.
-        GRPCClientIdentity.deleteStaleIdentities()
+        GRPCClientIdentity.deleteStaleIdentities(logger: transportLogger)
     }
 
     deinit {
@@ -185,7 +194,8 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
                 clientCertPEM: clientCertPEM,
                 privateKey: privateKey,
                 clusterName: clusterName,
-                clusterCAPEMs: clusterCAPEMs
+                clusterCAPEMs: clusterCAPEMs,
+                logger: transportLogger
             )
         } catch {
             // Surface the concrete error (NWError/TLS) rather than letting the
@@ -280,14 +290,24 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
 /// bogus `localhost:0` URL is rejected by Teleport's
 /// `ValidateClientRedirect` → "unable to create MFA challenges" (gRPC code 7)
 /// — that was the live-device regression.
+@MainActor
 final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
-    private let logger = Logger.forCategory("teleport-browsermfa")
+    private let logging: any TeleportLogging
+    private let presenter: any BrowserMFAPresenting
+
+    init(
+        logging: any TeleportLogging = AppTeleportLogging.shared,
+        presenter: (any BrowserMFAPresenting)? = nil
+    ) {
+        self.logging = logging
+        self.presenter = presenter ?? LiveBrowserMFAPresenter()
+    }
 
     func run(
         grpcClient: any TeleportGRPCClienting,
         host: String
     ) async throws -> Proto_BrowserMFAResponse {
-        let ceremony = BrowserMFACeremony()
+        let ceremony = BrowserMFACeremony(logging: logging, presenter: presenter)
         return try await ceremony.run(grpcClient: grpcClient, host: host)
     }
 }
