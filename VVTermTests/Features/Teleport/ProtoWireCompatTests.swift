@@ -268,4 +268,48 @@ final class ProtoWireCompatTests: XCTestCase {
         XCTAssertEqual(Proto_ChallengeScope.headlessLogin.rawValue, 3)
         XCTAssertEqual(Proto_DeviceUsage.passwordless.rawValue, 2)
     }
+
+    // MARK: - Restored wire-contract fields
+
+    /// `AddMFADeviceSyncResponse.device` (field 1, length-delimited). The
+    /// client ignores the value, but the field is part of the server's
+    /// response and must stay modeled so the IDL documents the real contract.
+    func testAddMFADeviceSyncResponse_wireBytes() throws {
+        var response = Proto_AddMFADeviceSyncResponse()
+        response.device = Data([0x01, 0x02, 0x03])
+        try assertWireRoundTrip(response, golden: "0a03010203")
+    }
+
+    /// `CredentialDescriptor.transports` (field 3, repeated string) is part of
+    /// the WebAuthn allow-list the server sends; the descriptor must keep
+    /// decoding it.
+    func testCredentialDescriptor_transportsWireBytes() throws {
+        var descriptor = Proto_CredentialDescriptor()
+        descriptor.type = "public-key"
+        descriptor.id = Data([0xaa, 0xbb])
+        descriptor.transports = ["usb", "internal"]
+        try assertWireRoundTrip(
+            descriptor,
+            golden: "0a0a7075626c69632d6b65791202aabb1a037573621a08696e7465726e616c"
+        )
+
+        let decoded = try Proto_CredentialDescriptor(
+            serializedBytes: data(
+                hex: "0a0a7075626c69632d6b65791202aabb1a037573621a08696e7465726e616c"
+            )
+        )
+        XCTAssertEqual(decoded.transports, ["usb", "internal"])
+    }
+
+    /// `MFAAuthenticateChallenge.mfa_required` (field 4, varint). The client
+    /// does not branch on it today, but a dropped field would make the
+    /// challenge decode lossy for any future consumer.
+    func testMFAAuthenticateChallenge_mfaRequiredWireBytes() throws {
+        var challenge = Proto_MFAAuthenticateChallenge()
+        challenge.mfaRequired = 1
+        try assertWireRoundTrip(challenge, golden: "2001")
+
+        let decoded = try Proto_MFAAuthenticateChallenge(serializedBytes: data(hex: "2001"))
+        XCTAssertEqual(decoded.mfaRequired, 1)
+    }
 }

@@ -1,26 +1,31 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //
 //  WebAuthn.swift
-//  SEPWebAuthn
+//  VVTerm
 //
-//  Ports `Register` and `Login` from Teleport's lib/auth/touchid/api.go.
-//  Builds the WebAuthn attestation/assertion objects by composing
-//  makeAttestationData + the signer + canonical CBOR.
+//  Assembles the WebAuthn registration and assertion responses the Teleport
+//  server consumes.
+//
+//  The response JSON mirrors Go's `webauthntypes` structs: a public-key
+//  credential object (`id`, `type`, `rawId`) with a ceremony-specific
+//  `response` object. Every binary field is base64url without padding, and
+//  `id`/`rawId` carry the same credential id bytes.
+//
+//  The attestation object is canonical CTAP2 CBOR:
+//    { "fmt": "packed", "attStmt": { "alg": -7, "sig": <DER> },
+//      "authData": <bytes> }
+//  with the map keys in length-first order.
+//
 
 import Foundation
-import CryptoKit
 
-// MARK: - WebAuthn responses (wire types)
-//  Mirror lib/auth/webauthntypes/webauthn.go. Field names match the JSON
-//  tags exactly because Teleport decodes these with encoding/json.
+// MARK: - Response types
 
-/// `PublicKeyCredential.id` + `rawId`. Shared by registration and assertion
-/// responses. `id` is the credential ID as a base64url string; `rawId` is the
-/// same bytes as URLEncodedBase64 (base64url no padding).
+/// The public-key credential identity shared by both ceremonies.
 public struct PublicKeyCredential: Codable {
     public let id: String
     public let type: String
-    public let rawId: String  // base64url
+    public let rawId: String
 
     public init(id: String, type: String, rawId: String) {
         self.id = id
@@ -29,19 +34,19 @@ public struct PublicKeyCredential: Codable {
     }
 }
 
-/// `AuthenticatorResponse` — just `clientDataJSON` (base64url).
+/// The base authenticator response carrying the raw client data JSON.
 public struct AuthenticatorResponse: Codable {
-    public let clientDataJSON: String  // base64url
+    public let clientDataJSON: String
 
     public init(clientDataJSON: String) {
         self.clientDataJSON = clientDataJSON
     }
 }
 
-/// `AuthenticatorAttestationResponse` — adds `attestationObject`.
+/// The registration ceremony's authenticator response.
 public struct AuthenticatorAttestationResponse: Codable {
-    public let clientDataJSON: String      // base64url
-    public let attestationObject: String   // base64url
+    public let clientDataJSON: String
+    public let attestationObject: String
 
     public init(clientDataJSON: String, attestationObject: String) {
         self.clientDataJSON = clientDataJSON
@@ -49,13 +54,13 @@ public struct AuthenticatorAttestationResponse: Codable {
     }
 }
 
-/// `AuthenticatorAssertionResponse` — adds `authenticatorData`, `signature`,
-/// `userHandle`.
+/// The login ceremony's authenticator response.
 public struct AuthenticatorAssertionResponse: Codable {
-    public let clientDataJSON: String      // base64url
-    public let authenticatorData: String  // base64url
-    public let signature: String          // base64url
-    public let userHandle: String?        // base64url, omit if nil
+    public let clientDataJSON: String
+    public let authenticatorData: String
+    public let signature: String
+    /// Omitted when nil; an empty handle is a present empty string.
+    public let userHandle: String?
 
     public init(
         clientDataJSON: String,
@@ -70,8 +75,7 @@ public struct AuthenticatorAssertionResponse: Codable {
     }
 }
 
-/// `CredentialCreationResponse` — the registration reply.
-/// Mirrors wantypes.CredentialCreationResponse.
+/// The full registration response.
 public struct CredentialCreationResponse: Codable {
     public let id: String
     public let type: String
@@ -91,8 +95,7 @@ public struct CredentialCreationResponse: Codable {
     }
 }
 
-/// `CredentialAssertionResponse` — the login/assertion reply.
-/// Mirrors wantypes.CredentialAssertionResponse.
+/// The full login response.
 public struct CredentialAssertionResponse: Codable {
     public let id: String
     public let type: String
@@ -112,170 +115,94 @@ public struct CredentialAssertionResponse: Codable {
     }
 }
 
-// MARK: - WebAuthn builder
-//  Composes makeAttestationData + the signer, mirroring api.go:Register and
-//  api.go:Login. The signer is injected so the same builder works for the
-//  software (Part A) and SEP (Part B) signers.
+// MARK: - Builder
 
+/// Builds the registration and assertion responses.
 public enum WebAuthn {
-    /// Build a registration response (api.go:Register).
-    ///
-    /// - Parameters:
-    ///   - origin: e.g. "https://teleport.pcad.it"
-    ///   - rpID: e.g. "teleport.pcad.it"
-    ///   - challenge: server-provided challenge bytes
-    ///   - credentialID: the opaque credential identifier bytes (what the
-    ///     signer uses as its lookup key). On the wire this becomes the
-    ///     base64url-encoded `id`/`rawId`. In api.go this is a string
-    ///     (uuid.NewString()); the spike uses 32 random bytes. Either is
-    ///     opaque to WebAuthn — the server stores whatever the client sends.
-    ///   - publicKeyRaw: ANSI X9.63 form (0x04 || X(32) || Y(32)), from
-    ///     SecKeyCopyExternalRepresentation / CryptoKit x963Representation
-    ///   - signer: the WebAuthnSigner (software or SEP)
-    /// - Returns: CredentialCreationResponse ready to JSON-encode and POST to
-    ///   /webapi/mfa/devices.
+
+    /// Builds a registration response, signing the create-ceremony message
+    /// with `signer`.
     public static func register(
         origin: String,
         rpID: String,
         challenge: Data,
         credentialID: Data,
         publicKeyRaw: Data,
-        signer: WebAuthnSigner
+        signer: any WebAuthnSigner
     ) throws -> CredentialCreationResponse {
-        // Build the COSE EC2 public key CBOR.
         let pubKeyCBOR = try coseEC2PublicKeyCBOR(publicKeyRaw: publicKeyRaw)
-
-        // The credential ID is embedded in authenticatorData as raw bytes.
-        // (api.go uses []byte(credentialID) where credentialID is a string —
-        // same bytes, different source type.)
-        let attData = try makeAttestationData(
+        let attestationData = try makeAttestationData(
             ceremony: .create,
             origin: origin,
             rpID: rpID,
             challenge: challenge,
-            cred: CredentialData(
-                id: credentialID,
-                pubKeyCBOR: pubKeyCBOR
-            )
+            cred: CredentialData(id: credentialID, pubKeyCBOR: pubKeyCBOR)
         )
-
-        // Sign the message (authData || clientDataHash). Each signer hashes
-        // it exactly once before signing — see WebAuthnSigner.sign.
-        let sig = try signer.sign(
-            message: attData.message,
+        let signature = try signer.sign(
+            message: attestationData.message,
             credentialID: credentialID
         )
-
-        // Assemble the attestation object via the shared helper (tested
-        // separately by FixtureTests).
-        let attObj = Self.buildAttestationObjectCBOR(
-            authData: attData.rawAuthData,
-            signature: sig
+        let attestationObject = buildAttestationObjectCBOR(
+            authData: attestationData.rawAuthData,
+            signature: signature
         )
 
-        // The wire `id` is the credential ID as a base64url string; `rawId`
-        // is the same bytes base64url-encoded (URLEncodedBase64 in Go).
-        // For a string credential ID (like api.go's UUID), the "bytes" are
-        // the UTF-8 encoding of that string. For the spike's raw-bytes ID,
-        // the bytes ARE the ID — `id` and `rawId` carry the same content,
-        // just `id` as a decoded string and `rawId` as base64url.
-        let idB64url = credentialID.base64URLEncodedString()
-        // `id` (decoded string) — for a random 32-byte ID this is
-        // non-printable, but WebAuthn treats `id` as opaque; Teleport stores
-        // whatever is sent. api.go sets `id` = the string credentialID. We
-        // mirror by sending the base64url form as the `id` string (matching
-        // what a spec-compliant client does for non-UTF8 credential IDs).
-
         return CredentialCreationResponse(
-            id: idB64url,
+            id: credentialID.base64URLEncodedString(),
             type: "public-key",
-            rawId: idB64url,
+            rawId: credentialID.base64URLEncodedString(),
             response: AuthenticatorAttestationResponse(
-                clientDataJSON: attData.ccdJSON.base64URLEncodedString(),
-                attestationObject: attObj.base64URLEncodedString()
+                clientDataJSON: attestationData.ccdJSON.base64URLEncodedString(),
+                attestationObject: attestationObject.base64URLEncodedString()
             )
         )
     }
 
-    /// Build the attestation object CBOR bytes for a registration.
-    ///
-    /// Exposed for testing (FixtureTests byte-compares this against the
-    /// Go-generated fixture). The signature is passed in so the test can
-    /// use the deterministic Go-fixture signature.
-    ///
-    /// Layout (canonical CTAP2 CBOR — length-first key sort):
-    ///   { "fmt": "packed",
-    ///     "attStmt": { "alg": -7, "sig": <bytes> },
-    ///     "authData": <bytes> }
-    ///
-    /// Canonical key order:
-    ///   outer: fmt(3 bytes) < attStmt(7 bytes) < authData(8 bytes)
-    ///   inner: alg(3 bytes) < sig(3 bytes)   [bytewise tiebreak]
-    public static func buildAttestationObjectCBOR(
-        authData: Data,
-        signature: Data
-    ) -> Data {
-        let attStmtMap = CBOR.encodeMap(items: [
-            (CBOR.encodeString("alg"), CBOR.encodeInt(-7)),
-            (CBOR.encodeString("sig"), CBOR.encodeByteString(signature)),
-        ])
-        return CBOR.encodeMap(items: [
-            (CBOR.encodeString("fmt"),      CBOR.encodeString("packed")),
-            (CBOR.encodeString("attStmt"),  attStmtMap),
-            (CBOR.encodeString("authData"), CBOR.encodeByteString(authData)),
-        ])
-    }
-
-    /// Build an assertion response (api.go:Login).
-    ///
-    /// - Parameters:
-    ///   - origin: e.g. "https://teleport.pcad.it"
-    ///   - rpID: e.g. "teleport.pcad.it"
-    ///   - challenge: server-provided challenge bytes (from
-    ///     /webapi/mfa/login/begin → webauthn_challenge.publicKey.challenge)
-    ///   - credentialID: the opaque credential identifier bytes (what the
-    ///     signer uses as its lookup key — must match what was passed to
-    ///     register)
-    ///   - userHandle: optional user handle bytes (from the credential, if
-    ///     known; Teleport returns this from FindCredentials — for the spike
-    ///     we pass nil since passwordless logins don't echo it back)
-    ///   - signer: the WebAuthnSigner (software or SEP)
-    /// - Returns: CredentialAssertionResponse ready to JSON-encode and POST
-    ///   to /webapi/mfa/login/finish.
+    /// Builds an assertion response, signing the get-ceremony message with
+    /// `signer`.
     public static func login(
         origin: String,
         rpID: String,
         challenge: Data,
         credentialID: Data,
         userHandle: Data?,
-        signer: WebAuthnSigner
+        signer: any WebAuthnSigner
     ) throws -> CredentialAssertionResponse {
-        // Build authenticatorData + clientDataJSON + digest (no cred for get).
-        let attData = try makeAttestationData(
+        let attestationData = try makeAttestationData(
             ceremony: .get,
             origin: origin,
             rpID: rpID,
             challenge: challenge,
             cred: nil
         )
-
-        let sig = try signer.sign(
-            message: attData.message,
+        let signature = try signer.sign(
+            message: attestationData.message,
             credentialID: credentialID
         )
 
-        let idB64url = credentialID.base64URLEncodedString()
-
         return CredentialAssertionResponse(
-            id: idB64url,
+            id: credentialID.base64URLEncodedString(),
             type: "public-key",
-            rawId: idB64url,
+            rawId: credentialID.base64URLEncodedString(),
             response: AuthenticatorAssertionResponse(
-                clientDataJSON: attData.ccdJSON.base64URLEncodedString(),
-                authenticatorData: attData.rawAuthData.base64URLEncodedString(),
-                signature: sig.base64URLEncodedString(),
+                clientDataJSON: attestationData.ccdJSON.base64URLEncodedString(),
+                authenticatorData: attestationData.rawAuthData.base64URLEncodedString(),
+                signature: signature.base64URLEncodedString(),
                 userHandle: userHandle?.base64URLEncodedString()
             )
         )
+    }
+
+    /// Encodes the `packed` attestation object CBOR.
+    public static func buildAttestationObjectCBOR(authData: Data, signature: Data) -> Data {
+        let attestationStatement = CBOR.encodeMap(items: [
+            (CBOR.encodeString("alg"), CBOR.encodeInt(-7)),
+            (CBOR.encodeString("sig"), CBOR.encodeByteString(signature)),
+        ])
+        return CBOR.encodeMap(items: [
+            (CBOR.encodeString("fmt"), CBOR.encodeString("packed")),
+            (CBOR.encodeString("attStmt"), attestationStatement),
+            (CBOR.encodeString("authData"), CBOR.encodeByteString(authData)),
+        ])
     }
 }

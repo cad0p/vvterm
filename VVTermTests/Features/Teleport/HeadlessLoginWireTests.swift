@@ -14,9 +14,9 @@
 //      HTTP server, so the actual shared `TeleportTrustSession.session` path
 //      is exercised;
 //    - the shared trust session's request/resource timeout constants
-//      (200 s >= the 180 s server-side block). This pins the shared session
-//      configuration, not which session `post` uses — making that link
-//      observable is a rewrite acceptance item.
+//      (200 s >= the 180 s server-side block), the default-session value
+//      identity, and the source-level wiring that makes `post` read that
+//      default.
 //
 //  Note: `URLProtocol.registerClass` does NOT intercept `URLSession` on this
 //  OS (verified: a fresh ephemeral session still hit the network, while an
@@ -213,6 +213,46 @@ final class LoopbackHTTPServer {
 
 #endif
 
+// MARK: - URLProtocol stub (explicit protocolClasses only)
+
+/// Records requests and returns a scripted 200 response. `URLProtocol`
+/// registration via `URLProtocol.registerClass` does not intercept
+/// `URLSession` on this OS, but an explicit `configuration.protocolClasses`
+/// stub does — which is exactly how a stub session is built here.
+final class HeadlessLoginRecordingProtocol: URLProtocol {
+    static let lock = NSLock()
+    static var recordedURLs: [URL] = []
+
+    static func reset() {
+        lock.lock()
+        recordedURLs = []
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        if let url = request.url {
+            Self.lock.lock()
+            Self.recordedURLs.append(url)
+            Self.lock.unlock()
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("{\"cert\":\"Q0VSVA==\"}".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 // MARK: - Tests
 
 final class HeadlessLoginWireTests: XCTestCase {
@@ -389,6 +429,24 @@ final class HeadlessLoginWireTests: XCTestCase {
         }
     }
 
+    /// A non-200 whose body is not valid UTF-8 must map to the documented
+    /// `<binary>` placeholder rather than a lossy replacement-character
+    /// decode: the body is a diagnostic payload, never parsed.
+    func testPost_nonUTF8ErrorBodyMapsToTheBinaryPlaceholder() async throws {
+        let server = try makeServer(.init(statusCode: 500, body: Data([0xFF, 0xFE, 0x00])))
+        defer { server.stop() }
+        do {
+            _ = try await HeadlessLogin.post(baseURL: loopbackURL(server), req: Self.makeRequest())
+            XCTFail("expected HeadlessError.http for a 500 response")
+        } catch let error as HeadlessError {
+            guard case .http(let status, let body) = error else {
+                return XCTFail("expected .http, got \(error)")
+            }
+            XCTAssertEqual(status, 500)
+            XCTAssertEqual(body, "<binary>")
+        }
+    }
+
     func testPost_mapsURLSessionErrorsToTransport() async throws {
         // Nothing listens on 127.0.0.1:1 (privileged port), so URLSession
         // fails. Assert the `.transport` case shape and that the underlying
@@ -422,12 +480,71 @@ final class HeadlessLoginWireTests: XCTestCase {
         }
     }
 
+    // MARK: - Session selection (the Phase-1b seam)
+
+    func testPost_usesTheInjectedSession() async throws {
+        HeadlessLoginRecordingProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeadlessLoginRecordingProtocol.self]
+        let stubSession = URLSession(configuration: configuration)
+        defer { stubSession.invalidateAndCancel() }
+
+        let resp = try await HeadlessLogin.post(
+            baseURL: baseURL,
+            req: Self.makeRequest(),
+            session: stubSession
+        )
+
+        XCTAssertEqual(resp.cert, "Q0VSVA==")
+        XCTAssertEqual(
+            HeadlessLoginRecordingProtocol.recordedURLs.map(\.absoluteString),
+            ["https://teleport.example.test/webapi/headless/login"],
+            "post must send the request through the injected session"
+        )
+    }
+
+    func testPost_defaultsToTheSharedTrustSession() {
+        // The production default must stay the shared trust session: it owns
+        // the 200s timeouts the 180s blocking POST needs. Pinning the default
+        // value keeps a swap to URLSession.shared from passing unnoticed.
+        XCTAssertTrue(
+            HeadlessLogin.defaultSession === TeleportTrustSession.session,
+            "post's default session must be TeleportTrustSession.session"
+        )
+    }
+
+    /// Pins the wiring, not only the value: `post`'s `session` parameter must
+    /// default to `HeadlessLogin.defaultSession`. A signature-level swap to
+    /// `URLSession.shared` would bypass the trust session and still leave every
+    /// runtime test green.
+    func testPostSignature_defaultsToTheSharedTrustSessionExpression() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // HeadlessLoginWireTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/HeadlessLogin.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("session: URLSession = HeadlessLogin.defaultSession"),
+            "post's default session must read HeadlessLogin.defaultSession"
+        )
+        XCTAssertFalse(
+            source.contains("session: URLSession = URLSession.shared"),
+            "post must not fall back to URLSession.shared (it bypasses the trust session)"
+        )
+    }
+
     // MARK: - Shared trust session configuration
 
     func testSharedTrustSessionConfiguration_pinsThe200sTimeouts() {
         // This pins the shared trust session's configuration (200 s > the
-        // 180 s blocking window the server holds), not which session
-        // `HeadlessLogin.post` uses — see the rewrite acceptance list.
+        // 180 s blocking window the server holds). Which session `post` reads
+        // is pinned separately by
+        // `testPostSignature_defaultsToTheSharedTrustSessionExpression`.
         let config = TeleportTrustSession.session.configuration
         XCTAssertGreaterThanOrEqual(config.timeoutIntervalForRequest, 180)
         XCTAssertGreaterThanOrEqual(config.timeoutIntervalForResource, 180)

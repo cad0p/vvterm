@@ -300,14 +300,6 @@ The derived paths are enumerated in
 [`docs/teleport-derived-files.txt`](docs/teleport-derived-files.txt), which is
 also the allowlist enforced by `scripts/ci/check-license-headers.sh`:
 
-- `VVTerm/Features/Teleport/Infrastructure/HeadlessID.swift`
-- `VVTerm/Features/Teleport/Infrastructure/HeadlessLogin.swift`
-- `VVTerm/Features/Teleport/Infrastructure/BrowserMFAListener.swift`
-- `VVTerm/Features/Teleport/Infrastructure/BrowserMFACeremony.swift`
-- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Attestation.swift`
-- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/Signer.swift`
-- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/WebAuthn.swift`
-- `VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/SecureEnclaveSigner.swift`
 - `VVTerm/Features/Teleport/UI/TeleportLiveCoordinators.swift`
 - `scripts/ci/teleport-webauthn.py`
 - `spikes/sep-webauthn/Sources/SEPWebAuthn/Attestation.swift`
@@ -316,8 +308,16 @@ also the allowlist enforced by `scripts/ci/check-license-headers.sh`:
 - `spikes/sep-webauthn/Sources/SEPWebAuthn/SecureEnclaveSigner.swift`
 - `spikes/sep-webauthn/fixtures/generate/main.go`
 
-Per-file derivation notes (the Teleport source each file ports or mirrors) are
-recorded next to each entry in the allowlist.
+The package-movable Teleport client files (`HeadlessID.swift`,
+`HeadlessLogin.swift`, `BrowserMFAListener.swift`, `BrowserMFACeremony.swift`,
+the `SEPWebAuthn` quartet, and the `iotest_mfa` IDL + generated bindings) were
+rewritten in Phase 1b Stage A as independent MIT implementations of the
+documented public contract: authored from the public API/behavior
+specification and the test oracle, not from the Teleport-derived expression.
+They carry `SPDX-License-Identifier: MIT` and no longer appear above.
+
+Per-file derivation notes (the Teleport source each remaining file ports or
+mirrors) are recorded next to each entry in the allowlist.
 
 Aggregate licensing: the repository as distributed stays GPL-3.0 (`LICENSE`);
 AGPL-3.0 and GPL-3.0 combination is permitted by GPLv3 section 13. Fork-new

@@ -228,7 +228,10 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
                     logger.info("no BrowserMFAChallenge — first-device path")
                     existingMfaResponse = nil
                 } else {
-                    logger.error("Browser MFA ceremony failed: \(msg, privacy: .public)")
+                    // The gRPC message can echo the redirect URL (and with it
+                    // the per-run secret_key), so the log carries the error's
+                    // shape only; the descriptive text stays in the UI state.
+                    logger.error("Browser MFA ceremony failed: \(String(describing: type(of: error)), privacy: .public)")
                     state = .failed(.browserMFAFailed(msg))
                     await grpcClient.disconnect()
                     return

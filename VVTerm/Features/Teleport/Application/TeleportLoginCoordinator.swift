@@ -406,7 +406,8 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
     /// Map a signer error (from WebAuthn.login → SecKeyCreateSignature) to a
     /// `TeleportLoginError`. Distinguishes Face ID cancel from unavailable.
-    private func mapSignerError(_ error: Error) -> TeleportLoginError {
+    /// Internal (not private) so the mapping is unit-testable directly.
+    func mapSignerError(_ error: Error) -> TeleportLoginError {
         let msg = error.localizedDescription.lowercased()
         // SignerError.signingFailed wraps the LAError. The LAError codes:
         //   - .userCancel → "canceled" / "cancel"

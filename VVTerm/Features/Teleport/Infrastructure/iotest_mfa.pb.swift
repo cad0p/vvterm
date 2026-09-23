@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //
 // DO NOT EDIT.
 // swift-format-ignore-file
@@ -9,34 +9,27 @@
 //
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
+
 //
-// NOTE: hand-modified — added `nonisolated` to the `SwiftProtobuf.Message`/
-// `_MessageImplementationBase`/`_ProtoNameProviding` conformance extensions on
-// all `Proto_*` message types. Under Swift 6 `InferIsolatedConformances` +
-// `default-isolation=MainActor`, these conformances (which inherit
-// `Equatable`/`Hashable` via `SwiftProtobuf.Message`) were inferred as
-// `@MainActor`-isolated, which violates the `Sendable` requirement on those
-// protocols. Marking the extensions `nonisolated` keeps the conformances (and
-// the synthesized `==`/`hash(into:)`) nonisolated so `Sendable` is satisfied.
-// The file is generated but committed (not regenerated in CI), so this hand-
-// edit is acceptable; if `protoc` is rerun, reapply `nonisolated` to each
-// `extension Proto_*: SwiftProtobuf.Message, ...` declaration. Also reapply the
-// SPDX header at the top of this file (protoc does not emit it).
+//  iotest_mfa.proto
+//  VVTerm
+//
+//  Minimal gRPC surface for the in-app Teleport MFA client. It carries the
+//  messages the app sends and decodes for the Phase-1 headless bootstrap,
+//  the existing-device browser MFA ceremony, and passwordless registration.
+//
+//  Message names, field numbers, wire types, and oneof membership are the
+//  client/server contract and must match the Teleport auth service. Field
+//  names stay lower_snake_case so the generated Swift reads naturally
+//  (requestID, rawID, clientDataJson, ...).
+//
+//  Regenerate with scripts/regen-iotest-mfa.sh (pinned protoc-gen-swift).
 
-/// Minimal standalone proto for the session 1.10/1.11 spike.
-/// Defines ONLY the messages needed for the gRPC calls:
-///   CreateAuthenticateChallenge, CreateRegisterChallenge, AddMFADeviceSync.
-/// Session 1.11 adds Browser MFA types (BrowserMFAChallenge, BrowserMFAResponse,
-///   CreateAuthenticateChallengeRequest.browser_mfa_tsh_redirect_url) to
-///   support the existing-device assertion via the Browser MFA flow.
-/// Field NUMBERS match Teleport v18.9.1 exactly (that's what matters on the
-/// wire for gRPC). Field *names* use snake_case (proto3 convention) so
-/// SwiftProtobuf generates clean camelCase Swift property names. The JSON
-/// tags differ from Teleport's, but that only matters for the HTTP/JSON API
-/// which we are NOT using — gRPC uses the binary protobuf wire format, keyed
-/// by field number.
-
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -44,117 +37,25 @@ import SwiftProtobuf
 // incompatible with the version of SwiftProtobuf to which you are linking.
 // Please ensure that you are building against the same version of the API
 // that was used to generate this file.
-fileprivate struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobuf.ProtobufAPIVersionCheck {
+fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobuf.ProtobufAPIVersionCheck {
   struct _2: SwiftProtobuf.ProtobufAPIVersion_2 {}
   typealias Version = _2
 }
 
-/// ── MFA v1 ChallengeExtensions (from mfa/v1/mfa.proto) ──
-enum Proto_ChallengeScope: SwiftProtobuf.Enum, Swift.CaseIterable {
-  typealias RawValue = Int
-  case unspecified // = 0
-  case login // = 1
-  case passwordlessLogin // = 2
-  case headlessLogin // = 3
-  case manageDevices // = 4
-  case accountRecovery // = 5
-  case userSession // = 6
-  case UNRECOGNIZED(Int)
-
-  init() {
-    self = .unspecified
-  }
-
-  init?(rawValue: Int) {
-    switch rawValue {
-    case 0: self = .unspecified
-    case 1: self = .login
-    case 2: self = .passwordlessLogin
-    case 3: self = .headlessLogin
-    case 4: self = .manageDevices
-    case 5: self = .accountRecovery
-    case 6: self = .userSession
-    default: self = .UNRECOGNIZED(rawValue)
-    }
-  }
-
-  var rawValue: Int {
-    switch self {
-    case .unspecified: return 0
-    case .login: return 1
-    case .passwordlessLogin: return 2
-    case .headlessLogin: return 3
-    case .manageDevices: return 4
-    case .accountRecovery: return 5
-    case .userSession: return 6
-    case .UNRECOGNIZED(let i): return i
-    }
-  }
-
-  // The compiler won't synthesize support with the UNRECOGNIZED case.
-  static let allCases: [Proto_ChallengeScope] = [
-    .unspecified,
-    .login,
-    .passwordlessLogin,
-    .headlessLogin,
-    .manageDevices,
-    .accountRecovery,
-    .userSession,
-  ]
-
-}
-
-enum Proto_DeviceUsage: SwiftProtobuf.Enum, Swift.CaseIterable {
-  typealias RawValue = Int
-  case unspecified // = 0
-  case mfa // = 1
-  case passwordless // = 2
-  case UNRECOGNIZED(Int)
-
-  init() {
-    self = .unspecified
-  }
-
-  init?(rawValue: Int) {
-    switch rawValue {
-    case 0: self = .unspecified
-    case 1: self = .mfa
-    case 2: self = .passwordless
-    default: self = .UNRECOGNIZED(rawValue)
-    }
-  }
-
-  var rawValue: Int {
-    switch self {
-    case .unspecified: return 0
-    case .mfa: return 1
-    case .passwordless: return 2
-    case .UNRECOGNIZED(let i): return i
-    }
-  }
-
-  // The compiler won't synthesize support with the UNRECOGNIZED case.
-  static let allCases: [Proto_DeviceUsage] = [
-    .unspecified,
-    .mfa,
-    .passwordless,
-  ]
-
-}
-
-enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
-  typealias RawValue = Int
+/// DeviceType identifies the MFA device kind. Value 2 belonged to the retired
+/// U2F flow and stays reserved so it can never be reused.
+public nonisolated enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
   case unspecified // = 0
   case totp // = 1
-  // 2 is reserved (was DEVICE_TYPE_U2F, removed; WEBAUTHN covers U2F/CTAP1/CTAP2/platform).
   case webauthn // = 3
   case UNRECOGNIZED(Int)
 
-  init() {
+  public init() {
     self = .unspecified
   }
 
-  init?(rawValue: Int) {
+  public init?(rawValue: Int) {
     switch rawValue {
     case 0: self = .unspecified
     case 1: self = .totp
@@ -163,7 +64,7 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
     }
   }
 
-  var rawValue: Int {
+  public var rawValue: Int {
     switch self {
     case .unspecified: return 0
     case .totp: return 1
@@ -173,7 +74,7 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
   }
 
   // The compiler won't synthesize support with the UNRECOGNIZED case.
-  static let allCases: [Proto_DeviceType] = [
+  public static let allCases: [Proto_DeviceType] = [
     .unspecified,
     .totp,
     .webauthn,
@@ -181,433 +82,162 @@ enum Proto_DeviceType: SwiftProtobuf.Enum, Swift.CaseIterable {
 
 }
 
-struct Proto_ContextUser: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
+/// DeviceUsage selects what a WebAuthn device is registered for.
+public nonisolated enum Proto_DeviceUsage: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unspecified // = 0
+  case mfa // = 1
+  case passwordless // = 2
+  case UNRECOGNIZED(Int)
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_Passwordless: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_ChallengeExtensions: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var scope: Proto_ChallengeScope = .unspecified
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-/// ── WebAuthn types (from legacy/types/webauthn/webauthn.proto) ──
-/// Field numbers match; names snake_cased for clean Swift.
-struct Proto_CredentialAssertion: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var publicKey: Proto_PublicKeyCredentialRequestOptions {
-    get {return _publicKey ?? Proto_PublicKeyCredentialRequestOptions()}
-    set {_publicKey = newValue}
+  public init() {
+    self = .unspecified
   }
-  /// Returns true if `publicKey` has been explicitly set.
-  var hasPublicKey: Bool {return self._publicKey != nil}
-  /// Clears the value of `publicKey`. Subsequent reads from it will return its default value.
-  mutating func clearPublicKey() {self._publicKey = nil}
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _publicKey: Proto_PublicKeyCredentialRequestOptions? = nil
-}
-
-struct Proto_PublicKeyCredentialRequestOptions: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var challenge: Data = Data()
-
-  var timeoutMs: Int64 = 0
-
-  var rpID: String = String()
-
-  var allowCredentials: [Proto_CredentialDescriptor] = []
-
-  var userVerification: String = String()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_CredentialDescriptor: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var type: String = String()
-
-  var id: Data = Data()
-
-  var transports: [String] = []
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_CredentialAssertionResponse: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var id: String = String()
-
-  var type: String = String()
-
-  var rawID: Data = Data()
-
-  var response: Proto_AuthenticatorAssertionResponse {
-    get {return _response ?? Proto_AuthenticatorAssertionResponse()}
-    set {_response = newValue}
-  }
-  /// Returns true if `response` has been explicitly set.
-  var hasResponse: Bool {return self._response != nil}
-  /// Clears the value of `response`. Subsequent reads from it will return its default value.
-  mutating func clearResponse() {self._response = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _response: Proto_AuthenticatorAssertionResponse? = nil
-}
-
-struct Proto_AuthenticatorAssertionResponse: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var clientDataJson: Data = Data()
-
-  var authenticatorData: Data = Data()
-
-  var signature: Data = Data()
-
-  var userHandle: Data = Data()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_CredentialCreation: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var publicKey: Proto_PublicKeyCredentialCreationOptions {
-    get {return _publicKey ?? Proto_PublicKeyCredentialCreationOptions()}
-    set {_publicKey = newValue}
-  }
-  /// Returns true if `publicKey` has been explicitly set.
-  var hasPublicKey: Bool {return self._publicKey != nil}
-  /// Clears the value of `publicKey`. Subsequent reads from it will return its default value.
-  mutating func clearPublicKey() {self._publicKey = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _publicKey: Proto_PublicKeyCredentialCreationOptions? = nil
-}
-
-struct Proto_PublicKeyCredentialCreationOptions: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var challenge: Data = Data()
-
-  var rp: Proto_RelyingPartyEntity {
-    get {return _rp ?? Proto_RelyingPartyEntity()}
-    set {_rp = newValue}
-  }
-  /// Returns true if `rp` has been explicitly set.
-  var hasRp: Bool {return self._rp != nil}
-  /// Clears the value of `rp`. Subsequent reads from it will return its default value.
-  mutating func clearRp() {self._rp = nil}
-
-  var user: Proto_UserEntity {
-    get {return _user ?? Proto_UserEntity()}
-    set {_user = newValue}
-  }
-  /// Returns true if `user` has been explicitly set.
-  var hasUser: Bool {return self._user != nil}
-  /// Clears the value of `user`. Subsequent reads from it will return its default value.
-  mutating func clearUser() {self._user = nil}
-
-  var timeoutMs: Int64 = 0
-
-  var attestation: String = String()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _rp: Proto_RelyingPartyEntity? = nil
-  fileprivate var _user: Proto_UserEntity? = nil
-}
-
-struct Proto_RelyingPartyEntity: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var id: String = String()
-
-  var name: String = String()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_UserEntity: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var id: String = String()
-
-  var name: String = String()
-
-  var displayName: String = String()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-struct Proto_CredentialCreationResponse: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var id: String = String()
-
-  var type: String = String()
-
-  var rawID: Data = Data()
-
-  var response: Proto_AuthenticatorAttestationResponse {
-    get {return _response ?? Proto_AuthenticatorAttestationResponse()}
-    set {_response = newValue}
-  }
-  /// Returns true if `response` has been explicitly set.
-  var hasResponse: Bool {return self._response != nil}
-  /// Clears the value of `response`. Subsequent reads from it will return its default value.
-  mutating func clearResponse() {self._response = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _response: Proto_AuthenticatorAttestationResponse? = nil
-}
-
-struct Proto_AuthenticatorAttestationResponse: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var clientDataJson: Data = Data()
-
-  var attestationObject: Data = Data()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-/// ── Auth service MFA messages (from authservice.proto) ──
-struct Proto_MFAAuthenticateChallenge: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var totp: Proto_TOTPChallenge {
-    get {return _totp ?? Proto_TOTPChallenge()}
-    set {_totp = newValue}
-  }
-  /// Returns true if `totp` has been explicitly set.
-  var hasTotp: Bool {return self._totp != nil}
-  /// Clears the value of `totp`. Subsequent reads from it will return its default value.
-  mutating func clearTotp() {self._totp = nil}
-
-  var webauthnChallenge: Proto_CredentialAssertion {
-    get {return _webauthnChallenge ?? Proto_CredentialAssertion()}
-    set {_webauthnChallenge = newValue}
-  }
-  /// Returns true if `webauthnChallenge` has been explicitly set.
-  var hasWebauthnChallenge: Bool {return self._webauthnChallenge != nil}
-  /// Clears the value of `webauthnChallenge`. Subsequent reads from it will return its default value.
-  mutating func clearWebauthnChallenge() {self._webauthnChallenge = nil}
-
-  var mfaRequired: Int32 = 0
-
-  /// Session 1.11: Browser MFA challenge (field 6).
-  var browserMfaChallenge: Proto_BrowserMFAChallenge {
-    get {return _browserMfaChallenge ?? Proto_BrowserMFAChallenge()}
-    set {_browserMfaChallenge = newValue}
-  }
-  /// Returns true if `browserMfaChallenge` has been explicitly set.
-  var hasBrowserMfaChallenge: Bool {return self._browserMfaChallenge != nil}
-  /// Clears the value of `browserMfaChallenge`. Subsequent reads from it will return its default value.
-  mutating func clearBrowserMfaChallenge() {self._browserMfaChallenge = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _totp: Proto_TOTPChallenge? = nil
-  fileprivate var _webauthnChallenge: Proto_CredentialAssertion? = nil
-  fileprivate var _browserMfaChallenge: Proto_BrowserMFAChallenge? = nil
-}
-
-struct Proto_TOTPChallenge: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-/// ── Browser MFA (session 1.11) ──
-/// Matches lib/auth/auth.go BeginBrowserMFAChallenge +
-/// api/proto/teleport/legacy/client/proto/authservice.proto:1408-1419.
-struct Proto_BrowserMFAChallenge: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  /// RequestId is the ID of a browser MFA request. The client opens
-  /// https://<proxy>/web/mfa/browser/<request_id> in a browser.
-  var requestID: String = String()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-}
-
-/// BrowserMFAResponse is sent back as ExistingMFAResponse.Browser in
-/// CreateRegisterChallenge, carrying the WebAuthn assertion the browser
-/// produced (decrypted from the loopback callback).
-struct Proto_BrowserMFAResponse: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var requestID: String = String()
-
-  var webauthnResponse: Proto_CredentialAssertionResponse {
-    get {return _webauthnResponse ?? Proto_CredentialAssertionResponse()}
-    set {_webauthnResponse = newValue}
-  }
-  /// Returns true if `webauthnResponse` has been explicitly set.
-  var hasWebauthnResponse: Bool {return self._webauthnResponse != nil}
-  /// Clears the value of `webauthnResponse`. Subsequent reads from it will return its default value.
-  mutating func clearWebauthnResponse() {self._webauthnResponse = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _webauthnResponse: Proto_CredentialAssertionResponse? = nil
-}
-
-struct Proto_MFAAuthenticateResponse: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var response: Proto_MFAAuthenticateResponse.OneOf_Response? = nil
-
-  var totp: Proto_TOTPResponse {
-    get {
-      if case .totp(let v)? = response {return v}
-      return Proto_TOTPResponse()
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .mfa
+    case 2: self = .passwordless
+    default: self = .UNRECOGNIZED(rawValue)
     }
-    set {response = .totp(newValue)}
   }
 
-  var webauthn: Proto_CredentialAssertionResponse {
-    get {
-      if case .webauthn(let v)? = response {return v}
-      return Proto_CredentialAssertionResponse()
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .mfa: return 1
+    case .passwordless: return 2
+    case .UNRECOGNIZED(let i): return i
     }
-    set {response = .webauthn(newValue)}
   }
 
-  /// Session 1.11: Browser MFA response (field 5).
-  var browser: Proto_BrowserMFAResponse {
-    get {
-      if case .browser(let v)? = response {return v}
-      return Proto_BrowserMFAResponse()
-    }
-    set {response = .browser(newValue)}
-  }
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Proto_DeviceUsage] = [
+    .unspecified,
+    .mfa,
+    .passwordless,
+  ]
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  enum OneOf_Response: Equatable, Sendable {
-    case totp(Proto_TOTPResponse)
-    case webauthn(Proto_CredentialAssertionResponse)
-    case browser(Proto_BrowserMFAResponse)
-
-  }
-
-  init() {}
 }
 
-struct Proto_TOTPResponse: Sendable {
+/// ChallengeScope authorizes what a solved MFA challenge may be used for.
+public nonisolated enum Proto_ChallengeScope: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unspecified // = 0
+  case login // = 1
+  case passwordlessLogin // = 2
+  case headlessLogin // = 3
+  case manageDevices // = 4
+  case accountRecovery // = 5
+  case userSession // = 6
+  case adminAction // = 7
+  case changePassword // = 8
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unspecified
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .login
+    case 2: self = .passwordlessLogin
+    case 3: self = .headlessLogin
+    case 4: self = .manageDevices
+    case 5: self = .accountRecovery
+    case 6: self = .userSession
+    case 7: self = .adminAction
+    case 8: self = .changePassword
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .login: return 1
+    case .passwordlessLogin: return 2
+    case .headlessLogin: return 3
+    case .manageDevices: return 4
+    case .accountRecovery: return 5
+    case .userSession: return 6
+    case .adminAction: return 7
+    case .changePassword: return 8
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Proto_ChallengeScope] = [
+    .unspecified,
+    .login,
+    .passwordlessLogin,
+    .headlessLogin,
+    .manageDevices,
+    .accountRecovery,
+    .userSession,
+    .adminAction,
+    .changePassword,
+  ]
+
+}
+
+/// ContextUser asks for a challenge for the authenticated user.
+public nonisolated struct Proto_ContextUser: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var code: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
+  public init() {}
 }
 
-struct Proto_CreateAuthenticateChallengeRequest: Sendable {
+/// Passwordless asks for a challenge that does not require an existing
+/// credential.
+public nonisolated struct Proto_Passwordless: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var request: Proto_CreateAuthenticateChallengeRequest.OneOf_Request? = nil
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var contextUser: Proto_ContextUser {
+  public init() {}
+}
+
+/// ChallengeExtensions carries the scope the issued challenge is authorized
+/// for.
+public nonisolated struct Proto_ChallengeExtensions: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var scope: Proto_ChallengeScope = .unspecified
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// CreateAuthenticateChallengeRequest starts an authentication ceremony.
+public nonisolated struct Proto_CreateAuthenticateChallengeRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var request: Proto_CreateAuthenticateChallengeRequest.OneOf_Request? = nil
+
+  public var recoveryStartTokenID: String {
+    get {
+      if case .recoveryStartTokenID(let v)? = request {return v}
+      return String()
+    }
+    set {request = .recoveryStartTokenID(newValue)}
+  }
+
+  public var contextUser: Proto_ContextUser {
     get {
       if case .contextUser(let v)? = request {return v}
       return Proto_ContextUser()
@@ -615,7 +245,7 @@ struct Proto_CreateAuthenticateChallengeRequest: Sendable {
     set {request = .contextUser(newValue)}
   }
 
-  var passwordless: Proto_Passwordless {
+  public var passwordless: Proto_Passwordless {
     get {
       if case .passwordless(let v)? = request {return v}
       return Proto_Passwordless()
@@ -623,66 +253,217 @@ struct Proto_CreateAuthenticateChallengeRequest: Sendable {
     set {request = .passwordless(newValue)}
   }
 
-  var challengeExtensions: Proto_ChallengeExtensions {
-    get {return _challengeExtensions ?? Proto_ChallengeExtensions()}
+  public var challengeExtensions: Proto_ChallengeExtensions {
+    get {_challengeExtensions ?? Proto_ChallengeExtensions()}
     set {_challengeExtensions = newValue}
   }
   /// Returns true if `challengeExtensions` has been explicitly set.
-  var hasChallengeExtensions: Bool {return self._challengeExtensions != nil}
+  public var hasChallengeExtensions: Bool {self._challengeExtensions != nil}
   /// Clears the value of `challengeExtensions`. Subsequent reads from it will return its default value.
-  mutating func clearChallengeExtensions() {self._challengeExtensions = nil}
+  public mutating func clearChallengeExtensions() {self._challengeExtensions = nil}
 
-  /// Session 1.11: loopback callback URL for Browser MFA (field 9).
-  var browserMfaTshRedirectURL: String = String()
+  public var ssoClientRedirectURL: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var proxyAddress: String = String()
 
-  enum OneOf_Request: Equatable, Sendable {
+  public var browserMfaTshRedirectURL: String = String()
+
+  public var browserMfaRequestID: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public nonisolated enum OneOf_Request: Equatable, Sendable {
+    case recoveryStartTokenID(String)
     case contextUser(Proto_ContextUser)
     case passwordless(Proto_Passwordless)
 
   }
 
-  init() {}
+  public init() {}
 
   fileprivate var _challengeExtensions: Proto_ChallengeExtensions? = nil
 }
 
-struct Proto_CreateRegisterChallengeRequest: Sendable {
+/// CreateRegisterChallengeRequest starts a registration ceremony. The existing
+/// MFA response is present when the user already has a device.
+public nonisolated struct Proto_CreateRegisterChallengeRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var tokenID: String = String()
+  public var tokenID: String = String()
 
-  var existingMfaResponse: Proto_MFAAuthenticateResponse {
-    get {return _existingMfaResponse ?? Proto_MFAAuthenticateResponse()}
+  public var deviceType: Proto_DeviceType = .unspecified
+
+  public var deviceUsage: Proto_DeviceUsage = .unspecified
+
+  public var existingMfaResponse: Proto_MFAAuthenticateResponse {
+    get {_existingMfaResponse ?? Proto_MFAAuthenticateResponse()}
     set {_existingMfaResponse = newValue}
   }
   /// Returns true if `existingMfaResponse` has been explicitly set.
-  var hasExistingMfaResponse: Bool {return self._existingMfaResponse != nil}
+  public var hasExistingMfaResponse: Bool {self._existingMfaResponse != nil}
   /// Clears the value of `existingMfaResponse`. Subsequent reads from it will return its default value.
-  mutating func clearExistingMfaResponse() {self._existingMfaResponse = nil}
+  public mutating func clearExistingMfaResponse() {self._existingMfaResponse = nil}
 
-  var deviceType: Proto_DeviceType = .unspecified
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var deviceUsage: Proto_DeviceUsage = .unspecified
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
+  public init() {}
 
   fileprivate var _existingMfaResponse: Proto_MFAAuthenticateResponse? = nil
 }
 
-struct Proto_MFARegisterChallenge: Sendable {
+/// AddMFADeviceSyncRequest finishes a registration with the signed response.
+public nonisolated struct Proto_AddMFADeviceSyncRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var request: Proto_MFARegisterChallenge.OneOf_Request? = nil
+  public var tokenID: String = String()
 
-  var webauthn: Proto_CredentialCreation {
+  public var newDeviceName: String = String()
+
+  public var newMfaResponse: Proto_MFARegisterResponse {
+    get {_newMfaResponse ?? Proto_MFARegisterResponse()}
+    set {_newMfaResponse = newValue}
+  }
+  /// Returns true if `newMfaResponse` has been explicitly set.
+  public var hasNewMfaResponse: Bool {self._newMfaResponse != nil}
+  /// Clears the value of `newMfaResponse`. Subsequent reads from it will return its default value.
+  public mutating func clearNewMfaResponse() {self._newMfaResponse = nil}
+
+  public var deviceUsage: Proto_DeviceUsage = .unspecified
+
+  public var contextUser: Proto_ContextUser {
+    get {_contextUser ?? Proto_ContextUser()}
+    set {_contextUser = newValue}
+  }
+  /// Returns true if `contextUser` has been explicitly set.
+  public var hasContextUser: Bool {self._contextUser != nil}
+  /// Clears the value of `contextUser`. Subsequent reads from it will return its default value.
+  public mutating func clearContextUser() {self._contextUser = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _newMfaResponse: Proto_MFARegisterResponse? = nil
+  fileprivate var _contextUser: Proto_ContextUser? = nil
+}
+
+/// AddMFADeviceSyncResponse is returned on a successful registration. The
+/// server's device field (1) is a serialized MFADevice; this client only
+/// needs the call to succeed, so it decodes the field opaquely.
+public nonisolated struct Proto_AddMFADeviceSyncResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var device: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// MFAAuthenticateChallenge carries the authentication challenges the user
+/// can solve. The server sets exactly one.
+public nonisolated struct Proto_MFAAuthenticateChallenge: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var totp: Proto_TOTPChallenge {
+    get {_totp ?? Proto_TOTPChallenge()}
+    set {_totp = newValue}
+  }
+  /// Returns true if `totp` has been explicitly set.
+  public var hasTotp: Bool {self._totp != nil}
+  /// Clears the value of `totp`. Subsequent reads from it will return its default value.
+  public mutating func clearTotp() {self._totp = nil}
+
+  public var webauthnChallenge: Proto_CredentialAssertion {
+    get {_webauthnChallenge ?? Proto_CredentialAssertion()}
+    set {_webauthnChallenge = newValue}
+  }
+  /// Returns true if `webauthnChallenge` has been explicitly set.
+  public var hasWebauthnChallenge: Bool {self._webauthnChallenge != nil}
+  /// Clears the value of `webauthnChallenge`. Subsequent reads from it will return its default value.
+  public mutating func clearWebauthnChallenge() {self._webauthnChallenge = nil}
+
+  public var mfaRequired: Int32 = 0
+
+  public var browserMfaChallenge: Proto_BrowserMFAChallenge {
+    get {_browserMfaChallenge ?? Proto_BrowserMFAChallenge()}
+    set {_browserMfaChallenge = newValue}
+  }
+  /// Returns true if `browserMfaChallenge` has been explicitly set.
+  public var hasBrowserMfaChallenge: Bool {self._browserMfaChallenge != nil}
+  /// Clears the value of `browserMfaChallenge`. Subsequent reads from it will return its default value.
+  public mutating func clearBrowserMfaChallenge() {self._browserMfaChallenge = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _totp: Proto_TOTPChallenge? = nil
+  fileprivate var _webauthnChallenge: Proto_CredentialAssertion? = nil
+  fileprivate var _browserMfaChallenge: Proto_BrowserMFAChallenge? = nil
+}
+
+/// MFAAuthenticateResponse carries the solved authentication challenge.
+public nonisolated struct Proto_MFAAuthenticateResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var response: Proto_MFAAuthenticateResponse.OneOf_Response? = nil
+
+  public var totp: Proto_TOTPResponse {
+    get {
+      if case .totp(let v)? = response {return v}
+      return Proto_TOTPResponse()
+    }
+    set {response = .totp(newValue)}
+  }
+
+  public var webauthn: Proto_CredentialAssertionResponse {
+    get {
+      if case .webauthn(let v)? = response {return v}
+      return Proto_CredentialAssertionResponse()
+    }
+    set {response = .webauthn(newValue)}
+  }
+
+  public var browser: Proto_BrowserMFAResponse {
+    get {
+      if case .browser(let v)? = response {return v}
+      return Proto_BrowserMFAResponse()
+    }
+    set {response = .browser(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public nonisolated enum OneOf_Response: Equatable, Sendable {
+    case totp(Proto_TOTPResponse)
+    case webauthn(Proto_CredentialAssertionResponse)
+    case browser(Proto_BrowserMFAResponse)
+
+  }
+
+  public init() {}
+}
+
+/// MFARegisterChallenge carries exactly one registration challenge.
+public nonisolated struct Proto_MFARegisterChallenge: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var request: Proto_MFARegisterChallenge.OneOf_Request? = nil
+
+  public var webauthn: Proto_CredentialCreation {
     get {
       if case .webauthn(let v)? = request {return v}
       return Proto_CredentialCreation()
@@ -690,24 +471,25 @@ struct Proto_MFARegisterChallenge: Sendable {
     set {request = .webauthn(newValue)}
   }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  enum OneOf_Request: Equatable, Sendable {
+  public nonisolated enum OneOf_Request: Equatable, Sendable {
     case webauthn(Proto_CredentialCreation)
 
   }
 
-  init() {}
+  public init() {}
 }
 
-struct Proto_MFARegisterResponse: Sendable {
+/// MFARegisterResponse carries the solved registration challenge.
+public nonisolated struct Proto_MFARegisterResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var response: Proto_MFARegisterResponse.OneOf_Response? = nil
+  public var response: Proto_MFARegisterResponse.OneOf_Response? = nil
 
-  var webauthn: Proto_CredentialCreationResponse {
+  public var webauthn: Proto_CredentialCreationResponse {
     get {
       if case .webauthn(let v)? = response {return v}
       return Proto_CredentialCreationResponse()
@@ -715,143 +497,383 @@ struct Proto_MFARegisterResponse: Sendable {
     set {response = .webauthn(newValue)}
   }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  enum OneOf_Response: Equatable, Sendable {
+  public nonisolated enum OneOf_Response: Equatable, Sendable {
     case webauthn(Proto_CredentialCreationResponse)
 
   }
 
-  init() {}
+  public init() {}
 }
 
-struct Proto_AddMFADeviceSyncRequest: Sendable {
+/// BrowserMFAChallenge asks the client to solve the challenge in a browser.
+public nonisolated struct Proto_BrowserMFAChallenge: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var tokenID: String = String()
+  public var requestID: String = String()
 
-  var contextUser: Proto_ContextUser {
-    get {return _contextUser ?? Proto_ContextUser()}
-    set {_contextUser = newValue}
-  }
-  /// Returns true if `contextUser` has been explicitly set.
-  var hasContextUser: Bool {return self._contextUser != nil}
-  /// Clears the value of `contextUser`. Subsequent reads from it will return its default value.
-  mutating func clearContextUser() {self._contextUser = nil}
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var newDeviceName: String = String()
-
-  var newMfaResponse: Proto_MFARegisterResponse {
-    get {return _newMfaResponse ?? Proto_MFARegisterResponse()}
-    set {_newMfaResponse = newValue}
-  }
-  /// Returns true if `newMfaResponse` has been explicitly set.
-  var hasNewMfaResponse: Bool {return self._newMfaResponse != nil}
-  /// Clears the value of `newMfaResponse`. Subsequent reads from it will return its default value.
-  mutating func clearNewMfaResponse() {self._newMfaResponse = nil}
-
-  var deviceUsage: Proto_DeviceUsage = .unspecified
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _contextUser: Proto_ContextUser? = nil
-  fileprivate var _newMfaResponse: Proto_MFARegisterResponse? = nil
+  public init() {}
 }
 
-struct Proto_AddMFADeviceSyncResponse: @unchecked Sendable {
+/// BrowserMFAResponse returns the browser ceremony's WebAuthn assertion.
+public nonisolated struct Proto_BrowserMFAResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// We don't need the full MFADevice; just succeed.
-  var device: Data = Data()
+  public var requestID: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var webauthnResponse: Proto_CredentialAssertionResponse {
+    get {_webauthnResponse ?? Proto_CredentialAssertionResponse()}
+    set {_webauthnResponse = newValue}
+  }
+  /// Returns true if `webauthnResponse` has been explicitly set.
+  public var hasWebauthnResponse: Bool {self._webauthnResponse != nil}
+  /// Clears the value of `webauthnResponse`. Subsequent reads from it will return its default value.
+  public mutating func clearWebauthnResponse() {self._webauthnResponse = nil}
 
-  init() {}
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _webauthnResponse: Proto_CredentialAssertionResponse? = nil
+}
+
+/// TOTPChallenge signals that a TOTP code is expected.
+public nonisolated struct Proto_TOTPChallenge: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// TOTPResponse carries the TOTP code the user entered.
+public nonisolated struct Proto_TOTPResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var code: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// CredentialDescriptor identifies one credential allowed for a ceremony.
+public nonisolated struct Proto_CredentialDescriptor: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var type: String = String()
+
+  public var id: Data = Data()
+
+  public var transports: [String] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// PublicKeyCredentialRequestOptions is the assertion challenge the
+/// authenticator signs.
+public nonisolated struct Proto_PublicKeyCredentialRequestOptions: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var challenge: Data = Data()
+
+  public var timeoutMs: Int64 = 0
+
+  public var rpID: String = String()
+
+  public var allowCredentials: [Proto_CredentialDescriptor] = []
+
+  public var userVerification: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// CredentialAssertion wraps the assertion request options.
+public nonisolated struct Proto_CredentialAssertion: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var publicKey: Proto_PublicKeyCredentialRequestOptions {
+    get {_publicKey ?? Proto_PublicKeyCredentialRequestOptions()}
+    set {_publicKey = newValue}
+  }
+  /// Returns true if `publicKey` has been explicitly set.
+  public var hasPublicKey: Bool {self._publicKey != nil}
+  /// Clears the value of `publicKey`. Subsequent reads from it will return its default value.
+  public mutating func clearPublicKey() {self._publicKey = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _publicKey: Proto_PublicKeyCredentialRequestOptions? = nil
+}
+
+/// RelyingPartyEntity names the relying party.
+public nonisolated struct Proto_RelyingPartyEntity: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var id: String = String()
+
+  public var name: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// UserEntity identifies the user a credential belongs to.
+public nonisolated struct Proto_UserEntity: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var id: String = String()
+
+  public var name: String = String()
+
+  public var displayName: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// PublicKeyCredentialCreationOptions is the registration challenge the
+/// authenticator signs.
+public nonisolated struct Proto_PublicKeyCredentialCreationOptions: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var challenge: Data = Data()
+
+  public var rp: Proto_RelyingPartyEntity {
+    get {_rp ?? Proto_RelyingPartyEntity()}
+    set {_rp = newValue}
+  }
+  /// Returns true if `rp` has been explicitly set.
+  public var hasRp: Bool {self._rp != nil}
+  /// Clears the value of `rp`. Subsequent reads from it will return its default value.
+  public mutating func clearRp() {self._rp = nil}
+
+  public var user: Proto_UserEntity {
+    get {_user ?? Proto_UserEntity()}
+    set {_user = newValue}
+  }
+  /// Returns true if `user` has been explicitly set.
+  public var hasUser: Bool {self._user != nil}
+  /// Clears the value of `user`. Subsequent reads from it will return its default value.
+  public mutating func clearUser() {self._user = nil}
+
+  public var timeoutMs: Int64 = 0
+
+  public var excludeCredentials: [Proto_CredentialDescriptor] = []
+
+  public var attestation: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _rp: Proto_RelyingPartyEntity? = nil
+  fileprivate var _user: Proto_UserEntity? = nil
+}
+
+/// CredentialCreation wraps the creation request options.
+public nonisolated struct Proto_CredentialCreation: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var publicKey: Proto_PublicKeyCredentialCreationOptions {
+    get {_publicKey ?? Proto_PublicKeyCredentialCreationOptions()}
+    set {_publicKey = newValue}
+  }
+  /// Returns true if `publicKey` has been explicitly set.
+  public var hasPublicKey: Bool {self._publicKey != nil}
+  /// Clears the value of `publicKey`. Subsequent reads from it will return its default value.
+  public mutating func clearPublicKey() {self._publicKey = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _publicKey: Proto_PublicKeyCredentialCreationOptions? = nil
+}
+
+/// AuthenticatorAssertionResponse is the raw assertion output.
+public nonisolated struct Proto_AuthenticatorAssertionResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var clientDataJson: Data = Data()
+
+  public var authenticatorData: Data = Data()
+
+  public var signature: Data = Data()
+
+  public var userHandle: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// AuthenticatorAttestationResponse is the raw attestation output.
+public nonisolated struct Proto_AuthenticatorAttestationResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var clientDataJson: Data = Data()
+
+  public var attestationObject: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// CredentialAssertionResponse is the assertion a client returns for login.
+public nonisolated struct Proto_CredentialAssertionResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var type: String = String()
+
+  public var rawID: Data = Data()
+
+  public var response: Proto_AuthenticatorAssertionResponse {
+    get {_response ?? Proto_AuthenticatorAssertionResponse()}
+    set {_response = newValue}
+  }
+  /// Returns true if `response` has been explicitly set.
+  public var hasResponse: Bool {self._response != nil}
+  /// Clears the value of `response`. Subsequent reads from it will return its default value.
+  public mutating func clearResponse() {self._response = nil}
+
+  public var id: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _response: Proto_AuthenticatorAssertionResponse? = nil
+}
+
+/// CredentialCreationResponse is the attestation a client returns for
+/// registration.
+public nonisolated struct Proto_CredentialCreationResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var type: String = String()
+
+  public var rawID: Data = Data()
+
+  public var response: Proto_AuthenticatorAttestationResponse {
+    get {_response ?? Proto_AuthenticatorAttestationResponse()}
+    set {_response = newValue}
+  }
+  /// Returns true if `response` has been explicitly set.
+  public var hasResponse: Bool {self._response != nil}
+  /// Clears the value of `response`. Subsequent reads from it will return its default value.
+  public mutating func clearResponse() {self._response = nil}
+
+  public var id: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _response: Proto_AuthenticatorAttestationResponse? = nil
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
-fileprivate let _protobuf_package = "proto"
+fileprivate nonisolated let _protobuf_package = "proto"
 
-extension Proto_ChallengeScope: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    0: .same(proto: "CHALLENGE_SCOPE_UNSPECIFIED"),
-    1: .same(proto: "CHALLENGE_SCOPE_LOGIN"),
-    2: .same(proto: "CHALLENGE_SCOPE_PASSWORDLESS_LOGIN"),
-    3: .same(proto: "CHALLENGE_SCOPE_HEADLESS_LOGIN"),
-    4: .same(proto: "CHALLENGE_SCOPE_MANAGE_DEVICES"),
-    5: .same(proto: "CHALLENGE_SCOPE_ACCOUNT_RECOVERY"),
-    6: .same(proto: "CHALLENGE_SCOPE_USER_SESSION"),
-  ]
+nonisolated extension Proto_DeviceType: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0DEVICE_TYPE_UNSPECIFIED\0\u{1}DEVICE_TYPE_TOTP\0\u{2}\u{2}DEVICE_TYPE_WEBAUTHN\0")
 }
 
-extension Proto_DeviceUsage: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    0: .same(proto: "DEVICE_USAGE_UNSPECIFIED"),
-    1: .same(proto: "DEVICE_USAGE_MFA"),
-    2: .same(proto: "DEVICE_USAGE_PASSWORDLESS"),
-  ]
+nonisolated extension Proto_DeviceUsage: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0DEVICE_USAGE_UNSPECIFIED\0\u{1}DEVICE_USAGE_MFA\0\u{1}DEVICE_USAGE_PASSWORDLESS\0")
 }
 
-extension Proto_DeviceType: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    0: .same(proto: "DEVICE_TYPE_UNSPECIFIED"),
-    1: .same(proto: "DEVICE_TYPE_TOTP"),
-    3: .same(proto: "DEVICE_TYPE_WEBAUTHN"),
-  ]
+nonisolated extension Proto_ChallengeScope: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0CHALLENGE_SCOPE_UNSPECIFIED\0\u{1}CHALLENGE_SCOPE_LOGIN\0\u{1}CHALLENGE_SCOPE_PASSWORDLESS_LOGIN\0\u{1}CHALLENGE_SCOPE_HEADLESS_LOGIN\0\u{1}CHALLENGE_SCOPE_MANAGE_DEVICES\0\u{1}CHALLENGE_SCOPE_ACCOUNT_RECOVERY\0\u{1}CHALLENGE_SCOPE_USER_SESSION\0\u{1}CHALLENGE_SCOPE_ADMIN_ACTION\0\u{1}CHALLENGE_SCOPE_CHANGE_PASSWORD\0")
 }
 
 nonisolated extension Proto_ContextUser: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ContextUser"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  public static let protoMessageName: String = _protobuf_package + ".ContextUser"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     // Load everything into unknown fields
     while try decoder.nextFieldNumber() != nil {}
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_ContextUser, rhs: Proto_ContextUser) -> Bool {
+  public static func ==(lhs: Proto_ContextUser, rhs: Proto_ContextUser) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
 nonisolated extension Proto_Passwordless: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".Passwordless"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  public static let protoMessageName: String = _protobuf_package + ".Passwordless"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     // Load everything into unknown fields
     while try decoder.nextFieldNumber() != nil {}
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_Passwordless, rhs: Proto_Passwordless) -> Bool {
+  public static func ==(lhs: Proto_Passwordless, rhs: Proto_Passwordless) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
 nonisolated extension Proto_ChallengeExtensions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ChallengeExtensions"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "scope"),
-  ]
+  public static let protoMessageName: String = _protobuf_package + ".ChallengeExtensions"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}scope\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -863,540 +885,262 @@ nonisolated extension Proto_ChallengeExtensions: SwiftProtobuf.Message, SwiftPro
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if self.scope != .unspecified {
       try visitor.visitSingularEnumField(value: self.scope, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_ChallengeExtensions, rhs: Proto_ChallengeExtensions) -> Bool {
+  public static func ==(lhs: Proto_ChallengeExtensions, rhs: Proto_ChallengeExtensions) -> Bool {
     if lhs.scope != rhs.scope {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Proto_CredentialAssertion: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CredentialAssertion"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "public_key"),
-  ]
+nonisolated extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CreateAuthenticateChallengeRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}recovery_start_token_id\0\u{3}context_user\0\u{1}passwordless\0\u{4}\u{2}challenge_extensions\0\u{3}sso_client_redirect_url\0\u{3}proxy_address\0\u{3}browser_mfa_tsh_redirect_url\0\u{3}browser_mfa_request_id\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularMessageField(value: &self._publicKey) }()
+      case 2: try {
+        var v: String?
+        try decoder.decodeSingularStringField(value: &v)
+        if let v = v {
+          if self.request != nil {try decoder.handleConflictingOneOf()}
+          self.request = .recoveryStartTokenID(v)
+        }
+      }()
+      case 3: try {
+        var v: Proto_ContextUser?
+        var hadOneofValue = false
+        if let current = self.request {
+          hadOneofValue = true
+          if case .contextUser(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.request = .contextUser(v)
+        }
+      }()
+      case 4: try {
+        var v: Proto_Passwordless?
+        var hadOneofValue = false
+        if let current = self.request {
+          hadOneofValue = true
+          if case .passwordless(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.request = .passwordless(v)
+        }
+      }()
+      case 6: try { try decoder.decodeSingularMessageField(value: &self._challengeExtensions) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self.ssoClientRedirectURL) }()
+      case 8: try { try decoder.decodeSingularStringField(value: &self.proxyAddress) }()
+      case 9: try { try decoder.decodeSingularStringField(value: &self.browserMfaTshRedirectURL) }()
+      case 10: try { try decoder.decodeSingularStringField(value: &self.browserMfaRequestID) }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
-    try { if let v = self._publicKey {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    switch self.request {
+    case .recoveryStartTokenID?: try {
+      guard case .recoveryStartTokenID(let v)? = self.request else { preconditionFailure() }
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    }()
+    case .contextUser?: try {
+      guard case .contextUser(let v)? = self.request else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case .passwordless?: try {
+      guard case .passwordless(let v)? = self.request else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    }()
+    case nil: break
+    }
+    try { if let v = self._challengeExtensions {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    } }()
+    if !self.ssoClientRedirectURL.isEmpty {
+      try visitor.visitSingularStringField(value: self.ssoClientRedirectURL, fieldNumber: 7)
+    }
+    if !self.proxyAddress.isEmpty {
+      try visitor.visitSingularStringField(value: self.proxyAddress, fieldNumber: 8)
+    }
+    if !self.browserMfaTshRedirectURL.isEmpty {
+      try visitor.visitSingularStringField(value: self.browserMfaTshRedirectURL, fieldNumber: 9)
+    }
+    if !self.browserMfaRequestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.browserMfaRequestID, fieldNumber: 10)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_CreateAuthenticateChallengeRequest, rhs: Proto_CreateAuthenticateChallengeRequest) -> Bool {
+    if lhs.request != rhs.request {return false}
+    if lhs._challengeExtensions != rhs._challengeExtensions {return false}
+    if lhs.ssoClientRedirectURL != rhs.ssoClientRedirectURL {return false}
+    if lhs.proxyAddress != rhs.proxyAddress {return false}
+    if lhs.browserMfaTshRedirectURL != rhs.browserMfaTshRedirectURL {return false}
+    if lhs.browserMfaRequestID != rhs.browserMfaRequestID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_CreateRegisterChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CreateRegisterChallengeRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}token_id\0\u{3}device_type\0\u{3}device_usage\0\u{3}existing_mfa_response\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.tokenID) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.deviceType) }()
+      case 3: try { try decoder.decodeSingularEnumField(value: &self.deviceUsage) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._existingMfaResponse) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.tokenID.isEmpty {
+      try visitor.visitSingularStringField(value: self.tokenID, fieldNumber: 1)
+    }
+    if self.deviceType != .unspecified {
+      try visitor.visitSingularEnumField(value: self.deviceType, fieldNumber: 2)
+    }
+    if self.deviceUsage != .unspecified {
+      try visitor.visitSingularEnumField(value: self.deviceUsage, fieldNumber: 3)
+    }
+    try { if let v = self._existingMfaResponse {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_CredentialAssertion, rhs: Proto_CredentialAssertion) -> Bool {
-    if lhs._publicKey != rhs._publicKey {return false}
+  public static func ==(lhs: Proto_CreateRegisterChallengeRequest, rhs: Proto_CreateRegisterChallengeRequest) -> Bool {
+    if lhs.tokenID != rhs.tokenID {return false}
+    if lhs.deviceType != rhs.deviceType {return false}
+    if lhs.deviceUsage != rhs.deviceUsage {return false}
+    if lhs._existingMfaResponse != rhs._existingMfaResponse {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Proto_PublicKeyCredentialRequestOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".PublicKeyCredentialRequestOptions"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "challenge"),
-    2: .standard(proto: "timeout_ms"),
-    3: .standard(proto: "rp_id"),
-    4: .standard(proto: "allow_credentials"),
-    6: .standard(proto: "user_verification"),
-  ]
+nonisolated extension Proto_AddMFADeviceSyncRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}token_id\0\u{3}new_device_name\0\u{3}new_mfa_response\0\u{3}device_usage\0\u{3}context_user\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularBytesField(value: &self.challenge) }()
-      case 2: try { try decoder.decodeSingularInt64Field(value: &self.timeoutMs) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.rpID) }()
-      case 4: try { try decoder.decodeRepeatedMessageField(value: &self.allowCredentials) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self.userVerification) }()
+      case 1: try { try decoder.decodeSingularStringField(value: &self.tokenID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.newDeviceName) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._newMfaResponse) }()
+      case 4: try { try decoder.decodeSingularEnumField(value: &self.deviceUsage) }()
+      case 5: try { try decoder.decodeSingularMessageField(value: &self._contextUser) }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.challenge.isEmpty {
-      try visitor.visitSingularBytesField(value: self.challenge, fieldNumber: 1)
-    }
-    if self.timeoutMs != 0 {
-      try visitor.visitSingularInt64Field(value: self.timeoutMs, fieldNumber: 2)
-    }
-    if !self.rpID.isEmpty {
-      try visitor.visitSingularStringField(value: self.rpID, fieldNumber: 3)
-    }
-    if !self.allowCredentials.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.allowCredentials, fieldNumber: 4)
-    }
-    if !self.userVerification.isEmpty {
-      try visitor.visitSingularStringField(value: self.userVerification, fieldNumber: 6)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_PublicKeyCredentialRequestOptions, rhs: Proto_PublicKeyCredentialRequestOptions) -> Bool {
-    if lhs.challenge != rhs.challenge {return false}
-    if lhs.timeoutMs != rhs.timeoutMs {return false}
-    if lhs.rpID != rhs.rpID {return false}
-    if lhs.allowCredentials != rhs.allowCredentials {return false}
-    if lhs.userVerification != rhs.userVerification {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CredentialDescriptor"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "type"),
-    2: .same(proto: "id"),
-    3: .same(proto: "transports"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
-      case 2: try { try decoder.decodeSingularBytesField(value: &self.id) }()
-      case 3: try { try decoder.decodeRepeatedStringField(value: &self.transports) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.type.isEmpty {
-      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
-    }
-    if !self.id.isEmpty {
-      try visitor.visitSingularBytesField(value: self.id, fieldNumber: 2)
-    }
-    if !self.transports.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.transports, fieldNumber: 3)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_CredentialDescriptor, rhs: Proto_CredentialDescriptor) -> Bool {
-    if lhs.type != rhs.type {return false}
-    if lhs.id != rhs.id {return false}
-    if lhs.transports != rhs.transports {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CredentialAssertionResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    5: .same(proto: "id"),
-    1: .same(proto: "type"),
-    2: .standard(proto: "raw_id"),
-    3: .same(proto: "response"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
-      case 2: try { try decoder.decodeSingularBytesField(value: &self.rawID) }()
-      case 3: try { try decoder.decodeSingularMessageField(value: &self._response) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.type.isEmpty {
-      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    if !self.tokenID.isEmpty {
+      try visitor.visitSingularStringField(value: self.tokenID, fieldNumber: 1)
     }
-    if !self.rawID.isEmpty {
-      try visitor.visitSingularBytesField(value: self.rawID, fieldNumber: 2)
+    if !self.newDeviceName.isEmpty {
+      try visitor.visitSingularStringField(value: self.newDeviceName, fieldNumber: 2)
     }
-    try { if let v = self._response {
+    try { if let v = self._newMfaResponse {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     } }()
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 5)
+    if self.deviceUsage != .unspecified {
+      try visitor.visitSingularEnumField(value: self.deviceUsage, fieldNumber: 4)
     }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_CredentialAssertionResponse, rhs: Proto_CredentialAssertionResponse) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.type != rhs.type {return false}
-    if lhs.rawID != rhs.rawID {return false}
-    if lhs._response != rhs._response {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_AuthenticatorAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AuthenticatorAssertionResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "client_data_json"),
-    2: .standard(proto: "authenticator_data"),
-    3: .same(proto: "signature"),
-    4: .standard(proto: "user_handle"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularBytesField(value: &self.clientDataJson) }()
-      case 2: try { try decoder.decodeSingularBytesField(value: &self.authenticatorData) }()
-      case 3: try { try decoder.decodeSingularBytesField(value: &self.signature) }()
-      case 4: try { try decoder.decodeSingularBytesField(value: &self.userHandle) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.clientDataJson.isEmpty {
-      try visitor.visitSingularBytesField(value: self.clientDataJson, fieldNumber: 1)
-    }
-    if !self.authenticatorData.isEmpty {
-      try visitor.visitSingularBytesField(value: self.authenticatorData, fieldNumber: 2)
-    }
-    if !self.signature.isEmpty {
-      try visitor.visitSingularBytesField(value: self.signature, fieldNumber: 3)
-    }
-    if !self.userHandle.isEmpty {
-      try visitor.visitSingularBytesField(value: self.userHandle, fieldNumber: 4)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_AuthenticatorAssertionResponse, rhs: Proto_AuthenticatorAssertionResponse) -> Bool {
-    if lhs.clientDataJson != rhs.clientDataJson {return false}
-    if lhs.authenticatorData != rhs.authenticatorData {return false}
-    if lhs.signature != rhs.signature {return false}
-    if lhs.userHandle != rhs.userHandle {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_CredentialCreation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CredentialCreation"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "public_key"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularMessageField(value: &self._publicKey) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    try { if let v = self._publicKey {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    try { if let v = self._contextUser {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
     } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_CredentialCreation, rhs: Proto_CredentialCreation) -> Bool {
-    if lhs._publicKey != rhs._publicKey {return false}
+  public static func ==(lhs: Proto_AddMFADeviceSyncRequest, rhs: Proto_AddMFADeviceSyncRequest) -> Bool {
+    if lhs.tokenID != rhs.tokenID {return false}
+    if lhs.newDeviceName != rhs.newDeviceName {return false}
+    if lhs._newMfaResponse != rhs._newMfaResponse {return false}
+    if lhs.deviceUsage != rhs.deviceUsage {return false}
+    if lhs._contextUser != rhs._contextUser {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Proto_PublicKeyCredentialCreationOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".PublicKeyCredentialCreationOptions"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "challenge"),
-    2: .same(proto: "rp"),
-    3: .same(proto: "user"),
-    5: .standard(proto: "timeout_ms"),
-    7: .same(proto: "attestation"),
-  ]
+nonisolated extension Proto_AddMFADeviceSyncResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}device\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularBytesField(value: &self.challenge) }()
-      case 2: try { try decoder.decodeSingularMessageField(value: &self._rp) }()
-      case 3: try { try decoder.decodeSingularMessageField(value: &self._user) }()
-      case 5: try { try decoder.decodeSingularInt64Field(value: &self.timeoutMs) }()
-      case 7: try { try decoder.decodeSingularStringField(value: &self.attestation) }()
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.device) }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.challenge.isEmpty {
-      try visitor.visitSingularBytesField(value: self.challenge, fieldNumber: 1)
-    }
-    try { if let v = self._rp {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._user {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
-    } }()
-    if self.timeoutMs != 0 {
-      try visitor.visitSingularInt64Field(value: self.timeoutMs, fieldNumber: 5)
-    }
-    if !self.attestation.isEmpty {
-      try visitor.visitSingularStringField(value: self.attestation, fieldNumber: 7)
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.device.isEmpty {
+      try visitor.visitSingularBytesField(value: self.device, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_PublicKeyCredentialCreationOptions, rhs: Proto_PublicKeyCredentialCreationOptions) -> Bool {
-    if lhs.challenge != rhs.challenge {return false}
-    if lhs._rp != rhs._rp {return false}
-    if lhs._user != rhs._user {return false}
-    if lhs.timeoutMs != rhs.timeoutMs {return false}
-    if lhs.attestation != rhs.attestation {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_RelyingPartyEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".RelyingPartyEntity"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "id"),
-    2: .same(proto: "name"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
-    }
-    if !self.name.isEmpty {
-      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_RelyingPartyEntity, rhs: Proto_RelyingPartyEntity) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.name != rhs.name {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_UserEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".UserEntity"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "id"),
-    2: .same(proto: "name"),
-    3: .standard(proto: "display_name"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.displayName) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
-    }
-    if !self.name.isEmpty {
-      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
-    }
-    if !self.displayName.isEmpty {
-      try visitor.visitSingularStringField(value: self.displayName, fieldNumber: 3)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_UserEntity, rhs: Proto_UserEntity) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.name != rhs.name {return false}
-    if lhs.displayName != rhs.displayName {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CredentialCreationResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    5: .same(proto: "id"),
-    1: .same(proto: "type"),
-    2: .standard(proto: "raw_id"),
-    3: .same(proto: "response"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
-      case 2: try { try decoder.decodeSingularBytesField(value: &self.rawID) }()
-      case 3: try { try decoder.decodeSingularMessageField(value: &self._response) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.type.isEmpty {
-      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
-    }
-    if !self.rawID.isEmpty {
-      try visitor.visitSingularBytesField(value: self.rawID, fieldNumber: 2)
-    }
-    try { if let v = self._response {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
-    } }()
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 5)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_CredentialCreationResponse, rhs: Proto_CredentialCreationResponse) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.type != rhs.type {return false}
-    if lhs.rawID != rhs.rawID {return false}
-    if lhs._response != rhs._response {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_AuthenticatorAttestationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AuthenticatorAttestationResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "client_data_json"),
-    2: .standard(proto: "attestation_object"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularBytesField(value: &self.clientDataJson) }()
-      case 2: try { try decoder.decodeSingularBytesField(value: &self.attestationObject) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.clientDataJson.isEmpty {
-      try visitor.visitSingularBytesField(value: self.clientDataJson, fieldNumber: 1)
-    }
-    if !self.attestationObject.isEmpty {
-      try visitor.visitSingularBytesField(value: self.attestationObject, fieldNumber: 2)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_AuthenticatorAttestationResponse, rhs: Proto_AuthenticatorAttestationResponse) -> Bool {
-    if lhs.clientDataJson != rhs.clientDataJson {return false}
-    if lhs.attestationObject != rhs.attestationObject {return false}
+  public static func ==(lhs: Proto_AddMFADeviceSyncResponse, rhs: Proto_AddMFADeviceSyncResponse) -> Bool {
+    if lhs.device != rhs.device {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
 nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateChallenge"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    2: .same(proto: "totp"),
-    3: .standard(proto: "webauthn_challenge"),
-    4: .standard(proto: "mfa_required"),
-    6: .standard(proto: "browser_mfa_challenge"),
-  ]
+  public static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateChallenge"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}totp\0\u{3}webauthn_challenge\0\u{3}mfa_required\0\u{4}\u{2}browser_mfa_challenge\0\u{c}\u{1}\u{1}")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1411,7 +1155,7 @@ nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, Swi
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -1431,7 +1175,7 @@ nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, Swi
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_MFAAuthenticateChallenge, rhs: Proto_MFAAuthenticateChallenge) -> Bool {
+  public static func ==(lhs: Proto_MFAAuthenticateChallenge, rhs: Proto_MFAAuthenticateChallenge) -> Bool {
     if lhs._totp != rhs._totp {return false}
     if lhs._webauthnChallenge != rhs._webauthnChallenge {return false}
     if lhs.mfaRequired != rhs.mfaRequired {return false}
@@ -1441,110 +1185,11 @@ nonisolated extension Proto_MFAAuthenticateChallenge: SwiftProtobuf.Message, Swi
   }
 }
 
-nonisolated extension Proto_TOTPChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".TOTPChallenge"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    // Load everything into unknown fields
-    while try decoder.nextFieldNumber() != nil {}
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_TOTPChallenge, rhs: Proto_TOTPChallenge) -> Bool {
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-// MARK: - Browser MFA (session 1.11)
-
-nonisolated extension Proto_BrowserMFAChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".BrowserMFAChallenge"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "request_id"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.requestID.isEmpty {
-      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_BrowserMFAChallenge, rhs: Proto_BrowserMFAChallenge) -> Bool {
-    if lhs.requestID != rhs.requestID {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_BrowserMFAResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".BrowserMFAResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "request_id"),
-    2: .standard(proto: "webauthn_response"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
-      case 2: try { try decoder.decodeSingularMessageField(value: &self._webauthnResponse) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.requestID.isEmpty {
-      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
-    }
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    try { if let v = self._webauthnResponse {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_BrowserMFAResponse, rhs: Proto_BrowserMFAResponse) -> Bool {
-    if lhs.requestID != rhs.requestID {return false}
-    if lhs._webauthnResponse != rhs._webauthnResponse {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
 nonisolated extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    2: .same(proto: "totp"),
-    3: .same(proto: "webauthn"),
-    5: .same(proto: "browser"),
-  ]
+  public static let protoMessageName: String = _protobuf_package + ".MFAAuthenticateResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}totp\0\u{1}webauthn\0\u{2}\u{2}browser\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1594,7 +1239,7 @@ nonisolated extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, Swif
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -1617,188 +1262,18 @@ nonisolated extension Proto_MFAAuthenticateResponse: SwiftProtobuf.Message, Swif
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_MFAAuthenticateResponse, rhs: Proto_MFAAuthenticateResponse) -> Bool {
+  public static func ==(lhs: Proto_MFAAuthenticateResponse, rhs: Proto_MFAAuthenticateResponse) -> Bool {
     if lhs.response != rhs.response {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Proto_TOTPResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".TOTPResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "code"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.code) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.code.isEmpty {
-      try visitor.visitSingularStringField(value: self.code, fieldNumber: 1)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_TOTPResponse, rhs: Proto_TOTPResponse) -> Bool {
-    if lhs.code != rhs.code {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_CreateAuthenticateChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CreateAuthenticateChallengeRequest"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    3: .standard(proto: "context_user"),
-    4: .same(proto: "passwordless"),
-    6: .standard(proto: "challenge_extensions"),
-    9: .standard(proto: "browser_mfa_tsh_redirect_url"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 3: try {
-        var v: Proto_ContextUser?
-        var hadOneofValue = false
-        if let current = self.request {
-          hadOneofValue = true
-          if case .contextUser(let m) = current {v = m}
-        }
-        try decoder.decodeSingularMessageField(value: &v)
-        if let v = v {
-          if hadOneofValue {try decoder.handleConflictingOneOf()}
-          self.request = .contextUser(v)
-        }
-      }()
-      case 4: try {
-        var v: Proto_Passwordless?
-        var hadOneofValue = false
-        if let current = self.request {
-          hadOneofValue = true
-          if case .passwordless(let m) = current {v = m}
-        }
-        try decoder.decodeSingularMessageField(value: &v)
-        if let v = v {
-          if hadOneofValue {try decoder.handleConflictingOneOf()}
-          self.request = .passwordless(v)
-        }
-      }()
-      case 6: try { try decoder.decodeSingularMessageField(value: &self._challengeExtensions) }()
-      case 9: try { try decoder.decodeSingularStringField(value: &self.browserMfaTshRedirectURL) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    switch self.request {
-    case .contextUser?: try {
-      guard case .contextUser(let v)? = self.request else { preconditionFailure() }
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
-    }()
-    case .passwordless?: try {
-      guard case .passwordless(let v)? = self.request else { preconditionFailure() }
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
-    }()
-    case nil: break
-    }
-    try { if let v = self._challengeExtensions {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
-    } }()
-    if !self.browserMfaTshRedirectURL.isEmpty {
-      try visitor.visitSingularStringField(value: self.browserMfaTshRedirectURL, fieldNumber: 9)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_CreateAuthenticateChallengeRequest, rhs: Proto_CreateAuthenticateChallengeRequest) -> Bool {
-    if lhs.request != rhs.request {return false}
-    if lhs._challengeExtensions != rhs._challengeExtensions {return false}
-    if lhs.browserMfaTshRedirectURL != rhs.browserMfaTshRedirectURL {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Proto_CreateRegisterChallengeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CreateRegisterChallengeRequest"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "token_id"),
-    4: .standard(proto: "existing_mfa_response"),
-    2: .standard(proto: "device_type"),
-    3: .standard(proto: "device_usage"),
-  ]
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.tokenID) }()
-      case 2: try { try decoder.decodeSingularEnumField(value: &self.deviceType) }()
-      case 3: try { try decoder.decodeSingularEnumField(value: &self.deviceUsage) }()
-      case 4: try { try decoder.decodeSingularMessageField(value: &self._existingMfaResponse) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.tokenID.isEmpty {
-      try visitor.visitSingularStringField(value: self.tokenID, fieldNumber: 1)
-    }
-    if self.deviceType != .unspecified {
-      try visitor.visitSingularEnumField(value: self.deviceType, fieldNumber: 2)
-    }
-    if self.deviceUsage != .unspecified {
-      try visitor.visitSingularEnumField(value: self.deviceUsage, fieldNumber: 3)
-    }
-    try { if let v = self._existingMfaResponse {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Proto_CreateRegisterChallengeRequest, rhs: Proto_CreateRegisterChallengeRequest) -> Bool {
-    if lhs.tokenID != rhs.tokenID {return false}
-    if lhs._existingMfaResponse != rhs._existingMfaResponse {return false}
-    if lhs.deviceType != rhs.deviceType {return false}
-    if lhs.deviceUsage != rhs.deviceUsage {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
 nonisolated extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".MFARegisterChallenge"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    3: .same(proto: "webauthn"),
-  ]
+  public static let protoMessageName: String = _protobuf_package + ".MFARegisterChallenge"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{3}webauthn\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1822,7 +1297,7 @@ nonisolated extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftPr
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -1833,7 +1308,7 @@ nonisolated extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftPr
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_MFARegisterChallenge, rhs: Proto_MFARegisterChallenge) -> Bool {
+  public static func ==(lhs: Proto_MFARegisterChallenge, rhs: Proto_MFARegisterChallenge) -> Bool {
     if lhs.request != rhs.request {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -1841,12 +1316,10 @@ nonisolated extension Proto_MFARegisterChallenge: SwiftProtobuf.Message, SwiftPr
 }
 
 nonisolated extension Proto_MFARegisterResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".MFARegisterResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    3: .same(proto: "webauthn"),
-  ]
+  public static let protoMessageName: String = _protobuf_package + ".MFARegisterResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{3}webauthn\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1870,7 +1343,7 @@ nonisolated extension Proto_MFARegisterResponse: SwiftProtobuf.Message, SwiftPro
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -1881,100 +1354,596 @@ nonisolated extension Proto_MFARegisterResponse: SwiftProtobuf.Message, SwiftPro
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_MFARegisterResponse, rhs: Proto_MFARegisterResponse) -> Bool {
+  public static func ==(lhs: Proto_MFARegisterResponse, rhs: Proto_MFARegisterResponse) -> Bool {
     if lhs.response != rhs.response {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Proto_AddMFADeviceSyncRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncRequest"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .standard(proto: "token_id"),
-    5: .standard(proto: "context_user"),
-    2: .standard(proto: "new_device_name"),
-    3: .standard(proto: "new_mfa_response"),
-    4: .standard(proto: "device_usage"),
-  ]
+nonisolated extension Proto_BrowserMFAChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".BrowserMFAChallenge"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.tokenID) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.newDeviceName) }()
-      case 3: try { try decoder.decodeSingularMessageField(value: &self._newMfaResponse) }()
-      case 4: try { try decoder.decodeSingularEnumField(value: &self.deviceUsage) }()
-      case 5: try { try decoder.decodeSingularMessageField(value: &self._contextUser) }()
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.tokenID.isEmpty {
-      try visitor.visitSingularStringField(value: self.tokenID, fieldNumber: 1)
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
     }
-    if !self.newDeviceName.isEmpty {
-      try visitor.visitSingularStringField(value: self.newDeviceName, fieldNumber: 2)
-    }
-    try { if let v = self._newMfaResponse {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
-    } }()
-    if self.deviceUsage != .unspecified {
-      try visitor.visitSingularEnumField(value: self.deviceUsage, fieldNumber: 4)
-    }
-    try { if let v = self._contextUser {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
-    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_AddMFADeviceSyncRequest, rhs: Proto_AddMFADeviceSyncRequest) -> Bool {
-    if lhs.tokenID != rhs.tokenID {return false}
-    if lhs._contextUser != rhs._contextUser {return false}
-    if lhs.newDeviceName != rhs.newDeviceName {return false}
-    if lhs._newMfaResponse != rhs._newMfaResponse {return false}
-    if lhs.deviceUsage != rhs.deviceUsage {return false}
+  public static func ==(lhs: Proto_BrowserMFAChallenge, rhs: Proto_BrowserMFAChallenge) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Proto_AddMFADeviceSyncResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AddMFADeviceSyncResponse"
-  static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
-    1: .same(proto: "device"),
-  ]
+nonisolated extension Proto_BrowserMFAResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".BrowserMFAResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}webauthn_response\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularBytesField(value: &self.device) }()
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._webauthnResponse) }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.device.isEmpty {
-      try visitor.visitSingularBytesField(value: self.device, fieldNumber: 1)
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    try { if let v = self._webauthnResponse {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_BrowserMFAResponse, rhs: Proto_BrowserMFAResponse) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs._webauthnResponse != rhs._webauthnResponse {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_TOTPChallenge: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".TOTPChallenge"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_TOTPChallenge, rhs: Proto_TOTPChallenge) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_TOTPResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".TOTPResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}code\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.code) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.code.isEmpty {
+      try visitor.visitSingularStringField(value: self.code, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_AddMFADeviceSyncResponse, rhs: Proto_AddMFADeviceSyncResponse) -> Bool {
-    if lhs.device != rhs.device {return false}
+  public static func ==(lhs: Proto_TOTPResponse, rhs: Proto_TOTPResponse) -> Bool {
+    if lhs.code != rhs.code {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_CredentialDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CredentialDescriptor"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}id\0\u{1}transports\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.id) }()
+      case 3: try { try decoder.decodeRepeatedStringField(value: &self.transports) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    if !self.id.isEmpty {
+      try visitor.visitSingularBytesField(value: self.id, fieldNumber: 2)
+    }
+    if !self.transports.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.transports, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_CredentialDescriptor, rhs: Proto_CredentialDescriptor) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.id != rhs.id {return false}
+    if lhs.transports != rhs.transports {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_PublicKeyCredentialRequestOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".PublicKeyCredentialRequestOptions"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}challenge\0\u{3}timeout_ms\0\u{3}rp_id\0\u{3}allow_credentials\0\u{4}\u{2}user_verification\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.challenge) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self.timeoutMs) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.rpID) }()
+      case 4: try { try decoder.decodeRepeatedMessageField(value: &self.allowCredentials) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self.userVerification) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.challenge.isEmpty {
+      try visitor.visitSingularBytesField(value: self.challenge, fieldNumber: 1)
+    }
+    if self.timeoutMs != 0 {
+      try visitor.visitSingularInt64Field(value: self.timeoutMs, fieldNumber: 2)
+    }
+    if !self.rpID.isEmpty {
+      try visitor.visitSingularStringField(value: self.rpID, fieldNumber: 3)
+    }
+    if !self.allowCredentials.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.allowCredentials, fieldNumber: 4)
+    }
+    if !self.userVerification.isEmpty {
+      try visitor.visitSingularStringField(value: self.userVerification, fieldNumber: 6)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_PublicKeyCredentialRequestOptions, rhs: Proto_PublicKeyCredentialRequestOptions) -> Bool {
+    if lhs.challenge != rhs.challenge {return false}
+    if lhs.timeoutMs != rhs.timeoutMs {return false}
+    if lhs.rpID != rhs.rpID {return false}
+    if lhs.allowCredentials != rhs.allowCredentials {return false}
+    if lhs.userVerification != rhs.userVerification {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_CredentialAssertion: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CredentialAssertion"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}public_key\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._publicKey) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._publicKey {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_CredentialAssertion, rhs: Proto_CredentialAssertion) -> Bool {
+    if lhs._publicKey != rhs._publicKey {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_RelyingPartyEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".RelyingPartyEntity"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}name\0\u{c}\u{3}\u{1}")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_RelyingPartyEntity, rhs: Proto_RelyingPartyEntity) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.name != rhs.name {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_UserEntity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".UserEntity"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}name\0\u{3}display_name\0\u{c}\u{4}\u{1}")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.displayName) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
+    }
+    if !self.displayName.isEmpty {
+      try visitor.visitSingularStringField(value: self.displayName, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_UserEntity, rhs: Proto_UserEntity) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.name != rhs.name {return false}
+    if lhs.displayName != rhs.displayName {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_PublicKeyCredentialCreationOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".PublicKeyCredentialCreationOptions"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}challenge\0\u{1}rp\0\u{1}user\0\u{4}\u{2}timeout_ms\0\u{3}exclude_credentials\0\u{1}attestation\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.challenge) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._rp) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._user) }()
+      case 5: try { try decoder.decodeSingularInt64Field(value: &self.timeoutMs) }()
+      case 6: try { try decoder.decodeRepeatedMessageField(value: &self.excludeCredentials) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self.attestation) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.challenge.isEmpty {
+      try visitor.visitSingularBytesField(value: self.challenge, fieldNumber: 1)
+    }
+    try { if let v = self._rp {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._user {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    if self.timeoutMs != 0 {
+      try visitor.visitSingularInt64Field(value: self.timeoutMs, fieldNumber: 5)
+    }
+    if !self.excludeCredentials.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.excludeCredentials, fieldNumber: 6)
+    }
+    if !self.attestation.isEmpty {
+      try visitor.visitSingularStringField(value: self.attestation, fieldNumber: 7)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_PublicKeyCredentialCreationOptions, rhs: Proto_PublicKeyCredentialCreationOptions) -> Bool {
+    if lhs.challenge != rhs.challenge {return false}
+    if lhs._rp != rhs._rp {return false}
+    if lhs._user != rhs._user {return false}
+    if lhs.timeoutMs != rhs.timeoutMs {return false}
+    if lhs.excludeCredentials != rhs.excludeCredentials {return false}
+    if lhs.attestation != rhs.attestation {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_CredentialCreation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CredentialCreation"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}public_key\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._publicKey) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._publicKey {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_CredentialCreation, rhs: Proto_CredentialCreation) -> Bool {
+    if lhs._publicKey != rhs._publicKey {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_AuthenticatorAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AuthenticatorAssertionResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}client_data_json\0\u{3}authenticator_data\0\u{1}signature\0\u{3}user_handle\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.clientDataJson) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.authenticatorData) }()
+      case 3: try { try decoder.decodeSingularBytesField(value: &self.signature) }()
+      case 4: try { try decoder.decodeSingularBytesField(value: &self.userHandle) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.clientDataJson.isEmpty {
+      try visitor.visitSingularBytesField(value: self.clientDataJson, fieldNumber: 1)
+    }
+    if !self.authenticatorData.isEmpty {
+      try visitor.visitSingularBytesField(value: self.authenticatorData, fieldNumber: 2)
+    }
+    if !self.signature.isEmpty {
+      try visitor.visitSingularBytesField(value: self.signature, fieldNumber: 3)
+    }
+    if !self.userHandle.isEmpty {
+      try visitor.visitSingularBytesField(value: self.userHandle, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_AuthenticatorAssertionResponse, rhs: Proto_AuthenticatorAssertionResponse) -> Bool {
+    if lhs.clientDataJson != rhs.clientDataJson {return false}
+    if lhs.authenticatorData != rhs.authenticatorData {return false}
+    if lhs.signature != rhs.signature {return false}
+    if lhs.userHandle != rhs.userHandle {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_AuthenticatorAttestationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AuthenticatorAttestationResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}client_data_json\0\u{3}attestation_object\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.clientDataJson) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.attestationObject) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.clientDataJson.isEmpty {
+      try visitor.visitSingularBytesField(value: self.clientDataJson, fieldNumber: 1)
+    }
+    if !self.attestationObject.isEmpty {
+      try visitor.visitSingularBytesField(value: self.attestationObject, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_AuthenticatorAttestationResponse, rhs: Proto_AuthenticatorAttestationResponse) -> Bool {
+    if lhs.clientDataJson != rhs.clientDataJson {return false}
+    if lhs.attestationObject != rhs.attestationObject {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_CredentialAssertionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CredentialAssertionResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{3}raw_id\0\u{1}response\0\u{2}\u{2}id\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.rawID) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._response) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    if !self.rawID.isEmpty {
+      try visitor.visitSingularBytesField(value: self.rawID, fieldNumber: 2)
+    }
+    try { if let v = self._response {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_CredentialAssertionResponse, rhs: Proto_CredentialAssertionResponse) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.rawID != rhs.rawID {return false}
+    if lhs._response != rhs._response {return false}
+    if lhs.id != rhs.id {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Proto_CredentialCreationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CredentialCreationResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{3}raw_id\0\u{1}response\0\u{2}\u{2}id\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.rawID) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._response) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    if !self.rawID.isEmpty {
+      try visitor.visitSingularBytesField(value: self.rawID, fieldNumber: 2)
+    }
+    try { if let v = self._response {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_CredentialCreationResponse, rhs: Proto_CredentialCreationResponse) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.rawID != rhs.rawID {return false}
+    if lhs._response != rhs._response {return false}
+    if lhs.id != rhs.id {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

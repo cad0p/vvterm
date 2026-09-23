@@ -155,4 +155,69 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
             "ceremony must call createAuthenticateChallenge itself (the spike's single-ceremony flow)"
         )
     }
+
+    /// The approval page is the server's Browser MFA UI: the ceremony must
+    /// open `https://<host>/web/mfa/browser/<request_id>`. A wrong path or a
+    /// truncated request id sends the user to a page that cannot approve the
+    /// pending request.
+    func testCeremony_opensTheServerApprovalPageForTheChallengeRequestID() async throws {
+        let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
+        let presenter = RecordingBrowserMFAPresenter()
+        let ceremony = BrowserMFACeremony(logging: DefaultTeleportLogging(), presenter: presenter)
+
+        let run = Task { try await ceremony.run(grpcClient: client, host: "teleport.pcad.it") }
+        let deadline = ContinuousClock.now + .seconds(15)
+        while presenter.presentedURLs.isEmpty, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        run.cancel()
+        _ = try? await run.value
+
+        let presented = try XCTUnwrap(presenter.presentedURLs.first)
+        XCTAssertEqual(
+            presented.absoluteString,
+            "https://teleport.pcad.it/web/mfa/browser/\(client.requestID)"
+        )
+    }
+
+    /// A gRPC stub that answers the challenge request with a real
+    /// `BrowserMFAChallenge` so the ceremony proceeds to the Safari step.
+    private final class ChallengeReturningGRPCClient: TeleportGRPCClienting {
+        let requestID: String
+
+        init(requestID: String) {
+            self.requestID = requestID
+        }
+
+        func connect(
+            host: String,
+            clientCertPEM: String,
+            privateKey: SecKey,
+            clusterName: String,
+            clusterCAPEMs: [String]
+        ) async throws {}
+
+        func createAuthenticateChallenge(
+            browserMFATSHRedirectURL: String
+        ) async throws -> Proto_MFAAuthenticateChallenge {
+            var challenge = Proto_MFAAuthenticateChallenge()
+            var browser = Proto_BrowserMFAChallenge()
+            browser.requestID = requestID
+            challenge.browserMfaChallenge = browser
+            return challenge
+        }
+
+        func createRegisterChallenge(
+            existingMFAResponse: Proto_MFAAuthenticateResponse?
+        ) async throws -> Proto_MFARegisterChallenge {
+            Proto_MFARegisterChallenge()
+        }
+
+        func addMFADeviceSync(
+            deviceName: String,
+            newMFAResponse: Proto_MFARegisterResponse
+        ) async throws {}
+
+        func disconnect() async {}
+    }
 }
