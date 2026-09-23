@@ -212,4 +212,10 @@ rejection. Each is reproduced byte-for-byte from the Go source:
 
 ## License
 
-AGPL-3.0-or-later (matches Teleport, whose `lib/auth/touchid/api.go` is ported here).
+Mixed, per file:
+
+- The four `Sources/SEPWebAuthn/*` sources that port Teleport (`Attestation.swift`, `Signer.swift`, `WebAuthn.swift`, `SecureEnclaveSigner.swift`) and `fixtures/generate/main.go` are AGPL-3.0-or-later (they are derivative works of Teleport's `lib/auth/touchid/api.go` and `lib/darwin`; see `../../LICENSES/AGPL-3.0-or-later.txt`).
+- Everything else in this spike (the package manifest, the original `SoftwareSigner.swift` / `SSHPubKey.swift` / `CBOR.swift` implementations, the CLI, the tests, and the harness apps) is MIT unless a file states otherwise; see `../../LICENSES/MIT.txt`.
+- The per-file allowlist and derivation notes are in `../../docs/teleport-derived-files.txt`, with attribution in `../../THIRD_PARTY_NOTICES.md` under "Teleport (ported portions)".
+
+The combined spike is AGPL-3.0-or-later because it links the ported sources.
