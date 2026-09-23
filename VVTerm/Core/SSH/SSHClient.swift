@@ -193,6 +193,11 @@ actor SSHClient {
     /// keyring (`TeleportKeyRingHost.shared`), so coordinators and the SSH
     /// session always see the same object + in-memory state.
     var teleportCredentialStore: any TeleportCredentialStore = TeleportKeyRingCredentialStore()
+    /// The Teleport channel transport factory forwarded into every
+    /// `SSHSession` (D6 #3/#4). Defaulted so the synthesized `init()` keeps
+    /// every bare `SSHClient()` call site compiling; the default builds the
+    /// host-side libssh2 channel bridge.
+    var teleportTransportFactory: any TeleportChannelTransportFactory = SSHProxySubsystemTransportFactory()
     private var keepAliveTask: Task<Void, Never>?
     private var connectTask: Task<SSHSession, Error>?
     private var pendingConnectSession: SSHSession?
@@ -295,7 +300,8 @@ actor SSHClient {
             config: config,
             startupTrace: startupTrace,
             teleportLogging: teleportLogging,
-            teleportCredentialStore: teleportCredentialStore
+            teleportCredentialStore: teleportCredentialStore,
+            teleportTransportFactory: teleportTransportFactory
         )
         pendingConnectSession = pendingSession
 
@@ -1620,8 +1626,9 @@ actor SSHSession {
     /// proxy-subsystem channel to the inner libssh2 session's FD. Retained
     /// for the inner session's lifetime so its pump keeps forwarding bytes
     /// between the outer channel and the inner socketpair. Closed in
-    /// `cleanup` (before the inner session is freed).
-    private var innerTransport: SSHProxySubsystemTransport?
+    /// `cleanup` (before the inner session is freed). Stored through the
+    /// package-movable `TeleportChannelTransport` seam.
+    private var innerTransport: (any TeleportChannelTransport)?
     /// The outer (proxy) session channel that carries the proxy-subsystem
     /// tunnel. Retained so `cleanup` can free it after the inner session is
     /// torn down (the pump reads/writes this channel).
@@ -1655,6 +1662,10 @@ actor SSHSession {
     /// construction in tests keeps compiling. The default resolves the
     /// single host keyring, so the UI and the session share state.
     private let teleportCredentialStore: any TeleportCredentialStore
+    /// The Teleport channel transport factory (D6 #3/#4). Injected through
+    /// `SSHClient`; defaulted so direct `SSHSession` construction in tests
+    /// keeps compiling.
+    private let teleportTransportFactory: any TeleportChannelTransportFactory
 
     /// Atomic socket storage for emergency abort from any thread
     private let atomicSocket = AtomicSocket()
@@ -1671,8 +1682,9 @@ actor SSHSession {
     /// pump closures (`makeForChannel`) and acquired here in `sendKeepAlive`
     /// (and any other outer-session caller) so off-actor pump access and
     /// actor-isolated access never overlap. See `SessionMutex` for the race
-    /// rationale.
-    private let outerSessionMutex = SessionMutex()
+    /// rationale. Stored through the package-movable `TeleportSessionMutex`
+    /// seam.
+    private let outerSessionMutex: any TeleportSessionMutex
 
     /// Session-specific auth callback context passed to libssh2 session abstract pointer.
     private let keyboardInteractiveContext = KeyboardInteractiveContext()
@@ -1689,12 +1701,16 @@ actor SSHSession {
         config: SSHSessionConfig,
         startupTrace: SSHStartupTrace? = nil,
         teleportLogging: any TeleportLogging = AppTeleportLogging.shared,
-        teleportCredentialStore: any TeleportCredentialStore = TeleportKeyRingCredentialStore()
+        teleportCredentialStore: any TeleportCredentialStore = TeleportKeyRingCredentialStore(),
+        teleportTransportFactory: any TeleportChannelTransportFactory = SSHProxySubsystemTransportFactory(),
+        teleportSessionMutex: any TeleportSessionMutex = SessionMutex()
     ) {
         self.config = config
         self.startupTrace = startupTrace
         self.teleportLogging = teleportLogging
         self.teleportCredentialStore = teleportCredentialStore
+        self.teleportTransportFactory = teleportTransportFactory
+        self.outerSessionMutex = teleportSessionMutex
     }
 
     var isConnected: Bool {
@@ -3319,10 +3335,10 @@ actor SSHSession {
         //    The pump starts before start() returns the FD, so the target
         //    node's banner is forwarded as soon as it arrives.
         let handshakeToken = startupTrace?.begin(.teleportInnerHandshake)
-        let transport = SSHProxySubsystemTransport.makeForChannel(
+        let transport = teleportTransportFactory.makeChannelTransport(
             channel: outerChannel,
             outerSession: outerSession,
-            outerSessionMutex: outerSessionMutex
+            mutex: outerSessionMutex
         )
         let innerFD: Int32
         do {
