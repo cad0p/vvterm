@@ -208,7 +208,7 @@ jobs:
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/ProbeResults.xcresult" \
-            -parallel-testing-enabled \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/probe-test.log"
