@@ -19,6 +19,7 @@ struct GhosttyConfigBuilderTests {
                 fontSize: 13,
                 shellName: "fish",
                 themeName: "Aizen Light",
+                themesDirectory: "/tmp/vvterm-themes",
                 optionAsAltMode: mode
             )
 
@@ -85,7 +86,8 @@ struct GhosttyConfigBuilderTests {
             primaryFontFamily: "  JetBrainsMono Nerd Font  ",
             fontSize: 9,
             shellName: "zsh",
-            themeName: "Aizen Dark"
+            themeName: "Aizen Dark",
+            themesDirectory: "/tmp/vvterm-themes"
         )
 
         let fontFamilyLines = content
@@ -100,20 +102,56 @@ struct GhosttyConfigBuilderTests {
 
     @Test
     func configContentKeepsNonFontLinesStable() {
+        let themesDirectory = "/tmp/vvterm-themes"
         let content = Ghostty.ConfigBuilder.configContent(
             primaryFontFamily: "Menlo",
             fontSize: 13,
             shellName: "fish",
-            themeName: "Aizen Light"
+            themeName: "Aizen Light",
+            themesDirectory: themesDirectory
         )
 
         #expect(content.contains("font-size = 13"))
         #expect(content.contains("window-inherit-font-size = false"))
         #expect(content.contains("shell-integration = fish"))
-        #expect(content.contains("theme = Aizen Light"))
+        #expect(content.contains("theme = \"\(themesDirectory)/Aizen Light\""))
+        #expect(!content.contains("theme = Aizen Light"))
         #expect(content.contains("cursor-style = block"))
         #expect(content.contains("cursor-style-blink = true"))
         #expect(content.contains("keybind = shift+enter=text:\\n"))
+    }
+
+    /// Regression coverage for issue #225: libghostty is handed the theme as an
+    /// absolute path so the config loader never has to resolve it through
+    /// `XDG_CONFIG_HOME`/`getenv` (whose environment snapshot is invalidated by
+    /// environment mutation after `ghostty_init`).
+    @Test
+    func themeIsEmittedAsQuotedAbsolutePath() {
+        let themesDirectory = "/var/folders/xy/T/.config/ghostty/themes"
+        let content = Ghostty.ConfigBuilder.configContent(
+            primaryFontFamily: "Menlo",
+            fontSize: 13,
+            shellName: "zsh",
+            themeName: "Aizen Dark",
+            themesDirectory: themesDirectory
+        )
+
+        // Quoting matters: bundled theme names contain spaces (e.g. "Aizen Dark").
+        #expect(content.contains("theme = \"\(themesDirectory)/Aizen Dark\""))
+        #expect(!content.contains("theme = Aizen Dark"))
+    }
+
+    @Test
+    func themePathEscapesQuotesAndBackslashes() {
+        let content = Ghostty.ConfigBuilder.configContent(
+            primaryFontFamily: "Menlo",
+            fontSize: 13,
+            shellName: "zsh",
+            themeName: "A\"B\\C",
+            themesDirectory: "/tmp/vvterm-themes"
+        )
+
+        #expect(content.contains("theme = \"/tmp/vvterm-themes/A\\\"B\\\\C\""))
     }
 
     @Test
@@ -123,6 +161,7 @@ struct GhosttyConfigBuilderTests {
             fontSize: 13,
             shellName: "fish",
             themeName: "Aizen Light",
+            themesDirectory: "/tmp/vvterm-themes",
             cursorStyle: .bar,
             cursorBlink: false
         )
