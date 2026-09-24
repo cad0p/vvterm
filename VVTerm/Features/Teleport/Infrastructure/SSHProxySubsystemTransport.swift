@@ -387,9 +387,10 @@ actor SSHProxySubsystemTransport {
     /// EOF. The libssh2FD itself is closed by the inner session (it owns that
     /// end); the pump never closes libssh2FD to avoid racing FD reuse.
     ///
-    /// `nonisolated` so the blocking `read()`/`write()` on the pump FD run on
-    /// the detached task's thread without hopping onto the actor (which would
-    /// serialize + stall the pump).
+    /// `nonisolated` so the pump's `read()`/`write()` syscalls on the pump FD
+    /// (both ends are `O_NONBLOCK`; EAGAIN yields) run on the detached task's
+    /// thread without hopping onto the actor (which would serialize + stall
+    /// the pump).
     nonisolated private func runPump(pair: SocketPair, closer: PumpFDCloser) async {
         let pumpLog = Logger.forCategory("SSH-Proxy-Subsystem-Pump")
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
