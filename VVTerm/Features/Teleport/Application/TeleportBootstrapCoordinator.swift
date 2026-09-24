@@ -146,6 +146,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// The in-flight POST task. Cancelled by `cancel()` / `retry()`.
     private var postTask: Task<Void, Never>?
 
+    /// Monotonic token identifying the current bootstrap attempt. Bumped by
+    /// `begin`, `cancel` and `retry`, so a continuation from an older POST
+    /// cannot write state after a newer attempt (or a cancel) took over.
+    private var requestGeneration = 0
+
     /// The ephemeral TLS keypair generated for this bootstrap. Kept alive
     /// for Phase 2 (the gRPC client needs the SecKey + PEM cert for mTLS).
     /// The coordinator hands this to the registration coordinator via
@@ -201,7 +206,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     }
 
     func begin(cluster: TeleportCluster) async {
-        // Reset any prior state.
+        // Reset any prior state, and bump the generation so a continuation
+        // from a previous attempt cannot write state this attempt owns.
+        requestGeneration &+= 1
+        let generation = requestGeneration
         postTask?.cancel()
         postTask = nil
         lastBootstrapResult = nil
@@ -271,10 +279,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                     cluster: cluster,
                     sshPrivateKeyPEM: sshPrivateKeyPEM,
                     sshPubKey: sshPubKey,
-                    requestedTTLSeconds: TimeInterval(ttl) / 1_000_000_000
+                    requestedTTLSeconds: TimeInterval(ttl) / 1_000_000_000,
+                    generation: generation
                 )
             } catch {
-                await self.handlePostFailure(error: error)
+                await self.handlePostFailure(error: error, generation: generation)
             }
         }
         self.postTask = postTask
@@ -324,6 +333,9 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
     func cancel() async {
         logger.info("cancelling bootstrap")
+        // Bump before awaiting the presenter: a stale POST continuation that
+        // resumes during the await must not overwrite `.userCancelled`.
+        requestGeneration &+= 1
         postTask?.cancel()
         postTask = nil
         #if canImport(AuthenticationServices)
@@ -334,6 +346,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
     func retry() async {
         logger.info("retrying bootstrap")
+        requestGeneration &+= 1
         postTask?.cancel()
         postTask = nil
         #if canImport(AuthenticationServices)
@@ -352,8 +365,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         cluster: TeleportCluster,
         sshPrivateKeyPEM: String,
         sshPubKey: String,
-        requestedTTLSeconds: TimeInterval
+        requestedTTLSeconds: TimeInterval,
+        generation: Int
     ) async {
+        guard generation == requestGeneration else { return }
+
         guard let certB64 = response.cert, !certB64.isEmpty else {
             logger.error("POST returned 200 but no cert")
             state = .failed(.unknown("no cert in response"))
@@ -482,16 +498,27 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         )
         await keyRing.storeClusterTLSState(tlsState, for: cluster.id)
 
+        // Re-take the staleness check after the last await: the keyring
+        // stores above can suspend, during which `cancel()` or a newer
+        // `begin()` may have taken over. Only write the terminal state and
+        // touch the presenter when this attempt is still current.
+        guard generation == requestGeneration else { return }
+
         logger.info("bootstrap succeeded — cert \(certPEM.count) chars, tls_cert \(tlsCertPEM.count) chars")
         state = .success
 
         // Dismiss the Safari sheet (the POST returned, the user is done).
+        guard generation == requestGeneration else { return }
         #if canImport(AuthenticationServices)
         await safariPresenter?.cancel()
         #endif
     }
 
-    private func handlePostFailure(error: Error) async {
+    private func handlePostFailure(error: Error, generation: Int) async {
+        // A stale continuation (the request was cancelled or superseded by a
+        // newer `begin`) must not overwrite the current state.
+        guard generation == requestGeneration else { return }
+
         // The redaction rationale lives in `TeleportErrorRedaction`: a
         // `HeadlessError.http` description embeds the raw response body, and
         // the transport case's message can print `NSErrorFailingURLKey`.
@@ -509,9 +536,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                 //
                 // Deliberate asymmetry with the unwrapped-URLError branch
                 // below: a wrapped `.cancelled` stays `.networkLost` here
-                // instead of `.userCancelled`. That is pre-existing behavior,
-                // preserved so this fix changes only the timeout
-                // classification (tracked as a follow-up).
+                // instead of `.userCancelled`. Decision recorded on #222 and
+                // pinned by `testWrappedTransportCancelled_mapsToNetworkLost`:
+                // a transport/OS-level cancellation is not a user action, and
+                // `cancel()` already owns `.userCancelled`. If symmetry is ever
+                // wanted, the neutral fix is a distinct `.cancelled` state.
                 mapped = (code == .timedOut) ? .timeout : .networkLost
             case .http(let status, let body):
                 // Non-2xx HTTP. Surface the server message verbatim.
@@ -547,7 +576,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
         state = .failed(mapped)
 
-        // Dismiss the Safari sheet on failure too.
+        // Dismiss the Safari sheet on failure too — but only if this attempt
+        // is still current: cancelling the presenter after a newer attempt
+        // took over would dismiss the new sheet.
+        guard generation == requestGeneration else { return }
         #if canImport(AuthenticationServices)
         await safariPresenter?.cancel()
         #endif

@@ -116,5 +116,17 @@ final class TeleportBootstrapCoordinatorTimeoutTests: XCTestCase {
         let coordinator = await driveFailure(URLError(.cancelled))
         XCTAssertEqual(coordinator.state, .failed(.userCancelled))
     }
+
+    /// The wrapped `.cancelled` mapping is deliberately `.networkLost`, not
+    /// `.userCancelled` (decision recorded on #222): a transport/OS-level
+    /// cancellation is not a user action, and `cancel()` already owns
+    /// `.userCancelled`. Pinned so a future "symmetry" change is a deliberate
+    /// decision rather than a drive-by.
+    func testWrappedTransportCancelled_mapsToNetworkLost() async {
+        let coordinator = await driveFailure(
+            HeadlessError.transport("cancelled", code: .cancelled)
+        )
+        XCTAssertEqual(coordinator.state, .failed(.networkLost))
+    }
 }
 #endif
