@@ -416,8 +416,23 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// `TeleportLoginError`. Distinguishes Face ID cancel from unavailable.
     /// Internal (not private) so the mapping is unit-testable directly.
     func mapSignerError(_ error: Error) -> TeleportLoginError {
+        // Classify on the typed OSStatus first: the biometric prompt fails
+        // through `SecKeyCreateSignature` with a Security-framework status in
+        // `NSOSStatusErrorDomain` (there is no `LAContext` on this path), so
+        // `errSecUserCanceled` is locale-independent. Only the cancel code is
+        // mapped here — `errSecAuthFailed` is a generic authentication
+        // failure, and claiming "Face ID is locked" for it would be a new lie.
+        // Every other code falls through to the string fallback below, which
+        // is what keeps this change from being worse than the old behavior.
+        if let signerError = error as? SignerError,
+           case .biometricSigningFailed(_, let status) = signerError,
+           status == errSecUserCanceled {
+            return .faceIDCancelled
+        }
+
         let msg = error.localizedDescription.lowercased()
-        // SignerError.signingFailed wraps the LAError. The LAError codes:
+        // SignerError.signingFailed wraps the underlying OS message. The
+        // legacy LAError-flavored codes:
         //   - .userCancel → "canceled" / "cancel"
         //   - .biometryLockout → "lockout"
         //   - .biometryNotEnrolled → "not enrolled" / "not available"
