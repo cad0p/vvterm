@@ -651,6 +651,18 @@ jobs:
               break
             fi
             if [ "$ATTEMPT" -lt 3 ]; then
+              # Do not start a retry that cannot finish inside the 35m job
+              # budget: a retry attempt costs ~15-20m on a loaded runner, and
+              # blowing the cap discards the attempt's verdict entirely (no
+              # failure names, no artifacts). $SECONDS is this step's elapsed
+              # time; the job adds ~3m of setup before it, so 900s here is
+              # ~18m of job budget, leaving ~17m for the retry. Observed
+              # 2026-09-24 (run 35939209454): a retry started at 20m and the
+              # job was cancelled at 35m with no verdict.
+              if [ "$SECONDS" -gt 900 ]; then
+                echo "Not retrying: ${SECONDS}s elapsed in this step (35m job cap, ~3m setup); failing on attempt $ATTEMPT's evidence."
+                break
+              fi
               # Reboot the simulator before the retry so each attempt gets a
               # clean AX daemon (see the loop comment above). ~30-60s cost,
               # only paid when a retry actually fires.
