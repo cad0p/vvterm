@@ -1908,20 +1908,27 @@ final class TerminalKeyboardUITests: XCTestCase {
     @MainActor
     func testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession() throws {
         let app = launchKeyboardHarness()
-        // #201: drive the keyboard through the harness affordance instead of
-        // a bare `terminal.tap()`. On a degraded AX host the terminal surface
-        // can report a stale off-screen frame (observed
-        // `{{0,-139},{402,114.3}}`) and the tap fails with kAXErrorFailure
-        // performing kAXScrollToVisibleAction after XCUITest's own 3 retries
-        // — not locally recoverable. The harness button reaches the same
-        // "software keyboard session exists" state without an AX scroll on
-        // the unstable surface; the accessory-hides/restores assertions below
-        // are unchanged.
+        // #201: present the software keyboard the way the product does — a tap
+        // on the terminal surface — but gate the tap on hittability (issue
+        // #47) so a stale off-screen frame (observed `{{0,-139},{402,114.3}}`)
+        // is waited out instead of driving `kAXErrorFailure` /
+        // `kAXScrollToVisibleAction`. Other keyboard tests already tap the
+        // surface this way.
+        //
+        // Do NOT substitute the harness's `vvterm.keyboardTest.showKeyboard`
+        // affordance: it calls `keyboardCoordinator.userRequestedShow()`, a
+        // *forced* show, and under it the hardware-attach accessory-hide this
+        // test exists to assert does not hold. Measured 2026-09-24 (runs
+        // 36058044226 / 36063583910): with the forced show, `hardware=true`
+        // and `softwareInputActive=true` arrive but `accessoryHidden=true`
+        // never does, in every attempt of both runs. The forced path changes
+        // the precondition, so the assertions below would stop proving the
+        // natural transition.
         let terminal = app.descendants(matching: .any)
             .matching(identifier: "vvterm.keyboardTest.terminalSurface")
             .firstMatch
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticsText(in: app))
-        tapWhenHittable(app.buttons["vvterm.keyboardTest.showKeyboard"], in: app)
+        tapWhenHittable(terminal, in: app)
         assertKeyboardAndAccessoryVisible(in: app)
 
         app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
