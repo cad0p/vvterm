@@ -326,6 +326,62 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    /// The transport failure path logs the locale-stable `URLError.Code`, not
+    /// the OS message — and never the raw error. This scripts a transport
+    /// failure whose message embeds an `NSError` carrying
+    /// `NSErrorFailingURLKey` with a `?token=` query (the shape URLSession
+    /// produces); a future raw-`error` interpolation would print that userInfo
+    /// and leak the token, so assert it stays out of the `.public` log.
+    func testTeleportBootstrapCoordinator_transportFailureLogsTheCodeNotTheFailingURL() async throws {
+        let logging = SpySubsystemLogging()
+        let http = MockTeleportHTTPClient()
+        let token = "transport-redaction-token-marker"
+        let failingURL = URL(
+            string: "https://teleport.pcad.it/webapi/headless/login?token=\(token)"
+        )!
+        let underlying = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorCannotConnectToHost,
+            userInfo: [NSURLErrorFailingURLErrorKey: failingURL]
+        )
+        http.scriptedHeadlessError = HeadlessError.transport(
+            String(describing: underlying),
+            code: .cannotConnectToHost
+        )
+
+        let coordinator = TeleportBootstrapCoordinator(
+            httpClient: http,
+            keyRing: MockTeleportKeyRing(),
+            safariPresenter: nil,
+            logging: logging,
+            signer: MockSEPKeySigner(outcome: .success),
+            sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            tlsKeyPairGenerator: try TeleportFixtureSupport.makeFixedTLSGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"))
+
+        let messages = try await waitForLog(subsystem: logging.subsystem, containing: "POST failed")
+        XCTAssertTrue(
+            messages.contains(where: {
+                $0.contains(
+                    "POST failed: transport code=\(URLError.Code.cannotConnectToHost.rawValue)"
+                )
+            }),
+            "the transport failure log must carry the code; saw: \(messages)"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(token),
+                "the failing URL's token leaked into a log payload: \(message)"
+            )
+            XCTAssertFalse(
+                message.contains(failingURL.absoluteString),
+                "the failing URL leaked into a log payload: \(message)"
+            )
+        }
+    }
+
     /// The unified log does not apply privacy masking on the iOS Simulator, so
     /// the runtime readback above cannot distinguish an annotated
     /// interpolation from a bare one. Pin the annotation form at the source

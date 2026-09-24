@@ -9,6 +9,11 @@
 # workflow runs only the fixture tests, which need no token — they compare
 # Swift output against committed Go-generated fixtures.
 #
+# The generator is fully deterministic (fixed P-256 key + RFC 6979 ECDSA), so
+# the committed fixtures must byte-match a fresh run. The provenance check
+# runs BEFORE the in-place regeneration: a tampered committed fixture fails
+# the job instead of being silently overwritten.
+#
 # Use this to verify wire-format-affecting refactors (CBOR.swift, Attestation.swift,
 # SSHPubKey.swift, etc.) without spending an invite token.
 
@@ -58,6 +63,10 @@ jobs:
           # and has a complex nested api module).
           go-version: '1.21'
 
+      - name: Verify committed fixtures match the generator (fail-closed provenance)
+        working-directory: spikes/sep-webauthn
+        run: ./fixtures/check-provenance.sh
+
       - name: Build package
         working-directory: spikes/sep-webauthn
         run: swift build
@@ -66,6 +75,10 @@ jobs:
         working-directory: spikes/sep-webauthn
         run: |
           set -euo pipefail
+          # Provenance was verified above (committed == generator output). This
+          # step regenerates in place so the tests below run against fresh
+          # generator output; with the deterministic generator the bytes are
+          # identical to the committed set, so a diff here would be a bug.
           # The fixture generator is self-contained — it inlines the one
           # Teleport function it needed (ecdsaPublicKeyFromRaw, a 45-line
           # stdlib-only parser) so it doesn't pull the entire teleport module.

@@ -19,9 +19,10 @@
 #     passwordless login (scripts/ci/teleport-webauthn.py + fido2)
 #
 # Why dispatch/schedule and not PR CI:
-#   - PR CI is capped at 5 concurrent macOS jobs (build + unit-tests + 4
-#     UI shards) with a ~20m wall-clock budget (AGENTS.md). A per-PR
-#     teleport job would queue and add wall-clock to every PR.
+#   - PR CI peaks at 5 concurrent macOS jobs (unit-tests + the 4 UI
+#     shards; the build job runs first alone) with a ~20m wall-clock budget
+#     (AGENTS.md). A per-PR teleport job would queue and add wall-clock to
+#     every PR.
 #   - The tests themselves ARE part of VVTermTests (env-gated: they `skip`
 #     when VVTERM_TELEPORT_CERT is absent), so they cost ~0s in PR CI and
 #     only execute here, where the env fixtures are present.

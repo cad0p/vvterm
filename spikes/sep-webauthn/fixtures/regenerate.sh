@@ -13,12 +13,17 @@
 # Requires: Go 1.21+ (any recent version).
 #
 # Usage:
-#   ./regenerate.sh
+#   ./regenerate.sh [OUTPUT_DIR]
+#
+# OUTPUT_DIR defaults to fixtures/expected/ next to this script. The
+# provenance check (check-provenance.sh) passes a temp dir so it can compare
+# without touching the committed tree.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUT_DIR="${1:-$PKG_DIR/fixtures/expected}"
 
 if ! command -v go >/dev/null 2>&1; then
     echo "ERROR: go not installed. Install from https://go.dev/dl/" >&2
@@ -56,10 +61,10 @@ echo "→ go run ./gen"
 go run ./gen
 
 # The generator writes to fixtures/expected/ relative to its working dir,
-# which is $WORKDIR. Copy the output back to the package.
-echo "→ copying fixtures back to $PKG_DIR/fixtures/expected/"
-mkdir -p "$PKG_DIR/fixtures/expected"
-cp -v "$WORKDIR"/fixtures/expected/* "$PKG_DIR/fixtures/expected/"
+# which is $WORKDIR. Copy the output to OUT_DIR.
+echo "→ copying fixtures to $OUT_DIR/"
+mkdir -p "$OUT_DIR"
+cp -v "$WORKDIR"/fixtures/expected/* "$OUT_DIR/"
 
 echo
-echo "✓ fixtures regenerated. Commit the changes in fixtures/expected/."
+echo "✓ fixtures regenerated in $OUT_DIR."

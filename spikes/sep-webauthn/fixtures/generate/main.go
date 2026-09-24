@@ -7,20 +7,23 @@
 //  their output against these fixtures to catch transcription errors in the
 //  CBOR / attestation / clientDataJSON building.
 //
-//  The fixtures use FIXED inputs (challenge, origin, rpID, credential ID)
-//  but mint a FRESH P-256 keypair + signature on every run, so the output is
-//  NOT reproducible. The committed set under fixtures/expected/ is a frozen
-//  matched vector (public key, signature, attestation object) from one run;
-//  regenerating produces a new matched set that must be committed together.
-//  The signature is pure software P-256 (not the SEP), for portability.
+//  The fixtures are FULLY REPRODUCIBLE: every input is fixed (challenge,
+//  origin, rpID, credential ID), the P-256 key is derived deterministically
+//  from a domain-separated seed, and the signature is RFC 6979 deterministic
+//  ECDSA (SHA-256). Two runs of this generator produce byte-identical output,
+//  so the committed set under fixtures/expected/ must byte-match a fresh run.
+//  `fixtures/check-provenance.sh` enforces that fail-closed in CI before the
+//  in-place regeneration step. The signature is pure software P-256 (not the
+//  SEP), for portability.
 
 package main
 
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -54,14 +57,13 @@ func run() error {
 		return err
 	}
 
-	// Generate a fresh P-256 keypair. The key is NOT fixed: every run mints a
-	// new key + signature, so the committed fixtures are a frozen vector, not
-	// a reproducible derivation. The committed pub_key_raw.bin /
-	// signature_create.der / attestation_object_create.cbor must therefore be
-	// regenerated and committed together.
-	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Derive the fixture P-256 key deterministically. The key is test-only and
+	// intentionally public (it is printed below and the committed fixtures are
+	// byte-compared): a fixed key is what makes the signature and every
+	// key-dependent fixture byte-reproducible.
+	privKey, err := fixturePrivateKey()
 	if err != nil {
-		return fmt.Errorf("generate key: %w", err)
+		return fmt.Errorf("derive fixture key: %w", err)
 	}
 
 	// Serialize public key in ANSI X9.63 form (0x04 || X || Y).
@@ -101,9 +103,9 @@ func run() error {
 	// negative keys matters: if the value is nil, the key is omitted. Since
 	// we always set non-nil values, omitempty doesn't affect output.
 	ec2 := webauthncoseEC2{
-		Kty: 2,   // EllipticKey
-		Alg: -7,  // AlgES256
-		Crv: 1,   // P-256
+		Kty: 2,  // EllipticKey
+		Alg: -7, // AlgES256
+		Crv: 1,  // P-256
 		X:   x,
 		Y:   y,
 	}
@@ -161,10 +163,10 @@ func run() error {
 	ccdHash := sha256.Sum256(ccdJSON)
 	flags := byte(0x01 | 0x04 | 0x40) // UP | UV | AT
 	authData := make([]byte, 0, 37+16+2+len(credentialID)+len(pubKeyCBOR))
-	authData = append(authData, rpIDHash[:]...)          // 32
-	authData = append(authData, flags)                   // 1
-	authData = append(authData, 0, 0, 0, 0)               // signCount (4, BE, 0)
-	authData = append(authData, make([]byte, 16)...)     // aaguid (16 zero bytes)
+	authData = append(authData, rpIDHash[:]...)      // 32
+	authData = append(authData, flags)               // 1
+	authData = append(authData, 0, 0, 0, 0)          // signCount (4, BE, 0)
+	authData = append(authData, make([]byte, 16)...) // aaguid (16 zero bytes)
 	credIDLen := uint16(len(credentialID))
 	authData = append(authData, byte(credIDLen>>8), byte(credIDLen&0xff))
 	authData = append(authData, []byte(credentialID)...)
@@ -186,8 +188,11 @@ func run() error {
 	fmt.Printf("wrote auth_data_get.bin (%d bytes)\n", len(authDataGet))
 
 	// Compute the WebAuthn message = authData || clientDataHash, then
-	// sha256(message) = digest. Sign the digest directly (Go's ecdsa.SignASN1
-	// takes a pre-hashed digest — it does NOT re-hash).
+	// sha256(message) = digest. Sign the digest directly with RFC 6979
+	// deterministic ECDSA — the digest is pre-hashed, so it is NOT re-hashed,
+	// and the nonce is derived from the key + digest rather than rand.Reader
+	// (Go's crypto/ecdsa draws a fresh random nonce per signature, which would
+	// make the fixtures run-unstable).
 	//
 	// This matches authenticate.m:55-59: api.go computes digest = sha256(message)
 	// and passes it to SecKeyCreateSignature with the *Digest* variant
@@ -200,9 +205,9 @@ func run() error {
 	message := append(authData, ccdHash[:]...)
 	digest := sha256.Sum256(message)
 
-	sigDER, err := ecdsa.SignASN1(rand.Reader, privKey, digest[:])
+	sigDER, err := deterministicSignASN1(privKey, digest[:])
 	if err != nil {
-		return fmt.Errorf("ecdsa sign: %w", err)
+		return fmt.Errorf("deterministic ecdsa sign: %w", err)
 	}
 	if err := writeBinary(outDir, "signature_create.der", sigDER); err != nil {
 		return err
@@ -266,6 +271,118 @@ func run() error {
 	fmt.Println("  attestation_object_create.cbor (full attObj, matches api.go:297)")
 
 	return nil
+}
+
+// fixtureKeySeed domain-separates the deterministic fixture key. The seed is
+// not a secret: the fixtures are public test data, and the generator prints
+// the derived private scalar so the vector is auditable.
+const fixtureKeySeed = "vvterm/sep-webauthn/fixture/p256/v1"
+
+// fixturePrivateKey derives the fixed P-256 key used by every fixture run:
+// d = SHA256(fixtureKeySeed) mapped into [1, n-1]. Deriving the scalar
+// (rather than hard-coding one) keeps the key's provenance obvious and makes
+// the reproducibility contract easy to audit.
+func fixturePrivateKey() (*ecdsa.PrivateKey, error) {
+	curve := elliptic.P256()
+	n := curve.Params().N
+	seed := sha256.Sum256([]byte(fixtureKeySeed))
+	d := new(big.Int).SetBytes(seed[:])
+	d.Mod(d, new(big.Int).Sub(n, big.NewInt(1)))
+	d.Add(d, big.NewInt(1))
+	x, y := curve.ScalarBaseMult(d.Bytes())
+	if x == nil || y == nil {
+		return nil, fmt.Errorf("scalar base mult produced the point at infinity")
+	}
+	return &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		D:         d,
+	}, nil
+}
+
+// deterministicSignASN1 signs digest with RFC 6979 deterministic ECDSA
+// (HMAC-SHA-256), returning an ASN.1 DER signature. The nonce derivation is
+// RFC 6979 §3.2; the signature equation is §2.4. P-256 has
+// qlen == hlen == 256, so no hash truncation or extension is needed
+// (bits2int only shifts when the input is longer than qlen).
+func deterministicSignASN1(priv *ecdsa.PrivateKey, digest []byte) ([]byte, error) {
+	curve := priv.Curve
+	n := curve.Params().N
+	qlen := n.BitLen()
+	rolen := (qlen + 7) / 8 // 32 for P-256
+	holen := sha256.Size
+
+	int2octets := func(v *big.Int) []byte {
+		out := make([]byte, rolen)
+		v.FillBytes(out)
+		return out
+	}
+	bits2int := func(b []byte) *big.Int {
+		v := new(big.Int).SetBytes(b)
+		if blen := len(b) * 8; blen > qlen {
+			v.Rsh(v, uint(blen-qlen))
+		}
+		return v
+	}
+	bits2octets := func(b []byte) []byte {
+		v := bits2int(b)
+		v.Mod(v, n)
+		return int2octets(v)
+	}
+	mac := func(key, data []byte) []byte {
+		h := hmac.New(sha256.New, key)
+		h.Write(data)
+		return h.Sum(nil)
+	}
+
+	x := int2octets(priv.D)
+	h1 := bits2octets(digest)
+
+	V := make([]byte, holen)
+	for i := range V {
+		V[i] = 0x01
+	}
+	K := make([]byte, holen)
+
+	K = mac(K, concat(V, []byte{0x00}, x, h1))
+	V = mac(K, V)
+	K = mac(K, concat(V, []byte{0x01}, x, h1))
+	V = mac(K, V)
+
+	for {
+		var T []byte
+		for len(T) < rolen {
+			V = mac(K, V)
+			T = append(T, V...)
+		}
+		k := bits2int(T)
+		if k.Sign() > 0 && k.Cmp(n) < 0 {
+			rx, _ := curve.ScalarBaseMult(k.Bytes())
+			r := new(big.Int).Mod(rx, n)
+			if r.Sign() != 0 {
+				e := bits2int(digest)
+				s := new(big.Int).Mul(r, priv.D)
+				s.Add(s, e)
+				s.Mul(s, new(big.Int).ModInverse(k, n))
+				s.Mod(s, n)
+				if s.Sign() != 0 {
+					return asn1.Marshal(struct {
+						R *big.Int
+						S *big.Int
+					}{r, s})
+				}
+			}
+		}
+		K = mac(K, concat(V, []byte{0x00}))
+		V = mac(K, V)
+	}
+}
+
+func concat(parts ...[]byte) []byte {
+	var out []byte
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
 }
 
 func min(a, b int) int {

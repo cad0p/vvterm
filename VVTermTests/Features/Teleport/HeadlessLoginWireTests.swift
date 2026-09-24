@@ -10,9 +10,9 @@
 //    - the HeadlessError mapping (transport / http / decode / noCert /
 //      missingField);
 //    - the URLSession behavior of `HeadlessLogin.post` (URL path, 200-only,
-//      `.transport(localizedDescription)`, `.decode`) against a real loopback
-//      HTTP server, so the actual shared `TeleportTrustSession.session` path
-//      is exercised;
+//      `.transport(localizedDescription, code:)`, `.decode`) against a real
+//      loopback HTTP server, so the actual shared `TeleportTrustSession.session`
+//      path is exercised;
 //    - the shared trust session's request/resource timeout constants
 //      (200 s >= the 180 s server-side block), the default-session value
 //      identity, and the source-level wiring that makes `post` read that
@@ -222,10 +222,14 @@ final class LoopbackHTTPServer {
 final class HeadlessLoginRecordingProtocol: URLProtocol {
     static let lock = NSLock()
     static var recordedURLs: [URL] = []
+    /// When set, `startLoading` fails the request with this error instead of
+    /// returning the scripted 200 response.
+    static var scriptedError: Error?
 
     static func reset() {
         lock.lock()
         recordedURLs = []
+        scriptedError = nil
         lock.unlock()
     }
 
@@ -234,10 +238,16 @@ final class HeadlessLoginRecordingProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        Self.lock.lock()
         if let url = request.url {
-            Self.lock.lock()
             Self.recordedURLs.append(url)
-            Self.lock.unlock()
+        }
+        let scriptedError = Self.scriptedError
+        Self.lock.unlock()
+
+        if let scriptedError {
+            client?.urlProtocol(self, didFailWithError: scriptedError)
+            return
         }
         let response = HTTPURLResponse(
             url: request.url!,
@@ -357,7 +367,7 @@ final class HeadlessLoginWireTests: XCTestCase {
     // MARK: - Error mapping
 
     func testErrorDescriptions_areTheFrozenStrings() {
-        XCTAssertEqual(HeadlessError.transport("boom").errorDescription, "transport: boom")
+        XCTAssertEqual(HeadlessError.transport("boom", code: nil).errorDescription, "transport: boom")
         XCTAssertEqual(
             HeadlessError.http(status: 401, body: "denied").errorDescription,
             "HTTP 401: denied"
@@ -457,13 +467,49 @@ final class HeadlessLoginWireTests: XCTestCase {
             _ = try await HeadlessLogin.post(baseURL: deadURL, req: Self.makeRequest())
             XCTFail("expected HeadlessError.transport")
         } catch let error as HeadlessError {
-            guard case .transport(let message) = error else {
+            guard case .transport(let message, let code) = error else {
                 return XCTFail("expected .transport, got \(error)")
             }
             XCTAssertFalse(
                 message.isEmpty,
                 "transport must carry the underlying URLSession message"
             )
+            XCTAssertEqual(
+                code,
+                .cannotConnectToHost,
+                "post must carry the underlying URLError.Code for classification"
+            )
+        }
+    }
+
+    /// The blocking POST's timeout must surface as a `.transport` whose
+    /// `code` is `.timedOut` — the bootstrap coordinator classifies on that
+    /// code, so a URLSession timeout that loses it would regress to
+    /// `.networkLost` on every locale.
+    func testPost_injectedSessionTimeoutSurfacesURLErrorCode() async throws {
+        HeadlessLoginRecordingProtocol.reset()
+        defer { HeadlessLoginRecordingProtocol.reset() }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeadlessLoginRecordingProtocol.self]
+        let stubSession = URLSession(configuration: configuration)
+        defer { stubSession.invalidateAndCancel() }
+
+        HeadlessLoginRecordingProtocol.lock.lock()
+        HeadlessLoginRecordingProtocol.scriptedError = URLError(.timedOut)
+        HeadlessLoginRecordingProtocol.lock.unlock()
+
+        do {
+            _ = try await HeadlessLogin.post(
+                baseURL: baseURL,
+                req: Self.makeRequest(),
+                session: stubSession
+            )
+            XCTFail("expected HeadlessError.transport")
+        } catch let error as HeadlessError {
+            guard case .transport(_, let code) = error else {
+                return XCTFail("expected .transport, got \(error)")
+            }
+            XCTAssertEqual(code, .timedOut)
         }
     }
 
