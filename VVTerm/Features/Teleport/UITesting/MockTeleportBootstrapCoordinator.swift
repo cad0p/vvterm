@@ -37,6 +37,11 @@ import Foundation
 /// bootstrap sheet's recovery UX for every failure case in mockup C.
 @MainActor
 final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoordinating {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// The scripted bootstrap scenario. Each maps to a specific recovery UX.
     enum Scenario: Equatable {
         /// The user approves in Safari → POST returns with a cert → success.

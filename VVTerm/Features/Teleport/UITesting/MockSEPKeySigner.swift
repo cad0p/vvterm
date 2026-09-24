@@ -57,6 +57,11 @@ import CryptoKit
 ///     `SignerError.biometricSigningFailed(_, errSecInteractionNotAllowed)`
 ///     with a not-enrolled message (same string-fallback rationale).
 final class MockSEPKeySigner: TeleportSEPSigning {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// The scripted Face ID outcome.
     enum Outcome {
         /// Face ID succeeds — the SEP key is created/loaded/signed without

@@ -23,6 +23,11 @@
 import Foundation
 
 final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// Resolves the keyring on the main actor. Defaults to the single host
     /// provider.
     private let keyRingProvider: @MainActor @Sendable () -> TeleportKeyRing

@@ -33,7 +33,11 @@ import os.log
 ///
 /// Per-connect identities must not accumulate in the keychain: the connection
 /// deletes its items in `close()` and on every failure path.
-struct GRPCClientIdentity {
+// `nonisolated`: a value type with lock-protected static state and pure
+// keychain helpers, called from the gRPC transport's nonisolated paths (and
+// from `TeleportGRPCConnection.deleteKeychainIdentity`'s nonisolated deinit
+// chain).
+nonisolated struct GRPCClientIdentity {
     let identity: sec_identity_t
     let label: String
 
@@ -395,6 +399,11 @@ enum GRPCTLSOptions {
 ///
 /// Created with a Phase 1 TLS cert. Use `unary(...)` to make gRPC calls.
 final class TeleportGRPCConnection: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let channel: Channel
     private let multiplexer: NIOHTTP2Handler.StreamMultiplexer
     private let authority: String
@@ -512,8 +521,9 @@ final class TeleportGRPCConnection: @unchecked Sendable {
     /// Remove the per-connect keychain identity without waiting for the
     /// asynchronous channel teardown. `close()` is the normal path; this
     /// bounds the leak when the owning client is deallocated without
-    /// `disconnect()`. Safe to call more than once.
-    func deleteKeychainIdentity() {
+    /// `disconnect()`. Safe to call more than once. `nonisolated` so it can
+    /// be called from `LiveTeleportGRPCClient`'s nonisolated deinit.
+    nonisolated func deleteKeychainIdentity() {
         identity.deleteKeychainItems(logger: logger)
     }
 }
@@ -523,6 +533,11 @@ final class TeleportGRPCConnection: @unchecked Sendable {
 /// Logs TLS handshake + connection errors with the real underlying NWError,
 /// so Phase 2 failures aren't opaque 'ChannelError error 0'.
 final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     typealias InboundIn = Any
     private let host: String
     private let logger: Logger
