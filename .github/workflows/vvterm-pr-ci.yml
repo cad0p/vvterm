@@ -350,12 +350,21 @@ jobs:
           # the prebuilt app + Cmlx in the extracted DerivedData and skips
           # recompiling them, compiling only the VVTermTests target (~3m).
           # The VVTermUnitTests scheme is scoped to VVTermTests only.
+          # -test-timeouts-enabled + 180s execution allowance: a hanging test
+          # is KILLED and recorded as a failure BY NAME ("Exceeded execution
+          # time allowance") instead of running to the 30m job timeout with no
+          # per-test attribution. Same policy as the UI shards: treat any such
+          # failure as a hang to fix or quarantine, not as a slow test.
+          # Placement matters: `-parallel-testing-enabled` consumes a following
+          # `-option` token as its value, so the timeout flags must precede it.
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 180 \
             -parallel-testing-enabled \
             CODE_SIGNING_ALLOWED=NO \
             IgnoreFileSystemDeviceInodeChanges=YES \
