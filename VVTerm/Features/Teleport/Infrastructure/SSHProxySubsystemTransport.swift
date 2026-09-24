@@ -135,6 +135,15 @@ extension SessionMutex: TeleportSessionMutex {}
 final class PumpFDCloser: @unchecked Sendable {
     private let didClose = OSAllocatedUnfairLock(initialState: false)
 
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change. #216's
+    // class list missed this one; the #234 regression test constructs and
+    // releases it from a synchronous test method, which is exactly the path
+    // that traps.
+    nonisolated deinit {}
+
     nonisolated init() {}
 
     /// `shutdown` + `close` the fd exactly once; subsequent calls are no-ops.
