@@ -49,22 +49,6 @@ nonisolated enum BrowserMFACeremonyError: Error, LocalizedError {
 
 // MARK: - Ceremony
 
-/// A redaction-safe rendering of a gRPC failure: the case (and status, where
-/// present) without the server's message, which can echo the redirect URL and
-/// its per-run `secret_key`.
-private extension GRPCError {
-    var redactedDescription: String {
-        switch self {
-        case .transport: return "transport"
-        case .tls: return "tls"
-        case .http2: return "http2"
-        case .grpc(let status, _): return "grpc(status: \(status))"
-        case .decode: return "decode"
-        case .timeout: return "timeout"
-        }
-    }
-}
-
 /// Runs one Browser MFA ceremony for the authenticated user.
 @MainActor
 final class BrowserMFACeremony: NSObject {

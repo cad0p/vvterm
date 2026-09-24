@@ -184,7 +184,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         do {
             beginResp = try await httpClient.loginBegin(baseURL: baseURL)
         } catch {
-            logger.error("login/begin failed: \(error.localizedDescription, privacy: .public)")
+            // A `HeadlessError.http` description embeds the raw response
+            // body; log the status/code only. The descriptive text stays in
+            // the UI state via `mapHTTPError`.
+            logger.error("login/begin failed: \(TeleportErrorRedaction.headlessFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
             return
         }
@@ -254,7 +257,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
                 ttl: ttl
             )
         } catch {
-            logger.error("login/finish failed: \(error.localizedDescription, privacy: .public)")
+            // A `HeadlessError.http` description embeds the raw response
+            // body; log the status/code only. The descriptive text stays in
+            // the UI state via `mapHTTPError`.
+            logger.error("login/finish failed: \(TeleportErrorRedaction.headlessFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
             return
         }
