@@ -205,6 +205,23 @@ actor SSHTLSTransport {
                 _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
             }
         }
+        // Suppress SIGPIPE on **both** ends. `PumpFDCloser.closeOnce` does
+        // `shutdown(SHUT_RDWR)` before closing, so a `write` racing it — the
+        // pump's `writeAllToPumpFD` on the pump end, libssh2's write on the
+        // peer — gets `EPIPE` and the kernel raises `SIGPIPE`, whose default
+        // disposition terminates the process. With the option set the same
+        // write returns `-1`/`EPIPE` and the pump's error path handles it.
+        // Same idiom as the TCP path in `SSHClient`.
+        for fd in fds {
+            var noSigPipe: Int32 = 1
+            _ = setsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSigPipe,
+                socklen_t(MemoryLayout<Int32>.size)
+            )
+        }
         return SocketPair(libssh2FD: fds[0], pumpFD: fds[1])
     }
 
@@ -385,8 +402,11 @@ actor SSHTLSTransport {
     /// the pump never closes libssh2FD to avoid racing FD reuse.
     ///
     /// Both socketpair ends are `O_NONBLOCK`, so no thread can be blocked in
-    /// `read(pumpFD)`; the shared `PumpFDCloser`'s `shutdown`+`close` neither
-    /// deadlocks nor changes the pump's exit path.
+    /// `read(pumpFD)` and the shared `PumpFDCloser`'s `shutdown`+`close`
+    /// cannot deadlock. It does change what a racing `write` sees — `EPIPE`
+    /// rather than `EBADF` — which is why both ends are created with
+    /// `SO_NOSIGPIPE` (`makeSocketPair`): without it that `EPIPE` would raise
+    /// `SIGPIPE`, whose default disposition terminates the process.
     ///
     /// `nonisolated` so the pump's `read()`/`write()` syscalls on the pump FD
     /// (O_NONBLOCK; EAGAIN yields) run on the detached task's thread without

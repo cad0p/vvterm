@@ -95,6 +95,42 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         )
     }
 
+    /// `PumpFDCloser.closeOnce` shuts the descriptor down before closing it, so
+    /// a `write` racing that close gets `EPIPE` — and without `SO_NOSIGPIPE`
+    /// the kernel raises `SIGPIPE`, which terminates the app host (observed as
+    /// `Test crashed with signal pipe.`). Both socketpair ends must carry the
+    /// option.
+    func testSocketPairSuppressesSIGPIPEOnBothEnds() throws {
+        let pair = try SSHTLSTransport.makeSocketPair()
+        defer {
+            Darwin.close(pair.libssh2FD)
+            Darwin.close(pair.pumpFD)
+        }
+
+        // Asserted first: if the option is missing, fail here rather than reach
+        // the write below, which would raise SIGPIPE and kill the test host.
+        for (name, fd) in [("libssh2FD", pair.libssh2FD), ("pumpFD", pair.pumpFD)] {
+            var value: Int32 = 0
+            var size = socklen_t(MemoryLayout<Int32>.size)
+            XCTAssertEqual(
+                Darwin.getsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &value, &size),
+                0,
+                "getsockopt(SO_NOSIGPIPE) failed on \(name)"
+            )
+            XCTAssertEqual(value, 1, "SO_NOSIGPIPE must be set on \(name)")
+        }
+
+        // The behaviour the option buys. `closeOnce` shuts the descriptor down
+        // before closing it, so a pump write racing the close (`writeAllToPumpFD`
+        // writes to this same fd) must return `EPIPE` rather than raise
+        // `SIGPIPE`. Measured without the option, this exact write is killed by
+        // signal 13.
+        XCTAssertEqual(Darwin.shutdown(pair.pumpFD, SHUT_WR), 0)
+        var byte: UInt8 = 0
+        XCTAssertEqual(Darwin.write(pair.pumpFD, &byte, 1), -1)
+        XCTAssertEqual(Darwin.errno, EPIPE)
+    }
+
     /// The repository root, derived from this file's location
     /// (`VVTermTests/SSHTLSTransportPumpFDCloserTests.swift`).
     private func repositoryRoot() -> URL {

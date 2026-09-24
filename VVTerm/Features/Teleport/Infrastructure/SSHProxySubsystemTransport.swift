@@ -271,6 +271,23 @@ actor SSHProxySubsystemTransport {
                 _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
             }
         }
+        // Suppress SIGPIPE on **both** ends. `PumpFDCloser.closeOnce` does
+        // `shutdown(SHUT_RDWR)` before closing, so a `write` racing it — the
+        // pump's write on the pump end, libssh2's write on the peer — gets
+        // `EPIPE` and the kernel raises `SIGPIPE`, whose default disposition
+        // terminates the process. With the option set the same write returns
+        // `-1`/`EPIPE` and the pump's error path handles it. Same idiom as the
+        // TCP path in `SSHClient`.
+        for fd in fds {
+            var noSigPipe: Int32 = 1
+            _ = setsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSigPipe,
+                socklen_t(MemoryLayout<Int32>.size)
+            )
+        }
         return SocketPair(libssh2FD: fds[0], pumpFD: fds[1])
     }
 
