@@ -135,6 +135,15 @@ extension SessionMutex: TeleportSessionMutex {}
 final class PumpFDCloser: @unchecked Sendable {
     private let didClose = OSAllocatedUnfairLock(initialState: false)
 
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change. #216's
+    // class list missed this one; the #234 regression test constructs and
+    // releases it from a synchronous test method, which is exactly the path
+    // that traps.
+    nonisolated deinit {}
+
     nonisolated init() {}
 
     /// `shutdown` + `close` the fd exactly once; subsequent calls are no-ops.
@@ -262,6 +271,23 @@ actor SSHProxySubsystemTransport {
                 _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
             }
         }
+        // Suppress SIGPIPE on **both** ends. `PumpFDCloser.closeOnce` does
+        // `shutdown(SHUT_RDWR)` before closing, so a `write` racing it — the
+        // pump's write on the pump end, libssh2's write on the peer — gets
+        // `EPIPE` and the kernel raises `SIGPIPE`, whose default disposition
+        // terminates the process. With the option set the same write returns
+        // `-1`/`EPIPE` and the pump's error path handles it. Same idiom as the
+        // TCP path in `SSHClient`.
+        for fd in fds {
+            var noSigPipe: Int32 = 1
+            _ = setsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSigPipe,
+                socklen_t(MemoryLayout<Int32>.size)
+            )
+        }
         return SocketPair(libssh2FD: fds[0], pumpFD: fds[1])
     }
 
@@ -361,9 +387,10 @@ actor SSHProxySubsystemTransport {
     /// EOF. The libssh2FD itself is closed by the inner session (it owns that
     /// end); the pump never closes libssh2FD to avoid racing FD reuse.
     ///
-    /// `nonisolated` so the blocking `read()`/`write()` on the pump FD run on
-    /// the detached task's thread without hopping onto the actor (which would
-    /// serialize + stall the pump).
+    /// `nonisolated` so the pump's `read()`/`write()` syscalls on the pump FD
+    /// (both ends are `O_NONBLOCK`; EAGAIN yields) run on the detached task's
+    /// thread without hopping onto the actor (which would serialize + stall
+    /// the pump).
     nonisolated private func runPump(pair: SocketPair, closer: PumpFDCloser) async {
         let pumpLog = Logger.forCategory("SSH-Proxy-Subsystem-Pump")
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")

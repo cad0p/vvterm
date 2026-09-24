@@ -44,6 +44,16 @@ enum TeleportWebAuthnRPID {
                 return "WebAuthn rpID mismatch (server: \(serverProvided), expected: \(expected))"
             }
         }
+
+        /// A log-safe rendering: the case only, so a `.public` log payload
+        /// never carries the *server-provided* rpID. The descriptive text
+        /// above belongs to the UI state.
+        var logSafeDescription: String {
+            switch self {
+            case .missingExpected: return "missing expected rpID"
+            case .mismatch: return "mismatch"
+            }
+        }
     }
 
     /// Resolve the RP ID to use for a ceremony.

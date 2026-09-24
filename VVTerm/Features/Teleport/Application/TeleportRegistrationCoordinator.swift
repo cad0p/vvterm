@@ -249,7 +249,9 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
                 existingMFAResponse: existingMfaResponse
             )
         } catch {
-            logger.error("CreateRegisterChallenge failed: \(error.localizedDescription, privacy: .public)")
+            // The gRPC message can echo server-side detail; log the
+            // case/status only. The descriptive text stays in the UI state.
+            logger.error("CreateRegisterChallenge failed: \(TeleportErrorRedaction.grpcFailure(error), privacy: .public)")
             state = .failed(.server("CreateRegisterChallenge: \(error.localizedDescription)"))
             await grpcClient.disconnect()
             return
@@ -267,7 +269,11 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
         case .success(let resolved):
             rpID = resolved
         case .failure(let error):
-            logger.error("CreateRegisterChallenge rpID rejected: \(error.errorDescription ?? "unknown", privacy: .public)")
+            // The rejection text embeds the *server-provided* rpID, so the log
+            // payload carries the case only; the descriptive text is in the UI
+            // state below.
+            let shape = error.logSafeDescription
+            logger.error("CreateRegisterChallenge rpID rejected (\(shape, privacy: .public))")
             state = .failed(.server("CreateRegisterChallenge: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
             await grpcClient.disconnect()
             return
@@ -332,7 +338,9 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
                 newMFAResponse: addReq
             )
         } catch {
-            logger.error("AddMFADeviceSync failed: \(error.localizedDescription, privacy: .public)")
+            // The gRPC message can echo server-side detail; log the
+            // case/status only. The descriptive text stays in the UI state.
+            logger.error("AddMFADeviceSync failed: \(TeleportErrorRedaction.grpcFailure(error), privacy: .public)")
             // Distinguish ALREADY_EXISTS (gRPC code 6) from other errors.
             // The concrete gRPC client surfaces this via GRPCError.grpc(6, ...);
             // we string-match because GRPCError isn't concretely typed here.

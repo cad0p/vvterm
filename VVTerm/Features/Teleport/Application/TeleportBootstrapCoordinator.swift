@@ -492,21 +492,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     }
 
     private func handlePostFailure(error: Error) async {
-        // A HeadlessError.http description embeds the raw response body, so
-        // log the status only — bodies can carry server-side detail (tokens,
-        // echoed request fields) that must not reach diagnostics exports.
-        let failureSummary: String
-        if case HeadlessError.http(let status, _) = error {
-            failureSummary = "HTTP \(status)"
-        } else if case HeadlessError.transport(_, let code) = error {
-            // The transport case's message is the OS-localized URLSession
-            // text; log the locale-stable code instead. Never interpolate the
-            // raw error — its userInfo can print NSErrorFailingURLKey.
-            failureSummary = "transport code=\(code?.rawValue ?? 0)"
-        } else {
-            failureSummary = error.localizedDescription
-        }
-        logger.error("POST failed: \(failureSummary, privacy: .public)")
+        // The redaction rationale lives in `TeleportErrorRedaction`: a
+        // `HeadlessError.http` description embeds the raw response body, and
+        // the transport case's message can print `NSErrorFailingURLKey`.
+        logger.error("POST failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
 
         // Map the infrastructure error to the coordinator-specific enum.
         let mapped: TeleportBootstrapError
