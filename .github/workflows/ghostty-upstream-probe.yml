@@ -202,6 +202,11 @@ jobs:
           # job (same scheme, destination, resultBundle, parallel testing,
           # PCM-safe flags). The full PR CI on the bump PR is still the
           # merge gate.
+          #
+          # Ad-hoc sign, matching vvterm-pr-ci.yml: `xcodebuild test` builds
+          # the app, and an unsigned sim app has no entitlements — the host
+          # then fails before the tests connect (see the unit-tests job's
+          # comment for the 2026-09-24 evidence).
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \
@@ -209,7 +214,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/ProbeResults.xcresult" \
             -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/probe-test.log"
 

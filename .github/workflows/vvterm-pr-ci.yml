@@ -361,6 +361,21 @@ jobs:
           # failure as a hang to fix or quarantine, not as a slow test.
           # Placement matters: `-parallel-testing-enabled` consumes a following
           # `-option` token as its value, so the timeout flags must precede it.
+          #
+          # Ad-hoc sign, matching the build job (CODE_SIGNING_ALLOWED=YES
+          # CODE_SIGN_IDENTITY=-). `xcodebuild test` BUILDS the app, so an
+          # unsigned build here is NOT harmless: an unsigned sim app carries no
+          # entitlements, and the test host then dies before the tests connect.
+          # Observed 2026-09-24 (run 36053966722): the log showed the
+          # entitlements stripped (`Removed stale file '…/VVTerm.app.xcent'`),
+          # then `[CK] … your process must have a
+          # com.apple.developer.icloud-services entitlement`, a 600 s
+          # diagnostics timeout, and finally "Early unexpected exit … The test
+          # runner crashed before establishing connection". The bare
+          # `-parallel-testing-enabled` used to swallow this setting, so the job
+          # silently built signed and passed; making the flag explicit exposed
+          # it. Matching the build job's flags also lets the extracted
+          # DerivedData be reused rather than rebuilt.
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \
@@ -370,7 +385,7 @@ jobs:
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 180 \
             -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/test.log"
 
