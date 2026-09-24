@@ -200,6 +200,39 @@ final class TeleportFrozenTextTests: XCTestCase {
         )
     }
 
+    /// A message that carries a *more specific* state than the generic cancel
+    /// wins over the typed `errSecUserCanceled` status (S3): a real lockout /
+    /// not-enrolled outcome surfaced with the cancel status must not be
+    /// presented as a benign user cancel. This restores the pre-typed
+    /// behaviour for exactly the colliding inputs while the locale-independent
+    /// typed classification still handles the non-English cancel case above.
+    func testMapSignerError_specificMessageWinsOverCancelledOSStatus() async {
+        let coordinator = TeleportLoginCoordinator(
+            httpClient: MockTeleportHTTPClient(),
+            keyRing: MockTeleportKeyRing(),
+            logging: AppTeleportLogging.shared
+        )
+
+        XCTAssertEqual(
+            coordinator.mapSignerError(
+                SignerError.biometricSigningFailed(
+                    "LAError: biometry lockout",
+                    errSecUserCanceled
+                )
+            ),
+            .faceIDUnavailable("Face ID is locked. Enter your passcode to unlock Face ID, then try again.")
+        )
+        XCTAssertEqual(
+            coordinator.mapSignerError(
+                SignerError.biometricSigningFailed(
+                    "LAError: biometry not enrolled",
+                    errSecUserCanceled
+                )
+            ),
+            .faceIDUnavailable("Face ID isn't available. Set up Face ID in iOS Settings.")
+        )
+    }
+
     /// Only `errSecUserCanceled` is confidently attributable. `errSecAuthFailed`
     /// is a generic authentication failure, so it must fall through to the
     /// string fallback and keep the raw description rather than be reported as
