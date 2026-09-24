@@ -311,6 +311,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
             safariOK = false
         }
 
+        // A `cancel()`/`retry()`/newer `begin()` during the presenter await
+        // owns the state now; this attempt must not write it.
+        guard generation == requestGeneration else { return }
+
         if !safariOK {
             // Safari didn't open. The POST is still running — don't abort,
             // but surface the Safari-unavailable state so the UI can show
@@ -338,25 +342,35 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
     func cancel() async {
         logger.info("cancelling bootstrap")
-        // Bump before awaiting the presenter: a stale POST continuation that
-        // resumes during the await must not overwrite `.userCancelled`.
+        // Bump before touching the presenter so a stale POST continuation
+        // cannot overwrite `.userCancelled`.
         requestGeneration &+= 1
+        let generation = requestGeneration
         postTask?.cancel()
         postTask = nil
         #if canImport(AuthenticationServices)
         await safariPresenter?.cancel()
         #endif
+        // Re-take after the presenter call so a newer `begin()`/`retry()`
+        // cannot be overwritten by this cancel. The presenter `cancel()` is
+        // synchronous today, so this is a defensive re-take kept symmetric
+        // with `begin`'s post-`open` re-take (which does suspend).
+        guard generation == requestGeneration else { return }
         state = .failed(.userCancelled)
     }
 
     func retry() async {
         logger.info("retrying bootstrap")
         requestGeneration &+= 1
+        let generation = requestGeneration
         postTask?.cancel()
         postTask = nil
         #if canImport(AuthenticationServices)
         await safariPresenter?.cancel()
         #endif
+        // A newer `begin()`/`retry()` during the presenter call owns the
+        // state now. Defensive: the presenter `cancel()` is synchronous today.
+        guard generation == requestGeneration else { return }
         state = .idle
         // The caller (the bootstrap sheet) re-invokes begin() with the
         // same cluster. We don't capture the cluster here to avoid stale
@@ -373,6 +387,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         requestedTTLSeconds: TimeInterval,
         generation: Int
     ) async {
+        // Re-take after the POST await: a stale continuation (the request was
+        // cancelled or superseded by a newer `begin`) must not write any
+        // state, including the early `.failed` branches below. This guard also
+        // covers the window before the first keyring store — the parsing and
+        // validation between here and there do not suspend.
         guard generation == requestGeneration else { return }
 
         guard let certB64 = response.cert, !certB64.isEmpty else {
@@ -472,13 +491,17 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
             clusterCAPEMs: clusterCAPEMs,
             certValidBefore: certValidBefore
         )
-        lastBootstrapResult = result
-
         // Store the bootstrap cert in the key ring so readiness flips to
         // `needsRegistration` (cert present, no SEP key yet). Also store
         // the ed25519 private key — the SSHClient cert seam fetches it via
         // `liveEd25519PrivateKey` to feed libssh2 at connect time.
+        //
+        // Each store is an async hop that can suspend on the MainActor,
+        // during which `cancel()` or a newer `begin()` can take over; a
+        // superseded success must not leave later writes behind. Re-take the
+        // generation after every store for that reason.
         await keyRing.storeBootstrapCert(certPEM, validBefore: certValidBefore, for: cluster.id)
+        guard generation == requestGeneration else { return }
         if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
             do {
                 try await keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
@@ -489,6 +512,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                 // surfaces the right UX (re-bootstrap).
             }
         }
+        guard generation == requestGeneration else { return }
 
         // Persist the cluster name + TLS CA certs for the SSH TLS+ALPN
         // transport. The SSH path (`SSHTLSTransport`) dials the proxy on
@@ -503,17 +527,16 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         )
         await keyRing.storeClusterTLSState(tlsState, for: cluster.id)
 
-        // Re-take the staleness check after the last await: the keyring
-        // stores above can suspend, during which `cancel()` or a newer
-        // `begin()` may have taken over. Only write the terminal state and
-        // touch the presenter when this attempt is still current.
+        // Re-take after the stores (the final await): only commit the
+        // in-memory result, the terminal state and the presenter side effect
+        // when this attempt is still current.
         guard generation == requestGeneration else { return }
 
+        lastBootstrapResult = result
         logger.info("bootstrap succeeded — cert \(certPEM.count) chars, tls_cert \(tlsCertPEM.count) chars")
         state = .success
 
         // Dismiss the Safari sheet (the POST returned, the user is done).
-        guard generation == requestGeneration else { return }
         #if canImport(AuthenticationServices)
         await safariPresenter?.cancel()
         #endif
@@ -581,10 +604,9 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
         state = .failed(mapped)
 
-        // Dismiss the Safari sheet on failure too — but only if this attempt
-        // is still current: cancelling the presenter after a newer attempt
-        // took over would dismiss the new sheet.
-        guard generation == requestGeneration else { return }
+        // Dismiss the Safari sheet on failure too. No re-take is needed here:
+        // nothing suspends between the entry guard and this point, so the
+        // generation cannot have changed.
         #if canImport(AuthenticationServices)
         await safariPresenter?.cancel()
         #endif
