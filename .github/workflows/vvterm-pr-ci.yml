@@ -666,12 +666,25 @@ jobs:
                 echo "Restarting loopback sshd fixture for retry environment..."
                 bash scripts/ci/repro-sshd-setup.sh --restart
               fi
-              # Case 1 — runner died before ANY test executed (zero "Test
-              # Case" lines). Message varies: "Failed to initialize for UI
-              # testing" (AX timeout), "Early unexpected exit ... signal abrt
-              # while preparing to run tests", etc. All are infra by
-              # definition — no product assertion can fail before tests run.
-              if ! grep -q "Test Case '-\[" "$RUNNER_TEMP/test.log"; then
+              # Case 1 — runner died before ANY test executed (zero test-case
+              # lines). Message varies: "Failed to initialize for UI testing"
+              # (AX timeout), "Early unexpected exit ... signal abrt while
+              # preparing to run tests", etc. All are infra by definition — no
+              # product assertion can fail before tests run.
+              #
+              # Match BOTH XCTest output formats. Xcode 27 under
+              # `-parallel-testing-enabled` prints the modern form
+              # (`Test case 'Suite.test()' passed on 'Clone 1 of iPhone 17 …'`)
+              # and NEVER the classic `Test Case '-[Suite test]' passed`; the
+              # classic-only grep therefore matched nothing on any failure, so
+              # Case 1 fired on every failing shard — real test failures
+              # retried (burning the cap, observed 2026-09-24 run 35939209454
+              # shards 0/2) and the Case 2/2a predicates below were
+              # unreachable. Verified against the archived logs: the two
+              # failing shards have modern-form lines (19/40) and no classic
+              # ones; a genuinely wedged shard (shard-3, cancelled at the cap)
+              # has neither.
+              if ! grep -qE "Test Case '-\[|Test case '" "$RUNNER_TEMP/test.log"; then
                 echo "Runner failed before any test executed (infra wedge); retrying shard (attempt $((ATTEMPT+1))/3)."
                 continue
               fi
