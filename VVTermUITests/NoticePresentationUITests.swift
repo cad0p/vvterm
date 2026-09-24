@@ -257,6 +257,15 @@ final class NoticePresentationUITests: XCTestCase {
     /// bounded number of times and gate on the resulting scenario label; the
     /// label assert is the real check, and a scenario that never switches
     /// still fails with the observed label.
+    ///
+    /// Two bounds matter here. The loop also requires that a menu item was
+    /// **actually tapped**: the label can already equal `name` because a
+    /// previous test in the shared app selected the same scenario, and a
+    /// label-only assert would then pass without the menu ever presenting —
+    /// the exact failure this loop exists to catch, made vacuous. And the
+    /// whole loop is wall-clock capped, because each attempt can burn its
+    /// per-wait timeouts and a failing attempt must stay cheap enough for the
+    /// shard's cost-based retry budget.
     @MainActor
     private func selectScenario(_ name: String, in app: XCUIApplication) {
         // Single-launch cleanup: the connection-status bottom sheet (and the
@@ -285,7 +294,10 @@ final class NoticePresentationUITests: XCTestCase {
         let item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
         let current = app.staticTexts["vvterm.noticeTest.scenario.current"]
 
+        var didTapItem = false
+        let loopDeadline = Date().addingTimeInterval(40)
         for _ in 0..<3 {
+            guard Date() < loopDeadline else { break }
             if !menu.exists {
                 guard menu.waitForExistence(timeout: 5) else { continue }
             }
@@ -309,15 +321,23 @@ final class NoticePresentationUITests: XCTestCase {
             }
             guard item.waitForExistence(timeout: 5) else { continue }
             item.tap()
+            didTapItem = true
             if waitForLabel(current, equalTo: name, timeout: 5) {
                 return
             }
         }
+        // Require a real interaction: without this the assert below can pass
+        // on a label a previous test already set, with the menu never opened.
+        XCTAssertTrue(
+            didTapItem,
+            "The '\(name)' scenario menu item never presented to be tapped. "
+                + "Menu exists: \(menu.exists); item exists: \(item.exists)."
+        )
         let observedLabel = current.exists ? current.label : "<missing>"
         XCTAssertEqual(
             observedLabel,
             name,
-            "Scenario did not switch to '\(name)' after 3 bounded menu/item taps. "
+            "Scenario did not switch to '\(name)' after the bounded menu/item taps. "
                 + "Menu exists: \(menu.exists); item exists: \(item.exists)."
         )
     }
