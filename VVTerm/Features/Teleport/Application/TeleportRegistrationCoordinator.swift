@@ -270,9 +270,10 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
             rpID = resolved
         case .failure(let error):
             // The rejection text embeds the *server-provided* rpID, so the log
-            // payload stays empty of it; the descriptive text is in the UI
+            // payload carries the case only; the descriptive text is in the UI
             // state below.
-            logger.error("CreateRegisterChallenge rpID rejected")
+            let shape = (error as? TeleportWebAuthnRPID.ResolveError)?.logSafeDescription ?? "rejected"
+            logger.error("CreateRegisterChallenge rpID rejected (\(shape, privacy: .public))")
             state = .failed(.server("CreateRegisterChallenge: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
             await grpcClient.disconnect()
             return

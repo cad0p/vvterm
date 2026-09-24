@@ -208,9 +208,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             rpID = resolved
         case .failure(let error):
             // The rejection text embeds the *server-provided* rpID, so the log
-            // payload stays empty of it; the descriptive text is in the UI
+            // payload carries the case only; the descriptive text is in the UI
             // state below.
-            logger.error("login/begin rpID rejected")
+            let shape = (error as? TeleportWebAuthnRPID.ResolveError)?.logSafeDescription ?? "rejected"
+            logger.error("login/begin rpID rejected (\(shape, privacy: .public))")
             state = .failed(.server("login/begin: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
             return
         }

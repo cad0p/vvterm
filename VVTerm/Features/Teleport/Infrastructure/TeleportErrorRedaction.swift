@@ -11,8 +11,10 @@
 //  can echo a redirect URL and its per-run `secret_key`),
 //  `GRPCError.http2` embeds the raw HTTP body, and
 //  `HeadlessError.http(status:body:)` embeds the raw response body. The
-//  renderings here keep the case/status — the triage signal — and drop the
-//  payload.
+//  renderings here keep the case — and the status where it is structurally
+//  available — and drop the payload. `.http2` keeps the case only: its
+//  message packs the status and the body into one free-form string, so the
+//  status cannot be recovered without parsing a payload-carrying string.
 //
 //  Local errors (a gRPC *connect* failure, a `SignerError`, a WebAuthn
 //  builder error) keep their descriptive `localizedDescription`: case-only
@@ -24,7 +26,8 @@ import Foundation
 extension GRPCError {
     /// A redaction-safe rendering of a gRPC failure: the case (and status,
     /// where present) without the server's message, which can echo the
-    /// redirect URL and its per-run `secret_key`.
+    /// redirect URL and its per-run `secret_key`. `.http2` carries its status
+    /// inside the same free-form string as the body, so only the case survives.
     var redactedDescription: String {
         switch self {
         case .transport: return "transport"
@@ -67,6 +70,11 @@ enum TeleportErrorRedaction {
         }
         if case HeadlessError.transport(_, let code) = error {
             return "transport code=\(code?.rawValue ?? 0)"
+        }
+        if let urlError = error as? URLError {
+            // A raw URLSession failure — the trust session's `data(for:)` does
+            // not wrap — keeps its locale-stable code, never the OS message.
+            return "url code=\(urlError.code.rawValue)"
         }
         return error.localizedDescription
     }

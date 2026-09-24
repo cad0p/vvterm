@@ -660,6 +660,50 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    /// The rpID-rejection log must name the rejection *case* without carrying
+    /// the **server-provided** rpID, which is a value that came off the wire.
+    func testTeleportLoginCoordinator_rpIDMismatchLogsTheCaseNotTheServerValue() async throws {
+        let logging = SpySubsystemLogging()
+        let serverRPID = "server-provided-rpid-marker.example"
+        let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
+        let credentialID = Data([1, 2, 3, 4])
+        let keyRing = Self.makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
+        let signer = MockSEPKeySigner(outcome: .success)
+        _ = try signer.createKey(credentialID: credentialID)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = LoginBeginResponse(
+            webauthnChallenge: .init(
+                publicKey: .init(challenge: "Y2hhbGxlbmdl", rpId: serverRPID)
+            )
+        )
+
+        let coordinator = TeleportLoginCoordinator(
+            httpClient: http,
+            keyRing: keyRing,
+            logging: logging,
+            signer: signer,
+            webAuthnBuilder: ScriptedWebAuthnBuilderStub(),
+            keyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: cluster)
+
+        let messages = try await waitForLog(
+            subsystem: logging.subsystem,
+            containing: "rpID rejected"
+        )
+        XCTAssertTrue(
+            messages.contains(where: { $0.contains("mismatch") }),
+            "the rejection log must name the case; saw: \(messages)"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(serverRPID),
+                "the server-provided rpID leaked into a log payload: \(message)"
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private static func makeRegisteredKeyRing(
