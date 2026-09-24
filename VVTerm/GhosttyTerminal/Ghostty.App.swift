@@ -81,6 +81,33 @@ extension Ghostty {
                 .replacingOccurrences(of: "\"", with: "\\\"")
         }
 
+        /// Sanitize a value that is emitted inside a double-quoted Ghostty config
+        /// value. Ghostty's line parser strips the surrounding quotes and does
+        /// **not** decode escape sequences (`src/cli/args.zig`, `LineIterator`),
+        /// so the value must be emitted verbatim: escaping a `\\` or `"` would
+        /// make the loader look for a file whose name literally contains the
+        /// backslash. Only the characters that would break the line structure
+        /// are removed.
+        static func sanitizedConfigValue(_ value: String) -> String {
+            value
+                .replacingOccurrences(of: "\r", with: "")
+                .replacingOccurrences(of: "\n", with: "")
+        }
+
+        /// The value to emit for `theme`. Ghostty treats an absolute path as a
+        /// direct file reference and otherwise searches the themes directory
+        /// *and* the bundled resources directory, so fall back to the bare name
+        /// whenever the copy in `themesDirectory` is missing (a purgeable
+        /// `TMPDIR`, or a custom theme added without refreshing the copies).
+        static func themeConfigValue(
+            themeName: String,
+            themesDirectory: String,
+            isFile: (String) -> Bool
+        ) -> String {
+            let absolutePath = (themesDirectory as NSString).appendingPathComponent(themeName)
+            return isFile(absolutePath) ? absolutePath : themeName
+        }
+
         static func fontFamilyLines(primaryFamily: String) -> String {
             sanitizedFontFamilies(primaryFamily: primaryFamily)
                 .map { "font-family = \"\(escapedConfigValue($0))\"" }
@@ -100,8 +127,7 @@ extension Ghostty {
             primaryFontFamily: String,
             fontSize: Double,
             shellName: String,
-            themeName: String,
-            themesDirectory: String,
+            theme: String,
             cursorStyle: TerminalCursorStyle = TerminalDefaults.defaultCursorStyle,
             cursorBlink: Bool = TerminalDefaults.defaultCursorBlink,
             optionAsAltMode: TerminalOptionAsAltMode = .none
@@ -129,7 +155,7 @@ extension Ghostty {
             cursor-style = \(cursorStyle.rawValue)
             cursor-style-blink = \(cursorBlink ? "true" : "false")
 
-            theme = "\(escapedConfigValue((themesDirectory as NSString).appendingPathComponent(themeName)))"
+            theme = "\(sanitizedConfigValue(theme))"
 
             # Disable audible bell
             audible-bell = false
@@ -578,12 +604,16 @@ extension Ghostty {
 
                 // Create config with font settings, shell integration, and theme
                 let effectiveFontSize = presentationOverrides.fontSize ?? TerminalDefaults.clampedFontSize(terminalFontSize)
+                let themeValue = ConfigBuilder.themeConfigValue(
+                    themeName: effectiveThemeName,
+                    themesDirectory: tempThemesDir,
+                    isFile: { FileManager.default.fileExists(atPath: $0) }
+                )
                 let configContent = ConfigBuilder.configContent(
                     primaryFontFamily: terminalFontName,
                     fontSize: effectiveFontSize,
                     shellName: shellName,
-                    themeName: effectiveThemeName,
-                    themesDirectory: tempThemesDir,
+                    theme: themeValue,
                     cursorStyle: terminalCursorStyle,
                     cursorBlink: terminalCursorBlink,
                     optionAsAltMode: terminalOptionAsAltMode
@@ -600,6 +630,13 @@ extension Ghostty {
                 // variable replaces the environment table, leaving that
                 // capture pointing at unowned memory that `getenv` then walks
                 // (issue #225).
+                guard (configFilePath as NSString).isAbsolutePath else {
+                    // `ghostty_config_load_file` asserts an absolute path and
+                    // traps in debug/safe builds; a relative path here would be
+                    // a programming error, so warn rather than trap.
+                    Ghostty.logger.warning("Generated config path is not absolute; skipping config load")
+                    return
+                }
                 ghostty_config_load_file(config, configFilePath)
 
                 Ghostty.logger.info("Loaded terminal settings - Font: \(self.terminalFontName) \(Int(effectiveFontSize))pt, Theme: \(self.effectiveThemeName)")

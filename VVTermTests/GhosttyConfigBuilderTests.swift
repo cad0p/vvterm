@@ -18,8 +18,7 @@ struct GhosttyConfigBuilderTests {
                 primaryFontFamily: "Menlo",
                 fontSize: 13,
                 shellName: "fish",
-                themeName: "Aizen Light",
-                themesDirectory: "/tmp/vvterm-themes",
+                theme: "/tmp/vvterm-themes/Aizen Light",
                 optionAsAltMode: mode
             )
 
@@ -86,8 +85,7 @@ struct GhosttyConfigBuilderTests {
             primaryFontFamily: "  JetBrainsMono Nerd Font  ",
             fontSize: 9,
             shellName: "zsh",
-            themeName: "Aizen Dark",
-            themesDirectory: "/tmp/vvterm-themes"
+            theme: "/tmp/vvterm-themes/Aizen Dark"
         )
 
         let fontFamilyLines = content
@@ -107,8 +105,7 @@ struct GhosttyConfigBuilderTests {
             primaryFontFamily: "Menlo",
             fontSize: 13,
             shellName: "fish",
-            themeName: "Aizen Light",
-            themesDirectory: themesDirectory
+            theme: "\(themesDirectory)/Aizen Light"
         )
 
         #expect(content.contains("font-size = 13"))
@@ -132,8 +129,7 @@ struct GhosttyConfigBuilderTests {
             primaryFontFamily: "Menlo",
             fontSize: 13,
             shellName: "zsh",
-            themeName: "Aizen Dark",
-            themesDirectory: themesDirectory
+            theme: "\(themesDirectory)/Aizen Dark"
         )
 
         // Quoting matters: bundled theme names contain spaces (e.g. "Aizen Dark").
@@ -141,17 +137,60 @@ struct GhosttyConfigBuilderTests {
         #expect(!content.contains("theme = Aizen Dark"))
     }
 
+    /// Ghostty's line parser strips the surrounding quotes and never decodes
+    /// escapes, so a backslash or quote inside the value must be emitted
+    /// verbatim — escaping it would make the loader look for a file whose name
+    /// literally contains the backslash. Newlines are still removed because
+    /// they would break the line structure.
     @Test
-    func themePathEscapesQuotesAndBackslashes() {
+    func themeValueIsEmittedVerbatimAndNewlinesAreStripped() {
         let content = Ghostty.ConfigBuilder.configContent(
             primaryFontFamily: "Menlo",
             fontSize: 13,
             shellName: "zsh",
-            themeName: "A\"B\\C",
-            themesDirectory: "/tmp/vvterm-themes"
+            theme: "/tmp/vvterm-themes/A\\B\"C\nD"
         )
 
-        #expect(content.contains("theme = \"/tmp/vvterm-themes/A\\\"B\\\\C\""))
+        #expect(content.contains("theme = \"/tmp/vvterm-themes/A\\B\"CD\""))
+        #expect(!content.contains("theme = \"/tmp/vvterm-themes/A\\\\B"))
+    }
+
+    /// The theme falls back to the bare name when the copy in the themes
+    /// directory is missing, so ghostty can still resolve it through its
+    /// resources-directory search instead of failing on a dangling absolute path.
+    @Test
+    func themeConfigValuePrefersTheAbsolutePathAndFallsBackToTheBareName() {
+        let directory = "/var/folders/xy/T/.config/ghostty/themes"
+
+        let present = Ghostty.ConfigBuilder.themeConfigValue(
+            themeName: "Aizen Dark",
+            themesDirectory: directory,
+            isFile: { _ in true }
+        )
+        #expect(present == "\(directory)/Aizen Dark")
+
+        let missing = Ghostty.ConfigBuilder.themeConfigValue(
+            themeName: "Aizen Dark",
+            themesDirectory: directory,
+            isFile: { _ in false }
+        )
+        #expect(missing == "Aizen Dark")
+    }
+
+    /// Documents the parser boundary rather than pretending it is handled:
+    /// ghostty routes a theme value containing `,`, `:` or `=` through its
+    /// light/dark pair parser, so such a name is mis-parsed today for bare names
+    /// and absolute paths alike. The emitted line stays well-formed either way.
+    @Test
+    func themeValueWithPairSeparatorsIsStillEmittedAsOneQuotedValue() {
+        let content = Ghostty.ConfigBuilder.configContent(
+            primaryFontFamily: "Menlo",
+            fontSize: 13,
+            shellName: "zsh",
+            theme: "/tmp/vvterm-themes/Dark,Light"
+        )
+
+        #expect(content.contains("theme = \"/tmp/vvterm-themes/Dark,Light\""))
     }
 
     @Test
@@ -160,8 +199,7 @@ struct GhosttyConfigBuilderTests {
             primaryFontFamily: "Menlo",
             fontSize: 13,
             shellName: "fish",
-            themeName: "Aizen Light",
-            themesDirectory: "/tmp/vvterm-themes",
+            theme: "/tmp/vvterm-themes/Aizen Light",
             cursorStyle: .bar,
             cursorBlink: false
         )
