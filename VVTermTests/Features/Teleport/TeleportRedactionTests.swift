@@ -495,6 +495,45 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    /// The registration counterpart of the login rpID test: the rejection log
+    /// names the case and never carries the **server-provided** rpID.
+    func testTeleportRegistrationCoordinator_rpIDMismatchLogsTheCaseNotTheServerValue() async throws {
+        let logging = SpySubsystemLogging()
+        let serverRPID = "server-provided-rpid-marker.example"
+        let grpc = FailingRegistrationGRPCStub(
+            registerChallenge: Self.makeRegisterChallenge(rpID: serverRPID)
+        )
+        let coordinator = TeleportRegistrationCoordinator(
+            grpcClient: grpc,
+            browserMFACeremony: FirstDeviceBrowserMFACeremonyStub(),
+            keyRing: MockTeleportKeyRing(),
+            logging: logging,
+            signer: MockSEPKeySigner(outcome: .success),
+            webAuthnBuilder: ScriptedWebAuthnBuilderStub()
+        )
+
+        await coordinator.begin(
+            cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"),
+            deviceName: "test-device",
+            bootstrapResult: try Self.makeBootstrapResult()
+        )
+
+        let messages = try await waitForLog(
+            subsystem: logging.subsystem,
+            containing: "rpID rejected"
+        )
+        XCTAssertTrue(
+            messages.contains(where: { $0.contains("mismatch") }),
+            "the rejection log must name the case; saw: \(messages)"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(serverRPID),
+                "the server-provided rpID leaked into a log payload: \(message)"
+            )
+        }
+    }
+
     // MARK: - TeleportLoginCoordinator
 
     /// `login/begin` is a headless HTTP call: a non-2xx carries the raw server
