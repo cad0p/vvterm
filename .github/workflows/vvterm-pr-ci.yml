@@ -652,6 +652,7 @@ jobs:
           XC_EXIT=0
           for ATTEMPT in 1 2 3; do
             rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+            ATTEMPT_START=$SECONDS
             xcodebuild test-without-building -collect-test-diagnostics never \
               -xctestrun "$XCRUN" \
               -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
@@ -668,20 +669,23 @@ jobs:
               break
             fi
             if [ "$ATTEMPT" -lt 3 ]; then
-              # Do not start a retry that cannot finish inside the 35m job
-              # budget: a retry attempt costs ~13-20m (shard-2 attempt 1 =
-              # 11m28s and attempt 2 = 12m45s of xcodebuild, +79-89s of
-              # simulator reboot + fixture restart; the plan's per-shard
-              # estimate is ~14.1m). Blowing the cap discards the step verdict
-              # and the attempt's xcresult — the job log keeps the failure
-              # names, but the run reports a cancellation instead of a
-              # failure. $SECONDS is this step's elapsed time; the job adds
-              # ~2-3m of setup before it, so 900s here is ~18m of job budget,
-              # leaving ~17m for the retry. Observed 2026-09-24 (run
-              # 35939209454): a retry started at 20m and the job was cancelled
-              # at 35m with no verdict.
-              if [ "$SECONDS" -gt 900 ]; then
-                echo "Not retrying: ${SECONDS}s elapsed in this step (35m job cap, ~3m setup); failing on attempt $ATTEMPT's evidence."
+              # Budget the retry against the 35m job cap (2100s; keep in sync
+              # with the ui-tests `timeout-minutes`). The job spends ~150-200s
+              # before this step, and a retry costs roughly what the attempt
+              # that just failed cost (measured from ATTEMPT_START, so it
+              # includes the pre-test simulator boot) plus ~2m of reboot +
+              # fixture restart + reporting. Measured: round-1 shard-0 decided
+              # at 1310s after a ~1020s attempt — the retry started anyway and
+              # was cancelled at the cap with no verdict; round-3 shard-2
+              # decided at 937s after an ~800s attempt, where a retry would
+              # have fit (a #201 AX wedge, exactly the class Case 2 absorbs).
+              # A fixed 900s cut-off blocked that legitimate retry, so the
+              # budget is derived from the attempt's own cost. Fail fast on the
+              # attempt's evidence rather than start a retry that cannot
+              # finish.
+              ATTEMPT_COST=$((SECONDS - ATTEMPT_START))
+              if [ $((SECONDS + ATTEMPT_COST + 120)) -gt 2100 ]; then
+                echo "Not retrying: attempt cost ${ATTEMPT_COST}s, ${SECONDS}s elapsed, 2100s job cap."
                 break
               fi
               # Reboot the simulator before the retry so each attempt gets a
