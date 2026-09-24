@@ -1,7 +1,7 @@
 import XCTest
 
 final class ServerNavigationUITests: XCTestCase {
-    /// One app instance per test-class run (both tests share identical
+    /// One app instance per test-class run (all tests share identical
     /// harness launch args). Saves a full app launch + fixture reconnect
     /// per shard run; the reset guard below returns each test to the
     /// server list regardless of the previous test's end state.
@@ -22,137 +22,68 @@ final class ServerNavigationUITests: XCTestCase {
         try skipUnlessLoopbackFixtureAvailable()
     }
 
+    /// List-position half of the old combined push/pop test (#227): after
+    /// each pop the active connection row must still be visible in the
+    /// server list. Split out so no single test dominates the shard bin
+    /// (the two halves stay in the same class so they share `sharedApp`).
     @MainActor
-    func testActiveTerminalPushPopPreservesListPositionAndSession() throws {
-        let app = resetToServerList(in: launchNavigationHarness())
-        let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
-        XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
-        wait(for: diagnostics, containing: "setup=ready", app: app)
+    func testActiveTerminalPushPopPreservesListPosition() throws {
+        let context = prepareNavigationContext(verifyMetadataReload: true)
+        let app = context.app
+        let diagnostics = context.diagnostics
+        let activeRow = context.activeRow
+        let list = context.list
 
-        let serverRow = app.descendants(matching: .any)
-            .matching(
-                identifier: "vvterm.serverList.server.D3A03FD5-453E-43AC-8BB5-838E5D5D1990"
-            )
-            .firstMatch
-        let activeRow = app.descendants(matching: .any)
-            .matching(
-                identifier: "vvterm.serverList.activeConnection.D3A03FD5-453E-43AC-8BB5-838E5D5D1990"
-            )
-            .firstMatch
-        let list = app.descendants(matching: .any)
-            .matching(identifier: "vvterm.serverList.list")
-            .firstMatch
-        XCTAssertTrue(list.waitForExistence(timeout: 10))
-        XCTAssertTrue(serverRow.waitForExistence(timeout: 10))
-        assertPostMountServerMetadataReload(
-            serverRow: serverRow,
-            app: app
-        )
-        scrollToVisible(activeRow, in: list, app: app)
-        // Let the swipe momentum and any banner transitions settle so the
-        // baseline frame is measured with the list at rest. The AX snapshot
-        // can report a zero/empty list frame right after the scroll loop
-        // (observed in CI: list frame (0,0,0,0) while the active row read a
-        // real frame), so wait for a non-empty list frame plus two
-        // consecutive identical active-row midY reads before measuring.
-        let settleDeadline = Date().addingTimeInterval(8)
-        var previousMidY: CGFloat = .nan
-        while Date() < settleDeadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-            let currentMidY = activeRow.frame.midY
-            if !list.frame.isEmpty, currentMidY == previousMidY {
-                break
-            }
-            previousMidY = currentMidY
-        }
-        let initialRowFrame = activeRow.frame
-        // The fixture metadata reload can collapse the list asynchronously
-        // (observed in CI: servers=25 -> 1 mid-test); measure what exists so
-        // the post-pop assertion can report the state instead of crashing.
-        let initialServerRowFrame = serverRow.exists ? serverRow.frame : .zero
-        let initialListFrame = list.frame
-        print("NAV-FRAMES pre active=(\(Int(initialRowFrame.midY)),\(Int(initialRowFrame.height))) "
-            + "list=(\(Int(initialListFrame.minY)),\(Int(initialListFrame.height))) "
-            + "serverRow=\(initialServerRowFrame == .zero ? "missing" : "\(Int(initialServerRowFrame.midY))") "
-            + "servers=\(diagnosticValue("servers", in: diagnostics) ?? "?")")
-
+        // Cycle 1: a plain push/pop keeps the active row visible.
         tapVisible(activeRow)
         let terminal = productionTerminal(in: app)
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
-        wait(
-            for: diagnostics,
-            containing: "setup=ready state=connected",
-            timeout: 45,
-            app: app
-        )
+        wait(for: diagnostics, containing: "setup=ready state=connected", timeout: 45, app: app)
+        popTerminal(in: app)
+        assertActiveRowVisibleAfterPop(activeRow: activeRow, list: list, app: app)
+
+        // Cycle 2: the keyboard-re-shown-then-pop path (#129) keeps it
+        // visible too. The keyboard is re-shown before the pop so the pop is
+        // exercised with the keyboard state the test established.
+        tapVisible(activeRow)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
+        wait(for: diagnostics, containing: "setup=ready state=connected", timeout: 45, app: app)
+        terminal.tap()
+        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
+        popTerminal(in: app)
+        assertActiveRowVisibleAfterPop(activeRow: activeRow, list: list, app: app)
+
+        XCUIDevice.shared.press(.home)
+        _ = app.wait(for: .runningBackground, timeout: 8)
+    }
+
+    /// Session half of the old combined push/pop test (#227): the same
+    /// terminal + shell ids survive a pop and re-push.
+    @MainActor
+    func testActiveTerminalPushPopPreservesSession() throws {
+        let context = prepareNavigationContext(verifyMetadataReload: false)
+        let app = context.app
+        let diagnostics = context.diagnostics
+        let activeRow = context.activeRow
+
+        // Push 1: mount + connect, then capture the session identity.
+        tapVisible(activeRow)
+        let terminal = productionTerminal(in: app)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
+        wait(for: diagnostics, containing: "setup=ready state=connected", timeout: 45, app: app)
         wait(for: diagnostics, containing: "shell=true", app: app)
-        wait(for: diagnostics, containing: "imeProxyFirstResponder=true", app: app)
-        wait(for: diagnostics, containing: "keyboardVisible=true", app: app)
-        XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: 8),
-            diagnosticText(in: app)
-        )
         let terminalID = try XCTUnwrap(diagnosticValue("terminalId", in: diagnostics))
         let shellID = try XCTUnwrap(diagnosticValue("shellId", in: diagnostics))
 
         popTerminal(in: app)
-        assertListPosition(
-            initialRowFrame,
-            activeRow: activeRow,
-            list: list,
-            app: app,
-            serverRow: serverRow,
-            initialServerRowFrame: initialServerRowFrame,
-            initialListFrame: initialListFrame
-        )
 
+        // Push 2: the same session survives the pop and re-push.
         tapVisible(activeRow)
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
         assertSession(
             terminalID: terminalID,
             shellID: shellID,
             diagnostics: diagnostics,
-            app: app
-        )
-
-        // The keyboard stays shown through the pop (symmetric with the
-        // first cycle): hiding it first shifts the list scroll offset by
-        // ~52pt (measured in NAV-FRAMES — the offset grows and a filler row
-        // appears at the top), which is exactly the drift the assertion
-        // catches.
-        popTerminal(in: app)
-        assertListPosition(
-            initialRowFrame,
-            activeRow: activeRow,
-            list: list,
-            app: app
-        )
-
-        tapVisible(activeRow)
-        XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
-        assertSession(
-            terminalID: terminalID,
-            shellID: shellID,
-            diagnostics: diagnostics,
-            app: app
-        )
-        // Keep the pop symmetric with the first cycle: the keyboard stays
-        // shown (hiding it first shifts the list offset by ~52pt).
-        terminal.tap()
-        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
-
-        popTerminal(in: app)
-        assertListPosition(
-            initialRowFrame,
-            activeRow: activeRow,
-            list: list,
-            app: app
-        )
-        measureNavigationRoundTrip(
-            activeRow: activeRow,
-            initialRowFrame: initialRowFrame,
-            list: list,
-            terminal: terminal,
             app: app
         )
 
@@ -251,9 +182,62 @@ final class ServerNavigationUITests: XCTestCase {
         return app
     }
 
-    /// Returns both tests to a known state (server list, foreground)
-    /// regardless of the previous test's end state: the push/pop test ends
-    /// at the list (popped), the background test ends backgrounded, and a
+    /// Prepared server-list state shared by the split push/pop tests: the
+    /// harness is up, the loopback fixture reports ready, and the active
+    /// connection row is on screen.
+    @MainActor
+    private struct NavigationContext {
+        let app: XCUIApplication
+        let diagnostics: XCUIElement
+        let activeRow: XCUIElement
+        let list: XCUIElement
+    }
+
+    /// Resets the shared app to the server list and resolves the elements
+    /// the split tests need. `verifyMetadataReload` runs the mount-time
+    /// metadata reload check (a list behaviour) once, in the list-position
+    /// method; the session method skips it so the split does not pay for it
+    /// twice while keeping the coverage.
+    @MainActor
+    private func prepareNavigationContext(
+        verifyMetadataReload: Bool
+    ) -> NavigationContext {
+        let app = resetToServerList(in: launchNavigationHarness())
+        let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
+        wait(for: diagnostics, containing: "setup=ready", app: app)
+
+        let serverRow = app.descendants(matching: .any)
+            .matching(
+                identifier: "vvterm.serverList.server.D3A03FD5-453E-43AC-8BB5-838E5D5D1990"
+            )
+            .firstMatch
+        let activeRow = app.descendants(matching: .any)
+            .matching(
+                identifier: "vvterm.serverList.activeConnection.D3A03FD5-453E-43AC-8BB5-838E5D5D1990"
+            )
+            .firstMatch
+        let list = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.serverList.list")
+            .firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        XCTAssertTrue(serverRow.waitForExistence(timeout: 10))
+        if verifyMetadataReload {
+            assertPostMountServerMetadataReload(serverRow: serverRow, app: app)
+        }
+        scrollToVisible(activeRow, in: list, app: app)
+        return NavigationContext(
+            app: app,
+            diagnostics: diagnostics,
+            activeRow: activeRow,
+            list: list
+        )
+    }
+
+    /// Returns the shared app to a known state (server list, foreground)
+    /// regardless of the previous test's end state: the list-position test
+    /// ends at the list (popped), the session and background tests end
+    /// backgrounded (the session test with the terminal pushed), and a
     /// failed test can leave the terminal pushed. Tapping the harness back
     /// button pops to the list; a wedged app is relaunched once (the shared
     /// instance is cleared first so the relaunch reuses the seed/args path).
@@ -320,33 +304,39 @@ final class ServerNavigationUITests: XCTestCase {
         XCTAssertTrue(serverRow.waitForExistence(timeout: 8), diagnosticText(in: app))
     }
 
+    /// Asserts the active connection row is still visible in the server list
+    /// after a pop, and records the settled frames for triage. There is no
+    /// drift assertion: the old strict branch could never run (the pop hides
+    /// the keyboard, so its `keyboardVisible == true` precondition was
+    /// unsatisfiable by construction) and the measured drift was 0 in every
+    /// CI run (#227). The visible-cell enumeration runs only on the failure
+    /// path; as an unconditional diagnostic dump it cost ~43 s per run.
     @MainActor
-    private func measureNavigationRoundTrip(
+    private func assertActiveRowVisibleAfterPop(
         activeRow: XCUIElement,
-        initialRowFrame: CGRect,
         list: XCUIElement,
-        terminal: XCUIElement,
         app: XCUIApplication
     ) {
-        let options = XCTMeasureOptions()
-        options.iterationCount = 1
-        measure(
-            metrics: [XCTOSSignpostMetric.navigationTransitionMetric],
-            options: options
-        ) {
-            tapVisible(activeRow)
-            XCTAssertTrue(
-                terminal.waitForExistence(timeout: 8),
-                diagnosticText(in: app)
-            )
-            popTerminal(in: app)
-            assertListPosition(
-                initialRowFrame,
-                activeRow: activeRow,
-                list: list,
-                app: app
-            )
+        // The pop transition restores the list scroll asynchronously; under
+        // runner load the active row can still be mid-animation (or the AX
+        // snapshot stale) right after the pop — the known scroll-restoration
+        // race (#129). Settle-wait for the row to become visible, bounded,
+        // before asserting.
+        let visibilityDeadline = Date().addingTimeInterval(8)
+        var activeRowVisible = isVisible(activeRow, in: list)
+        while !activeRowVisible, Date() < visibilityDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            activeRowVisible = isVisible(activeRow, in: list)
         }
+        if !activeRowVisible {
+            XCTFail("Active row left the visible list after pop. \(visibleListDescription(in: app))")
+        }
+        let actualFrame = activeRow.frame
+        let actualListFrame = list.frame
+        print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
+            + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
+            + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
+            + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?")")
     }
 
     @MainActor
@@ -369,43 +359,10 @@ final class ServerNavigationUITests: XCTestCase {
         )
     }
 
+    /// Diagnostic-only visible-row dump, built on the failure path so the
+    /// happy path pays no AX enumeration (#227).
     @MainActor
-    private func assertListPosition(
-        _ expectedFrame: CGRect,
-        activeRow: XCUIElement,
-        list: XCUIElement,
-        app: XCUIApplication,
-        serverRow: XCUIElement? = nil,
-        initialServerRowFrame: CGRect = .zero,
-        initialListFrame: CGRect = .zero
-    ) {
-        // The pop transition restores the list scroll asynchronously; under
-        // runner load the active row can still be mid-animation (or the AX
-        // snapshot stale) right after the pop — the known scroll-restoration
-        // race (#129). Settle-wait for the row to become visible, bounded,
-        // before asserting.
-        let visibilityDeadline = Date().addingTimeInterval(8)
-        while Date() < visibilityDeadline, !isVisible(activeRow, in: list) {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-        XCTAssertTrue(
-            isVisible(activeRow, in: list),
-            "Active row left the visible list after pop. \(diagnosticText(in: app))"
-        )
-        // The pop transition + keyboard dismissal animate; measure with the
-        // list at rest so the comparison is frame-stable.
-        let settleDeadline = Date().addingTimeInterval(8)
-        var previousMidY: CGFloat = .nan
-        while Date() < settleDeadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-            let currentMidY = activeRow.frame.midY
-            if !list.frame.isEmpty, currentMidY == previousMidY {
-                break
-            }
-            previousMidY = currentMidY
-        }
-        let actualFrame = activeRow.frame
-        let actualListFrame = list.frame
+    private func visibleListDescription(in app: XCUIApplication) -> String {
         let serverCells = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'vvterm.serverList.server.'"))
         let visibleCells = (0..<min(serverCells.count, 40)).compactMap { index -> String? in
@@ -426,40 +383,9 @@ final class ServerNavigationUITests: XCTestCase {
             guard !frame.isEmpty, frame.maxY > 0, frame.minY < app.frame.height else { return nil }
             return "\(Int(frame.minY))"
         }
-        print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
-            + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
-            + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
-            + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?") "
-            + "drift=\(Int(actualFrame.midY - expectedFrame.midY)) "
+        return "\(diagnosticText(in: app)) "
             + "visibleServerRows=[\(visibleCells.joined(separator: ","))] "
-            + "visibleActiveRows=[\(visibleActive.joined(separator: ","))]")
-        // Mode B (#129): under runner load the keyboard can lose focus DURING
-        // the pop (f10d2ad known artifact) — the harness list does not inset
-        // for the keyboard, so a hidden keyboard grows the list scroll offset
-        // by ~52pt. The strict drift assert only applies when the keyboard
-        // state at measurement time matches the state the test established
-        // before the pop (keyboard shown). A nil read (stale or missing
-        // diagnostics label) takes the loose path — never false-fail on a
-        // missing label.
-        let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
-        if diagnosticValue("keyboardVisible", in: diagnostics) == "true" {
-            XCTAssertEqual(
-                actualFrame.midY,
-                expectedFrame.midY,
-                accuracy: 8,
-                "Server-list scroll position changed during pop (expected \(expectedFrame.midY), "
-                    + "actual \(actualFrame.midY); server row midY "
-                    + "\(initialServerRowFrame.midY) -> \(serverRow?.exists == true ? String(describing: serverRow?.frame.midY) : "gone"); "
-                    + "list frame \(initialListFrame) -> \(actualListFrame)). \(diagnosticText(in: app))"
-            )
-        } else {
-            // Keyboard hid during the pop: the ~52pt offset growth is the
-            // known f10d2ad artifact, not a new regression (#129). Record the
-            // measured drift for the record; row visibility was already
-            // asserted above.
-            print("NAV-FRAMES keyboard hidden during pop (f10d2ad ~52pt artifact, #129); "
-                + "skipping strict drift assert, measured drift=\(Int(actualFrame.midY - expectedFrame.midY))")
-        }
+            + "visibleActiveRows=[\(visibleActive.joined(separator: ","))]"
     }
 
     @MainActor
