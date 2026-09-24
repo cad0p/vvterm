@@ -101,6 +101,12 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     /// `Test crashed with signal pipe.`). Both socketpair ends must carry the
     /// option.
     func testSocketPairSuppressesSIGPIPEOnBothEnds() throws {
+        // A failed assertion must stop the test before the write below.
+        // `continueAfterFailure` defaults to true, so without this a missing
+        // option would be recorded and the test would still reach the
+        // signalling write — failing as a host crash instead of a clean
+        // assertion.
+        continueAfterFailure = false
         let pair = try SSHTLSTransport.makeSocketPair()
         defer {
             Darwin.close(pair.libssh2FD)
