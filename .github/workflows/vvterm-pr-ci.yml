@@ -7,11 +7,12 @@
 #   2. unit-tests  — runs VVTermTests (fast, pure logic). Downloads the
 #                    build artifact so it reuses the prebuilt app + SPM deps
 #                    and only compiles the VVTermTests target.
-#   3. ui-tests    — matrix of 5 parallel shard jobs (notice-outlier,
-#                    keyboard-a/b/c, teleport), each downloading the build
-#                    artifact and running a subset of VVTermUITests via
-#                    -only-testing:. fail-fast is disabled so one failing
-#                    shard does not cancel the others.
+#   3. ui-tests    — matrix of 4 parallel shard jobs (shard-0..shard-3),
+#                    each downloading the build artifact and running a
+#                    subset of VVTermUITests via -only-testing:. fail-fast
+#                    is disabled so one failing shard does not cancel the
+#                    others; the 18 TeleportUITests are distributed across
+#                    the 4 shards.
 #   (The unsigned Release device archive for per-PR OTA distribution —
 #   formerly job 4, ota-archive — moved to vvterm-pr-ota.yml. Split out so
 #   ios-adhoc-pr's workflow_run trigger fires when the archive is ready
@@ -24,24 +25,21 @@
 # (which can be slow) from blocking unit test results.
 #
 # Concurrency-cap-aware shard count:
-#   - GitHub Actions caps this repo at 5 concurrent jobs. With build(1) +
-#     unit-tests(1) + 5 ui-tests = 7 jobs total, the build runs first alone,
-#     then the 5 test-phase jobs (4 existing UI + 1 unit) fit within the cap.
-#     The 5th UI shard (`teleport`) waits for a slot only if all 5 existing
-#     test jobs are still running — in practice the unit-tests job finishes
-#     fast (~7s of tests + ~3m compile) and frees a slot before the teleport
-#     shard is scheduled. fail-fast is disabled so a failing shard does not
-#     cancel the others.
-#   - The `teleport` shard runs the 18 TeleportUITests (Phase 1/2/3 sheet
-#     matrices) against the DEBUG-only TeleportUITestHarness + mock
-#     coordinators (no real Safari/Face ID/Teleport server). Each test
-#     captures an XCTAttachment(screenshot:) with .keepAlways lifetime.
+#   - GitHub Actions caps this repo at 5 concurrent macOS jobs. The build
+#     job runs first alone; then unit-tests (1) + 4 ui-tests shards (4)
+#     fill the cap with zero queueing. fail-fast is disabled so a failing
+#     shard does not cancel the others.
+#   - The 18 TeleportUITests (Phase 1/2/3 sheet matrices) run against the
+#     DEBUG-only TeleportUITestHarness + mock coordinators (no real Safari/
+#     Face ID/Teleport server) and are distributed across the 4 shards
+#     (~4-5 per shard). Each test captures an XCTAttachment(screenshot:)
+#     with .keepAlways lifetime.
 #
 # Build-once-fanout architecture:
-#   - The `build` job compiles the app once and uploads Build/Products from
-#     DerivedData (Intermediates.noindex is excluded — ui-tests uses
-#     test-without-building and unit-tests gets compiled SPM intermediates
-#     from the SPM cache).
+#   - The `build` job compiles the app once and uploads Build/Products +
+#     Build/Intermediates.noindex from DerivedData (ui-tests uses
+#     test-without-building; unit-tests reuses the compiled SPM
+#     intermediates instead of rebuilding swift-nio/MLX from scratch).
 #   - Each `ui-tests` shard downloads that artifact into the same
 #     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
 #     app and skips compilation. Each shard then runs only its assigned tests
@@ -49,12 +47,11 @@
 #   - The `unit-tests` job downloads the same artifact, so it reuses the
 #     prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
 #     target (fast), then runs the 577 tests (~7s).
-#   - Shard split is balanced via LPT bin-packing of measured per-method
-#     runtimes from CI run 30069836793 (serialized) calibrated against the
-#     measured 7-shard totals from run 30092781079. All 56 UI test methods
-#     are distributed across 4 shards with max balance diff ~1s (raw est).
-#     Projected max shard ~15.6m (test-step) vs the old 7-shard max ~9.6m,
-#     but 4 shards fit the cap with zero queueing vs 7 shards queueing ~8m.
+#   - Shard split is LPT bin-packing of measured per-method runtimes from
+#     the five successful 2026-09-23 runs. The 78 executing methods are
+#     distributed 19/19/20/20; bin sums 527.6/517.8/527.0/527.8 s (max/min
+#     1.02). 525 s of test time + ~322 s of setup ≈ 14m/shard, so the
+#     wall clock is build + slowest shard ≈ 17m median.
 #
 # Runner / toolchain:
 #   - All jobs run on `xcode-27` (macOS 26 + Xcode 27 public-preview, arm64).
@@ -381,12 +378,12 @@ jobs:
     # rebalance. gh-ruleset-main requires these exact names.
     name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
-    # Kill cap for wedged shards, not expected runtime: measured shard
-    # runtimes are 13-21m clean (2026-08-17/18); a failing run with in-step
-    # retry passes reached 32m21s on 2026-08-18 (PR #181 shard-2, 4 flaky
-    # failures) — so 35m keeps headroom over the observed worst while
-    # killing a true whole-session wedge ~10m sooner than the old 45m cap.
-    # The per-test 180s allowance (-test-timeouts-enabled YES) already
+    # Kill cap for wedged shards, not expected runtime: measured UI-shard
+    # walls were 13.6-28.9m across the five 2026-09-23 runs (13-21m clean
+    # shards; degraded attempts and in-step retries reach 27-29m) — 35m
+    # keeps headroom over the observed worst while killing a true
+    # whole-session wedge ~10m sooner than the old 45m cap. The per-test
+    # 300s allowance (-test-timeouts-enabled YES, see the Run UI tests step)
     # catches single hanging tests; this cap catches session-level wedges.
     # Raised 20→45 in ff3905b for a one-off spike; lowered 45→35 2026-08-18.
     timeout-minutes: 35
@@ -403,27 +400,34 @@ jobs:
           # fail-fast is disabled so one failing shard does not cancel others.
           #
           # Shard split is LPT bin-packing of measured per-method runtimes
-          # from CI run 31272216842 (PR #118). Total measured test time
-          # ~33m across 85 methods → ideal 4-shard = 8.3m each. Actual LPT
-          # balance: 493–504s per shard (max/min ratio 1.02, well under
-          # the 1.3 rebalance threshold). Each entry's `only-testing` is a
-          # comma-separated list of Target/Class/method — no spaces.
+          # from the five successful 2026-09-23 runs (35855154311,
+          # 35859452415, 35892455663, 35906201179, 35915626164). The 78
+          # executing methods are distributed 19/19/20/20; bin sums 527.6 /
+          # 517.8 / 527.0 / 527.8s → max/min ratio 1.02, well under the 1.3
+          # rebalance threshold. Each bin carries 3 loopback-SSH-fixture-gated
+          # tests, so all four set needs-fixture: true. The 20 XCTSkip/CI-gated
+          # entries (18 quarantined TerminalKeyboardUITests +
+          # NoticePresentationUITests.testDismissedFailureDoesNotImmediatelyReopen
+          # + VVTermUITests.testExample) and the duplicated TeleportReadinessIOS
+          # crossDevice entry are deliberately not listed; they add no coverage.
+          # Each entry's `only-testing` is a comma-separated list of
+          # Target/Class/method — no spaces.
           #
           # The 18 TeleportUITests (mock-driven, ~5-10s each) are distributed
           # across the 4 shards (~4-5 per shard) rather than a separate 5th
           # shard, to preserve the 5-concurrent-cap zero-queueing invariant.
           - name: shard-0
             needs-fixture: true
-            only-testing: "VVTermUITests/TerminalZenModeUITests/testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets,VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesSessionKeyboardAndTyping,VVTermUITests/TerminalReconnectUITests/testProductionCodexFindKeyboardMenuRestoresPTYTyping,VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesDarkAccessoryAppearance,VVTermUITests/TerminalZenModeUITests/testFullScreenZenAutoShiftsInitialPromptBelowNotch,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/testExample,VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition,VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates,VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached,VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayDetachesAndRestoresAccessoryWithoutLosingTyping,VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping,VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild,VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss,VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal,VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch,VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard,VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal"
+            only-testing: "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPositionAndSession,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"
           - name: shard-1
             needs-fixture: true
-            only-testing: "VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible,VVTermUITests/TerminalReconnectUITests/testColdRelaunchRestoresTabsSplitsSelectionAndReconnects,VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping,VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPositionAndSession,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/ServerNavigationUITests/testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness"
+            only-testing: "VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesSessionKeyboardAndTyping,VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalReconnectUITests/testColdRelaunchRestoresTabsSplitsSelectionAndReconnects,VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton,VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable,VVTermUITests/TerminalZenModeUITests/testFullScreenZenAutoShiftsInitialPromptBelowNotch,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy,VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly"
           - name: shard-2
-            needs-fixture: false
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName"
+            needs-fixture: true
+            only-testing: "VVTermUITests/TerminalReconnectUITests/testProductionCodexFindKeyboardMenuRestoresPTYTyping,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesDarkAccessoryAppearance,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TerminalZenModeUITests/testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy"
           - name: shard-3
-            needs-fixture: false
-            only-testing: "VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen,VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal,VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance"
+            needs-fixture: true
+            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/ServerNavigationUITests/testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness,VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping,VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy"
 
     steps:
       - name: Checkout
@@ -572,12 +576,41 @@ jobs:
           done
           echo "Shard test args:$ONLY_TESTING_ARGS"
 
-          # -test-timeouts-enabled + 180s execution allowance: a hanging test
+          # -test-timeouts-enabled + 300s execution allowance: a hanging test
           # is KILLED and recorded as a failure BY NAME ("Exceeded execution
           # time allowance") instead of wedging the shard until XCTest's own
           # launch/activity timeouts fire — hangs become identifiable,
-          # skippable tests instead of silent wall-clock burn. 180s = ~2x the
-          # slowest legitimate test (~91s observed on CI).
+          # skippable tests instead of silent wall-clock burn. 300s is set
+          # from the slowest real test: testActiveTerminalPushPopPreservesList
+          # PositionAndSession ran 185.8-245.1s across the five measured
+          # 2026-09-23 runs (next longest ~98s), so 300s leaves headroom for a
+          # loaded runner without letting a hang burn the cap. A degraded
+          # runner can still push that test past 300s and kill it (observed
+          # 2026-09-24 run 35939209454: killed at exactly 300.000s) — that is
+          # the allowance doing its job (a named failure, not a silent burn);
+          # issue #227 splits the test so the allowance can come back down.
+          #
+          # Parallel testing is explicitly OFF. The shard bins are LPT-packed
+          # from SERIAL per-test sums (~527s/bin ≈ 14.1m/shard), and
+          # `-parallel-testing-enabled YES` (the first #230 revision) instead
+          # ran 2 simulator clones per shard — 8 concurrent clones across the
+          # 4 shards — which correlates with the wedge wave and the 38-39m
+          # walls of run 35939209454. Serial mode also keeps XCTest's per-test
+          # failure diagnostics (XCTAssert, scene=, sentCount=) on stdout,
+          # which is what the Case 2/2a retry predicates read; under parallel
+          # testing those move into the xcresult and the predicates can never
+          # match. Pre-#230 main was effectively serial (0 `Clone` lines, 42
+          # classic-format test lines, XCTAssert in stdout in run
+          # 35915626164); parallel was never intended.
+          #
+          # Placement is load-bearing. A bare `-parallel-testing-enabled`
+          # consumes the FOLLOWING `-option` token as its optional YES/NO
+          # value, which silently made the timeout flags inert. Probe on
+          # Xcode 26.3: `xcodebuild test -scheme __nope__
+          # -parallel-testing-enabled -test-timeouts-enabled YES` →
+          # `error: Unknown build action 'YES'` (the timeout flag was eaten);
+          # the bare form without YES parses but drops the timeouts. Keep the
+          # timeout flags first and give every boolean an explicit value.
           # Bounded retry for runner-init wedges: when 4+ shards boot simulators
           # simultaneously, the runner sometimes dies before any test executes
           # ("Failed to initialize for UI testing: Timed out waiting for AX
@@ -619,15 +652,16 @@ jobs:
           XC_EXIT=0
           for ATTEMPT in 1 2 3; do
             rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+            ATTEMPT_START=$SECONDS
             xcodebuild test-without-building -collect-test-diagnostics never \
               -xctestrun "$XCRUN" \
               -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
               -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
               $ONLY_TESTING_ARGS \
-              -parallel-testing-enabled \
-              -test-timeouts-enabled \
-              -default-test-execution-time-allowance 180 \
-              -maximum-test-execution-time-allowance 180 \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 300 \
+              -maximum-test-execution-time-allowance 300 \
+              -parallel-testing-enabled NO \
               CODE_SIGNING_ALLOWED=NO \
               | tee "$RUNNER_TEMP/test.log"
             XC_EXIT=${PIPESTATUS[0]}
@@ -635,6 +669,25 @@ jobs:
               break
             fi
             if [ "$ATTEMPT" -lt 3 ]; then
+              # Budget the retry against the 35m job cap (2100s; keep in sync
+              # with the ui-tests `timeout-minutes`). The job spends ~150-200s
+              # before this step, and a retry costs roughly what the attempt
+              # that just failed cost (measured from ATTEMPT_START, so it
+              # includes the pre-test simulator boot) plus ~2m of reboot +
+              # fixture restart + reporting. Measured: round-1 shard-0 decided
+              # at 1310s after a ~1020s attempt — the retry started anyway and
+              # was cancelled at the cap with no verdict; round-3 shard-2
+              # decided at 937s after an ~800s attempt, where a retry would
+              # have fit (a #201 AX wedge, exactly the class Case 2 absorbs).
+              # A fixed 900s cut-off blocked that legitimate retry, so the
+              # budget is derived from the attempt's own cost. Fail fast on the
+              # attempt's evidence rather than start a retry that cannot
+              # finish.
+              ATTEMPT_COST=$((SECONDS - ATTEMPT_START))
+              if [ $((SECONDS + ATTEMPT_COST + 120)) -gt 2100 ]; then
+                echo "Not retrying: attempt cost ${ATTEMPT_COST}s, ${SECONDS}s elapsed, 2100s job cap."
+                break
+              fi
               # Reboot the simulator before the retry so each attempt gets a
               # clean AX daemon (see the loop comment above). ~30-60s cost,
               # only paid when a retry actually fires.
@@ -650,13 +703,51 @@ jobs:
                 echo "Restarting loopback sshd fixture for retry environment..."
                 bash scripts/ci/repro-sshd-setup.sh --restart
               fi
-              # Case 1 — runner died before ANY test executed (zero "Test
-              # Case" lines). Message varies: "Failed to initialize for UI
-              # testing" (AX timeout), "Early unexpected exit ... signal abrt
-              # while preparing to run tests", etc. All are infra by
-              # definition — no product assertion can fail before tests run.
-              if ! grep -q "Test Case '-\[" "$RUNNER_TEMP/test.log"; then
+              # Case 1 — runner died before ANY test executed (zero test-case
+              # lines). Message varies: "Failed to initialize for UI testing"
+              # (AX timeout), "Early unexpected exit ... signal abrt while
+              # preparing to run tests", etc. All are infra by definition — no
+              # product assertion can fail before tests run.
+              #
+              # Match BOTH XCTest output formats. With
+              # `-parallel-testing-enabled YES` (the mode that shipped in the
+              # first #230 revision) Xcode 27 prints the modern form
+              # (`Test case 'Suite.test()' passed on 'Clone 1 of iPhone 17 …'`)
+              # and never the classic `Test Case '-[Suite test]' passed`, so
+              # the classic-only grep matched nothing and Case 1 fired on every
+              # failing shard (observed 2026-09-24 run 35939209454: shard-0 had
+              # 19 modern lines, shard-2 20 per attempt, both 0 classic).
+              # Parallel testing is now explicitly OFF, which restores the
+              # classic form and the diagnostics Case 2/2a read; the dual match
+              # keeps the predicate correct if parallel mode is ever
+              # re-enabled. Verified against the archived logs: the two failing
+              # shards match, and a genuinely wedged shard (shard-3, zero
+              # test-case lines of either format, cancelled at the cap) still
+              # does not.
+              if ! grep -qE "Test Case '-\[|Test case '" "$RUNNER_TEMP/test.log"; then
                 echo "Runner failed before any test executed (infra wedge); retrying shard (attempt $((ATTEMPT+1))/3)."
+                continue
+              fi
+              # A per-test execution-allowance kill is a VERDICT, not an infra
+              # signature: the test ran, the allowance expired, and its name is
+              # in the log. Never retry one — AGENTS.md treats a hang as a bug
+              # to fix or quarantine, not to retry away, and a second attempt
+              # would burn the budget on the same hang. Matches both output
+              # formats (classic `failed (300.000 seconds)`, modern
+              # `failed on '…' (300.000 seconds)`); keep the literal in sync
+              # with -default-test-execution-time-allowance above.
+              if grep -qE "\(300\.000 seconds\)|Exceeded execution time allowance" "$RUNNER_TEMP/test.log"; then
+                echo "Per-test execution allowance expired (hang); not retrying."
+                break
+              fi
+              # Case 2a — pre-product scene wedge: window attached but the
+              # scene never activated (UISceneActivationState.rawValue 0 ==
+              # .unattached) and zero input reached the app (sentCount=0). The
+              # XCTAssertTrue is a downstream symptom, not a product verdict.
+              # Observed 2026-09-23 (run 35925111916 s3); tracked by issue
+              # #225.
+              if grep -qE "scene=UISceneActivationState\(rawValue: 0\).*sentCount=0" "$RUNNER_TEMP/test.log"; then
+                echo "Pre-product scene wedge (unattached scene, zero input); retrying shard (attempt $((ATTEMPT+1))/3)."
                 continue
               fi
               # Case 2 — launch-level failures only (simulator infra: "Failed to
@@ -817,14 +908,21 @@ jobs:
               plistlib.dump(data, f)
           PY
 
+          # Explicit values and option-before-option ordering: a bare
+          # `-parallel-testing-enabled` can absorb the following option token
+          # (the same defect fixed in the shard invocation), silently
+          # disabling the diagnostics/timeout flags this job exists for.
+          # Parallel testing is OFF here too: this job exists to capture full
+          # per-test diagnostics in the log, and parallel mode routes them into
+          # the xcresult instead.
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:"${{ github.event.inputs.debug_test }}" \
-            -parallel-testing-enabled \
+            -parallel-testing-enabled NO \
             -collect-test-diagnostics always \
-            -test-timeouts-enabled \
+            -test-timeouts-enabled YES \
             -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
             CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
