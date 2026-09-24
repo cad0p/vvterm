@@ -34,9 +34,9 @@ import os.log
 /// Per-connect identities must not accumulate in the keychain: the connection
 /// deletes its items in `close()` and on every failure path.
 // `nonisolated`: a value type with lock-protected static state and pure
-// keychain helpers, called from the gRPC transport's nonisolated paths (and
-// from `TeleportGRPCConnection.deleteKeychainIdentity`'s nonisolated deinit
-// chain).
+// keychain helpers, called from the gRPC transport's nonisolated paths and
+// from `TeleportGRPCConnection.deleteKeychainIdentity()` (a nonisolated
+// method reached from `LiveTeleportGRPCClient`'s nonisolated deinit).
 nonisolated struct GRPCClientIdentity {
     let identity: sec_identity_t
     let label: String
@@ -155,7 +155,22 @@ nonisolated struct GRPCClientIdentity {
 
     /// Test seam: overrides the keychain enumeration for the next sweep.
     /// Returning nil simulates a transient keychain error.
-    static var sweepEnumerationOverrideForTesting: ((String) -> [[String: Any]]?)?
+    ///
+    /// Lock-protected like the other statics so the `nonisolated` value type
+    /// does not expose it unsynchronised to off-actor callers.
+    private static var sweepEnumerationOverrideStorage: ((String) -> [[String: Any]]?)?
+    static var sweepEnumerationOverrideForTesting: ((String) -> [[String: Any]]?)? {
+        get {
+            registryLock.lock()
+            defer { registryLock.unlock() }
+            return sweepEnumerationOverrideStorage
+        }
+        set {
+            registryLock.lock()
+            defer { registryLock.unlock() }
+            sweepEnumerationOverrideStorage = newValue
+        }
+    }
 
     /// Test seam: clears the once-per-process gate so the retry behavior can
     /// be exercised deterministically.
