@@ -406,15 +406,20 @@ jobs:
     # rebalance. gh-ruleset-main requires these exact names.
     name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
-    # Kill cap for wedged shards, not expected runtime: measured UI-shard
-    # walls were 13.6-28.9m across the five 2026-09-23 runs (13-21m clean
-    # shards; degraded attempts and in-step retries reach 27-29m) — 35m
-    # keeps headroom over the observed worst while killing a true
-    # whole-session wedge ~10m sooner than the old 45m cap. The per-test
-    # 300s allowance (-test-timeouts-enabled YES, see the Run UI tests step)
-    # catches single hanging tests; this cap catches session-level wedges.
-    # Raised 20→45 in ff3905b for a one-off spike; lowered 45→35 2026-08-18.
-    timeout-minutes: 35
+    # Kill cap for wedged shards, not expected runtime. The cap must exceed
+    # the retry budget it guards, or a shard that retries is killed
+    # mid-attempt instead of reporting a verdict: setup ~2m + 3 attempts ×
+    # ~13m ≈ 41m, so 35m could never fit the 3-attempt budget. Observed
+    # 2026-09-24 (run 36058044226): shard-0 took two Case-2a scene-wedge
+    # retries (13m + 11m) and was killed 8m52s into attempt 3 — and attempt 3
+    # is the one that runs after the other shards have finished, i.e. on the
+    # least-loaded host, so the cap killed the retry most likely to pass. 45m
+    # covers setup + 3 attempts with slack. The per-test 300s allowance
+    # (-test-timeouts-enabled YES, see the Run UI tests step) still catches
+    # single hanging tests; this cap catches session-level wedges.
+    # Raised 20→45 in ff3905b; lowered 45→35 2026-08-18; back to 45
+    # 2026-09-24 so the 3-attempt budget can complete.
+    timeout-minutes: 45
     needs: build
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
