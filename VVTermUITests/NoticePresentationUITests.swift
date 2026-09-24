@@ -249,6 +249,14 @@ final class NoticePresentationUITests: XCTestCase {
         XCTAssertTrue(banner.waitForNonExistence(timeout: 5))
     }
 
+    /// Selects a scenario from the notice harness's scenario menu.
+    ///
+    /// #243: under runner load the AX stack can drop the menu presentation or
+    /// the item tap entirely (the shard-3 cascade failed at the menu wait 6×),
+    /// and a fixed waiter cannot recover a lost tap. Re-drive the menu/item a
+    /// bounded number of times and gate on the resulting scenario label; the
+    /// label assert is the real check, and a scenario that never switches
+    /// still fails with the observed label.
     @MainActor
     private func selectScenario(_ name: String, in app: XCUIApplication) {
         // Single-launch cleanup: the connection-status bottom sheet (and the
@@ -274,35 +282,57 @@ final class NoticePresentationUITests: XCTestCase {
             )
         }
         let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 5))
-        // A sheet dismissal animation can still intercept hits for a moment
-        // after the sheet leaves the AX tree; wait for the menu to be hittable
-        // before tapping (bounded, fall-through — the item wait below reports
-        // the real state on timeout).
-        let menuDeadline = Date().addingTimeInterval(5)
-        while Date() < menuDeadline, !menu.isHittable {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        menu.tap()
-        var item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
-        if !item.waitForExistence(timeout: 5) {
-            // Context-menu presentation can be dropped under runner load (the
-            // tap lands but no items appear). A second tap re-presents the
-            // menu — but only when the menu is not covered by its own open
-            // popover (isHittable false = the popover is up and items may
-            // still be coming; the final wait below then gets the open menu).
-            // Bounded single retry, then the assert reports the real state.
-            if menu.isHittable {
-                menu.tap()
-            }
-            item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
-        }
-        XCTAssertTrue(item.waitForExistence(timeout: 5))
-        item.tap()
+        let item = app.descendants(matching: .any)["vvterm.noticeTest.scenarioMenu.\(name)"]
         let current = app.staticTexts["vvterm.noticeTest.scenario.current"]
-        let predicate = NSPredicate(format: "label == %@", name)
-        let exp = XCTNSPredicateExpectation(predicate: predicate, object: current)
-        XCTAssertEqual(XCTWaiter.wait(for: [exp], timeout: 5), .completed)
+
+        for _ in 0..<3 {
+            if !menu.exists {
+                guard menu.waitForExistence(timeout: 5) else { continue }
+            }
+            if !item.exists {
+                // A sheet dismissal animation can still intercept hits for a
+                // moment after the sheet leaves the AX tree; wait for the
+                // menu to be hittable before tapping (bounded, fall-through).
+                let menuDeadline = Date().addingTimeInterval(5)
+                while Date() < menuDeadline, !menu.isHittable {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                }
+                menu.tap()
+                if !item.waitForExistence(timeout: 5), menu.isHittable {
+                    // Context-menu presentation can be dropped under runner
+                    // load (the tap lands but no items appear). A second tap
+                    // re-presents the menu — but only when the menu is not
+                    // covered by its own open popover (isHittable false = the
+                    // popover is up and items may still be coming).
+                    menu.tap()
+                }
+            }
+            guard item.waitForExistence(timeout: 5) else { continue }
+            item.tap()
+            if waitForLabel(current, equalTo: name, timeout: 5) {
+                return
+            }
+        }
+        let observedLabel = current.exists ? current.label : "<missing>"
+        XCTAssertEqual(
+            observedLabel,
+            name,
+            "Scenario did not switch to '\(name)' after 3 bounded menu/item taps. "
+                + "Menu exists: \(menu.exists); item exists: \(item.exists)."
+        )
+    }
+
+    /// Non-asserting label wait used by `selectScenario`'s bounded re-tap
+    /// loop; the loop's final `XCTAssertEqual` is the only failure gate.
+    @MainActor
+    private func waitForLabel(
+        _ element: XCUIElement,
+        equalTo expected: String,
+        timeout: TimeInterval
+    ) -> Bool {
+        let predicate = NSPredicate(format: "label == %@", expected)
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private static var app: XCUIApplication?
