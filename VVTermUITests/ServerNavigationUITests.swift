@@ -35,23 +35,35 @@ final class ServerNavigationUITests: XCTestCase {
         let list = context.list
 
         // Cycle 1: a plain push/pop keeps the active row visible.
+        let cycle1BaselineMidY = activeRow.frame.midY
         tapVisible(activeRow)
         let terminal = productionTerminal(in: app)
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
         wait(for: diagnostics, containing: "setup=ready state=connected", timeout: 45, app: app)
         popTerminal(in: app)
-        assertActiveRowVisibleAfterPop(activeRow: activeRow, list: list, app: app)
+        assertActiveRowVisibleAfterPop(
+            activeRow: activeRow,
+            list: list,
+            app: app,
+            baselineMidY: cycle1BaselineMidY
+        )
 
-        // Cycle 2: the keyboard-re-shown-then-pop path (#129) keeps it
-        // visible too. The keyboard is re-shown before the pop so the pop is
-        // exercised with the keyboard state the test established.
+        // Cycle 2: the keyboard-shown-then-pop path (#129) keeps it visible
+        // too. The terminal is tapped first so the pop is exercised with the
+        // software keyboard presented, not merely observed.
+        let cycle2BaselineMidY = activeRow.frame.midY
         tapVisible(activeRow)
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
         wait(for: diagnostics, containing: "setup=ready state=connected", timeout: 45, app: app)
         terminal.tap()
         wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
         popTerminal(in: app)
-        assertActiveRowVisibleAfterPop(activeRow: activeRow, list: list, app: app)
+        assertActiveRowVisibleAfterPop(
+            activeRow: activeRow,
+            list: list,
+            app: app,
+            baselineMidY: cycle2BaselineMidY
+        )
 
         XCUIDevice.shared.press(.home)
         _ = app.wait(for: .runningBackground, timeout: 8)
@@ -306,16 +318,21 @@ final class ServerNavigationUITests: XCTestCase {
 
     /// Asserts the active connection row is still visible in the server list
     /// after a pop, and records the settled frames for triage. There is no
-    /// drift assertion: the old strict branch could never run (the pop hides
-    /// the keyboard, so its `keyboardVisible == true` precondition was
-    /// unsatisfiable by construction) and the measured drift was 0 in every
-    /// CI run (#227). The visible-cell enumeration runs only on the failure
-    /// path; as an unconditional diagnostic dump it cost ~43 s per run.
+    /// drift assertion: the old strict branch was never observed to run — all
+    /// 10 measured CI cycles took the loose path with drift 0 — because the
+    /// pop hides the keyboard, so its `keyboardVisible == true` precondition
+    /// was never satisfied. That is weaker than "unreachable by construction",
+    /// so the branch was deleted rather than "fixed" (rewriting the condition
+    /// would risk manufacturing a vacuous assert); drift is still printed
+    /// against the pre-push baseline as a triage signal, but nothing asserts
+    /// it (#227). The visible-cell enumeration runs only on the failure path;
+    /// as an unconditional diagnostic dump it cost ~43 s per run.
     @MainActor
     private func assertActiveRowVisibleAfterPop(
         activeRow: XCUIElement,
         list: XCUIElement,
-        app: XCUIApplication
+        app: XCUIApplication,
+        baselineMidY: CGFloat
     ) {
         // The pop transition restores the list scroll asynchronously; under
         // runner load the active row can still be mid-animation (or the AX
@@ -334,6 +351,7 @@ final class ServerNavigationUITests: XCTestCase {
         let actualFrame = activeRow.frame
         let actualListFrame = list.frame
         print("NAV-FRAMES post active=(\(Int(actualFrame.midY)),\(Int(actualFrame.height))) "
+            + "drift=\(Int(actualFrame.midY - baselineMidY)) "
             + "activeLabel=\(activeRow.label.replacingOccurrences(of: " ", with: "_")) "
             + "list=(\(Int(actualListFrame.minY)),\(Int(actualListFrame.height))) "
             + "servers=\(diagnosticValue("servers", in: app.staticTexts["vvterm.reconnectTest.diagnostics"]) ?? "?")")
