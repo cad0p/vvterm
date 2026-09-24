@@ -32,8 +32,12 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     /// repeat closes, so a guard without the once-flag would close the
     /// unrelated file that now owns that number.
     func testPumpFDCloserClosesTheDescriptorExactlyOnce() throws {
-        var fds: [Int32] = [0, 0]
-        XCTAssertEqual(Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0)
+        var fds: [Int32] = [-1, -1]
+        guard Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
+            // Without this guard a failed socketpair leaves `fds == [0, 0]` and
+            // the closes below would shut the test host's stdin.
+            throw XCTSkip("socketpair unavailable (errno \(Darwin.errno))")
+        }
         let libssh2FD = fds[0]
         let pumpFD = fds[1]
         defer { Darwin.close(libssh2FD) }
