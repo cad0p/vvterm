@@ -8,15 +8,15 @@
 //
 //  Invariant: a `.public` log payload may never be a value that came off the
 //  wire. `GRPCError.grpc(status:message:)` embeds the server's message (which
-//  can echo a redirect URL and its per-run `secret_key`) and
+//  can echo a redirect URL and its per-run `secret_key`),
+//  `GRPCError.http2` embeds the raw HTTP body, and
 //  `HeadlessError.http(status:body:)` embeds the raw response body. The
 //  renderings here keep the case/status — the triage signal — and drop the
 //  payload.
 //
 //  Local errors (a gRPC *connect* failure, a `SignerError`, a WebAuthn
-//  builder error, an rpID rejection) keep their descriptive
-//  `localizedDescription`: case-only rendering would discard the
-//  errno/`OSStatus` signal they carry.
+//  builder error) keep their descriptive `localizedDescription`: case-only
+//  rendering would discard the errno/`OSStatus` signal they carry.
 //
 
 import Foundation
@@ -43,18 +43,25 @@ enum TeleportErrorRedaction {
     /// A gRPC failure's shape: the case (and status, where present) without
     /// the server's message. A non-`GRPCError` falls back to its type name —
     /// never `localizedDescription`, which can carry a wire payload.
+    ///
+    /// Use at sites whose errors are known to come from the gRPC client.
     static func grpcFailure(_ error: Error) -> String {
         (error as? GRPCError)?.redactedDescription
             ?? String(describing: type(of: error))
     }
 
-    /// A headless web-api failure's shape: status only for `.http` (the body
-    /// is the raw server response), locale-stable `URLError.Code` for
-    /// `.transport` (never the OS message, whose `userInfo` can print
-    /// `NSErrorFailingURLKey`). A non-`HeadlessError` keeps its
-    /// `localizedDescription` — the local errors on this path are the
-    /// descriptive ones.
-    static func headlessFailure(_ error: Error) -> String {
+    /// A wire-derived failure's shape at sites that can receive **either**
+    /// error family. The login path's live client throws
+    /// `GRPCError.http2("<op> HTTP <status>: <body>")` — the raw body again —
+    /// while the bootstrap path's client wraps every failure in
+    /// `HeadlessError`. Both families are matched explicitly, so the
+    /// `localizedDescription` fallback is reached only by the genuinely local
+    /// errors those paths also produce (keychain, Safari, signer), whose text
+    /// carries the triage signal.
+    static func wireFailure(_ error: Error) -> String {
+        if let grpc = error as? GRPCError {
+            return grpc.redactedDescription
+        }
         if case HeadlessError.http(let status, _) = error {
             return "HTTP \(status)"
         }

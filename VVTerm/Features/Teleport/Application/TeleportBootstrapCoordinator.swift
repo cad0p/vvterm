@@ -495,7 +495,7 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         // The redaction rationale lives in `TeleportErrorRedaction`: a
         // `HeadlessError.http` description embeds the raw response body, and
         // the transport case's message can print `NSErrorFailingURLKey`.
-        logger.error("POST failed: \(TeleportErrorRedaction.headlessFailure(error), privacy: .public)")
+        logger.error("POST failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
 
         // Map the infrastructure error to the coordinator-specific enum.
         let mapped: TeleportBootstrapError

@@ -577,6 +577,89 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    // The login path's *production* error type is `GRPCError.http2`, not
+    // `HeadlessError.http`: `LiveTeleportHTTPClient.loginBegin` throws
+    // `GRPCError.http2("login/begin HTTP <status>: <body>")` on a non-200, so
+    // the raw body travels inside the error's message. These two tests pin the
+    // production type — the `HeadlessError` cases above exercise the mock's
+    // type and would have passed even while this path leaked.
+    func testTeleportLoginCoordinator_loginBeginRedactsTheProductionGRPCErrorType() async throws {
+        let logging = SpySubsystemLogging()
+        let marker = "login-begin-production-body-marker"
+        let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
+        let credentialID = Data([1, 2, 3, 4])
+        let keyRing = Self.makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
+        let signer = MockSEPKeySigner(outcome: .success)
+        _ = try signer.createKey(credentialID: credentialID)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginError = GRPCError.http2("login/begin HTTP 403: \(marker)")
+
+        let coordinator = TeleportLoginCoordinator(
+            httpClient: http,
+            keyRing: keyRing,
+            logging: logging,
+            signer: signer,
+            webAuthnBuilder: ScriptedWebAuthnBuilderStub(),
+            keyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: cluster)
+
+        let messages = try await waitForLog(
+            subsystem: logging.subsystem,
+            containing: "login/begin failed"
+        )
+        XCTAssertTrue(
+            messages.contains(where: { $0.contains("login/begin failed: http2") }),
+            "the failure log must carry the gRPC case only; saw: \(messages)"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(marker),
+                "the HTTP response body leaked into a log payload: \(message)"
+            )
+        }
+    }
+
+    /// `login/finish` throws the same production type.
+    func testTeleportLoginCoordinator_loginFinishRedactsTheProductionGRPCErrorType() async throws {
+        let logging = SpySubsystemLogging()
+        let marker = "login-finish-production-body-marker"
+        let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
+        let credentialID = Data([1, 2, 3, 4])
+        let keyRing = Self.makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
+        let signer = MockSEPKeySigner(outcome: .success)
+        _ = try signer.createKey(credentialID: credentialID)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginFinishError = GRPCError.http2("login/finish HTTP 500: \(marker)")
+
+        let coordinator = TeleportLoginCoordinator(
+            httpClient: http,
+            keyRing: keyRing,
+            logging: logging,
+            signer: signer,
+            webAuthnBuilder: ScriptedWebAuthnBuilderStub(),
+            keyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+        await coordinator.begin(cluster: cluster)
+
+        let messages = try await waitForLog(
+            subsystem: logging.subsystem,
+            containing: "login/finish failed"
+        )
+        XCTAssertTrue(
+            messages.contains(where: { $0.contains("login/finish failed: http2") }),
+            "the failure log must carry the gRPC case only; saw: \(messages)"
+        )
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(marker),
+                "the HTTP response body leaked into a log payload: \(message)"
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private static func makeRegisteredKeyRing(

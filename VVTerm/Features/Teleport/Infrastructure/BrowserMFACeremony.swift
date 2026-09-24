@@ -101,9 +101,7 @@ final class BrowserMFACeremony: NSObject {
         } catch {
             // The server's gRPC message can echo the redirect URL, which
             // carries the per-run secret_key — log the error's shape only.
-            let shape = (error as? GRPCError)?.redactedDescription
-                ?? String(describing: type(of: error))
-            logger.error("browser MFA CreateAuthenticateChallenge failed: \(shape, privacy: .public)")
+            logger.error("browser MFA CreateAuthenticateChallenge failed: \(TeleportErrorRedaction.grpcFailure(error), privacy: .public)")
             throw error
         }
 

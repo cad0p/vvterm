@@ -184,10 +184,12 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         do {
             beginResp = try await httpClient.loginBegin(baseURL: baseURL)
         } catch {
-            // A `HeadlessError.http` description embeds the raw response
-            // body; log the status/code only. The descriptive text stays in
-            // the UI state via `mapHTTPError`.
-            logger.error("login/begin failed: \(TeleportErrorRedaction.headlessFailure(error), privacy: .public)")
+            // A wire-derived failure can carry the raw server body in either
+            // error family — `HeadlessError.http` or the live client's
+            // `GRPCError.http2("<op> HTTP <status>: <body>")`. Log the
+            // case/status only. The descriptive text stays in the UI state via
+            // `mapHTTPError`.
+            logger.error("login/begin failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
             return
         }
@@ -205,7 +207,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         case .success(let resolved):
             rpID = resolved
         case .failure(let error):
-            logger.error("login/begin rpID rejected: \(error.errorDescription ?? "unknown", privacy: .public)")
+            // The rejection text embeds the *server-provided* rpID, so the log
+            // payload stays empty of it; the descriptive text is in the UI
+            // state below.
+            logger.error("login/begin rpID rejected")
             state = .failed(.server("login/begin: \(error.errorDescription ?? "WebAuthn rpID rejected")"))
             return
         }
@@ -257,10 +262,8 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
                 ttl: ttl
             )
         } catch {
-            // A `HeadlessError.http` description embeds the raw response
-            // body; log the status/code only. The descriptive text stays in
-            // the UI state via `mapHTTPError`.
-            logger.error("login/finish failed: \(TeleportErrorRedaction.headlessFailure(error), privacy: .public)")
+            // Same class as `login/begin` above.
+            logger.error("login/finish failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
             return
         }
