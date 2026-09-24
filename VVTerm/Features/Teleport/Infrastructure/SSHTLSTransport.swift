@@ -413,6 +413,14 @@ actor SSHTLSTransport {
             // second close a no-op instead of an fd-reuse hazard.
             await group.next()
             group.cancelAll()
+            // This close races the other loop's raw `read` (`pumpFDToNW`) and
+            // `write` (`writeAllToPumpFD`) on `pumpFD`. Once it has closed, the
+            // descriptor number can be reused, so such a syscall can land on an
+            // unrelated descriptor rather than merely returning `EBADF` — read
+            // delivers unrelated bytes to the server, write corrupts the
+            // unrelated file. Pre-existing and deliberately out of scope here
+            // (this fix removes the much more likely double close); tracked
+            // separately.
             pumpFDCloser.closeOnce(pair.pumpFD)
             connection.cancel()
         }
