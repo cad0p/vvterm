@@ -2675,8 +2675,9 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// kAXErrorFailure performing kAXScrollToVisibleAction. Recovery-only:
     /// wait (bounded) for an onscreen + stable frame and tap as soon as it
     /// appears. On timeout, fall through to the caller's tap — no new
-    /// assertion line, so the workflow's zero-assert + kAXErrorFailure retry
-    /// predicate still absorbs the residual host-wedged case.
+    /// assertion line, so the workflow's per-test retry predicate (a failed
+    /// block carrying an infra signature and no assertion token) still
+    /// absorbs the residual host-wedged case.
     @MainActor
     private func waitForTerminalFrameOnscreen(
         _ terminal: XCUIElement,
