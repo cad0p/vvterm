@@ -45,7 +45,7 @@ Documentation-only changes can skip this.
 
 - `VVTerm PR CI` (`.github/workflows/vvterm-pr-ci.yml`): build → unit-tests + 4 UI shards. Wall-clock target ≤ 20m (`build` + the slowest shard; the balanced bins are ~14m/shard including setup); check per-shard runtimes with `gh run view <id> --json jobs`.
 - `VVTerm PR OTA` (`.github/workflows/vvterm-pr-ota.yml`): installable build for device smoke.
-- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — do not retry them away. Exception: pre-product runner state (unattached `UIScene`, zero delivered input — Case 2a, #225) is host state, not a test hang; the shard loop retries it up to twice before failing.
+- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — do not retry them away. A per-test execution-allowance kill is a verdict and is never retried. Exception: pre-product runner state (unattached `UIScene`, zero delivered input — Case 2a, #225) is host state, not a test hang; the shard loop retries it up to twice before failing, and skips the retry entirely once the job budget cannot fit another attempt (`Not retrying: … elapsed in this step`).
 
 ## 5. Report in the PR
 

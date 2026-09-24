@@ -580,11 +580,28 @@ jobs:
           # is KILLED and recorded as a failure BY NAME ("Exceeded execution
           # time allowance") instead of wedging the shard until XCTest's own
           # launch/activity timeouts fire — hangs become identifiable,
-          # skippable tests instead of silent wall-clock burn. 300s bounds a
-          # hang without killing a legitimate test: the slowest real test
-          # (testActiveTerminalPushPopPreservesListPositionAndSession) ran
-          # 185.8-245.1s across the five measured 2026-09-23 runs; the next
-          # longest is ~98s.
+          # skippable tests instead of silent wall-clock burn. 300s is set
+          # from the slowest real test: testActiveTerminalPushPopPreservesList
+          # PositionAndSession ran 185.8-245.1s across the five measured
+          # 2026-09-23 runs (next longest ~98s), so 300s leaves headroom for a
+          # loaded runner without letting a hang burn the cap. A degraded
+          # runner can still push that test past 300s and kill it (observed
+          # 2026-09-24 run 35939209454: killed at exactly 300.000s) — that is
+          # the allowance doing its job (a named failure, not a silent burn);
+          # issue #227 splits the test so the allowance can come back down.
+          #
+          # Parallel testing is explicitly OFF. The shard bins are LPT-packed
+          # from SERIAL per-test sums (~527s/bin ≈ 14.1m/shard), and
+          # `-parallel-testing-enabled YES` (the first #230 revision) instead
+          # ran 2 simulator clones per shard — 8 concurrent clones across the
+          # 4 shards — which correlates with the wedge wave and the 38-39m
+          # walls of run 35939209454. Serial mode also keeps XCTest's per-test
+          # failure diagnostics (XCTAssert, scene=, sentCount=) on stdout,
+          # which is what the Case 2/2a retry predicates read; under parallel
+          # testing those move into the xcresult and the predicates can never
+          # match. Pre-#230 main was effectively serial (0 `Clone` lines, 42
+          # classic-format test lines, XCTAssert in stdout in run
+          # 35915626164); parallel was never intended.
           #
           # Placement is load-bearing. A bare `-parallel-testing-enabled`
           # consumes the FOLLOWING `-option` token as its optional YES/NO
@@ -593,7 +610,7 @@ jobs:
           # -parallel-testing-enabled -test-timeouts-enabled YES` →
           # `error: Unknown build action 'YES'` (the timeout flag was eaten);
           # the bare form without YES parses but drops the timeouts. Keep the
-          # timeout flags first and give both booleans explicit values.
+          # timeout flags first and give every boolean an explicit value.
           # Bounded retry for runner-init wedges: when 4+ shards boot simulators
           # simultaneously, the runner sometimes dies before any test executes
           # ("Failed to initialize for UI testing: Timed out waiting for AX
@@ -643,7 +660,7 @@ jobs:
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 300 \
               -maximum-test-execution-time-allowance 300 \
-              -parallel-testing-enabled YES \
+              -parallel-testing-enabled NO \
               CODE_SIGNING_ALLOWED=NO \
               | tee "$RUNNER_TEMP/test.log"
             XC_EXIT=${PIPESTATUS[0]}
@@ -652,13 +669,17 @@ jobs:
             fi
             if [ "$ATTEMPT" -lt 3 ]; then
               # Do not start a retry that cannot finish inside the 35m job
-              # budget: a retry attempt costs ~15-20m on a loaded runner, and
-              # blowing the cap discards the attempt's verdict entirely (no
-              # failure names, no artifacts). $SECONDS is this step's elapsed
-              # time; the job adds ~3m of setup before it, so 900s here is
-              # ~18m of job budget, leaving ~17m for the retry. Observed
-              # 2026-09-24 (run 35939209454): a retry started at 20m and the
-              # job was cancelled at 35m with no verdict.
+              # budget: a retry attempt costs ~13-20m (shard-2 attempt 1 =
+              # 11m28s and attempt 2 = 12m45s of xcodebuild, +79-89s of
+              # simulator reboot + fixture restart; the plan's per-shard
+              # estimate is ~14.1m). Blowing the cap discards the step verdict
+              # and the attempt's xcresult — the job log keeps the failure
+              # names, but the run reports a cancellation instead of a
+              # failure. $SECONDS is this step's elapsed time; the job adds
+              # ~2-3m of setup before it, so 900s here is ~18m of job budget,
+              # leaving ~17m for the retry. Observed 2026-09-24 (run
+              # 35939209454): a retry started at 20m and the job was cancelled
+              # at 35m with no verdict.
               if [ "$SECONDS" -gt 900 ]; then
                 echo "Not retrying: ${SECONDS}s elapsed in this step (35m job cap, ~3m setup); failing on attempt $ATTEMPT's evidence."
                 break
@@ -684,21 +705,36 @@ jobs:
               # preparing to run tests", etc. All are infra by definition — no
               # product assertion can fail before tests run.
               #
-              # Match BOTH XCTest output formats. Xcode 27 under
-              # `-parallel-testing-enabled` prints the modern form
+              # Match BOTH XCTest output formats. With
+              # `-parallel-testing-enabled YES` (the mode that shipped in the
+              # first #230 revision) Xcode 27 prints the modern form
               # (`Test case 'Suite.test()' passed on 'Clone 1 of iPhone 17 …'`)
-              # and NEVER the classic `Test Case '-[Suite test]' passed`; the
-              # classic-only grep therefore matched nothing on any failure, so
-              # Case 1 fired on every failing shard — real test failures
-              # retried (burning the cap, observed 2026-09-24 run 35939209454
-              # shards 0/2) and the Case 2/2a predicates below were
-              # unreachable. Verified against the archived logs: the two
-              # failing shards have modern-form lines (19/40) and no classic
-              # ones; a genuinely wedged shard (shard-3, cancelled at the cap)
-              # has neither.
+              # and never the classic `Test Case '-[Suite test]' passed`, so
+              # the classic-only grep matched nothing and Case 1 fired on every
+              # failing shard (observed 2026-09-24 run 35939209454: shard-0 had
+              # 19 modern lines, shard-2 20 per attempt, both 0 classic).
+              # Parallel testing is now explicitly OFF, which restores the
+              # classic form and the diagnostics Case 2/2a read; the dual match
+              # keeps the predicate correct if parallel mode is ever
+              # re-enabled. Verified against the archived logs: the two failing
+              # shards match, and a genuinely wedged shard (shard-3, zero
+              # test-case lines of either format, cancelled at the cap) still
+              # does not.
               if ! grep -qE "Test Case '-\[|Test case '" "$RUNNER_TEMP/test.log"; then
                 echo "Runner failed before any test executed (infra wedge); retrying shard (attempt $((ATTEMPT+1))/3)."
                 continue
+              fi
+              # A per-test execution-allowance kill is a VERDICT, not an infra
+              # signature: the test ran, the allowance expired, and its name is
+              # in the log. Never retry one — AGENTS.md treats a hang as a bug
+              # to fix or quarantine, not to retry away, and a second attempt
+              # would burn the budget on the same hang. Matches both output
+              # formats (classic `failed (300.000 seconds)`, modern
+              # `failed on '…' (300.000 seconds)`); keep the literal in sync
+              # with -default-test-execution-time-allowance above.
+              if grep -qE "\(300\.000 seconds\)|Exceeded execution time allowance" "$RUNNER_TEMP/test.log"; then
+                echo "Per-test execution allowance expired (hang); not retrying."
+                break
               fi
               # Case 2a — pre-product scene wedge: window attached but the
               # scene never activated (UISceneActivationState.rawValue 0 ==
@@ -868,16 +904,19 @@ jobs:
               plistlib.dump(data, f)
           PY
 
-          # Explicit YES values and option-before-option ordering: a bare
+          # Explicit values and option-before-option ordering: a bare
           # `-parallel-testing-enabled` can absorb the following option token
           # (the same defect fixed in the shard invocation), silently
           # disabling the diagnostics/timeout flags this job exists for.
+          # Parallel testing is OFF here too: this job exists to capture full
+          # per-test diagnostics in the log, and parallel mode routes them into
+          # the xcresult instead.
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:"${{ github.event.inputs.debug_test }}" \
-            -parallel-testing-enabled YES \
+            -parallel-testing-enabled NO \
             -collect-test-diagnostics always \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
