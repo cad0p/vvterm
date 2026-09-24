@@ -423,7 +423,7 @@ jobs:
           # launch; the recorded bin sums predate the split and the next
           # ≥3-clean-run re-measurement refreshes them. Each bin carries 3
           # loopback-SSH-fixture-gated tests, so all four set
-          # needs-fixture: true. The 20 XCTSkip/CI-gated entries (18
+          # needs-fixture: true. The 21 XCTSkip/CI-gated entries (19
           # quarantined TerminalKeyboardUITests +
           # NoticePresentationUITests.testDismissedFailureDoesNotImmediatelyReopen
           # + VVTermUITests.testExample) and the duplicated TeleportReadinessIOS
@@ -752,11 +752,13 @@ jobs:
               # signature: the test ran, the allowance expired, and its name is
               # in the log. Never retry one — AGENTS.md treats a hang as a bug
               # to fix or quarantine, not to retry away, and a second attempt
-              # would burn the budget on the same hang. Matches both output
-              # formats (classic `failed (300.000 seconds)`, modern
-              # `failed on '…' (300.000 seconds)`); keep the literal in sync
-              # with -default-test-execution-time-allowance above.
-              if grep -qE "\(300\.000 seconds\)|Exceeded execution time allowance" "$RUNNER_TEMP/test.log"; then
+              # would burn the budget on the same hang. Two observed forms:
+              # the serial shard emits `Test Case '…' exceeded execution time
+              # allowance of N minutes.` (matched case-insensitively below),
+              # while a parallel/older run emits `failed (300.000 seconds)`;
+              # keep the literal in sync with
+              # -default-test-execution-time-allowance above.
+              if grep -qiE "\(300\.000 seconds\)|execution time allowance" "$RUNNER_TEMP/test.log"; then
                 echo "Per-test execution allowance expired (hang); not retrying."
                 break
               fi
@@ -811,10 +813,12 @@ jobs:
               # (N seconds).`; the modern `Test case 'Suite.test()' ...` shape
               # is recognised for format parity but carries no per-test
               # diagnostics on stdout (buffered into the xcresult), so a
-              # modern-format failure fails closed (no retry) — the safe
-              # direction. Infra lines outside any block (the runner can die
-              # after the last verdict) are held in a pseudo-block and retried
-              # only when no assertion line appears outside blocks either.
+              # modern-format failure qualifies only when its own verdict line
+              # carries the infra signature and no assertion; otherwise it is
+              # not retried, which is the safe direction. Infra lines outside
+              # any block (the runner can die after the last verdict) are held
+              # in a pseudo-block and retried only when no assertion appears
+              # outside blocks **and** no failed block produced one.
               if awk '
                 BEGIN {
                   infra = "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|scroll to visible|Timed out waiting for AX|Timed out waiting for [A-Za-z]+="
@@ -823,6 +827,10 @@ jobs:
                 }
                 function resetBlock() { failed = 0; hasInfra = 0; hasAssert = 0 }
                 function verdict() {
+                  # A failed block that produced an assertion is a product
+                  # verdict: record it so the out-of-block pseudo-block below
+                  # can never retry the shard on its behalf.
+                  if (failed && hasAssert) blockFailedWithAssert = 1
                   if (failed && hasInfra && !hasAssert) {
                     if (!retryable) { print "Case 2 qualifier: " name }
                     retryable = 1
@@ -862,7 +870,7 @@ jobs:
                 }
                 END {
                   if (inBlock) verdict()
-                  if (outsideInfra && !outsideAssert) {
+                  if (outsideInfra && !outsideAssert && !blockFailedWithAssert) {
                     if (!retryable) { print "Case 2 qualifier: infra signature outside a test block" }
                     retryable = 1
                   }
