@@ -1908,9 +1908,20 @@ final class TerminalKeyboardUITests: XCTestCase {
     @MainActor
     func testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession() throws {
         let app = launchKeyboardHarness()
-        let terminal = waitForTerminal(in: app)
-
-        terminal.tap()
+        // #201: drive the keyboard through the harness affordance instead of
+        // a bare `terminal.tap()`. On a degraded AX host the terminal surface
+        // can report a stale off-screen frame (observed
+        // `{{0,-139},{402,114.3}}`) and the tap fails with kAXErrorFailure
+        // performing kAXScrollToVisibleAction after XCUITest's own 3 retries
+        // — not locally recoverable. The harness button reaches the same
+        // "software keyboard session exists" state without an AX scroll on
+        // the unstable surface; the accessory-hides/restores assertions below
+        // are unchanged.
+        let terminal = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.keyboardTest.terminalSurface")
+            .firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticsText(in: app))
+        tapWhenHittable(app.buttons["vvterm.keyboardTest.showKeyboard"], in: app)
         assertKeyboardAndAccessoryVisible(in: app)
 
         app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
