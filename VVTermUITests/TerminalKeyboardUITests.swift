@@ -1476,9 +1476,11 @@ final class TerminalKeyboardUITests: XCTestCase {
         )
 
         // #48/#85: bound each in-loop wait so the worst-case iteration time
-        // stays well under the 180s per-test execution allowance. Each of the
+        // stays well under the per-test execution allowance (300s, set by
+        // `-default-test-execution-time-allowance` in vvterm-pr-ci.yml; the
+        // 180s this comment used to cite was the pre-#230 value). Each of the
         // 6 in-loop waits is capped at loopTimeout: worst case 6 × 18s = 108s
-        // loop + ~50s fixed costs ≈ 158s, still under the 180s kill.
+        // loop + ~50s fixed costs ≈ 158s, still under the allowance.
         // (Realistic iterations cost ~1-2s; the observed flicker window is ~1s,
         // so 3s per wait is 3× headroom.)
         let loopTimeout: TimeInterval = 3
@@ -1908,9 +1910,27 @@ final class TerminalKeyboardUITests: XCTestCase {
     @MainActor
     func testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession() throws {
         let app = launchKeyboardHarness()
-        let terminal = waitForTerminal(in: app)
-
-        terminal.tap()
+        // #201: present the software keyboard the way the product does — a tap
+        // on the terminal surface — but gate the tap on hittability (issue
+        // #47) so a stale off-screen frame (observed `{{0,-139},{402,114.3}}`)
+        // is waited out instead of driving `kAXErrorFailure` /
+        // `kAXScrollToVisibleAction`. Other keyboard tests already tap the
+        // surface this way.
+        //
+        // Do NOT substitute the harness's `vvterm.keyboardTest.showKeyboard`
+        // affordance: it calls `keyboardCoordinator.userRequestedShow()`, a
+        // *forced* show, and under it the hardware-attach accessory-hide this
+        // test exists to assert does not hold. Measured 2026-09-24 (runs
+        // 36058044226 / 36063583910): with the forced show, `hardware=true`
+        // and `softwareInputActive=true` arrive but `accessoryHidden=true`
+        // never does, in every attempt of both runs. The forced path changes
+        // the precondition, so the assertions below would stop proving the
+        // natural transition.
+        let terminal = app.descendants(matching: .any)
+            .matching(identifier: "vvterm.keyboardTest.terminalSurface")
+            .firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticsText(in: app))
+        tapWhenHittable(terminal, in: app)
         assertKeyboardAndAccessoryVisible(in: app)
 
         app.buttons["vvterm.keyboardTest.hardware.attach"].tap()
@@ -2201,6 +2221,16 @@ final class TerminalKeyboardUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
+        // #201/#138: the diagnostics wait above gives the AX daemon time to
+        // start serving a stale offscreen frame for the surface, and tapping
+        // that frame fails with `kAXErrorFailure performing
+        // kAXScrollToVisibleAction` (observed on run 36067947194 shard-1: the
+        // surface reported at {{0,-147},{402,106}}). Wait for an onscreen +
+        // stable frame first, like `testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat`.
+        // Recovery-only: on timeout it falls through to the tap, so a residual
+        // host wedge still surfaces as the infra signature the workflow's
+        // per-test retry predicate absorbs.
+        waitForOnscreenStableFrame(terminal, in: app)
         terminal.tap()
         assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
         wait(
@@ -2419,7 +2449,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
-        waitForTerminalFrameOnscreen(terminal, in: app)
+        waitForOnscreenStableFrame(terminal, in: app)
         terminal.tap()
         tapWhenHittable(app.buttons["vvterm.keyboardTest.hardware.attach"], in: app)
         wait(
@@ -2659,16 +2689,18 @@ final class TerminalKeyboardUITests: XCTestCase {
         return terminal
     }
 
-    /// #138: the AX daemon can serve a stale offscreen frame for the terminal
-    /// surface (y=-139) on loaded runners; a tap then fails with
-    /// kAXErrorFailure performing kAXScrollToVisibleAction. Recovery-only:
-    /// wait (bounded) for an onscreen + stable frame and tap as soon as it
-    /// appears. On timeout, fall through to the caller's tap — no new
-    /// assertion line, so the workflow's zero-assert + kAXErrorFailure retry
-    /// predicate still absorbs the residual host-wedged case.
+    /// #138/#201: the AX daemon can serve a stale offscreen frame for any
+    /// harness element on loaded runners — the terminal surface at y=-139, the
+    /// mode buttons at `{{139.3,-139.0},{33.7,14.3}}` — and a tap on that frame
+    /// fails hard with `kAXErrorFailure performing kAXScrollToVisibleAction`.
+    /// Recovery-only: wait (bounded) for an onscreen + stable frame and tap as
+    /// soon as it appears. On timeout, fall through to the caller's tap — no
+    /// new assertion line, so the workflow's per-test retry predicate (a failed
+    /// block carrying an infra signature and no assertion token) still
+    /// absorbs the residual host-wedged case.
     @MainActor
-    private func waitForTerminalFrameOnscreen(
-        _ terminal: XCUIElement,
+    private func waitForOnscreenStableFrame(
+        _ element: XCUIElement,
         in app: XCUIApplication,
         timeout: TimeInterval = 8
     ) {
@@ -2677,7 +2709,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         var previousMidY: CGFloat = .nan
         var stableReadings = 0
         while Date() < deadline {
-            let frame = terminal.frame
+            let frame = element.frame
             let onscreen = !frame.isEmpty
                 && frame.maxY > 0
                 && frame.minY < appFrame.height
@@ -2749,6 +2781,14 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// frame can be transiently off-screen (e.g. `{{139,-25},{33,14}}` for
     /// `mode.other` in issue #48) and a bare tap() hits the same
     /// `kAXScrollToVisibleAction` failure as the terminal surface (#85).
+    /// `waitForHittable` is best-effort (it returns silently on timeout) and a
+    /// tap on an element the AX daemon is serving at a stale offscreen frame
+    /// fails hard with `kAXErrorFailure performing kAXScrollToVisibleAction`
+    /// (#138/#201 — observed on run 36076580791 shard-1 for
+    /// `vvterm.keyboardTest.mode.other` at `{{139.3,-139.0},{33.7,14.3}}`, three
+    /// re-taps then the error). When hittability did not arrive, wait for an
+    /// onscreen + stable frame before tapping; still no assertion, so the
+    /// residual host wedge remains the workflow's to retry.
     @MainActor
     private func tapWhenHittable(
         _ element: XCUIElement,
@@ -2756,6 +2796,27 @@ final class TerminalKeyboardUITests: XCTestCase {
         timeout: TimeInterval = 10
     ) {
         waitForHittable(element, in: app, timeout: timeout)
+        // `element.exists` is load-bearing: `waitForOnscreenStableFrame` reads
+        // `element.frame`, and `.frame` on a *missing* element records a hard
+        // failure ("Failed to get matching snapshot: No matches found"). This
+        // class sets `continueAfterFailure = false`, so that hard failure would
+        // abort before the `tap()` below — a tap that re-resolves the query and
+        // can still succeed if the element appeared in between. A missing
+        // element therefore keeps the original path: it fails at the caller's
+        // own `tap()` with the natural message.
+        if !element.isHittable, element.exists {
+            // Short by design. The settle returns as soon as it sees two
+            // consecutive stable readings (~0.5s), so 3s already gives it ~6x
+            // headroom for a transient stale frame; a frame the AX daemon keeps
+            // reporting offscreen (`maxY < 0` — the shape of both observed
+            // wedges, `{{0,-147},{402,106}}` and `{{139.3,-139},{33.7,14.3}}`)
+            // can never satisfy the predicate, so a longer wait would only burn
+            // the budget. That persistent case is the shard retry's job, and the
+            // retry budget guard now fits it. Keeping the wait short also
+            // protects the 300s per-test allowance on the heaviest shard-1
+            // method, which has ~12 tapWhenHittable calls.
+            waitForOnscreenStableFrame(element, in: app, timeout: 3)
+        }
         element.tap()
     }
 
