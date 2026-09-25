@@ -2228,7 +2228,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         // Recovery-only: on timeout it falls through to the tap, so a residual
         // host wedge still surfaces as the infra signature the workflow's
         // per-test retry predicate absorbs.
-        waitForTerminalFrameOnscreen(terminal, in: app)
+        waitForOnscreenStableFrame(terminal, in: app)
         terminal.tap()
         assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
         wait(
@@ -2447,7 +2447,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         let app = launchKeyboardHarness()
         let terminal = waitForTerminal(in: app)
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
-        waitForTerminalFrameOnscreen(terminal, in: app)
+        waitForOnscreenStableFrame(terminal, in: app)
         terminal.tap()
         tapWhenHittable(app.buttons["vvterm.keyboardTest.hardware.attach"], in: app)
         wait(
@@ -2687,17 +2687,18 @@ final class TerminalKeyboardUITests: XCTestCase {
         return terminal
     }
 
-    /// #138: the AX daemon can serve a stale offscreen frame for the terminal
-    /// surface (y=-139) on loaded runners; a tap then fails with
-    /// kAXErrorFailure performing kAXScrollToVisibleAction. Recovery-only:
-    /// wait (bounded) for an onscreen + stable frame and tap as soon as it
-    /// appears. On timeout, fall through to the caller's tap — no new
-    /// assertion line, so the workflow's per-test retry predicate (a failed
+    /// #138/#201: the AX daemon can serve a stale offscreen frame for any
+    /// harness element on loaded runners — the terminal surface at y=-139, the
+    /// mode buttons at `{{139.3,-139.0},{33.7,14.3}}` — and a tap on that frame
+    /// fails hard with `kAXErrorFailure performing kAXScrollToVisibleAction`.
+    /// Recovery-only: wait (bounded) for an onscreen + stable frame and tap as
+    /// soon as it appears. On timeout, fall through to the caller's tap — no
+    /// new assertion line, so the workflow's per-test retry predicate (a failed
     /// block carrying an infra signature and no assertion token) still
     /// absorbs the residual host-wedged case.
     @MainActor
-    private func waitForTerminalFrameOnscreen(
-        _ terminal: XCUIElement,
+    private func waitForOnscreenStableFrame(
+        _ element: XCUIElement,
         in app: XCUIApplication,
         timeout: TimeInterval = 8
     ) {
@@ -2706,7 +2707,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         var previousMidY: CGFloat = .nan
         var stableReadings = 0
         while Date() < deadline {
-            let frame = terminal.frame
+            let frame = element.frame
             let onscreen = !frame.isEmpty
                 && frame.maxY > 0
                 && frame.minY < appFrame.height
@@ -2778,6 +2779,14 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// frame can be transiently off-screen (e.g. `{{139,-25},{33,14}}` for
     /// `mode.other` in issue #48) and a bare tap() hits the same
     /// `kAXScrollToVisibleAction` failure as the terminal surface (#85).
+    /// `waitForHittable` is best-effort (it returns silently on timeout) and a
+    /// tap on an element the AX daemon is serving at a stale offscreen frame
+    /// fails hard with `kAXErrorFailure performing kAXScrollToVisibleAction`
+    /// (#138/#201 — observed on run 36076580791 shard-1 for
+    /// `vvterm.keyboardTest.mode.other` at `{{139.3,-139.0},{33.7,14.3}}`, three
+    /// re-taps then the error). When hittability did not arrive, wait for an
+    /// onscreen + stable frame before tapping; still no assertion, so the
+    /// residual host wedge remains the workflow's to retry.
     @MainActor
     private func tapWhenHittable(
         _ element: XCUIElement,
@@ -2785,6 +2794,9 @@ final class TerminalKeyboardUITests: XCTestCase {
         timeout: TimeInterval = 10
     ) {
         waitForHittable(element, in: app, timeout: timeout)
+        if !element.isHittable {
+            waitForOnscreenStableFrame(element, in: app)
+        }
         element.tap()
     }
 
