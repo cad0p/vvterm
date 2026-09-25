@@ -847,7 +847,7 @@ jobs:
               # string is emitted only by that gate.
               if awk '
                 BEGIN {
-                  infra = "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|scroll to visible|Timed out waiting for AX|Timed out waiting for [A-Za-z]+=|Notice harness did not mount"
+                  infra = "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|scroll to visible|Timed out waiting for AX|Timed out waiting for [A-Za-z]+=|Notice harness did not mount|Timed out while evaluating UI query"
                   assert = "XCTAssert|XCTFail|XCTUnwrap|XCTIssue"
                   retryable = 0
                 }
