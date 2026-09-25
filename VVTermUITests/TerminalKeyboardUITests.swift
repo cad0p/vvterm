@@ -2219,6 +2219,16 @@ final class TerminalKeyboardUITests: XCTestCase {
             diagnostics: diagnosticsText(in: app)
         )
 
+        // #201/#138: the diagnostics wait above gives the AX daemon time to
+        // start serving a stale offscreen frame for the surface, and tapping
+        // that frame fails with `kAXErrorFailure performing
+        // kAXScrollToVisibleAction` (observed on run 36067947194 shard-1: the
+        // surface reported at {{0,-147},{402,106}}). Wait for an onscreen +
+        // stable frame first, like `testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat`.
+        // Recovery-only: on timeout it falls through to the tap, so a residual
+        // host wedge still surfaces as the infra signature the workflow's
+        // per-test retry predicate absorbs.
+        waitForTerminalFrameOnscreen(terminal, in: app)
         terminal.tap()
         assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
         wait(
