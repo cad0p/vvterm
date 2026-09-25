@@ -234,7 +234,14 @@ final class ServerNavigationUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(list.waitForExistence(timeout: 10))
         revealListTop(list, until: serverRow)
-        XCTAssertTrue(serverRow.waitForExistence(timeout: 10))
+        // Carry the visible-row dump on the failure path: this assertion is the
+        // one that failed in run 36067947194 shard-0, and a bare
+        // `XCTAssertTrue failed` was the artifact that made the lazy-list
+        // diagnosis expensive (#227).
+        XCTAssertTrue(
+            serverRow.waitForExistence(timeout: 10),
+            "server row never appeared after revealListTop; visible list: \(visibleListDescription(in: app))"
+        )
         if verifyMetadataReload {
             assertPostMountServerMetadataReload(serverRow: serverRow, app: app)
         }

@@ -2796,7 +2796,15 @@ final class TerminalKeyboardUITests: XCTestCase {
         timeout: TimeInterval = 10
     ) {
         waitForHittable(element, in: app, timeout: timeout)
-        if !element.isHittable {
+        // `element.exists` is load-bearing: `waitForOnscreenStableFrame` reads
+        // `element.frame`, and `.frame` on a *missing* element records a hard
+        // failure ("Failed to get matching snapshot: No matches found"). This
+        // class sets `continueAfterFailure = false`, so that hard failure would
+        // abort before the `tap()` below — a tap that re-resolves the query and
+        // can still succeed if the element appeared in between. A missing
+        // element therefore keeps the original path: it fails at the caller's
+        // own `tap()` with the natural message.
+        if !element.isHittable, element.exists {
             // Short by design. The settle returns as soon as it sees two
             // consecutive stable readings (~0.5s), so 3s already gives it ~6x
             // headroom for a transient stale frame; a frame the AX daemon keeps
