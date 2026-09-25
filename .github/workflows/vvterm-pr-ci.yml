@@ -406,19 +406,11 @@ jobs:
     # rebalance. gh-ruleset-main requires these exact names.
     name: ui-tests-${{ matrix.shard.name }}
     runs-on: xcode-27
-    # Kill cap for wedged shards, not expected runtime. The cap must exceed
-    # the retry budget it guards, or a shard that retries is killed
-    # mid-attempt instead of reporting a verdict: setup ~2m + 3 attempts ×
-    # ~13m ≈ 41m, so 35m could never fit the 3-attempt budget. Observed
-    # 2026-09-24 (run 36058044226): shard-0 took two Case-2a scene-wedge
-    # retries (13m + 11m) and was killed 8m52s into attempt 3 — and attempt 3
-    # is the one that runs after the other shards have finished, i.e. on the
-    # least-loaded host, so the cap killed the retry most likely to pass. 45m
-    # covers setup + 3 attempts with slack. The per-test 300s allowance
-    # (-test-timeouts-enabled YES, see the Run UI tests step) still catches
-    # single hanging tests; this cap catches session-level wedges.
-    # Raised 20→45 in ff3905b; lowered 45→35 2026-08-18; back to 45
-    # 2026-09-24 so the 3-attempt budget can complete.
+    # Kill cap for wedged shards, not expected runtime: setup ~2m + one
+    # ~13m shard run ≈ 15m expected. 45m leaves slack for a session-level
+    # wedge that would otherwise hang; the per-test 300s allowance
+    # (-test-timeouts-enabled YES, see the Run UI tests step) catches
+    # single hanging tests.
     timeout-minutes: 45
     needs: build
     env:
@@ -518,11 +510,6 @@ jobs:
         if: matrix.shard.needs-fixture
         run: bash scripts/ci/repro-sshd-setup.sh
 
-      # The gate below budgets a retry against 2700s = the real 45m job cap,
-      # which 47199926 raised from 35m while leaving the guard at the old 2100s;
-      # the 380s overhead is measured (~181s of job time before this step plus
-      # reboot/fixture/reporting). Calibration and data points: see the commit
-      # message for this change.
       - name: Run UI tests (shard ${{ matrix.shard.name }})
         shell: bash
         run: |
@@ -630,21 +617,21 @@ jobs:
           # loaded runner without letting a hang burn the cap. A degraded
           # runner can still push that test past 300s and kill it (observed
           # 2026-09-24 run 35939209454: killed at exactly 300.000s) — that is
-          # the allowance doing its job (a named failure, not a silent burn);
-          # issue #227 splits the test so the allowance can come back down.
+          # the allowance doing its job: a named failure, and a verdict to fix
+          # or quarantine, never to retry (AGENTS.md). #227 has split the test
+          # so a tighter allowance can be re-derived after the next
+          # ≥3-clean-run re-measurement.
           #
           # Parallel testing is explicitly OFF. The shard bins are LPT-packed
           # from SERIAL per-test sums (~527s/bin ≈ 14.1m/shard), and
           # `-parallel-testing-enabled YES` (the first #230 revision) instead
           # ran 2 simulator clones per shard — 8 concurrent clones across the
           # 4 shards — which correlates with the wedge wave and the 38-39m
-          # walls of run 35939209454. Serial mode also keeps XCTest's per-test
-          # failure diagnostics (XCTAssert, scene=, sentCount=) on stdout,
-          # which is what the Case 2/2a retry predicates read; under parallel
-          # testing those move into the xcresult and the predicates can never
-          # match. Pre-#230 main was effectively serial (0 `Clone` lines, 42
-          # classic-format test lines, XCTAssert in stdout in run
-          # 35915626164); parallel was never intended.
+          # walls of run 35939209454. Pre-#230 main was effectively serial (0
+          # `Clone` lines, 42 classic-format test lines, XCTAssert in stdout
+          # in run 35915626164); parallel was never intended. There are no
+          # shard retries: a failed shard fails the run, and a host-state
+          # flake must be fixed or quarantined into a non-blocking job.
           #
           # Placement is load-bearing. A bare `-parallel-testing-enabled`
           # consumes the FOLLOWING `-option` token as its optional YES/NO
@@ -654,26 +641,6 @@ jobs:
           # `error: Unknown build action 'YES'` (the timeout flag was eaten);
           # the bare form without YES parses but drops the timeouts. Keep the
           # timeout flags first and give every boolean an explicit value.
-          # Bounded retry for runner-init wedges: when 4+ shards boot simulators
-          # simultaneously, the runner sometimes dies before any test executes
-          # ("Failed to initialize for UI testing: Timed out waiting for AX
-          # loaded notification", #43 family). Retrying the whole shard then is
-          # safe (no test ran) and turns an infra coin-flip into a retry instead
-          # of a failed run. Up to 3 attempts: one retry for launch-level
-          # wedges, a second for mid-test AX-wedge signatures (#85) that only
-          # appear after the simulator was already degraded. Real test failures
-          # still fail on the first attempt: the Case 2 predicate only retries
-          # when a FAILED test's own block carries an infra signature and no
-          # assertion token, so a genuine assertion failure is never retried on
-          # its own behalf. A persistently wedged runner still surfaces after
-          # the 3rd attempt.
-          #
-          # Each retry reboots the simulator first (per #85's proposed
-          # simctl shutdown/boot cycle on wedge detection): a wedged AX daemon
-          # stays wedged across attempts on the same boot — observed when
-          # attempt 2 of a shard passed a test that attempt 3 then failed 15
-          # minutes later with a slow launch (10s) and a notice title that
-          # never appeared (both #43-family launch/notice wedges).
           # Pre-boot the destination simulator so the test session never
           # starts against a still-initializing boot (4 shards boot sims
           # simultaneously; a boot that is not ready when xcodebuild starts
@@ -694,222 +661,19 @@ jobs:
           if [ "$BOOTED" -ne 1 ]; then
             echo "::warning::iPhone 17 did not report Booted within 120s; continuing (xcodebuild will retry its own boot)."
           fi
-          XC_EXIT=0
-          for ATTEMPT in 1 2 3; do
-            rm -rf "$RUNNER_TEMP/TestResults.xcresult"
-            ATTEMPT_START=$SECONDS
-            xcodebuild test-without-building -collect-test-diagnostics never \
-              -xctestrun "$XCRUN" \
-              -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-              -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-              $ONLY_TESTING_ARGS \
-              -test-timeouts-enabled YES \
-              -default-test-execution-time-allowance 300 \
-              -maximum-test-execution-time-allowance 300 \
-              -parallel-testing-enabled NO \
-              CODE_SIGNING_ALLOWED=NO \
-              | tee "$RUNNER_TEMP/test.log"
-            XC_EXIT=${PIPESTATUS[0]}
-            if [ "$XC_EXIT" -eq 0 ]; then
-              break
-            fi
-            if [ "$ATTEMPT" -lt 3 ]; then
-              # 2700s = the real 45m job cap; 380s = the measured overhead
-              # (see the step's YAML comment). Calibration: commit message.
-              ATTEMPT_COST=$((SECONDS - ATTEMPT_START))
-              if [ $((SECONDS + ATTEMPT_COST + 380)) -gt 2700 ]; then
-                echo "Not retrying: attempt cost ${ATTEMPT_COST}s, ${SECONDS}s elapsed — over the 45m job-cap retry budget (failure not classified)."
-                break
-              fi
-              # Reboot the simulator before the retry so each attempt gets a
-              # clean AX daemon (see the loop comment above). ~30-60s cost,
-              # only paid when a retry actually fires.
-              echo "Rebooting simulator for retry environment..."
-              xcrun simctl shutdown all >/dev/null 2>&1 || true
-              xcrun simctl boot "iPhone 17" >/dev/null 2>&1 || true
-              xcrun simctl bootstatus "iPhone 17" -b >/dev/null 2>&1 || true
-              # The loopback sshd can stall under host load mid-shard (#144
-              # family: "Shell cwd never advanced" with healthy app-side
-              # transport counters). Restart the fixture on EVERY retry so
-              # each attempt gets a fresh sshd.
-              if [ "${{ matrix.shard.needs-fixture }}" == "true" ]; then
-                echo "Restarting loopback sshd fixture for retry environment..."
-                bash scripts/ci/repro-sshd-setup.sh --restart
-              fi
-              # Case 1 — runner died before ANY test executed (zero test-case
-              # lines). Message varies: "Failed to initialize for UI testing"
-              # (AX timeout), "Early unexpected exit ... signal abrt while
-              # preparing to run tests", etc. All are infra by definition — no
-              # product assertion can fail before tests run.
-              #
-              # Match BOTH XCTest output formats. With
-              # `-parallel-testing-enabled YES` (the mode that shipped in the
-              # first #230 revision) Xcode 27 prints the modern form
-              # (`Test case 'Suite.test()' passed on 'Clone 1 of iPhone 17 …'`)
-              # and never the classic `Test Case '-[Suite test]' passed`, so
-              # the classic-only grep matched nothing and Case 1 fired on every
-              # failing shard (observed 2026-09-24 run 35939209454: shard-0 had
-              # 19 modern lines, shard-2 20 per attempt, both 0 classic).
-              # Parallel testing is now explicitly OFF, which restores the
-              # classic form and the diagnostics Case 2/2a read; the dual match
-              # keeps the predicate correct if parallel mode is ever
-              # re-enabled. Verified against the archived logs: the two failing
-              # shards match, and a genuinely wedged shard (shard-3, zero
-              # test-case lines of either format, cancelled at the cap) still
-              # does not.
-              if ! grep -qE "Test Case '-\[|Test case '" "$RUNNER_TEMP/test.log"; then
-                echo "Runner failed before any test executed (infra wedge); retrying shard (attempt $((ATTEMPT+1))/3)."
-                continue
-              fi
-              # A per-test execution-allowance kill is a VERDICT, not an infra
-              # signature: the test ran, the allowance expired, and its name is
-              # in the log. Never retry one — AGENTS.md treats a hang as a bug
-              # to fix or quarantine, not to retry away, and a second attempt
-              # would burn the budget on the same hang. Two observed forms:
-              # the serial shard emits `Test Case '…' exceeded execution time
-              # allowance of N minutes.` (matched case-insensitively below),
-              # while a parallel/older run emits `failed (300.000 seconds)`;
-              # keep the literal in sync with
-              # -default-test-execution-time-allowance above.
-              if grep -qiE "\(300\.000 seconds\)|execution time allowance" "$RUNNER_TEMP/test.log"; then
-                echo "Per-test execution allowance expired (hang); not retrying."
-                break
-              fi
-              # Case 2a — pre-product scene wedge: the app's scene never
-              # attached AND zero input reached the app. `UISceneActivationState`
-              # is `unattached = -1, foregroundActive = 0, foregroundInactive
-              # = 1, background = 2` (UIKit's `UISceneDefinitions.h`), so the
-              # signature is rawValue **-1**, not 0. The predicate below
-              # matched 0 — a healthy foreground-active scene — which made it
-              # fire on *any* failure that happened before the first input.
-              # Measured 2026-09-24 (runs 36058044226 / 36063583910): shard-0
-              # took two ~13m "wedge" retries per run on real pre-input
-              # failures (`serverRow.waitForExistence`, `Timed out waiting for
-              # accessoryHidden=true`, the scenario menu never presenting),
-              # masking them and burning the retry budget. rawValue -1 has
-              # never appeared in any archived shard log; if it does, this is
-              # the retry for it.
-              if grep -qE "scene=UISceneActivationState\(rawValue: -1\).*sentCount=0" "$RUNNER_TEMP/test.log"; then
-                echo "Pre-product scene wedge (unattached scene, zero input); retrying shard (attempt $((ATTEMPT+1))/3)."
-                continue
-              fi
-              # Case 2 — infra signatures, scoped to the failing test's own
-              # block. These are never product bugs in the UI-test harnesses;
-              # a real crash-on-launch regression simply fails again on the
-              # next attempt, costing ~3 minutes.
-              #
-              # Signatures: "Failed to launch", "does not have a process ID",
-              # "Failed to terminate", AX timeouts, and the mid-test AX-daemon
-              # wedges (#85): kAXScrollToVisibleAction failing with
-              # kAXErrorFailure on stale element frames (the AX daemon serves
-              # a stale/off-screen frame, e.g. terminal surface at
-              # {{0,-155},{402,98}} on an otherwise healthy shard, and
-              # different tests fail on each run of the same shard).
-              # "No such process" (simctl launch wedge) and "Lost connection
-              # to the application" (XCTest lost the app — the #45 launch-test
-              # signature; also the standard crash-report message, so an
-              # intermittent app crash is retried once before surfacing on
-              # the next attempt, an accepted tradeoff for launch-crash
-              # wedges).
-              #
-              # Per-test scope (the defect this fixes): a shard retries when a
-              # FAILED test's own block carries an infra signature and no
-              # assertion token (`XCTAssert|XCTFail|XCTUnwrap|XCTIssue`). A
-              # real product regression still fails on attempt 1, and one
-              # test's assertion failure no longer suppresses a different
-              # test's wedge retry (run 36040152601 shard-0: #243's
-              # XCTAssertEqual blocked #201's kAXErrorFailure retry).
-              #
-              # The harness wait-helper's own timeout message ("Timed out
-              # waiting for <diagnostics key>=<value>", e.g.
-              # keyboardVisible=true) is also an AX-wedge signature when the
-              # failing test's block has no assertion token: the app-side
-              # keyboard state (keyboardShows=0) contradicts the AX tree (a
-              # keyboards element the harness never presented), i.e. stale AX
-              # frames again. A genuinely broken keyboard fails again on the
-              # next attempt and surfaces.
-              #
-              # Block shapes: classic (parallel testing is OFF) is
-              # `Test Case '-[Suite test]' started.` ... `passed|failed|skipped
-              # (N seconds).`; the modern `Test case 'Suite.test()' ...` shape
-              # is recognised for format parity but carries no per-test
-              # diagnostics on stdout (buffered into the xcresult), so a
-              # modern-format failure qualifies only when its own verdict line
-              # carries the infra signature and no assertion; otherwise it is
-              # not retried, which is the safe direction. Infra lines outside
-              # any block (the runner can die after the last verdict) are held
-              # in a pseudo-block and retried only when no assertion appears
-              # outside blocks **and** no failed block produced one.
-              #
-              # `Notice harness did not mount` is the notice harness's own mount
-              # gate (#252): the scenario capsule never appeared, so every
-              # scenario in the class is unreachable. That is host state, and the
-              # string is emitted only by that gate.
-              if awk '
-                BEGIN {
-                  infra = "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|scroll to visible|Timed out waiting for AX|Timed out waiting for [A-Za-z]+=|Notice harness did not mount|Timed out while evaluating UI query"
-                  assert = "XCTAssert|XCTFail|XCTUnwrap|XCTIssue"
-                  retryable = 0
-                }
-                function resetBlock() { failed = 0; hasInfra = 0; hasAssert = 0 }
-                function verdict() {
-                  # A failed block that produced an assertion is a product
-                  # verdict: record it so the out-of-block pseudo-block below
-                  # can never retry the shard on its behalf.
-                  if (failed && hasAssert) blockFailedWithAssert = 1
-                  if (failed && hasInfra && !hasAssert) {
-                    if (!retryable) { print "Case 2 qualifier: " name }
-                    retryable = 1
-                  }
-                  resetBlock()
-                }
-                /^Test Case .-\[/ && / started\.$/ {
-                  if (inBlock) verdict()
-                  inBlock = 1
-                  name = $0
-                  sub(/^Test Case .-\[/, "", name)
-                  sub(/].*$/, "", name)
-                  next
-                }
-                /^Test Case .-\[/ {
-                  if ($0 ~ / failed /) failed = 1
-                  if (name == "") { name = $0; sub(/^Test Case .-\[/, "", name); sub(/].*$/, "", name) }
-                  verdict()
-                  inBlock = 0
-                  next
-                }
-                /^Test case ./ {
-                  if (inBlock) verdict()
-                  if ($0 ~ / failed /) {
-                    failed = 1
-                    name = $0
-                    if ($0 ~ infra) hasInfra = 1
-                    if ($0 ~ assert) hasAssert = 1
-                  }
-                  verdict()
-                  inBlock = 0
-                  next
-                }
-                {
-                  if ($0 ~ infra) { if (inBlock) { hasInfra = 1 } else { outsideInfra = 1 } }
-                  if ($0 ~ assert) { if (inBlock) { hasAssert = 1 } else { outsideAssert = 1 } }
-                }
-                END {
-                  if (inBlock) verdict()
-                  if (outsideInfra && !outsideAssert && !blockFailedWithAssert) {
-                    if (!retryable) { print "Case 2 qualifier: infra signature outside a test block" }
-                    retryable = 1
-                  }
-                  exit (retryable ? 0 : 1)
-                }
-              ' "$RUNNER_TEMP/test.log"; then
-                echo "Only per-test infra signatures (that failed test emitted no assertion); retrying shard (attempt $((ATTEMPT+1))/3)."
-                continue
-              fi
-              echo "No retry case matched (attempt ${ATTEMPT}/3); failing the shard on this attempt."
-            fi
-            break
-          done
+          rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+          xcodebuild test-without-building -collect-test-diagnostics never \
+            -xctestrun "$XCRUN" \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            $ONLY_TESTING_ARGS \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 300 \
+            -maximum-test-execution-time-allowance 300 \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log"
+          XC_EXIT=${PIPESTATUS[0]}
           # Preserve xcodebuild's exit code for the step status, but don't
           # abort before the upload steps (which run on always()).
           #
