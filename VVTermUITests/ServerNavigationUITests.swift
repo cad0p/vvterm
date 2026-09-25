@@ -233,6 +233,7 @@ final class ServerNavigationUITests: XCTestCase {
             .matching(identifier: "vvterm.serverList.list")
             .firstMatch
         XCTAssertTrue(list.waitForExistence(timeout: 10))
+        revealListTop(list, until: serverRow)
         XCTAssertTrue(serverRow.waitForExistence(timeout: 10))
         if verifyMetadataReload {
             assertPostMountServerMetadataReload(serverRow: serverRow, app: app)
@@ -244,6 +245,24 @@ final class ServerNavigationUITests: XCTestCase {
             activeRow: activeRow,
             list: list
         )
+    }
+
+    /// The server list is lazy: a row outside the render window is absent from
+    /// the AX tree entirely, so `waitForExistence` cannot see it. Both split
+    /// halves share `prepareNavigationContext`, and the list-position half ends
+    /// by scrolling to the active row (`scrollToVisible`), which leaves the list
+    /// scrolled for whichever half runs next — that hid the seeded server row
+    /// from the session half and failed it at the `serverRow` assertion
+    /// (measured on run 36067947194 shard-0: two `Swipe up "vvterm.serverList.list"`
+    /// at t=29.62s and t=33.65s, then the next test failed at 22.5s). Scroll
+    /// back toward the top, bounded, until the row is realized. The list is not
+    /// `.refreshable`, so a downward swipe cannot trigger a reload.
+    @MainActor
+    private func revealListTop(_ list: XCUIElement, until row: XCUIElement) {
+        guard !row.exists else { return }
+        for _ in 0..<12 where !row.exists {
+            list.swipeDown()
+        }
     }
 
     /// Returns the shared app to a known state (server list, foreground)
