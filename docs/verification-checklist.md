@@ -45,7 +45,7 @@ Documentation-only changes can skip this.
 
 - `VVTerm PR CI` (`.github/workflows/vvterm-pr-ci.yml`): build → unit-tests + 4 UI shards. Wall-clock target ≤ 20m (`build` + the slowest shard; the balanced bins are ~14m/shard including setup); check per-shard runtimes with `gh run view <id> --json jobs`.
 - `VVTerm PR OTA` (`.github/workflows/vvterm-pr-ota.yml`): installable build for device smoke.
-- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — do not retry them away. A per-test execution-allowance kill is a verdict and is never retried. Exception: pre-product runner state (unattached `UIScene`, zero delivered input — Case 2a, #225) is host state, not a test hang; the shard loop retries it up to twice before failing, and skips the retry entirely once the job budget cannot fit another attempt (`Not retrying: … elapsed in this step`).
+- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — do not retry them away. A per-test execution-allowance kill is a verdict and is never retried. Exception: an unattached `UIScene` (`UISceneActivationState(rawValue: -1)`; note that `rawValue: 0` is `.foregroundActive`, not `.unattached`) with zero delivered input is pre-product host state, not a test hang. The Case 2a retry that targets that signature lands with the CI-hardening PR (`ci/pr-flake-hardening`); until it merges, the predicate in this branch's workflow still matches `rawValue: 0`, so the exception is documented here but not yet enforced by the current predicate.
 
 ## 5. Report in the PR
 

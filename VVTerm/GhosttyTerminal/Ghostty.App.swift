@@ -72,17 +72,45 @@ extension Ghostty {
             return families
         }
 
-        static func escapedFontFamilyValue(_ family: String) -> String {
-            family
+        /// Sanitize a value that is emitted inside a double-quoted Ghostty config
+        /// value. Ghostty's line parser strips the surrounding quotes and does
+        /// **not** decode escape sequences (`src/cli/args.zig`, `LineIterator`),
+        /// so the value must be emitted verbatim: escaping a `\\` or `"` would
+        /// make the loader look for a file whose name literally contains the
+        /// backslash. Only the characters that would break the line structure
+        /// are removed. Used for every quoted value (`theme`, `font-family`).
+        static func sanitizedConfigValue(_ value: String) -> String {
+            value
                 .replacingOccurrences(of: "\r", with: "")
                 .replacingOccurrences(of: "\n", with: "")
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
+        }
+
+        /// The value to emit for `theme`. Ghostty treats an absolute path as a
+        /// direct file reference and otherwise searches the themes directory
+        /// *and* the bundled resources directory, so fall back to the bare name
+        /// whenever the copy in `themesDirectory` is missing (a purgeable
+        /// `TMPDIR`, or a custom theme added without refreshing the copies).
+        static func themeConfigValue(
+            themeName: String,
+            themesDirectory: String,
+            isFile: (String) -> Bool
+        ) -> String {
+            // An empty name would resolve to the themes directory itself.
+            guard !themeName.isEmpty else { return "" }
+            let absolutePath = (themesDirectory as NSString).appendingPathComponent(themeName)
+            return isFile(absolutePath) ? absolutePath : themeName
+        }
+
+        /// `FileManager.fileExists` is also true for directories, so it would
+        /// accept the themes directory itself as a "theme file" and ghostty
+        /// would then drop the theme. Only a regular file is a theme.
+        static func isRegularFile(_ path: String) -> Bool {
+            (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
         }
 
         static func fontFamilyLines(primaryFamily: String) -> String {
             sanitizedFontFamilies(primaryFamily: primaryFamily)
-                .map { "font-family = \"\(escapedFontFamilyValue($0))\"" }
+                .map { "font-family = \"\(sanitizedConfigValue($0))\"" }
                 .joined(separator: "\n")
         }
 
@@ -99,7 +127,7 @@ extension Ghostty {
             primaryFontFamily: String,
             fontSize: Double,
             shellName: String,
-            themeName: String,
+            theme: String,
             cursorStyle: TerminalCursorStyle = TerminalDefaults.defaultCursorStyle,
             cursorBlink: Bool = TerminalDefaults.defaultCursorBlink,
             optionAsAltMode: TerminalOptionAsAltMode = .none
@@ -109,6 +137,10 @@ extension Ghostty {
             #else
             let platformInputConfig = ""
             #endif
+
+            // An empty theme name has no usable value (it would resolve to the
+            // themes directory), so the directive is omitted entirely.
+            let themeLine = theme.isEmpty ? "" : "theme = \"\(sanitizedConfigValue(theme))\""
 
             return """
             \(fontFamilyLines(primaryFamily: primaryFontFamily))
@@ -127,14 +159,18 @@ extension Ghostty {
             cursor-style = \(cursorStyle.rawValue)
             cursor-style-blink = \(cursorBlink ? "true" : "false")
 
-            theme = \(themeName)
+            \(themeLine)
 
-            # Disable audible bell
-            audible-bell = false
+            # The audible bell is already off: the `bell-features` default
+            # enables only `attention` and `title`. The old `audible-bell` key
+            # was removed upstream and is now rejected as an unknown field
+            # (verified against the vendored core with a config probe).
 
-            # Limit scrollback to prevent unbounded memory growth
-            # 10000 lines is plenty for most use cases (~5-10MB)
-            scrollback-limit = 10000
+            # Limit scrollback to prevent unbounded memory growth.
+            # `scrollback-limit` is a deprecated alias for `scrollback-limit-bytes`
+            # (bytes, not lines), so the line-based key has to be used explicitly:
+            # 10000 lines is plenty for most use cases (~5-10MB).
+            scrollback-limit-lines = 10000
 
             # Faster scroll speed (especially for iOS touch)
             mouse-scroll-multiplier = 3
@@ -308,10 +344,6 @@ extension Ghostty {
             // Free config after app creation (app clones it)
             ghostty_config_free(config)
 
-            // CRITICAL: Unset XDG_CONFIG_HOME after app creation
-            // If left set, fish will look for config.fish in the temp directory instead of ~/.config
-            unsetenv("XDG_CONFIG_HOME")
-
             self.app = app
             self.readiness = .ready
 
@@ -345,6 +377,14 @@ extension Ghostty {
             Ghostty.logger.info("Ghostty app initialized successfully")
         }
 
+        /// Called at the top of `start()`, before `ghostty_init`. libghostty
+        /// snapshots the process environment by pointer during init, so the
+        /// mutations below are safe here: adding a variable with `setenv`
+        /// replaces the environment table, which would invalidate that
+        /// snapshot if it happened after init, and the config loader's
+        /// `getenv` walk would then read unowned memory (issue #225).
+        /// `unsetenv` after init is dead code today but is a latent hazard for
+        /// the same reason. Keep environment mutations in this function only.
         private func ensureProcessEnvironment() {
             #if os(iOS)
             let homeDirectory = NSHomeDirectory()
@@ -484,9 +524,6 @@ extension Ghostty {
 
             ghostty_config_free(config)
 
-            // Unset XDG_CONFIG_HOME so it doesn't affect fish/shell config loading
-            unsetenv("XDG_CONFIG_HOME")
-
             Ghostty.logger.info("Configuration reloaded and propagated to \(self.activeSurfaces.count) surfaces")
 
             // Notify views to refresh their rendering
@@ -496,7 +533,6 @@ extension Ghostty {
         func updateSurfaceConfig(_ surface: ghostty_surface_t, presentationOverrides: TerminalPresentationOverrides) {
             guard let config = cachedSurfaceConfig(for: presentationOverrides) else { return }
             ghostty_surface_update_config(surface, config)
-            unsetenv("XDG_CONFIG_HOME")
             Ghostty.logger.info("Updated surface presentation overrides")
         }
 
@@ -576,11 +612,16 @@ extension Ghostty {
 
                 // Create config with font settings, shell integration, and theme
                 let effectiveFontSize = presentationOverrides.fontSize ?? TerminalDefaults.clampedFontSize(terminalFontSize)
+                let themeValue = ConfigBuilder.themeConfigValue(
+                    themeName: effectiveThemeName,
+                    themesDirectory: tempThemesDir,
+                    isFile: ConfigBuilder.isRegularFile
+                )
                 let configContent = ConfigBuilder.configContent(
                     primaryFontFamily: terminalFontName,
                     fontSize: effectiveFontSize,
                     shellName: shellName,
-                    themeName: effectiveThemeName,
+                    theme: themeValue,
                     cursorStyle: terminalCursorStyle,
                     cursorBlink: terminalCursorBlink,
                     optionAsAltMode: terminalOptionAsAltMode
@@ -590,12 +631,21 @@ extension Ghostty {
 
                 try configContent.write(toFile: configFilePath, atomically: true, encoding: String.Encoding.utf8)
 
-                // Set XDG_CONFIG_HOME to our temp directory
-                // Ghostty will look for themes at XDG_CONFIG_HOME/ghostty/themes/
-                setenv("XDG_CONFIG_HOME", (tempDir as NSString).appendingPathComponent(".config"), 1)
-
-                // Load default files - will load our XDG config
-                ghostty_config_load_default_files(config)
+                // Load the generated config by absolute path. The theme is
+                // also an absolute path, so this path never consults the
+                // process environment: libghostty captures `environ` once
+                // inside `ghostty_init`, and a later `setenv` that adds a
+                // variable replaces the environment table, leaving that
+                // capture pointing at unowned memory that `getenv` then walks
+                // (issue #225).
+                guard (configFilePath as NSString).isAbsolutePath else {
+                    // `ghostty_config_load_file` asserts an absolute path and
+                    // traps in debug/safe builds; a relative path here would be
+                    // a programming error, so log rather than trap.
+                    Ghostty.logger.error("Generated config path is not absolute; skipping config load: \(configFilePath, privacy: .public)")
+                    return
+                }
+                ghostty_config_load_file(config, configFilePath)
 
                 Ghostty.logger.info("Loaded terminal settings - Font: \(self.terminalFontName) \(Int(effectiveFontSize))pt, Theme: \(self.effectiveThemeName)")
             } catch {
