@@ -45,7 +45,8 @@ Documentation-only changes can skip this.
 
 - `VVTerm PR CI` (`.github/workflows/vvterm-pr-ci.yml`): build → unit-tests + 4 UI shards. Wall-clock target ≤ 20m (`build` + the slowest shard; the balanced bins are ~14m/shard including setup); check per-shard runtimes with `gh run view <id> --json jobs`.
 - `VVTerm PR OTA` (`.github/workflows/vvterm-pr-ota.yml`): installable build for device smoke.
-- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — shards do not retry: a failed shard fails the run. A per-test execution-allowance kill is a verdict, not an infra signature. A flake that cannot be fixed must be quarantined into a separate non-blocking job (or `XCTSkip` with an issue reference) rather than retried away. A shard that fails with **zero `Test Case` lines** in its `test.log` is a pre-test runner infra wedge, not a test defect — re-run the job (`gh run rerun --failed`); do not quarantine a healthy test for it.
+- Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — shards do not retry: a failed shard fails the run. A per-test execution-allowance kill is a verdict, not an infra signature. A flake that cannot be fixed must be quarantined into a separate non-blocking job (or `XCTSkip` with an issue reference) rather than retried away. The four `ui-tests-shard-*` jobs are **not required checks** — `gh-ruleset-main` requires only `build` and `unit-tests` — so a red shard reports without blocking the merge. Triage it, record it on the tracker, and fix or quarantine the class.
+- Exactly two failure modes get a manual `gh run rerun --failed`, and neither is a workflow retry: a shard that fails with **zero `Test Case` lines** in its `test.log` (a pre-test runner infra wedge, not a test defect), and a **recorded** host-state flake on a run whose change under test is unrelated. State in the PR that the unblock was a manual re-run of a recorded flake, so it is never mistaken for a fix.
 
 ## 5. Report in the PR
 
