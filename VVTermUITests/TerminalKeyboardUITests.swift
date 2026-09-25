@@ -1476,9 +1476,11 @@ final class TerminalKeyboardUITests: XCTestCase {
         )
 
         // #48/#85: bound each in-loop wait so the worst-case iteration time
-        // stays well under the 180s per-test execution allowance. Each of the
+        // stays well under the per-test execution allowance (300s, set by
+        // `-default-test-execution-time-allowance` in vvterm-pr-ci.yml; the
+        // 180s this comment used to cite was the pre-#230 value). Each of the
         // 6 in-loop waits is capped at loopTimeout: worst case 6 × 18s = 108s
-        // loop + ~50s fixed costs ≈ 158s, still under the 180s kill.
+        // loop + ~50s fixed costs ≈ 158s, still under the allowance.
         // (Realistic iterations cost ~1-2s; the observed flicker window is ~1s,
         // so 3s per wait is 3× headroom.)
         let loopTimeout: TimeInterval = 3
@@ -2795,7 +2797,17 @@ final class TerminalKeyboardUITests: XCTestCase {
     ) {
         waitForHittable(element, in: app, timeout: timeout)
         if !element.isHittable {
-            waitForOnscreenStableFrame(element, in: app)
+            // Short by design. The settle returns as soon as it sees two
+            // consecutive stable readings (~0.5s), so 3s already gives it ~6x
+            // headroom for a transient stale frame; a frame the AX daemon keeps
+            // reporting offscreen (`maxY < 0` — the shape of both observed
+            // wedges, `{{0,-147},{402,106}}` and `{{139.3,-139},{33.7,14.3}}`)
+            // can never satisfy the predicate, so a longer wait would only burn
+            // the budget. That persistent case is the shard retry's job, and the
+            // retry budget guard now fits it. Keeping the wait short also
+            // protects the 300s per-test allowance on the heaviest shard-1
+            // method, which has ~12 tapWhenHittable calls.
+            waitForOnscreenStableFrame(element, in: app, timeout: 3)
         }
         element.tap()
     }
