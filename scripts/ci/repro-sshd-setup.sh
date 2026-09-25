@@ -20,8 +20,8 @@ REPRO_DIR="${REPRO_DIR:-${RUNNER_TEMP:-/tmp}/vvterm-repro}"
 SSH_PORT="${SSH_PORT:-22232}"
 
 # --restart: kill any existing rig sshd/dropbear and re-provision from
-# scratch (used by the PR CI shard retry loop so each attempt gets a fresh
-# fixture; sshd can stall under host load mid-shard).
+# scratch. The PR CI shard retry loop was its only caller and is gone (#253);
+# retained for manual use when a local rig sshd stalls under host load.
 RESTART=0
 for ARG in "$@"; do
   case "$ARG" in

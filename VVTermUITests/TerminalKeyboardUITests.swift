@@ -3,7 +3,7 @@
 // upstream's new harness is coupled to upstream's TerminalTabManager wiring and
 // fails on the fork's app (harness control-panel geometry + keyboard state machine).
 // Plus one CI-only quarantine under #184: testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel
-// (marginal IME-proxy handoff timeout that misfires the shard retry — see the test body).
+// (marginal IME-proxy handoff timeout — see the test body).
 import XCTest
 
 final class TerminalKeyboardUITests: XCTestCase {
@@ -2228,8 +2228,8 @@ final class TerminalKeyboardUITests: XCTestCase {
         // surface reported at {{0,-147},{402,106}}). Wait for an onscreen +
         // stable frame first, like `testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat`.
         // Recovery-only: on timeout it falls through to the tap, so a residual
-        // host wedge still surfaces as the infra signature the workflow's
-        // per-test retry predicate absorbs.
+        // host wedge still surfaces as the infra signature a triager can read
+        // off the log.
         waitForOnscreenStableFrame(terminal, in: app)
         terminal.tap()
         assertMouseClickCountsRemain(presses: 0, releases: 0, in: app)
@@ -2255,14 +2255,14 @@ final class TerminalKeyboardUITests: XCTestCase {
     func testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel() throws {
         // #184: marginal 5s IME-proxy first-responder handoff timeout under CI
         // host load. Failed once on PR #181 shard-2 (29.974s, "Timed out waiting
-        // for imeProxyFirstResponder=true") and passed the in-step retry
+        // for imeProxyFirstResponder=true") and passed on the in-step retry
         // (31.383s — same duration, a hair over the 5s wait, not a product bug).
-        // The wait helper's XCTFail message matches the shard retry predicate's
-        // AX-wedge signature, so the flake rebooted the sim and reran the whole
-        // shard; the rerun landed on a still-degraded host and the
+        // The wait helper's XCTFail message matched the shard retry predicate's
+        // AX-wedge signature, so the flake used to reboot the sim and rerun the
+        // whole shard; the rerun landed on a still-degraded host and the
         // NoticePresentation suite cascaded 4 failures 15 minutes later (issue
-        // #184). Quarantined from CI until the handoff wait is made
-        // load-tolerant; kept for local runs.
+        // #184). Shards no longer retry (#253), so this stays quarantined from
+        // CI until the handoff wait is made load-tolerant; kept for local runs.
         if ProcessInfo.processInfo.environment["CI"] != nil {
             throw XCTSkip("Marginal IME-proxy handoff timeout under CI host load — quarantined (#184)")
         }
@@ -2674,7 +2674,7 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// an otherwise healthy shard). Waiting for hittability first lets the
     /// frame settle so the tap goes through without the AX scroll action;
     /// if it never becomes hittable the caller's tap() still runs and
-    /// surfaces the raw AX error, which the CI shard retry recognizes.
+    /// surfaces the raw AX error in the log.
     @MainActor
     private func waitForTerminal(
         in app: XCUIApplication,
@@ -2695,9 +2695,8 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// fails hard with `kAXErrorFailure performing kAXScrollToVisibleAction`.
     /// Recovery-only: wait (bounded) for an onscreen + stable frame and tap as
     /// soon as it appears. On timeout, fall through to the caller's tap — no
-    /// new assertion line, so the workflow's per-test retry predicate (a failed
-    /// block carrying an infra signature and no assertion token) still
-    /// absorbs the residual host-wedged case.
+    /// new assertion line, so a residual host-wedged case still surfaces as an
+    /// infra signature rather than a test failure.
     @MainActor
     private func waitForOnscreenStableFrame(
         _ element: XCUIElement,
@@ -2787,8 +2786,8 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// (#138/#201 — observed on run 36076580791 shard-1 for
     /// `vvterm.keyboardTest.mode.other` at `{{139.3,-139.0},{33.7,14.3}}`, three
     /// re-taps then the error). When hittability did not arrive, wait for an
-    /// onscreen + stable frame before tapping; still no assertion, so the
-    /// residual host wedge remains the workflow's to retry.
+    /// onscreen + stable frame before tapping; still no assertion, so a
+    /// residual host wedge surfaces as an infra signature.
     @MainActor
     private func tapWhenHittable(
         _ element: XCUIElement,
@@ -2811,10 +2810,9 @@ final class TerminalKeyboardUITests: XCTestCase {
             // reporting offscreen (`maxY < 0` — the shape of both observed
             // wedges, `{{0,-147},{402,106}}` and `{{139.3,-139},{33.7,14.3}}`)
             // can never satisfy the predicate, so a longer wait would only burn
-            // the budget. That persistent case is the shard retry's job, and the
-            // retry budget guard now fits it. Keeping the wait short also
-            // protects the 300s per-test allowance on the heaviest shard-1
-            // method, which has ~12 tapWhenHittable calls.
+            // the per-test allowance. Keeping the wait short protects that
+            // allowance on the heaviest shard-1 method, which has ~12
+            // tapWhenHittable calls.
             waitForOnscreenStableFrame(element, in: app, timeout: 3)
         }
         element.tap()
