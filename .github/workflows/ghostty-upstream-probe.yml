@@ -34,8 +34,10 @@
 #     actor: its pull_request workflows run AUTOMATICALLY, exactly like a
 #     human PR. No approval, no click, no PAT.
 #   - No direct pushes, no ruleset bypass actors: the bump goes through a
-#     normal PR and the ruleset's required checks (build, unit-tests,
-#     ui-tests-shard-0..3) are the merge gate via auto-merge.
+#     normal PR and the ruleset's required checks (build, unit-tests) are
+#     the merge gate via auto-merge. The UI shards run and report on the
+#     bump PR but are NOT required checks (2026-09-25), so a red shard does
+#     not stop the auto-merge — see the Gate section of the PR body.
 #   - The app is scoped to this repo only (installed on cad0p/vvterm,
 #     Contents + Pull requests read/write). Setup: see
 #     scripts/patches/ghostty/README.md.
@@ -200,8 +202,9 @@ jobs:
           # GhosttyOSCColorQueryTests) — against the NEW binaries, before
           # the bump PR is opened. Mirrors vvterm-pr-ci.yml's unit-tests
           # job (same scheme, destination, resultBundle, parallel testing,
-          # PCM-safe flags). The full PR CI on the bump PR is still the
-          # merge gate.
+          # PCM-safe flags). The bump PR's own CI is still the gate for
+          # landing it: `build` + `unit-tests` block, the UI shards report
+          # without gating.
           #
           # Ad-hoc sign, matching vvterm-pr-ci.yml: `xcodebuild test` builds
           # the app, and an unsigned sim app has no entitlements — the host
@@ -256,7 +259,7 @@ jobs:
             ### Gate
             - Created by the **vvterm-ghostty-bump GitHub App** (not GITHUB_TOKEN), so this PR's CI runs automatically — no approval needed.
             - The probe pre-validated these binaries: full `VVTermTests` unit suite (incl. the custom-I/O behavioral probes) passed before this PR was opened.
-            - **Full PR CI (build + unit + UI shards incl. loopback SSH) is the merge gate**; auto-merge is enabled and merges on green.
+            - **`build` and `unit-tests` are the merge gate** — auto-merge fires as soon as those pass. The four UI shards (incl. the loopback-SSH fixture tests) still run and report, but they are not required checks, so **check them before trusting an auto-merged bump**.
             - The per-PR OTA build is posted by the ad-hoc pipeline for device validation before merge.
             - Probe run: ${RUN_URL}
           CANARY_BODY: |
@@ -555,9 +558,9 @@ jobs:
           echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok"
 
           # Enable auto-merge (squash) with retries. gh-ruleset-main
-          # requires the PR CI checks (build/unit-tests/ui-tests-shard-0..3),
-          # so auto-merge only fires when the full PR CI passes on the new
-          # binaries. If auto-merge cannot be enabled (PR not mergeable
+          # requires `build` and `unit-tests`, so auto-merge fires once those
+          # pass on the new binaries — the UI shards report without gating
+          # (2026-09-25). If auto-merge cannot be enabled (PR not mergeable
           # yet), the evergreen PR stays open; the open canary is the signal
           # — never a probe alarm.
           AUTO_MERGED=0

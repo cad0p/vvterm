@@ -184,9 +184,11 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   are unsigned (`mergeStateStatus: BLOCKED`, auto-merge never fires).
 - The bump PR's own `pull_request` CI runs **automatically** (app-created PRs are
   first-class actors — no approval, no click) and is the **merge gate**: the
-  `gh-ruleset-main` required checks (`build`, `unit-tests`, `ui-tests-shard-0..3`,
-  stable job names — no wildcards; rulesets don't support them) must pass;
-  auto-merge then merges. The open canary issue is the signal that the bump
+  `gh-ruleset-main` required checks (`build`, `unit-tests`; stable job names —
+  no wildcards, rulesets don't support them) must pass; auto-merge then merges.
+  The four `ui-tests-shard-*` jobs run and report on the bump PR but are **not**
+  required checks (2026-09-25), so a red shard no longer stops the bump — read
+  them before trusting an auto-merged bump. The open canary issue is the signal that the bump
   has not landed, and it auto-closes on the squash auto-merge via the title's
   `(closes #N)` subject. A red bump is not abandoned —
   the next weekly run appends the newest build to the SAME PR and re-runs CI;
@@ -202,7 +204,7 @@ slice dir and prints the xcframework contents + Info.plist on mismatch.
   workflows run automatically, exactly like a human PR. The app is scoped to this
   repo only (Contents + Pull requests read/write, installed on `cad0p/vvterm` only).
 - No direct pushes and no ruleset bypass actors: the bump goes through a normal PR
-  and the ruleset's required checks are the gate via auto-merge.
+  and the ruleset's required checks (`build`, `unit-tests`) are the gate via auto-merge.
 - Setup (done 2026-08-12): GitHub App `vvterm-ghostty-bump` (App ID 4570338) created
   and installed on `cad0p/vvterm`; **Client ID** stored as repo variable
   `GHOSTTY_BUMP_CLIENT_ID`; the app's **private key** must be stored as the Actions
