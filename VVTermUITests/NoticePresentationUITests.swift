@@ -367,7 +367,34 @@ final class NoticePresentationUITests: XCTestCase {
             "-AppleLocale", "en_US"
         ]
         _ = launchForTest(app)
+        // The scenario capsule is the only way into any scenario, and the app is
+        // cached for the whole class — so a launch that reaches the foreground
+        // without the harness UI mounted fails every remaining test in the class
+        // with `Menu exists: false`. Observed 2026-09-25 (run 36143757881
+        // shard-3): six consecutive notice tests failed on a cold shard while
+        // every class after them passed. Gate on the capsule before caching, and
+        // relaunch once if it never mounts, mirroring `launchForTest(attempts:)`'s
+        // foreground retry.
+        if !Self.waitForScenarioCapsule(app) {
+            app.terminate()
+            _ = launchForTest(app)
+            if !Self.waitForScenarioCapsule(app) {
+                // Deliberate host-state signature: this means the harness never
+                // mounted, not that a notice regressed, so the workflow's Case 2
+                // predicate retries the shard on it.
+                XCTFail("Notice harness did not mount")
+            }
+        }
         Self.app = app
         return app
+    }
+
+    /// Bounded wait for the scenario capsule, the harness UI's entry point.
+    @MainActor
+    private static func waitForScenarioCapsule(
+        _ app: XCUIApplication,
+        timeout: TimeInterval = 30
+    ) -> Bool {
+        app.buttons["vvterm.noticeTest.scenarioMenu"].waitForExistence(timeout: timeout)
     }
 }
