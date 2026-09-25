@@ -265,7 +265,7 @@ final class NoticePresentationUITests: XCTestCase {
     /// the exact failure this loop exists to catch, made vacuous. And the
     /// whole loop is wall-clock capped, because each attempt can burn its
     /// per-wait timeouts and a failing attempt must stay cheap enough for the
-    /// shard's cost-based retry budget.
+    /// per-test execution allowance.
     @MainActor
     private func selectScenario(_ name: String, in app: XCUIApplication) {
         // Single-launch cleanup: the connection-status bottom sheet (and the
@@ -379,9 +379,10 @@ final class NoticePresentationUITests: XCTestCase {
             app.terminate()
             _ = launchForTest(app)
             if !Self.waitForScenarioCapsule(app) {
-                // Deliberate host-state signature: this means the harness never
-                // mounted, not that a notice regressed, so the workflow's Case 2
-                // predicate retries the shard on it.
+                // Deliberate host-state signature: the harness never mounted, so
+                // no scenario in this class is reachable — this is not a notice
+                // regression. Shards no longer retry (#253), so it names the
+                // class for triage instead of being retried away.
                 XCTFail("Notice harness did not mount")
             }
         }
