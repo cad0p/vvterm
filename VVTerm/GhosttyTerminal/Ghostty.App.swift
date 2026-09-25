@@ -72,22 +72,13 @@ extension Ghostty {
             return families
         }
 
-        /// Escape a value for use inside a double-quoted Ghostty config value.
-        static func escapedConfigValue(_ value: String) -> String {
-            value
-                .replacingOccurrences(of: "\r", with: "")
-                .replacingOccurrences(of: "\n", with: "")
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-        }
-
         /// Sanitize a value that is emitted inside a double-quoted Ghostty config
         /// value. Ghostty's line parser strips the surrounding quotes and does
         /// **not** decode escape sequences (`src/cli/args.zig`, `LineIterator`),
         /// so the value must be emitted verbatim: escaping a `\\` or `"` would
         /// make the loader look for a file whose name literally contains the
         /// backslash. Only the characters that would break the line structure
-        /// are removed.
+        /// are removed. Used for every quoted value (`theme`, `font-family`).
         static func sanitizedConfigValue(_ value: String) -> String {
             value
                 .replacingOccurrences(of: "\r", with: "")
@@ -104,13 +95,22 @@ extension Ghostty {
             themesDirectory: String,
             isFile: (String) -> Bool
         ) -> String {
+            // An empty name would resolve to the themes directory itself.
+            guard !themeName.isEmpty else { return "" }
             let absolutePath = (themesDirectory as NSString).appendingPathComponent(themeName)
             return isFile(absolutePath) ? absolutePath : themeName
         }
 
+        /// `FileManager.fileExists` is also true for directories, so it would
+        /// accept the themes directory itself as a "theme file" and ghostty
+        /// would then drop the theme. Only a regular file is a theme.
+        static func isRegularFile(_ path: String) -> Bool {
+            (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+        }
+
         static func fontFamilyLines(primaryFamily: String) -> String {
             sanitizedFontFamilies(primaryFamily: primaryFamily)
-                .map { "font-family = \"\(escapedConfigValue($0))\"" }
+                .map { "font-family = \"\(sanitizedConfigValue($0))\"" }
                 .joined(separator: "\n")
         }
 
@@ -138,6 +138,10 @@ extension Ghostty {
             let platformInputConfig = ""
             #endif
 
+            // An empty theme name has no usable value (it would resolve to the
+            // themes directory), so the directive is omitted entirely.
+            let themeLine = theme.isEmpty ? "" : "theme = \"\(sanitizedConfigValue(theme))\""
+
             return """
             \(fontFamilyLines(primaryFamily: primaryFontFamily))
             font-size = \(Int(fontSize))
@@ -155,14 +159,18 @@ extension Ghostty {
             cursor-style = \(cursorStyle.rawValue)
             cursor-style-blink = \(cursorBlink ? "true" : "false")
 
-            theme = "\(sanitizedConfigValue(theme))"
+            \(themeLine)
 
-            # Disable audible bell
-            audible-bell = false
+            # The audible bell is already off: the `bell-features` default
+            # enables only `attention` and `title`. The old `audible-bell` key
+            # was removed upstream and is now rejected as an unknown field
+            # (verified against the vendored core with a config probe).
 
-            # Limit scrollback to prevent unbounded memory growth
-            # 10000 lines is plenty for most use cases (~5-10MB)
-            scrollback-limit = 10000
+            # Limit scrollback to prevent unbounded memory growth.
+            # `scrollback-limit` is a deprecated alias for `scrollback-limit-bytes`
+            # (bytes, not lines), so the line-based key has to be used explicitly:
+            # 10000 lines is plenty for most use cases (~5-10MB).
+            scrollback-limit-lines = 10000
 
             # Faster scroll speed (especially for iOS touch)
             mouse-scroll-multiplier = 3
@@ -607,7 +615,7 @@ extension Ghostty {
                 let themeValue = ConfigBuilder.themeConfigValue(
                     themeName: effectiveThemeName,
                     themesDirectory: tempThemesDir,
-                    isFile: { FileManager.default.fileExists(atPath: $0) }
+                    isFile: ConfigBuilder.isRegularFile
                 )
                 let configContent = ConfigBuilder.configContent(
                     primaryFontFamily: terminalFontName,
@@ -633,8 +641,8 @@ extension Ghostty {
                 guard (configFilePath as NSString).isAbsolutePath else {
                     // `ghostty_config_load_file` asserts an absolute path and
                     // traps in debug/safe builds; a relative path here would be
-                    // a programming error, so warn rather than trap.
-                    Ghostty.logger.warning("Generated config path is not absolute; skipping config load")
+                    // a programming error, so log rather than trap.
+                    Ghostty.logger.error("Generated config path is not absolute; skipping config load: \(configFilePath, privacy: .public)")
                     return
                 }
                 ghostty_config_load_file(config, configFilePath)
