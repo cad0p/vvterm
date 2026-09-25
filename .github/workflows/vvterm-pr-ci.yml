@@ -840,9 +840,14 @@ jobs:
               # any block (the runner can die after the last verdict) are held
               # in a pseudo-block and retried only when no assertion appears
               # outside blocks **and** no failed block produced one.
+              #
+              # `Notice harness did not mount` is the notice harness's own mount
+              # gate (#252): the scenario capsule never appeared, so every
+              # scenario in the class is unreachable. That is host state, and the
+              # string is emitted only by that gate.
               if awk '
                 BEGIN {
-                  infra = "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|scroll to visible|Timed out waiting for AX|Timed out waiting for [A-Za-z]+="
+                  infra = "Failed to launch|Failed to terminate|does not have a process ID|No such process|Lost connection to the application|AX loaded notification|kAXErrorFailure|scroll to visible|Timed out waiting for AX|Timed out waiting for [A-Za-z]+=|Notice harness did not mount"
                   assert = "XCTAssert|XCTFail|XCTUnwrap|XCTIssue"
                   retryable = 0
                 }
