@@ -451,9 +451,12 @@ jobs:
           # Each entry's `only-testing` is a comma-separated list of
           # Target/Class/method — no spaces.
           #
-          # The 18 TeleportUITests (mock-driven, ~5-10s each) are distributed
-          # across the 4 shards (~4-5 per shard) rather than a separate 5th
-          # shard, to preserve the 5-concurrent-cap zero-queueing invariant.
+          # The 18 TeleportUITests (mock-driven) are distributed across the 4
+          # shards (~4-5 per shard) rather than a separate 5th shard, to
+          # preserve the 5-concurrent-cap zero-queueing invariant. Note they are
+          # not cheap filler: measured 15.1-25.8s (avg 18.4s) on run 35915626164
+          # and 16.0-46.2s (avg 25.5s) on run 36067947194, not the ~5-10s an
+          # earlier split assumed.
           - name: shard-0
             needs-fixture: true
             only-testing: "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPosition,VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesSession,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"
@@ -709,23 +712,28 @@ jobs:
               break
             fi
             if [ "$ATTEMPT" -lt 3 ]; then
-              # Budget the retry against the 35m job cap (2100s; keep in sync
-              # with the ui-tests `timeout-minutes`). The job spends ~150-200s
-              # before this step, and a retry costs roughly what the attempt
-              # that just failed cost (measured from ATTEMPT_START, so it
-              # includes the pre-test simulator boot) plus ~2m of reboot +
-              # fixture restart + reporting. Measured: round-1 shard-0 decided
-              # at 1310s after a ~1020s attempt — the retry started anyway and
-              # was cancelled at the cap with no verdict; round-3 shard-2
-              # decided at 937s after an ~800s attempt, where a retry would
-              # have fit (a #201 AX wedge, exactly the class Case 2 absorbs).
-              # A fixed 900s cut-off blocked that legitimate retry, so the
-              # budget is derived from the attempt's own cost. Fail fast on the
+              # Budget the retry against the real job cap: 45m = 2700s (keep in
+              # sync with the ui-tests `timeout-minutes`, which 47199926 raised
+              # from 35m — this constant was left behind at the old 2100s cap).
+              # The overhead term is measured, not guessed: the job spends ~181s
+              # before this step (run 36067947194 shard-1: job start 22:35:24,
+              # step start 22:38:25), and a retry adds ~75s of simulator reboot
+              # + loopback-fixture restart plus ~60s of reporting on top of the
+              # attempt's own cost (measured from ATTEMPT_START, so it includes
+              # the pre-test simulator boot). 380s covers those with margin, and
+              # it is calibrated on both observed data points: run 36067947194
+              # shard-1 declined a legitimate Case 2 retry at
+              # 1226 + 1063 + 380 = 2669 <= 2700 (kAXErrorFailure with zero
+              # assertions — the class Case 2 exists for), while the round-1
+              # shard-0 case that was cancelled at the cap with no verdict
+              # computes 1310 + 1020 + 380 = 2710 > 2700 and is still declined.
+              # A fixed 900s cut-off blocked a legitimate retry, so the budget
+              # is derived from the attempt's own cost: fail fast on the
               # attempt's evidence rather than start a retry that cannot
               # finish.
               ATTEMPT_COST=$((SECONDS - ATTEMPT_START))
-              if [ $((SECONDS + ATTEMPT_COST + 120)) -gt 2100 ]; then
-                echo "Not retrying: attempt cost ${ATTEMPT_COST}s, ${SECONDS}s elapsed, 2100s job cap."
+              if [ $((SECONDS + ATTEMPT_COST + 380)) -gt 2700 ]; then
+                echo "Not retrying: attempt cost ${ATTEMPT_COST}s, ${SECONDS}s elapsed — over the 45m job-cap retry budget (failure not classified)."
                 break
               fi
               # Reboot the simulator before the retry so each attempt gets a
