@@ -98,14 +98,10 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
             )
         }
 
-        let attributes: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String: 256,
-            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
-            kSecAttrIsPermanent as String: true,
-            kSecAttrApplicationLabel as String: credentialID,
-            kSecAttrAccessControl as String: accessControl,
-        ]
+        let attributes = Self.keyAttributes(
+            credentialID: credentialID,
+            accessControl: accessControl
+        )
 
         var error: Unmanaged<CFError>?
         guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
@@ -115,6 +111,33 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
         }
         queue.sync { keys[credentialID] = key }
         return key
+    }
+
+    /// The `SecKeyCreateRandomKey` attributes for a permanent SEP credential.
+    ///
+    /// `kSecAttrIsPermanent`, `kSecAttrApplicationLabel` and
+    /// `kSecAttrAccessControl` describe the *private* key and must be nested
+    /// under `kSecPrivateKeyAttrs`. The clean-room rewrite (`ba81877c`)
+    /// flattened them to the top level, so the framework never applied the
+    /// private-key policy and every device registration failed adding the key
+    /// to the keychain with `errSecAuthFailed` (-25293); the pre-rewrite
+    /// handler and the device-proven spike both nest them. Kept as a pure
+    /// builder so a simulator unit test can pin the shape without a Secure
+    /// Enclave (issue #261).
+    static func keyAttributes(
+        credentialID: Data,
+        accessControl: SecAccessControl
+    ) -> [String: Any] {
+        [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+            kSecPrivateKeyAttrs as String: [
+                kSecAttrIsPermanent as String: true,
+                kSecAttrApplicationLabel as String: credentialID,
+                kSecAttrAccessControl as String: accessControl,
+            ] as [String: Any],
+        ]
     }
 
     public func loadKey(credentialID: Data) throws -> SecKey? {

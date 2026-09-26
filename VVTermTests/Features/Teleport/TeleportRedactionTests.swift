@@ -29,6 +29,8 @@
 
 #if DEBUG
 import Foundation
+import Network
+import os
 import OSLog
 import Security
 import XCTest
@@ -75,6 +77,31 @@ final class TeleportRedactionTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         XCTFail("timed out waiting for a log entry containing \(needle); saw: \(messages)")
+        return messages
+    }
+
+    /// Polls the unified log until every `needle` has arrived, then returns
+    /// every message logged for the subsystem. Waiting for all needles keeps a
+    /// per-path assertion from being satisfied by an earlier entry of the same
+    /// class, and keeps the marker scan from missing a later line.
+    private func waitForLog(
+        subsystem: String,
+        containingAll needles: [String],
+        timeout: TimeInterval = 10
+    ) async throws -> [String] {
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        var messages: [String] = []
+        while ContinuousClock.now < deadline {
+            messages = try loggedMessages(subsystem: subsystem)
+            let missing = needles.filter { needle in
+                !messages.contains(where: { $0.contains(needle) })
+            }
+            if missing.isEmpty {
+                return messages
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTFail("timed out waiting for log entries containing \(needles); saw: \(messages)")
         return messages
     }
 
@@ -251,6 +278,238 @@ final class TeleportRedactionTests: XCTestCase {
                 message.contains("secret_key="),
                 "the redirect URL leaked into the error log payload: \(message)"
             )
+        }
+    }
+
+    // MARK: - BrowserMFAListener
+
+    /// The callback rejection paths must log a static reason without echoing
+    /// any query value: `secret_key` is the per-run sealing key, the
+    /// `response` envelope decrypts to the WebAuthn assertion, and the
+    /// buffered bytes of a truncated head can carry either. These paths used
+    /// to fail silently (issue #241), so this drives every one of them over a
+    /// real loopback request and asserts both that each reason is logged and
+    /// that the marker values never reach a log payload.
+    func testBrowserMFAListener_rejectionsLogAReasonWithoutQueryValues() async throws {
+        let logging = SpySubsystemLogging()
+        let listener = BrowserMFAListener(
+            logger: logging.logger(category: "TeleportBrowserMFA")
+        )
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let secretMarker = "redaction-secret-key-\(UUID().uuidString)"
+        let responseMarker = "redaction-response-envelope-\(UUID().uuidString)"
+        let bothMarkers = [
+            URLQueryItem(name: "secret_key", value: secretMarker),
+            URLQueryItem(name: "response", value: responseMarker),
+        ]
+
+        // A query carrying both values: the envelope does not authenticate,
+        // so the listener logs the GCM rejection reason.
+        _ = try await sendLoopbackRequest(
+            method: "GET",
+            path: "/callback",
+            queryItems: bothMarkers,
+            port: listener.port
+        )
+        // No response param: the missing-response 400.
+        _ = try await sendLoopbackRequest(
+            method: "GET",
+            path: "/callback",
+            queryItems: [URLQueryItem(name: "secret_key", value: secretMarker)],
+            port: listener.port
+        )
+        // The real redirect shape (no secret_key) with an unauthenticated
+        // envelope: the same GCM rejection through the genuine browser shape.
+        _ = try await sendLoopbackRequest(
+            method: "GET",
+            path: "/callback",
+            queryItems: [URLQueryItem(name: "response", value: responseMarker)],
+            port: listener.port
+        )
+        // A method the callback cannot serve: the 405 path.
+        _ = try await sendLoopbackRequest(
+            method: "PUT",
+            path: "/callback",
+            queryItems: bothMarkers,
+            port: listener.port
+        )
+        // A path the listener does not serve: the 404 path.
+        _ = try await sendLoopbackRequest(
+            method: "GET",
+            path: "/not-the-callback",
+            queryItems: bothMarkers,
+            port: listener.port
+        )
+        // A head that never reaches `\r\n\r\n`, then a half-close: the
+        // buffered bytes carry the markers, so the incomplete-request line
+        // must stay static.
+        let incompleteResponse = try await sendIncompleteLoopbackRequest(
+            Data(
+                "GET /callback?\(encodedQuery(bothMarkers)) HTTP/1.1\r\nHost: localhost\r\n".utf8
+            ),
+            port: listener.port
+        )
+        XCTAssertTrue(
+            incompleteResponse.hasPrefix("HTTP/1.1 400"),
+            "a truncated head must be answered 400; got: \(incompleteResponse)"
+        )
+
+        let reasons = [
+            "envelope authentication failed",
+            "missing response parameter",
+            "unsupported method",
+            "unrecognized path",
+            "incomplete request",
+        ]
+        let messages = try await waitForLog(
+            subsystem: logging.subsystem,
+            containingAll: reasons.map { "browser MFA callback rejected: \($0)" }
+        )
+        for reason in reasons {
+            XCTAssertTrue(
+                messages.contains(where: { $0.contains("browser MFA callback rejected: \(reason)") }),
+                "the listener must log '\(reason)'; saw: \(messages)"
+            )
+        }
+        for message in messages {
+            XCTAssertFalse(
+                message.contains(secretMarker),
+                "the secret_key leaked into a log payload: \(message)"
+            )
+            XCTAssertFalse(
+                message.contains(responseMarker),
+                "the response envelope leaked into a log payload: \(message)"
+            )
+        }
+    }
+
+    /// Sends one HTTP/1.1 request to the loopback listener and returns the raw
+    /// response head. Uses `NWConnection` directly (no ATS involvement).
+    private func sendLoopbackRequest(
+        method: String,
+        path: String,
+        queryItems: [URLQueryItem],
+        port: UInt16
+    ) async throws -> String {
+        let connection = try loopbackConnection(port: port)
+        defer { connection.cancel() }
+        let request = Data(
+            "\(method) \(path)?\(encodedQuery(queryItems)) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8
+        )
+        try await startLoopbackConnection(connection)
+        try await sendLoopbackBytes(connection, request)
+        return try await receiveLoopbackResponse(connection)
+    }
+
+    /// Sends a request head that never terminates, half-closes the write side
+    /// so the listener observes `isComplete` with an unparsable buffer, and
+    /// returns the response head. Drives the incomplete-request path.
+    private func sendIncompleteLoopbackRequest(_ data: Data, port: UInt16) async throws -> String {
+        let connection = try loopbackConnection(port: port)
+        defer { connection.cancel() }
+        try await startLoopbackConnection(connection)
+        try await sendLoopbackBytes(connection, data)
+        try await halfCloseLoopbackConnection(connection)
+        return try await receiveLoopbackResponse(connection)
+    }
+
+    private func loopbackConnection(port: UInt16) throws -> NWConnection {
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+            throw BrowserMFAListenerError.listenerFailed("invalid loopback port \(port)")
+        }
+        return NWConnection(host: .ipv4(.loopback), port: endpointPort, using: .tcp)
+    }
+
+    private func encodedQuery(_ queryItems: [URLQueryItem]) -> String {
+        var components = URLComponents()
+        components.queryItems = queryItems
+        return components.percentEncodedQuery ?? ""
+    }
+
+    private func halfCloseLoopbackConnection(_ connection: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.send(
+                content: nil,
+                contentContext: .finalMessage,
+                isComplete: true,
+                completion: .contentProcessed { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            )
+        }
+    }
+
+    private func startLoopbackConnection(_ connection: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let resumed = OSAllocatedUnfairLock(initialState: false)
+            func resumeOnce(_ result: Result<Void, Error>) {
+                let alreadyResumed = resumed.withLock { isResumed -> Bool in
+                    if isResumed { return true }
+                    isResumed = true
+                    return false
+                }
+                guard !alreadyResumed else { return }
+                continuation.resume(with: result)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    resumeOnce(.success(()))
+                case .failed(let error):
+                    resumeOnce(.failure(error))
+                case .waiting(let error):
+                    resumeOnce(.failure(error))
+                default:
+                    break
+                }
+            }
+            connection.start(queue: .global(qos: .userInitiated))
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 15) {
+                resumeOnce(.failure(BrowserMFAListenerError.timedOut))
+            }
+        }
+    }
+
+    private func sendLoopbackBytes(_ connection: NWConnection, _ data: Data) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.send(content: data, completion: .contentProcessed { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            })
+        }
+    }
+
+    private func receiveLoopbackResponse(_ connection: NWConnection) async throws -> String {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let resumed = OSAllocatedUnfairLock(initialState: false)
+            func resumeOnce(_ result: Result<String, Error>) {
+                let alreadyResumed = resumed.withLock { isResumed -> Bool in
+                    if isResumed { return true }
+                    isResumed = true
+                    return false
+                }
+                guard !alreadyResumed else { return }
+                continuation.resume(with: result)
+            }
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, error in
+                if let error {
+                    resumeOnce(.failure(error))
+                } else {
+                    resumeOnce(.success(String(data: data ?? Data(), encoding: .utf8) ?? ""))
+                }
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 15) {
+                resumeOnce(.failure(BrowserMFAListenerError.timedOut))
+            }
         }
     }
 

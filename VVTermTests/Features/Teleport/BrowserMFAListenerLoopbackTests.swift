@@ -647,41 +647,18 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         )
     }
 
-    /// The `secret_key` query value is the per-run proof the callback came
-    /// from the server. A genuine envelope sent under a wrong key must be
-    /// answered 400 and must not resolve the login — without this vector the
-    /// guard could be deleted and every other callback test would stay green.
-    func testCallbackWithAWrongSecretKeyIsRejected() async throws {
+    /// A genuine envelope must resolve even when the query carries no
+    /// `secret_key` at all: Teleport strips the key-delivery parameter and
+    /// redirects the browser to `?response=…` only. This is the shape the
+    /// device sees, and it is the regression test for issue #241 — restoring
+    /// the removed equality guard makes this test fail.
+    func testCallbackWithoutASecretKeyStillResolves() async throws {
         let listener = BrowserMFAListener(timeout: 60)
         _ = try await listener.start()
         defer { listener.cancel() }
 
         let envelope = try Self.encryptedEnvelope(
-            plaintext: try Self.loginResponsePlaintext(id: "wrong-secret"),
-            secretKeyHex: listener.secretKeyHex
-        )
-        let response = try await probeRawResponse(
-            host: .ipv4(.loopback),
-            port: listener.port,
-            secretKey: String(repeating: "cd", count: 32),
-            response: envelope
-        )
-        XCTAssertTrue(
-            response.hasPrefix("HTTP/1.1 400"),
-            "a wrong secret_key must be answered 400; got: \(response)"
-        )
-        XCTAssertFalse(listener.didResume, "a wrong secret_key must not resolve the login")
-    }
-
-    /// The same guard must reject a callback with no `secret_key` at all
-    /// (the pre-rewrite code documented the parameter but never checked it).
-    func testCallbackWithoutASecretKeyIsRejected() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
-        _ = try await listener.start()
-        defer { listener.cancel() }
-
-        let envelope = try Self.encryptedEnvelope(
-            plaintext: try Self.loginResponsePlaintext(id: "missing-secret"),
+            plaintext: try Self.loginResponsePlaintext(id: "no-secret"),
             secretKeyHex: listener.secretKeyHex
         )
         var components = URLComponents()
@@ -691,11 +668,57 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
             "GET /callback?\(query) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8
         )
         let response = try await sendRawRequest(request, host: .ipv4(.loopback), port: listener.port)
-        XCTAssertTrue(
-            response.hasPrefix("HTTP/1.1 400"),
-            "a missing secret_key must be answered 400; got: \(response)"
+        guard response.hasPrefix("HTTP/1.1 200") else {
+            XCTFail("a genuine callback without secret_key must be answered 200; got: \(response)")
+            return
+        }
+
+        let resolved = try await listener.waitForResponse()
+        XCTAssertEqual(
+            resolved.id,
+            "no-secret",
+            "the no-secret callback must resolve with the sealed assertion id"
         )
-        XCTAssertFalse(listener.didResume, "a missing secret_key must not resolve the login")
+    }
+
+    /// A genuine envelope must resolve even when the query carries a
+    /// `secret_key` that does not match the listener's: the value is a
+    /// key-delivery parameter the server strips from the browser redirect,
+    /// not an inbound credential. The mismatched value must deliberately
+    /// differ from `listener.secretKeyHex`, otherwise the test would pass
+    /// even with the removed equality guard restored.
+    func testCallbackWithAMismatchedSecretKeyStillResolves() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let mismatchedSecret = String(repeating: "cd", count: 32)
+        XCTAssertNotEqual(
+            mismatchedSecret,
+            listener.secretKeyHex,
+            "the test must send a value other than the listener's own key"
+        )
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintext(id: "mismatched-secret"),
+            secretKeyHex: listener.secretKeyHex
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: mismatchedSecret,
+            response: envelope
+        )
+        guard response.hasPrefix("HTTP/1.1 200") else {
+            XCTFail("a genuine callback with a mismatched secret_key must be answered 200; got: \(response)")
+            return
+        }
+
+        let resolved = try await listener.waitForResponse()
+        XCTAssertEqual(
+            resolved.id,
+            "mismatched-secret",
+            "the mismatched-secret callback must resolve with the sealed assertion id"
+        )
     }
 
     /// Only the browser's GET/POST are callback methods; anything else must be
@@ -825,8 +848,9 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
 
     /// Connect, send a minimal HTTP GET, and return the raw response text.
     ///
-    /// `response` is the optional `?response=` value appended to the query
-    /// (form-encoded like Go's `url.Values.Encode`).
+    /// `secretKey` is the loopback query value the registered callback URL
+    /// advertises to the auth server; the real Teleport redirect carries
+    /// `?response=…` alone and is covered by the shape tests above.
     private func probeRawResponse(
         host: NWEndpoint.Host,
         port: UInt16,
@@ -837,9 +861,12 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         return try await sendRawRequest(request, host: host, port: port)
     }
 
-    /// The raw HTTP/1.1 GET the browser sends to the loopback listener.
-    /// `response` is the optional `?response=` value appended to the query
-    /// (form-encoded like Go's `url.Values.Encode`).
+    /// The raw HTTP/1.1 GET a test client sends to the loopback listener.
+    ///
+    /// The real browser redirect carries only `?response=…` (the server reads
+    /// `secret_key` from the registered URL, seals the payload, and replaces
+    /// the whole query); `secretKey` is included so tests can also exercise
+    /// the advertised query shape and the per-run-key gate.
     private static func callbackRequest(secretKey: String, response: String?) -> Data {
         var queryItems = [URLQueryItem(name: "secret_key", value: secretKey)]
         if let response {
