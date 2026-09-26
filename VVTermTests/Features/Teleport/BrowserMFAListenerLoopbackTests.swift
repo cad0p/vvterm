@@ -668,10 +668,10 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
             "GET /callback?\(query) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8
         )
         let response = try await sendRawRequest(request, host: .ipv4(.loopback), port: listener.port)
-        XCTAssertTrue(
-            response.hasPrefix("HTTP/1.1 200"),
-            "a genuine callback without secret_key must be answered 200; got: \(response)"
-        )
+        guard response.hasPrefix("HTTP/1.1 200") else {
+            XCTFail("a genuine callback without secret_key must be answered 200; got: \(response)")
+            return
+        }
 
         let resolved = try await listener.waitForResponse()
         XCTAssertEqual(
@@ -708,10 +708,10 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
             secretKey: mismatchedSecret,
             response: envelope
         )
-        XCTAssertTrue(
-            response.hasPrefix("HTTP/1.1 200"),
-            "a genuine callback with a mismatched secret_key must be answered 200; got: \(response)"
-        )
+        guard response.hasPrefix("HTTP/1.1 200") else {
+            XCTFail("a genuine callback with a mismatched secret_key must be answered 200; got: \(response)")
+            return
+        }
 
         let resolved = try await listener.waitForResponse()
         XCTAssertEqual(
