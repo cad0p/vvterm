@@ -15,15 +15,22 @@
 //  are bound when the OS lets them share the port.
 //
 //  The callback is not trusted just because it arrived on the loopback port —
-//  any local process can connect. The server seals the assertion with a
-//  per-run AES-256-GCM key whose raw bytes are the hex string in the URL
-//  query (`secret_key`), so the GCM tag is the authentication: a callback
-//  that does not open under the key is answered 400 and does not resolve the
-//  login. Only a payload that authenticates and then fails to decode is
-//  terminal.
+//  any local process can connect. The URL registered with the auth server
+//  advertises a per-run `?secret_key=<hex>` value, but that is a
+//  key-delivery parameter carried on the authenticated app→server channel,
+//  not an inbound credential: Teleport reads it from the registered URL,
+//  seals the assertion under the per-run AES-256-GCM key, and replaces the
+//  entire query with `?response=…` before the browser navigates back. The
+//  listener therefore authenticates the callback solely with the GCM tag
+//  under the per-run key it holds: an envelope that does not open is
+//  answered 400 and does not resolve the login, and only a payload that
+//  authenticates and then fails to decode is terminal. Requiring the
+//  browser-facing callback to echo `secret_key` would reject every genuine
+//  redirect (issue #241). The security boundary is the confidentiality of
+//  the registered callback URL on the mTLS channel to the auth server.
 //
-//  The listener never logs the secret key, the full callback URL, or the
-//  decrypted payload.
+//  The listener never logs the secret key, the full callback URL, the
+//  received query values, or the decrypted payload.
 //
 
 import Foundation
@@ -445,6 +452,12 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         handler.start()
     }
 
+    /// Logs a request that could not even be parsed. The line is static: the
+    /// buffered bytes may carry query values, so they are never interpolated.
+    fileprivate func logIncompleteRequest() {
+        logger.error("browser MFA callback rejected: incomplete request")
+    }
+
     /// Called by a connection once it is done; releases its admission slot
     /// and its retain slot.
     fileprivate func connectionClosed(_ handler: BrowserMFAHTTPConnection) {
@@ -457,19 +470,26 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     }
 
     /// Answers a parsed request. A non-nil `resolution` resolves the login.
+    ///
+    /// Every rejection logs a static reason so a failure on a live cluster is
+    /// diagnosable from the app log alone; query values are sensitive and are
+    /// never interpolated (see the file header).
     fileprivate func handle(_ request: BrowserMFARequest) -> BrowserMFACallbackResult {
         guard request.method == "GET" || request.method == "POST" else {
+            logger.error("browser MFA callback rejected: unsupported method")
             return BrowserMFACallbackResult(status: 405, body: "Method not allowed", resolution: nil)
         }
         guard request.path == Self.callbackPath else {
+            logger.error("browser MFA callback rejected: unrecognized path")
             return BrowserMFACallbackResult(status: 404, body: "Not found", resolution: nil)
         }
-        guard request.query["secret_key"] == secretKeyHex else {
-            return BrowserMFACallbackResult(status: 400, body: "Invalid callback", resolution: nil)
-        }
+        // No `secret_key` check: it is a key-delivery parameter, and Teleport
+        // strips it from the browser-facing redirect, which carries
+        // `?response=…` alone. The GCM tag below is the gate.
         guard let responseValue = request.query["response"] else {
             // A bare callback is not authenticated and must not terminate the
             // login; the genuine callback (or the deadline) still can.
+            logger.error("browser MFA callback rejected: missing response parameter")
             return BrowserMFACallbackResult(status: 400, body: "Missing response", resolution: nil)
         }
 
@@ -749,6 +769,7 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
             }
 
             if error != nil || isComplete {
+                self.listener.logIncompleteRequest()
                 self.finish(status: 400, body: "Incomplete request", resolution: nil)
                 return
             }
