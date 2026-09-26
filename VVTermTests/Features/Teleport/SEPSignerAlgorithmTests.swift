@@ -66,6 +66,73 @@ final class SEPSignerAlgorithmTests: XCTestCase {
             "the digest must not be signed as if it were a message"
         )
     }
+
+    /// Pins the `SecKeyCreateRandomKey` attribute shape the device needs:
+    /// `kSecAttrIsPermanent`, `kSecAttrApplicationLabel` and
+    /// `kSecAttrAccessControl` describe the private key and must be nested
+    /// under `kSecPrivateKeyAttrs`. The clean-room rewrite (`ba81877c`)
+    /// flattened them, and every device registration then failed adding the
+    /// key to the keychain with `errSecAuthFailed` (-25293) — a failure no
+    /// simulator test could see, because the Secure Enclave is absent there
+    /// (issue #261).
+    func testKeyAttributesNestThePrivateKeyAttributes() throws {
+        var accessError: Unmanaged<CFError>?
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            [.privateKeyUsage, .biometryAny],
+            &accessError
+        ) else {
+            throw XCTSkip(
+                "SecAccessControlCreateWithFlags unavailable: \(String(describing: accessError))"
+            )
+        }
+
+        let credentialID = Data((0..<32).map { UInt8($0) })
+        let attributes = SecureEnclaveSigner.keyAttributes(
+            credentialID: credentialID,
+            accessControl: accessControl
+        )
+
+        XCTAssertEqual(
+            attributes[kSecAttrTokenID as String] as? String,
+            kSecAttrTokenIDSecureEnclave as String,
+            "the credential must be Secure-Enclave-backed"
+        )
+        let privateKeyAttributes = try XCTUnwrap(
+            attributes[kSecPrivateKeyAttrs as String] as? [String: Any],
+            "the private-key attributes must be nested under kSecPrivateKeyAttrs"
+        )
+        XCTAssertEqual(
+            privateKeyAttributes[kSecAttrIsPermanent as String] as? Bool,
+            true,
+            "the key must be persisted to the keychain"
+        )
+        XCTAssertEqual(
+            privateKeyAttributes[kSecAttrApplicationLabel as String] as? Data,
+            credentialID,
+            "the credential id must be the raw application-label bytes"
+        )
+        let storedAccessControl = privateKeyAttributes[kSecAttrAccessControl as String] as AnyObject?
+        XCTAssertNotNil(
+            storedAccessControl,
+            "the biometry access control must be applied to the private key"
+        )
+        XCTAssertTrue(
+            storedAccessControl === accessControl,
+            "the private key must carry the exact SecAccessControl instance"
+        )
+        for flattened in [
+            kSecAttrIsPermanent,
+            kSecAttrApplicationLabel,
+            kSecAttrAccessControl,
+        ] {
+            XCTAssertNil(
+                attributes[flattened as String],
+                "\(flattened) must not be a top-level key-generation attribute"
+            )
+        }
+    }
 }
 
 #endif
