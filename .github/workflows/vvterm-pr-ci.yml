@@ -376,7 +376,15 @@ jobs:
           # silently built signed and passed; making the flag explicit exposed
           # it. Matching the build job's flags also lets the extracted
           # DerivedData be reused rather than rebuilt.
-          xcodebuild test \
+          #
+          # The 600 s diagnostics timeout in that run was a *symptom* of the
+          # crash, not part of its cause — and a diagnostics timeout also occurs
+          # on a fully green run (#251): the suites finish, then collection waits
+          # 600 s for a simulator response that never arrives, ~37% of the job.
+          # So this invocation passes `-collect-test-diagnostics never`,
+          # matching the UI shards. Full diagnostics stay available through the
+          # `debug-test` dispatch input, which is what that path exists for.
+          xcodebuild test -collect-test-diagnostics never \
             -scheme VVTermUnitTests \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
