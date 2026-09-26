@@ -286,11 +286,18 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         }
         XCTAssertEqual(listener.activeConnectionCount, 1, "the first connection must hold the only slot")
 
-        let response = try await probeRawResponse(
-            host: .ipv4(.loopback),
-            port: listener.port,
-            secretKey: listener.secretKeyHex
-        )
+        // The listener answers an over-cap connection *before* it reads
+        // anything (`start()` -> `finish(503)`), so this probe must not send a
+        // request: the listener closes as soon as the 503 is written, and a
+        // send racing that close surfaces as ECONNRESET instead of the
+        // response under test (issue #233; observed once on CI, 2026-09-24).
+        // Connecting and reading pins the same property without the race — the
+        // admission decision is made at accept time. Mirrors the fix already
+        // applied in cad0p/swift-teleport (30ac59b, PR #11).
+        let probe = NWConnection(host: .ipv4(.loopback), port: endpointPort, using: .tcp)
+        defer { probe.cancel() }
+        try await connect(probe)
+        let response = try await receiveResponse(probe)
         XCTAssertTrue(
             response.hasPrefix("HTTP/1.1 503"),
             "an over-cap connection must get 503; got: \(response)"

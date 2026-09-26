@@ -36,12 +36,22 @@ public protocol WebAuthnSigner: AnyObject {
 /// Errors surfaced by the signer implementations.
 ///
 /// `LocalizedError` so `error.localizedDescription` carries the wrapped
-/// system message (the login coordinator maps Face ID cancel/lockout/
-/// not-enrolled from those substrings).
+/// system message (the login coordinator keeps a string fallback over those
+/// substrings for any error it cannot classify more precisely).
 public enum SignerError: Error, LocalizedError, CustomStringConvertible {
     case keyCreationFailed(String)
     case keyNotFound
     case signingFailed(String)
+    /// A signing failure whose underlying `CFError` was a Security-framework
+    /// status (`NSOSStatusErrorDomain`).
+    ///
+    /// The biometric prompt here is driven by `SecKeyCreateSignature` under a
+    /// `[.privateKeyUsage, .biometryAny]` access control, so a cancelled /
+    /// locked-out prompt surfaces as `errSecUserCanceled` / `errSecAuthFailed`
+    /// — NOT as an `LAError`. The status is carried so the coordinator can
+    /// classify locale-independently; `description` keeps the frozen
+    /// `"signing failed: \(message)"` shape so the string fallback still works.
+    case biometricSigningFailed(String, OSStatus)
     case invalidPublicKey(String)
 
     public var description: String {
@@ -51,6 +61,8 @@ public enum SignerError: Error, LocalizedError, CustomStringConvertible {
         case .keyNotFound:
             return "credential not found"
         case .signingFailed(let message):
+            return "signing failed: \(message)"
+        case .biometricSigningFailed(let message, _):
             return "signing failed: \(message)"
         case .invalidPublicKey(let message):
             return "invalid public key: \(message)"

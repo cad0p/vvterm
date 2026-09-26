@@ -44,6 +44,11 @@ import AppKit
 /// static `HeadlessLogin.post` directly for Phase 1 (to return the raw
 /// `HeadlessLoginResponse` that the coordinator decodes itself).
 final class LiveTeleportHTTPClient: TeleportHTTPClienting {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let logger = Logger.forCategory("teleport-http")
 
     func headlessLogin(
@@ -156,7 +161,10 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
         GRPCClientIdentity.deleteStaleIdentities(logger: transportLogger)
     }
 
-    deinit {
+    // Explicit nonisolated deinit: a MainActor-isolated deinit takes the
+    // back-deployed isolated-deinit path and aborts when the client is
+    // released outside a task context — swiftlang/swift#85663, #88036.
+    nonisolated deinit {
         // `disconnect()` deletes the identity on the normal path; this
         // bounds the leak when the client is deallocated without it (e.g. an
         // aborted registration).
@@ -292,6 +300,11 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
 /// — that was the live-device regression.
 @MainActor
 final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let logging: any TeleportLogging
     private let presenter: any BrowserMFAPresenting
 
@@ -325,6 +338,11 @@ final class LiveBrowserMFACeremony: BrowserMFACeremonyRunning {
 #if canImport(AuthenticationServices)
 @MainActor
 final class WebAuthenticationSessionPresenter: NSObject, WebAuthenticationSessionPresenting {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     static let shared = WebAuthenticationSessionPresenter()
 
     private var session: ASWebAuthenticationSession?

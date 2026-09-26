@@ -35,6 +35,11 @@ import Foundation
 /// cross-device).
 @MainActor
 final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, TeleportCredentialStore {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// A scripted fixture for a single cluster's credential state.
     struct Fixture {
         /// Whether a bootstrap cert (PEM) is present.

@@ -190,6 +190,11 @@ protocol TeleportSSHKeyPairGenerating: AnyObject {
 
 /// The live generator — a fresh ed25519 keypair per request.
 final class LiveTeleportSSHKeyPairGenerator: TeleportSSHKeyPairGenerating {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     func generateKeyPair(comment: String) -> (publicKey: String, privateKeyPEM: String) {
         SSHPubKey.generateEd25519KeyPair(comment: comment)
     }
@@ -204,6 +209,11 @@ protocol TeleportTLSKeyPairGenerating: AnyObject {
 
 /// The live generator — a fresh SecKey + PKIX public key PEM per bootstrap.
 final class LiveTeleportTLSKeyPairGenerator: TeleportTLSKeyPairGenerating {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     func generate() throws -> TLSKeyPair {
         try TLSKeyPairGen.generate()
     }

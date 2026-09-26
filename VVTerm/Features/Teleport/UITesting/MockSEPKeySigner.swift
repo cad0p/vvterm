@@ -46,15 +46,22 @@ import CryptoKit
 /// each method returns a scripted result based on the configured `outcome`:
 ///   - `.success`: createKey/loadKey/sign all succeed (with a real
 ///     in-memory P-256 key so signatures verify against the public key).
-///   - `.cancelled`: sign() throws `SignerError.signingFailed("cancelled")`
-///     (the login coordinator maps this to `.faceIDCancelled`).
+///   - `.cancelled`: sign() throws
+///     `SignerError.biometricSigningFailed(_, errSecUserCanceled)` (the login
+///     coordinator maps the typed OSStatus to `.faceIDCancelled`).
 ///   - `.lockout`: createKey/sign throw
-///     `SignerError.signingFailed("biometry lockout")` (maps to
-///     `.faceIDUnavailable`).
+///     `SignerError.biometricSigningFailed(_, errSecAuthFailed)` with a
+///     lockout message (falls through the coordinator's string fallback — the
+///     production lockout code is not established, see issue #221).
 ///   - `.notEnrolled`: createKey/sign throw
-///     `SignerError.signingFailed("biometry not enrolled")` (maps to
-///     `.faceIDUnavailable`).
+///     `SignerError.biometricSigningFailed(_, errSecInteractionNotAllowed)`
+///     with a not-enrolled message (same string-fallback rationale).
 final class MockSEPKeySigner: TeleportSEPSigning {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// The scripted Face ID outcome.
     enum Outcome {
         /// Face ID succeeds — the SEP key is created/loaded/signed without
@@ -137,13 +144,28 @@ final class MockSEPKeySigner: TeleportSEPSigning {
             keys[credentialID] = secKey
             return secKey
         case .cancelled:
-            // Face ID cancelled — surface the same error the real signer does
-            // (so the login coordinator's mapSignerError produces .faceIDCancelled).
-            throw SignerError.signingFailed("The user cancelled Face ID (LAError.userCancel)")
+            // Face ID cancelled — surface the same typed OSStatus the real
+            // signer throws, so the login coordinator's typed mapping is
+            // exercised (not the string fallback).
+            throw SignerError.biometricSigningFailed(
+                "The user cancelled Face ID",
+                errSecUserCanceled
+            )
         case .lockout:
-            throw SignerError.signingFailed("Face ID is locked out (LAError.biometryLockout)")
+            // The production OSStatus for lockout is not established (issue
+            // #221), so this is an arbitrary non-cancel code: the message
+            // exercises the string fallback that stays in place for
+            // unattributable codes (the fallback matches the "lockout"
+            // substring).
+            throw SignerError.biometricSigningFailed(
+                "Face ID lockout",
+                errSecAuthFailed
+            )
         case .notEnrolled:
-            throw SignerError.signingFailed("Face ID is not enrolled (LAError.biometryNotEnrolled)")
+            throw SignerError.biometricSigningFailed(
+                "Face ID is not enrolled",
+                errSecInteractionNotAllowed
+            )
         }
     }
 
@@ -174,11 +196,20 @@ final class MockSEPKeySigner: TeleportSEPSigning {
             }
             return signature as Data
         case .cancelled:
-            throw SignerError.signingFailed("The user cancelled Face ID (LAError.userCancel)")
+            throw SignerError.biometricSigningFailed(
+                "The user cancelled Face ID",
+                errSecUserCanceled
+            )
         case .lockout:
-            throw SignerError.signingFailed("Face ID is locked out (LAError.biometryLockout)")
+            throw SignerError.biometricSigningFailed(
+                "Face ID lockout",
+                errSecAuthFailed
+            )
         case .notEnrolled:
-            throw SignerError.signingFailed("Face ID is not enrolled (LAError.biometryNotEnrolled)")
+            throw SignerError.biometricSigningFailed(
+                "Face ID is not enrolled",
+                errSecInteractionNotAllowed
+            )
         }
     }
 }

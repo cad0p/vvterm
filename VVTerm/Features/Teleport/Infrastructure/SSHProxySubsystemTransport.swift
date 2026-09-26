@@ -65,6 +65,11 @@ import os
 /// retain cycle: the closures are stored on the transport). A small Sendable
 /// class wrapping a lock-protected bool.
 final class PumpCancelToken: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let lock = OSAllocatedUnfairLock(initialState: false)
 
     func cancel() {
@@ -101,6 +106,11 @@ final class PumpCancelToken: @unchecked Sendable {
 /// libssh2 C call (never across an `await` or an EAGAIN `usleep` retry), so
 /// reentrancy would indicate a bug.
 final class SessionMutex: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let lock = NSLock()
 
     nonisolated init() {}

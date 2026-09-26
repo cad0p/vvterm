@@ -25,6 +25,11 @@ import AppKit
 /// Host adapter: presents Safari in-app and returns a cancellable handle.
 @MainActor
 final class LiveBrowserMFAPresenter: NSObject, BrowserMFAPresenting {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     func present(
         url: URL,
         completion: @escaping @Sendable (Error?) -> Void
@@ -59,6 +64,11 @@ extension LiveBrowserMFAPresenter: ASWebAuthenticationPresentationContextProvidi
 /// One live Safari session, retained by the ceremony until it cancels it.
 @MainActor
 final class LiveBrowserMFASession: BrowserMFASessionHandle {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let session: ASWebAuthenticationSession
     let didStart: Bool
 

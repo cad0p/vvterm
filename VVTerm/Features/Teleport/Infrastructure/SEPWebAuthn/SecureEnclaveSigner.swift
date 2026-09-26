@@ -152,9 +152,23 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
             digest as CFData,
             &error
         ) else {
-            throw SignerError.signingFailed(
-                "SecKeyCreateSignature failed: \(Self.describe(error))"
-            )
+            // Consume the CFError exactly once (both the message and the
+            // domain/code read from it).
+            let cfError = error?.takeRetainedValue()
+            let message = "SecKeyCreateSignature failed: \(Self.describe(cfError))"
+            // The Face ID prompt's outcomes surface as a Security-framework
+            // status in `NSOSStatusErrorDomain` (`errSecUserCanceled`,
+            // `errSecAuthFailed`, ...), never as an `LAError`: this path has no
+            // `LAContext`. Carry the status so the coordinator can classify
+            // without the OS-localized text; the message keeps the frozen
+            // `"signing failed: ..."` description shape.
+            if let cfError, (CFErrorGetDomain(cfError) as String) == NSOSStatusErrorDomain {
+                throw SignerError.biometricSigningFailed(
+                    message,
+                    OSStatus(truncatingIfNeeded: CFErrorGetCode(cfError))
+                )
+            }
+            throw SignerError.signingFailed(message)
         }
         return signature as Data
     }
@@ -163,6 +177,11 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
 
     private static func describe(_ error: Unmanaged<CFError>?) -> String {
         guard let error else { return "unknown" }
-        return (error.takeRetainedValue() as Error).localizedDescription
+        return describe(error.takeRetainedValue())
+    }
+
+    private static func describe(_ error: CFError?) -> String {
+        guard let error else { return "unknown" }
+        return (error as Error).localizedDescription
     }
 }

@@ -51,6 +51,11 @@ import os.log
 /// (`TeleportKeyRingStoring`) is declared in `Core/Teleport`.
 @MainActor
 final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// The UserDefaults key for the encoded `[UUID: TeleportCredential]` map.
     private let credentialsKey = "vvterm.teleport.credentials"
 
