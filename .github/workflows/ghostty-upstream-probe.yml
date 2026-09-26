@@ -278,8 +278,8 @@ jobs:
             - Bump PR: look for `chore/ghostty-upstream-bump` (evergreen branch) under Pull requests — its title shows the current sha.
             - Probe run: ${RUN_URL}
             - Alarm issues (label `ghostty-patch`) may explain a pre-PR failure; if
-              CI is green but the PR has not merged: merge it manually (auto-merge
-              re-enables each run).
+              `build` and `unit-tests` are green but the PR has not merged: merge it
+              manually (auto-merge re-enables each run).
             - The shipped app is untouched either way: it runs the last good core
               until a bump merges.
         run: |
@@ -613,7 +613,7 @@ jobs:
             3. Update `scripts/patches/ghostty/BASE`, then re-dispatch the probe (workflow_dispatch, force_rebuild=true, create_bump_pr=false) to validate before the real bump.
 
             ### Risk window
-            The **shipped app is untouched**: the vendored build and installed app keep running on the last good core until a bump PR passes CI and merges. No user action required.
+            The **shipped app is untouched**: the vendored build and installed app keep running on the last good core until a bump PR passes the required checks and merges. No user action required.
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
