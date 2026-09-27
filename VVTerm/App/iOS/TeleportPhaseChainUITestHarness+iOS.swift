@@ -268,7 +268,8 @@ private struct PhaseChainLoginSheet: View {
         TeleportLoginView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: onSuccess,
+            storedHostLogin: nil,
+            onSuccess: { _ in onSuccess() },
             onCancel: onCancel
         )
     }

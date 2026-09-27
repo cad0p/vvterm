@@ -50,8 +50,15 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
     // MARK: - Shared fixtures
 
+    /// The keyID of the committed fixture user certificate
+    /// (`Fixtures/OpenSSH/user-cert-ed25519.pub`). The bootstrap coordinator
+    /// requires the issued cert's keyID to equal the configured Teleport user
+    /// (the keyID binding check), so the success-path fixtures use the cert's
+    /// own keyID — same rule as `TeleportCertBindingCoordinatorTests`.
+    private static let fixtureCertKeyID = "user-cert-ed25519"
+
     private func makeCluster() -> TeleportCluster {
-        TeleportCluster(host: "teleport.pcad.it", username: "pier")
+        TeleportCluster(host: "teleport.pcad.it", username: Self.fixtureCertKeyID)
     }
 
     /// Build the real bootstrap coordinator with mocked infrastructure so the

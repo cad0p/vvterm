@@ -244,7 +244,7 @@ actor SSHClient {
         _isAborted = false
         try Task.checkCancellation()
 
-        let key = "\(server.host):\(server.port):\(server.username):\(server.connectionMode):\(server.authMethod):\(server.cloudflareAccessMode?.rawValue ?? "none"):\(server.cloudflareTeamDomainOverride ?? "")"
+        let key = "\(server.host):\(server.port):\(server.username):\(server.teleportHostLogin ?? ""):\(server.connectionMode):\(server.authMethod):\(server.cloudflareAccessMode?.rawValue ?? "none"):\(server.cloudflareTeamDomainOverride ?? "")"
 
         if let session = session, await session.isConnected, connectionKey == key {
             connectedServer = server
@@ -293,6 +293,7 @@ actor SSHClient {
             connectionMode: server.connectionMode,
             authMethod: server.authMethod,
             credentials: credentials,
+            teleportHostLogin: server.teleportHostLogin,
             teleportNodeName: server.name
         )
 
@@ -504,8 +505,12 @@ actor SSHClient {
             do {
                 try await prepareTeleportInnerSession()
             } catch {
+                let message = Self.teleportInnerSessionPrepareFailureMessage(
+                    for: error,
+                    redacting: connectedServer
+                )
                 logger.warning(
-                    "Failed to prepare Teleport inner session before resolving environment: \(error.localizedDescription, privacy: .public)"
+                    "Failed to prepare Teleport inner session before resolving environment: \(message, privacy: .public)"
                 )
             }
         }
@@ -1081,6 +1086,20 @@ actor SSHClient {
         innerSessionReady: Bool
     ) -> Bool {
         authMethod == .faceIDTeleport && !innerSessionReady
+    }
+
+    /// Rendering for the swallowed `prepareTeleportInnerSession()` failure in
+    /// `remoteEnvironment()`. Extracted so the redaction contract can be unit-
+    /// tested without a live libssh2 session: the inner resolver can throw
+    /// `TeleportHostLoginFailure.ambiguousPrincipalSet`, whose
+    /// `localizedDescription` embeds the principal logins, and this message is
+    /// logged at public privacy for the diagnostics export. It must go through
+    /// the same redaction spine as the recorder.
+    nonisolated static func teleportInnerSessionPrepareFailureMessage(
+        for error: Error,
+        redacting server: Server?
+    ) -> String {
+        SSHError.diagnosticsMessage(for: error, redacting: server)
     }
 
     // MARK: - Mosh
@@ -2069,12 +2088,97 @@ actor SSHSession {
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
     }
 
+    /// The resolved auth material for a Teleport connection: the SSH username
+    /// (a certificate principal) plus the exact cert/key pair it was resolved
+    /// against. The pair is read together so the username and the certificate
+    /// the SSH call sends can never come from different generations.
+    private struct TeleportAuthMaterial {
+        let username: String
+        let certData: Data
+        let keyData: Data
+    }
+
+    /// Resolve the Teleport SSH username from the exact certificate that is
+    /// about to be sent.
+    ///
+    /// This is the only writer of the Teleport SSH username. The stored
+    /// `config.teleportHostLogin` is used only when it is still a principal of
+    /// this certificate; otherwise the login is derived only for an
+    /// exactly-one-principal certificate. A keyID mismatch (the certificate
+    /// does not belong to the configured Teleport user) and every fail-closed
+    /// resolution clear the credential so readiness flips to `.needsBootstrap`
+    /// and the row's setup sheet (with the picker) becomes reachable.
+    private func resolveTeleportAuthMaterial() async throws -> TeleportAuthMaterial {
+        let clusterId = config.credentials.serverId
+        guard let snapshot = await teleportCredentialStore.liveCredentialSnapshot(for: clusterId),
+              let certData = snapshot.certPEM.data(using: .utf8) else {
+            logger.error("No live Teleport cert or ed25519 key for cluster \(clusterId.uuidString, privacy: .public)")
+            throw SSHError.teleportCertMissing
+        }
+
+        // The certificate must be readable and must belong to the configured
+        // Teleport user — a foreign/stale cert must never name the SSH user.
+        guard let cert = OpenSSHCertificate.parse(authorizedKeysOrPEM: snapshot.certPEM) else {
+            logger.error(
+                "Teleport certificate unreadable for cluster \(clusterId.uuidString, privacy: .public) — clearing credential"
+            )
+            await teleportCredentialStore.clear(for: clusterId)
+            throw SSHError.teleportCertMissing
+        }
+        guard cert.keyID == config.username else {
+            logger.error(
+                "Teleport certificate keyID does not match the configured Teleport user for cluster \(clusterId.uuidString, privacy: .public) — clearing credential"
+            )
+            await teleportCredentialStore.clear(for: clusterId)
+            throw SSHError.teleportCertMissing
+        }
+
+        switch TeleportHostLogin.resolve(cert: cert, storedLogin: config.teleportHostLogin) {
+        case .success(let login):
+            if let stored = config.teleportHostLogin, stored == login {
+                logger.info(
+                    "Using the stored Teleport host login for cluster \(clusterId.uuidString, privacy: .public)"
+                )
+            } else {
+                // Derived from the certificate's single non-internal principal.
+                logger.info(
+                    "Derived the Teleport host login from the certificate's single principal for cluster \(clusterId.uuidString, privacy: .public)"
+                )
+            }
+            return TeleportAuthMaterial(username: login, certData: certData, keyData: snapshot.privateKeyPEM)
+        case .failure(let failure):
+            // Log the case name only: the failure's principal payload is
+            // identity material and must not be rendered into logs or the
+            // diagnostics export.
+            logger.error(
+                "Teleport host login unresolvable for cluster \(clusterId.uuidString, privacy: .public): \(failure.caseDescription, privacy: .public) — clearing credential"
+            )
+            throw await TeleportHostLoginFailureRoute.clearAndFail(
+                failure,
+                store: teleportCredentialStore,
+                clusterId: clusterId
+            )
+        }
+    }
+
     private func authenticate() async throws {
         guard let session = libssh2Session else {
             throw SSHError.notConnected
         }
 
-        let username = config.username
+        // The SSH username must be resolved BEFORE any call that sends it:
+        // for Teleport it is a certificate principal (the host login), not the
+        // Teleport user. Non-Teleport connections keep `config.username`.
+        let username: String
+        let teleportAuth: TeleportAuthMaterial?
+        if config.authMethod == .faceIDTeleport {
+            let material = try await resolveTeleportAuthMaterial()
+            username = material.username
+            teleportAuth = material
+        } else {
+            username = config.username
+            teleportAuth = nil
+        }
         var authResult: Int32 = -1
 
         // Query supported auth methods
@@ -2111,18 +2215,16 @@ actor SSHSession {
             // don't have one). Same `libssh2_userauth_publickey_frommemory`
             // call the `.sshKey` case uses, just with different key material.
             //
-            // The cert + key are fetched live from `TeleportKeyRing` so a
-            // refresh (Phase 3 re-auth) is picked up without rebuilding the
-            // config. If no live cert (expired/missing) or no private key,
-            // throw `teleportCertMissing` so the UI layer can trigger the
-            // `TeleportLoginCoordinator` flow.
-            let clusterId = config.credentials.serverId
-            guard let certPEM = await teleportCredentialStore.liveCertPEM(for: clusterId),
-                  let certData = certPEM.data(using: .utf8),
-                  let keyData = await teleportCredentialStore.liveEd25519PrivateKey(for: clusterId) else {
-                logger.error("No live Teleport cert or ed25519 key for cluster \(clusterId.uuidString, privacy: .public)")
+            // The cert + key were read together above and the username was
+            // resolved to one of the cert's principals; both auth sites (the
+            // outer proxy session here and the inner node session) send the
+            // same login, because Teleport checks `conn.User()` on both.
+            guard let teleportAuth else {
+                logger.error("Teleport auth material missing after resolution")
                 throw SSHError.teleportCertMissing
             }
+            let certData = teleportAuth.certData
+            let keyData = teleportAuth.keyData
             logger.info("Attempting Teleport cert auth for user: \(username)")
             authResult = certData.withUnsafeBytes { certBuffer -> Int32 in
                 guard let certBase = certBuffer.bindMemory(to: CChar.self).baseAddress else {
@@ -2345,9 +2447,11 @@ actor SSHSession {
             if config.authMethod == .faceIDTeleport,
                let cert = OpenSSHCertificate.parse(blob: blob) {
                 // Actionable diagnostics: the presented principals let an
-                // operator correct the expected set from evidence.
+                // operator correct the expected set from evidence. Identity
+                // values stay at the default (private) interpolation so they
+                // cannot reach the shareable diagnostics export.
                 logger.error(
-                    "teleport_host_cert_rejected key_id=\(cert.keyID, privacy: .public) principals=\(cert.validPrincipals.joined(separator: ","), privacy: .public) expected=\(expectedPrincipals.joined(separator: ","), privacy: .public)"
+                    "teleport_host_cert_rejected key_id=\(cert.keyID) principals=\(cert.validPrincipals.joined(separator: ",")) expected=\(expectedPrincipals.joined(separator: ","))"
                 )
             }
             logger.error(
@@ -3678,28 +3782,20 @@ actor SSHSession {
     }
 
     /// Authenticate the inner (target-node) session with the same Teleport
-    /// cert + ed25519 key used for the outer session.
+    /// cert + ed25519 key used for the outer session, and the same resolved
+    /// username.
     ///
-    /// The SSH `user` for the inner session must be an OS login from the
-    /// cert's `ValidPrincipals` (e.g. `root`), NOT the Teleport username.
-    /// This MVP uses `config.username` (the Teleport username) as a first
-    /// attempt — this works when the Teleport username matches the OS login
-    /// (the common case). A future change should parse the cert's
-    /// `ValidPrincipals` (via `SSHCertExpiryParser`'s wire-format walker) and
-    /// use the first principal as the login, or expose a `teleportLogin`
-    /// field on `Server`.
-    /// TODO: parse cert ValidPrincipals for the inner-session OS login.
+    /// The SSH `user` for the inner session must be a certificate principal
+    /// (the host login, e.g. `deploy`), NOT the Teleport username — Teleport
+    /// runs the same `CertChecker` principal check on the node as on the
+    /// proxy. The username is resolved from the exact cert + key pair read
+    /// together here (via `resolveTeleportAuthMaterial`), so the inner session
+    /// can never send a login the outer session would not.
     private func authenticateInner(session: OpaquePointer) async throws {
-        let clusterId = config.credentials.serverId
-        guard let certPEM = await teleportCredentialStore.liveCertPEM(for: clusterId),
-              let certData = certPEM.data(using: .utf8),
-              let keyData = await teleportCredentialStore.liveEd25519PrivateKey(for: clusterId) else {
-            logger.error("No live Teleport cert or ed25519 key for inner cluster \(clusterId.uuidString, privacy: .public)")
-            throw SSHError.teleportCertMissing
-        }
-        // TODO: this should be the cert's first ValidPrincipal (OS login),
-        // not the Teleport username. Using config.username as the MVP default.
-        let username = config.username
+        let material = try await resolveTeleportAuthMaterial()
+        let username = material.username
+        let certData = material.certData
+        let keyData = material.keyData
         logger.info("Attempting Teleport cert inner auth for user: \(username)")
         let authResult = certData.withUnsafeBytes { certBuffer -> Int32 in
             guard let certBase = certBuffer.bindMemory(to: CChar.self).baseAddress else {
@@ -5728,7 +5824,14 @@ struct SSHSessionConfig {
     let dialPort: Int
     let hostKeyHost: String
     let hostKeyPort: Int
+    /// The Teleport *user* (the SSH identity). For `.faceIDTeleport` this is
+    /// the identity that owns the certificate, NOT the SSH username — the
+    /// username is resolved at the auth sites to a certificate principal (the
+    /// host login, `config.teleportHostLogin`).
     let username: String
+    /// The stored Teleport host login (a certificate principal) preference,
+    /// or nil. Only meaningful for `.faceIDTeleport`.
+    let teleportHostLogin: String?
     let connectionMode: SSHConnectionMode
     let authMethod: AuthMethod
     let credentials: ServerCredentials
@@ -5747,6 +5850,7 @@ struct SSHSessionConfig {
         connectionMode: SSHConnectionMode,
         authMethod: AuthMethod,
         credentials: ServerCredentials,
+        teleportHostLogin: String? = nil,
         teleportNodeName: String? = nil,
         connectionTimeout: TimeInterval = 30,
         keepAliveInterval: TimeInterval = 30
@@ -5759,6 +5863,7 @@ struct SSHSessionConfig {
         self.hostKeyHost = hostKeyHost ?? host
         self.hostKeyPort = hostKeyPort ?? port
         self.username = username
+        self.teleportHostLogin = teleportHostLogin
         self.connectionMode = connectionMode
         self.authMethod = authMethod
         self.credentials = credentials
@@ -5791,6 +5896,11 @@ enum SSHError: LocalizedError {
     case hostKeyUnknown(host: String, port: Int, fingerprint: String, keyType: Int)
     case socketError(String)
     case teleportCertMissing
+    /// The Teleport SSH username could not be resolved to a principal of the
+    /// current certificate (no principals, an ambiguous set, or an unreadable
+    /// cert). The connect path clears the credential before throwing, so
+    /// readiness flips to `.needsBootstrap` and setup is reachable again.
+    case teleportHostLoginUnresolvable(TeleportHostLoginFailure)
     case unknown(String)
 
     /// Marker prefix for `hostKeyUnknown`'s message. `ConnectionState.failed`
@@ -5839,6 +5949,7 @@ enum SSHError: LocalizedError {
              .hostKeyVerificationFailed,
              .hostKeyUnknown,
              .teleportCertMissing,
+             .teleportHostLoginUnresolvable,
              .unknown:
             return false
         }
@@ -5881,6 +5992,8 @@ enum SSHError: LocalizedError {
         case .socketError(let msg): return "Socket error: \(msg)"
         case .teleportCertMissing:
             return String(localized: "Teleport certificate is missing or expired. Sign in with Face ID to refresh it.")
+        case .teleportHostLoginUnresolvable(let failure):
+            return failure.errorDescription
         case .unknown(let msg): return "Unknown error: \(msg)"
         }
     }

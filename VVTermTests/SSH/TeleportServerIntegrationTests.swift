@@ -46,6 +46,15 @@ struct TeleportServerIntegrationTests {
             && env["VVTERM_TELEPORT_APP_TLS_CERT"] != nil
     }
 
+    /// The remote login from an `id -un` exec as whole trimmed lines: an
+    /// exact-line match, so a MOTD or an echoed command cannot satisfy the
+    /// assertion the way a substring match could.
+    private static func remoteLoginLines(in output: String) -> [String] {
+        output
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
     /// Full E2E connection helper shared by the transport tests: reads the
     /// VVTERM_TELEPORT_* fixtures, seeds the keyring, connects through the
     /// TLS-routing proxy (`proxy:<node>:0` subsystem, outer + inner libssh2
@@ -54,11 +63,17 @@ struct TeleportServerIntegrationTests {
     /// (`disconnect()` on every path) and the keyring cleanup
     /// (`TeleportKeyRingHost.shared.clear(for: clusterId)`).
     ///
+    /// - Parameter hostLogin: the stored `teleportHostLogin` to send, or nil
+    ///   to exercise the derived-single-principal fallback. The `Server`'s
+    ///   `username` is the Teleport *user* (`VVTERM_TELEPORT_USER`), which the
+    ///   CI cluster deliberately keeps different from the login
+    ///   (`VVTERM_TELEPORT_LOGIN`) so this path is the #262 regression lever.
+    ///
     /// The 30s default connect budget is tight for a contended CI runner
     /// (the off leg's outer handshake has stalled 18-30s+ there); give the
     /// E2E path headroom. The app default is unchanged.
     @MainActor
-    private static func makeTeleportClient() async throws -> (client: SSHClient, clusterId: UUID) {
+    private static func makeTeleportClient(hostLogin: String?) async throws -> (client: SSHClient, clusterId: UUID) {
         let environment = ProcessInfo.processInfo.environment
         guard let cert = environment["VVTERM_TELEPORT_CERT"] else {
             throw SSHError.connectionFailed(
@@ -81,18 +96,21 @@ struct TeleportServerIntegrationTests {
         let host = environment["VVTERM_TELEPORT_HOST"] ?? "127.0.0.1"
         let port = Int(environment["VVTERM_TELEPORT_PORT"] ?? "443") ?? 443
         let node = environment["VVTERM_TELEPORT_NODE"] ?? "ci-node"
-        let login = environment["VVTERM_TELEPORT_LOGIN"] ?? "ci-user"
+        let user = environment["VVTERM_TELEPORT_USER"] ?? "ci-user"
 
         let clusterId = UUID()
         // For Teleport, `Server.name` IS the node name (`proxy:<node>:0`),
-        // `host`/`port` are the PROXY endpoint.
+        // `host`/`port` are the PROXY endpoint, and `username` is the Teleport
+        // USER — the SSH username is resolved from the certificate (hostLogin
+        // when stored, otherwise the single non-internal principal).
         let server = Server(
             id: clusterId,
             workspaceId: UUID(),
             name: node,
             host: host,
             port: port,
-            username: login,
+            username: user,
+            teleportHostLogin: hostLogin,
             connectionMode: .standard,
             authMethod: .faceIDTeleport
         )
@@ -136,10 +154,12 @@ struct TeleportServerIntegrationTests {
 
     /// Full E2E: TLS+ALPN dial of the proxy, `proxy:<node>:0` subsystem,
     /// outer + inner libssh2 handshakes, cert auth, and exec routed to the
-    /// target node.
+    /// target node — as the stored host login (the certificate principal),
+    /// with the remote login asserted.
     @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
     func teleportSSHConnectsThroughTLSRoutingAndExecutes() async throws {
-        let (client, clusterId) = try await Self.makeTeleportClient()
+        let storedLogin = ProcessInfo.processInfo.environment["VVTERM_TELEPORT_LOGIN"] ?? "ci-login"
+        let (client, clusterId) = try await Self.makeTeleportClient(hostLogin: storedLogin)
         defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
         do {
             // The node's exec-session startup can stall behind the CI
@@ -149,10 +169,38 @@ struct TeleportServerIntegrationTests {
             // exec budget is too tight for that — give it headroom; the
             // assertion still verifies the output.
             let output = try await client.execute(
-                "echo VVTERM_TELEPORT_E2E_OK",
+                "echo VVTERM_TELEPORT_E2E_OK; id -un",
                 timeout: .seconds(60)
             )
             #expect(output.contains("VVTERM_TELEPORT_E2E_OK"))
+            // Leg 1 (stored host login): the SSH username must be the
+            // certificate principal, not the Teleport user. A whole-line
+            // match, so a MOTD or an echoed command cannot satisfy it.
+            #expect(
+                Self.remoteLoginLines(in: output).contains(storedLogin),
+                "the remote login must be the certificate principal (\(storedLogin)); got: \(output)"
+            )
+            await client.disconnect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+    }
+
+    /// Leg 2 (the device-bug path): with no stored `teleportHostLogin`, the
+    /// connect path derives the single non-internal principal and the remote
+    /// login is still the certificate principal.
+    @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
+    func teleportSSHDerivesTheHostLoginWhenUnsetAndExecutes() async throws {
+        let storedLogin = ProcessInfo.processInfo.environment["VVTERM_TELEPORT_LOGIN"] ?? "ci-login"
+        let (client, clusterId) = try await Self.makeTeleportClient(hostLogin: nil)
+        defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
+        do {
+            let output = try await client.execute("id -un", timeout: .seconds(60))
+            #expect(
+                Self.remoteLoginLines(in: output).contains(storedLogin),
+                "the derived login must be the certificate principal (\(storedLogin)); got: \(output)"
+            )
             await client.disconnect()
         } catch {
             await client.disconnect()
@@ -167,7 +215,9 @@ struct TeleportServerIntegrationTests {
     /// and depends on these bytes arriving intact.
     @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
     func teleportOSC8HyperlinkBytesSurviveRealSSHSession() async throws {
-        let (client, clusterId) = try await Self.makeTeleportClient()
+        let (client, clusterId) = try await Self.makeTeleportClient(
+            hostLogin: ProcessInfo.processInfo.environment["VVTERM_TELEPORT_LOGIN"] ?? "ci-login"
+        )
         defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
         do {
             // printf (not echo): keeps the escape bytes literal. The remote

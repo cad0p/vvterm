@@ -38,6 +38,15 @@ struct TeleportUITestHarness: View {
     /// `cluster.host` and `cluster.username` for display copy.
     private let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
 
+    /// The login chosen past the Phase-3 host-login step, so the picker UI
+    /// test can assert what `onSuccess` received.
+    @State private var continuedHostLogin: String?
+
+    /// The stored host login the harness pre-seeds (drives the pre-selection).
+    private var storedHostLogin: String? {
+        launchArgValue(for: "--vvterm-ui-test-teleport-stored-login")
+    }
+
     var body: some View {
         Group {
             switch phase {
@@ -50,7 +59,21 @@ struct TeleportUITestHarness: View {
                     bootstrapResult: bootstrapResult
                 )
             case .login:
-                LoginHarnessSheet(scenario: loginScenario, cluster: cluster)
+                VStack(spacing: 0) {
+                    LoginHarnessSheet(
+                        scenario: loginScenario,
+                        cluster: cluster,
+                        storedHostLogin: storedHostLogin,
+                        onContinue: { login in
+                            continuedHostLogin = login
+                        }
+                    )
+                    if let continuedHostLogin {
+                        Text("continued: \(continuedHostLogin)")
+                            .font(.caption)
+                            .accessibilityIdentifier("vvterm.teleport.harness.continuedHostLogin")
+                    }
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -170,6 +193,15 @@ struct TeleportUITestHarness: View {
             return .faceIDUnavailable("Face ID isn't available. Set up Face ID in iOS Settings.")
         case .serverUnreachable:
             return .serverUnreachable
+        case .hostLoginMultiple:
+            return .happyPath(certTTL: 12 * 3600, logins: ["deploy", "root"])
+        case .hostLoginSingle:
+            return .happyPath(certTTL: 12 * 3600, logins: ["deploy"])
+        case .hostLoginEmpty:
+            // A cert whose principals are all internal: the validator rejects
+            // this in production, so the step's defensive error branch is
+            // exercised here (the coordinator must never reach `.success`).
+            return .happyPath(certTTL: 12 * 3600, logins: [])
         }
     }
 
@@ -210,6 +242,7 @@ struct TeleportUITestHarness: View {
     private enum LoginScenario: String {
         case happyPath12h, happyPath1h, certExpiredOnTap
         case faceIDCancelled, faceIDUnavailable, serverUnreachable
+        case hostLoginMultiple, hostLoginSingle, hostLoginEmpty
     }
 }
 
@@ -277,13 +310,22 @@ private struct RegistrationHarnessSheet: View {
 private struct LoginHarnessSheet: View {
     let scenario: MockTeleportLoginCoordinator.Scenario
     let cluster: TeleportCluster
+    let storedHostLogin: String?
+    let onContinue: (String) -> Void
 
     @StateObject private var coordinator: MockTeleportLoginCoordinator
 
     @MainActor
-    init(scenario: MockTeleportLoginCoordinator.Scenario, cluster: TeleportCluster) {
+    init(
+        scenario: MockTeleportLoginCoordinator.Scenario,
+        cluster: TeleportCluster,
+        storedHostLogin: String? = nil,
+        onContinue: @escaping (String) -> Void = { _ in }
+    ) {
         self.scenario = scenario
         self.cluster = cluster
+        self.storedHostLogin = storedHostLogin
+        self.onContinue = onContinue
         _coordinator = StateObject(wrappedValue: MockTeleportLoginCoordinator(scenario: scenario))
     }
 
@@ -291,7 +333,8 @@ private struct LoginHarnessSheet: View {
         TeleportLoginView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: {},
+            storedHostLogin: storedHostLogin,
+            onSuccess: onContinue,
             onCancel: {}
         )
     }

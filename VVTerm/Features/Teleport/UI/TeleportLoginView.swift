@@ -8,7 +8,7 @@
 //  One-tap Face ID. The coordinator does `loginBegin` → `WebAuthn.login`
 //  (SEP signature, Face ID prompt fires automatically) → `loginFinish` →
 //  cert lands in `TeleportKeyRing` → sheet dismisses → row badge flips to
-//  green → auto-connect.
+//  green (the user connects from the row).
 //
 //  The cert TTL is dynamic — read from `cert.ValidBefore`, never hardcoded.
 //  Before login: generic copy ("Your SSH certificate will be issued by
@@ -36,12 +36,29 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     /// The cluster being logged in to.
     let cluster: TeleportCluster
 
-    /// Called when Phase 3 succeeds (cert issued + stored). The caller
-    /// dismisses the sheet and auto-connects.
-    var onSuccess: () -> Void
+    /// The host login already stored on the server row, if any. When it is
+    /// still a principal of the fresh certificate the step renders it
+    /// read-only (the choice is frozen per row); the picker only appears
+    /// when no stored login applies.
+    let storedHostLogin: String?
+
+    /// Called when the user continues past the host-login step (cert issued +
+    /// stored). The argument is the chosen certificate principal; the caller
+    /// persists it on the server row and dismisses the sheet when the persist
+    /// succeeds. No caller auto-connects.
+    var onSuccess: (String) -> Void
 
     /// Called when the user cancels. The caller dismisses the sheet.
     var onCancel: () -> Void
+
+    /// An optional notice shown above the host-login step (e.g. the reuse
+    /// notice when the credential came from a duplicate server's setup).
+    var reuseNotice: String? = nil
+
+    /// The host login chosen in the Phase-3 step. Initialized from the stored
+    /// login / the certificate's single principal when the coordinator
+    /// reaches `.success`.
+    @State private var selectedHostLogin: String?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -53,6 +70,18 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                 header
 
                 clusterInfo
+
+                if let reuseNotice {
+                    // Shown before the cert is issued too, so the user knows
+                    // the registration came from another row while Face ID
+                    // runs.
+                    Text(reuseNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("vvterm.teleport.login.reuseNotice")
+                }
 
                 signInButton
 
@@ -77,8 +106,18 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
             }
         }
         .onChange(of: coordinator.state) { newValue in
-            if case .success = newValue {
-                onSuccess()
+            guard case .success(_, let logins) = newValue else {
+                selectedHostLogin = nil
+                return
+            }
+            // Prefer the stored login only while it is still a principal of
+            // the fresh cert; single-principal certs auto-select, and several
+            // principals with no stored login start with no selection.
+            if selectedHostLogin == nil || !logins.contains(selectedHostLogin ?? "") {
+                selectedHostLogin = TeleportHostLogin.initialSelection(
+                    logins: logins,
+                    stored: storedHostLogin
+                )
             }
         }
     }
@@ -123,8 +162,8 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                 .progressViewStyle(.circular)
                 .controlSize(.large)
                 .accessibilityIdentifier("vvterm.teleport.login.inFlight")
-        case .success(let certValidUntil):
-            successView(certValidUntil: certValidUntil)
+        case .success(let certValidUntil, let logins):
+            successView(certValidUntil: certValidUntil, logins: logins)
         case .failed(let error):
             errorView(error)
         case .idle:
@@ -141,23 +180,126 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
     // MARK: - Success
 
-    private func successView(certValidUntil: Date) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 36))
-                .foregroundStyle(.green)
+    private func successView(certValidUntil: Date, logins: [String]) -> some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.green)
 
-            Text(String(localized: "Signed in"))
-                .font(.headline)
-                .accessibilityIdentifier("vvterm.teleport.login.successTitle")
+                Text(String(localized: "Signed in"))
+                    .font(.headline)
+                    .accessibilityIdentifier("vvterm.teleport.login.successTitle")
 
-            Text(certificateValidityText(certValidUntil: certValidUntil))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("vvterm.teleport.login.successMessage")
+                Text(certificateValidityText(certValidUntil: certValidUntil))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.login.successMessage")
+            }
+
+            hostLoginStep(logins: logins)
         }
+    }
+
+    // MARK: - Host login step
+
+    /// The Phase-3 "Host login" step, appended below the success copy (which
+    /// stays visible). A stored login that is still a principal of the fresh
+    /// certificate is shown read-only — no re-login picker, the choice is
+    /// frozen per server row. Otherwise: with a single principal it is
+    /// auto-selected and shown read-only (never silent); with several
+    /// principals the user must pick one explicitly before Continue.
+    @ViewBuilder
+    private func hostLoginStep(logins: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(String(localized: "Host login"))
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("vvterm.teleport.login.hostLoginTitle")
+
+            if logins.isEmpty {
+                // Defensive: the issued-cert validator rejects a cert with no
+                // **non-internal** principals before `.success`, so this is a
+                // setup error, not a retry loop.
+                Text(String(localized: "The certificate carries no login for this host. Ask an administrator to grant a login for this host on the Teleport role, then run setup again."))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.login.hostLoginError")
+            } else if let frozenLogin = frozenHostLogin(logins: logins) {
+                // The row already has a frozen login and it is still a
+                // principal: show it read-only, never the picker. The section
+                // header above already names the field.
+                Text(frozenLogin)
+                    .font(.body.weight(.medium))
+                    .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
+            } else if logins.count == 1 {
+                // The section header above already names the field.
+                Text(effectiveHostLogin(logins: logins) ?? "")
+                    .font(.body.weight(.medium))
+                    .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
+            } else {
+                Text(String(localized: "This certificate carries several logins. Pick the one to use for this server."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(logins, id: \.self) { login in
+                    Button {
+                        selectedHostLogin = login
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: effectiveHostLogin(logins: logins) == login ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(effectiveHostLogin(logins: logins) == login ? Color.accentColor : Color.secondary)
+                            Text(login)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("vvterm.teleport.login.hostLoginOption.\(login)")
+                    .accessibilityAddTraits(effectiveHostLogin(logins: logins) == login ? .isSelected : [])
+                    .accessibilityHint(String(localized: "Use this login for the server"))
+                }
+            }
+
+            if !logins.isEmpty {
+                Button {
+                    guard let login = effectiveHostLogin(logins: logins) else { return }
+                    onSuccess(login)
+                } label: {
+                    Text(String(localized: "Continue"))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(effectiveHostLogin(logins: logins) == nil)
+                .accessibilityIdentifier("vvterm.teleport.login.continueButton")
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// The row's stored login while it is still a principal of the fresh
+    /// certificate. Present ⇒ the step renders read-only (no re-login picker).
+    private func frozenHostLogin(logins: [String]) -> String? {
+        guard let stored = Server.normalizedTeleportHostLogin(storedHostLogin),
+              logins.contains(stored) else {
+            return nil
+        }
+        return stored
+    }
+
+    /// The selection shown: the user's explicit pick when it is still a
+    /// principal, otherwise the pure selection policy. Also keeps the step
+    /// usable when the `.onChange` initialization did not run (e.g. the
+    /// coordinator was already in `.success` when the view appeared).
+    private func effectiveHostLogin(logins: [String]) -> String? {
+        if let selectedHostLogin, logins.contains(selectedHostLogin) {
+            return selectedHostLogin
+        }
+        return TeleportHostLogin.initialSelection(logins: logins, stored: storedHostLogin)
     }
 
     // MARK: - Error
@@ -293,7 +435,8 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     TeleportLoginView(
         coordinator: PreviewLoginCoordinator(state: .idle),
         cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"),
-        onSuccess: {},
+        storedHostLogin: nil,
+        onSuccess: { _ in },
         onCancel: {}
     )
 }
@@ -301,10 +444,11 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 #Preview("Login — success") {
     TeleportLoginView(
         coordinator: PreviewLoginCoordinator(
-            state: .success(certValidUntil: Date(timeIntervalSinceNow: 12 * 3600))
+            state: .success(certValidUntil: Date(timeIntervalSinceNow: 12 * 3600), logins: ["deploy", "root"])
         ),
         cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"),
-        onSuccess: {},
+        storedHostLogin: "deploy",
+        onSuccess: { _ in },
         onCancel: {}
     )
 }
@@ -313,7 +457,8 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     TeleportLoginView(
         coordinator: PreviewLoginCoordinator(state: .failed(.faceIDCancelled)),
         cluster: TeleportCluster(host: "teleport.pcad.it", username: "pier"),
-        onSuccess: {},
+        storedHostLogin: nil,
+        onSuccess: { _ in },
         onCancel: {}
     )
 }

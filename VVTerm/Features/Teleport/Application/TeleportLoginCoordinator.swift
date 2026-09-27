@@ -47,8 +47,10 @@ enum TeleportLoginState: Equatable {
     /// The login/finish POST is in flight.
     case fetchingCert
     /// The cert is issued + stored. The `certValidUntil` drives the
-    /// "Certificate valid for …" copy in the login sheet.
-    case success(certValidUntil: Date)
+    /// "Certificate valid for …" copy in the login sheet; `logins` are the
+    /// cert's non-internal principals (wire order) the setup picker offers as
+    /// the host login.
+    case success(certValidUntil: Date, logins: [String])
     /// A step failed. The error drives the recovery UX.
     case failed(TeleportLoginError)
 }
@@ -318,8 +320,25 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             now: now()
         )
         let certValidBefore: Date
+        let issuedCertificate: OpenSSHCertificate
         switch validation {
         case .success(let cert):
+            // The certificate must belong to the Teleport user this row is
+            // configured with: the connect path resolves the SSH username from
+            // the cert's principals, so a foreign cert (a different keyID)
+            // would authenticate as the wrong identity. Clear whatever the row
+            // holds and fail closed.
+            guard cert.keyID == cluster.username else {
+                // No username in the log: identity values use the default
+                // (private) interpolation and never `.public`.
+                logger.error(
+                    "issued certificate keyID does not match the configured Teleport user for cluster \(cluster.id.uuidString, privacy: .public) — rejecting and clearing the credential"
+                )
+                await keyRing.clear(for: cluster.id)
+                state = .failed(.server("Certificate user binding check failed: the certificate does not belong to this Teleport user"))
+                return
+            }
+            issuedCertificate = cert
             certValidBefore = cert.validBeforeDate
         case .failure(let failure):
             logger.error(
@@ -373,7 +392,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         }
         logger.info("login succeeded — cert \(certPEM.count) chars, valid until \(certValidBefore.debugDescription, privacy: .public)")
 
-        state = .success(certValidUntil: certValidBefore)
+        state = .success(
+            certValidUntil: certValidBefore,
+            logins: TeleportHostLogin.nonInternalPrincipals(of: issuedCertificate)
+        )
     }
 
     func cancel() async {

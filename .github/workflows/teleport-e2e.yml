@@ -125,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
-          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           bash scripts/ci/teleport-server.sh start
 
@@ -133,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=8443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
-          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           bash scripts/ci/teleport-server.sh bootstrap
 
@@ -216,7 +216,7 @@ jobs:
           # off — the M1 app SSH path. webauthn — the M3 smokes + the M4
           # app ceremony (Phase-2 registration + Phase-3 passwordless).
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
-          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           TELEPORT_PASSWORD=VmTestPassw0rd! \
           bash scripts/ci/teleport-server.sh start
@@ -225,13 +225,34 @@ jobs:
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
-          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           TELEPORT_PASSWORD=VmTestPassw0rd! \
           bash scripts/ci/teleport-server.sh bootstrap
 
       - name: Confirm server health
         run: bash scripts/ci/teleport-server.sh status
+
+      - name: Assert the Teleport user and host login differ (#262)
+        # The E2E cluster must exercise the mismatch: the app sends the
+        # certificate principal as the SSH username, and a cluster where
+        # TELEPORT_USER == TELEPORT_LOGIN cannot catch a regression that sends
+        # the Teleport user instead. Fail loudly rather than silently losing
+        # the lever.
+        run: |
+          set -euo pipefail
+          env_file="${VVTERM_TELEPORT_ENV_FILE:?teleport-server.sh bootstrap did not export VVTERM_TELEPORT_ENV_FILE}"
+          env_user="$(sed -n 's/^VVTERM_TELEPORT_USER=//p' "$env_file" | head -1)"
+          env_login="$(sed -n 's/^VVTERM_TELEPORT_LOGIN=//p' "$env_file" | head -1)"
+          if [ -z "$env_user" ] || [ -z "$env_login" ]; then
+            echo "error: VVTERM_TELEPORT_USER/VVTERM_TELEPORT_LOGIN missing from $env_file" >&2
+            exit 1
+          fi
+          if [ "$env_user" = "$env_login" ]; then
+            echo "error: the #262 E2E lever requires TELEPORT_USER != TELEPORT_LOGIN (both '$env_user')" >&2
+            exit 1
+          fi
+          echo "lever ok: user=$env_user login=$env_login"
 
       - name: Restore e2e DerivedData cache (explicit)
         # The irgaly/xcode-cache restore has missed on every e2e run (both
@@ -265,7 +286,7 @@ jobs:
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
-          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-user \
+          TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
           bash scripts/ci/teleport-server.sh probe
 

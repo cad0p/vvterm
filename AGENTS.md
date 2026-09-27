@@ -167,6 +167,7 @@ Remote shell and multiplexer ownership:
 - Windows tmux-compatible sessions use the explicit psmux backend and must not use POSIX tmux command construction.
 - Probe `psmux`, then `pmux`, and accept `tmux.exe` only after a psmux-specific compatibility check.
 - Apply VVTerm-generated tmux or psmux configuration only to VVTerm-managed sessions, never external user sessions.
+- The Teleport SSH username must be a **certificate principal** (the host login, e.g. `deploy`), never the Teleport user (e.g. `pier`). Resolve it from the exact certificate being sent (`TeleportHostLogin.resolve*`), store only the picker's choice in `Server.teleportHostLogin`, and fail closed on zero/ambiguous principals — Teleport runs x/crypto's `CertChecker.CheckCert` against `conn.User()` on the proxy and the node alike.
 
 ## Product Planning and Repository Documentation
 

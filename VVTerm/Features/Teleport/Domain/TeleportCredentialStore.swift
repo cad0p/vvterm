@@ -7,10 +7,15 @@
 //
 //  This protocol covers the union of keyring operations used outside
 //  `Features/Teleport/UI`: the coordinators' writes (bootstrap/login/
-//  registration) and `SSHSession`'s reads (cluster TLS state, live cert,
-//  ed25519 private key). The host-side `TeleportKeyRing` conforms to it
-//  directly, and a host adapter (`TeleportKeyRingCredentialStore`) exposes
-//  it as the default `SSHClient` store with one MainActor hop per operation.
+//  registration) and `SSHSession`'s reads (cluster TLS state, live cert +
+//  key snapshot, ed25519 private key).
+//
+//  Conformers (all four named per the #262 plan review):
+//    - `TeleportKeyRing` (production, also the observation source);
+//    - `TeleportKeyRingCredentialStore` (the host adapter the `SSHClient`
+//      default store uses);
+//    - `MockTeleportKeyRing` (DEBUG UI-test/harness);
+//    - `GatedTeleportCredentialStore` (test suite, coordinator races).
 //
 //  All methods are `async` + the protocol is `Sendable`, so the package can
 //  be built in Swift 6 mode and the store can be called from `SSHSession`'s
@@ -27,6 +32,14 @@ protocol TeleportCredentialStore: Sendable {
 
     /// The live cert PEM for a cluster, or nil if no valid cert.
     func liveCertPEM(for clusterId: UUID) async -> String?
+
+    /// The live cert PEM **and** its paired ed25519 private key read together,
+    /// or nil when either is missing.
+    ///
+    /// The connect path resolves the SSH username against the *exact* PEM it
+    /// sends, so it must read the cert + key as one pair: two separate reads
+    /// could observe a fresh cert with a stale key after a concurrent re-login.
+    func liveCredentialSnapshot(for clusterId: UUID) async -> (certPEM: String, privateKeyPEM: Data)?
 
     /// The ed25519 private key (OpenSSH PEM format) paired with the live
     /// cert, or nil if none.

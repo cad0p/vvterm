@@ -18,14 +18,33 @@ struct Server: Identifiable, Codable, Hashable {
     /// For all other auth methods, `name` is just the display name and
     /// `host` is the direct SSH target.
     ///
-    /// This is a model reinterpretation, not a schema change: `Server`'s
-    /// `Codable` is unchanged. Existing Teleport servers (whose `host`
-    /// currently holds the proxy host) require a one-time migration to
+    /// This is a model reinterpretation of `name`/`host` for Teleport rows,
+    /// not a schema change to those fields. The only schema addition for
+    /// Teleport is the optional `teleportHostLogin` (tsh's "host login"),
+    /// which is written by the setup picker and resolved against the current
+    /// certificate's principals at connect time. Existing Teleport servers
+    /// (whose `host` currently holds the proxy host) require a one-time
+    /// migration to
     var host: String
     var port: Int
     /// TCP port exposed by etserver. SSH still uses `port` for bootstrap.
     var eternalTerminalPort: Int
+    /// The Teleport user (the SSH identity). For `.faceIDTeleport` this is
+    /// the Teleport *user* (`pier`) — it is needed before any cert exists
+    /// (headless bootstrap, gRPC registration, `login/begin|finish`), so the
+    /// host login (the certificate principal, `deploy`) is a separate field.
     var username: String
+    /// The certificate principal to send as the SSH username for a Teleport
+    /// connection (tsh's "host login", e.g. `deploy`). Picked once during
+    /// setup Phase 3 from the issued certificate's non-internal principals and
+    /// frozen per server row. `nil` for non-Teleport rows and for Teleport
+    /// rows that have not completed the picker yet (the connect path then
+    /// derives only when the cert has exactly one non-internal principal).
+    ///
+    /// Shape-validated on the persist/decode seam (non-empty, ≤255 bytes, no
+    /// control characters); the authoritative check is the connect-time
+    /// principal match against the certificate being sent.
+    var teleportHostLogin: String?
     var connectionMode: SSHConnectionMode
     var authMethod: AuthMethod
     var cloudflareAccessMode: CloudflareAccessMode?
@@ -52,6 +71,7 @@ struct Server: Identifiable, Codable, Hashable {
         port: Int = 22,
         eternalTerminalPort: Int = 2022,
         username: String,
+        teleportHostLogin: String? = nil,
         connectionMode: SSHConnectionMode = .standard,
         authMethod: AuthMethod = .password,
         cloudflareAccessMode: CloudflareAccessMode? = nil,
@@ -77,6 +97,7 @@ struct Server: Identifiable, Codable, Hashable {
             ? eternalTerminalPort
             : 2022
         self.username = username
+        self.teleportHostLogin = Server.normalizedTeleportHostLogin(teleportHostLogin)
         self.connectionMode = connectionMode
         self.authMethod = authMethod
         self.cloudflareAccessMode = cloudflareAccessMode
@@ -100,6 +121,28 @@ struct Server: Identifiable, Codable, Hashable {
         return "\(username)@\(host):\(port)"
     }
 
+    /// The maximum UTF-8 byte length accepted for `teleportHostLogin`.
+    static let maxTeleportHostLoginBytes = 255
+
+    /// Shape-validates a Teleport host login for the persist/decode seam.
+    ///
+    /// Persist/decode can only check the shape — the authoritative check is
+    /// the connect-time principal match against the certificate being sent,
+    /// which a decode cannot perform. Returns `nil` for a value that is empty
+    /// (or whitespace-only), longer than 255 UTF-8 bytes, or contains a
+    /// control character. `@` is explicitly allowed (Teleport logins may
+    /// contain it).
+    static func normalizedTeleportHostLogin(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.utf8.count <= maxTeleportHostLoginBytes else { return nil }
+        guard trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        return trimmed
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case workspaceId
@@ -109,6 +152,7 @@ struct Server: Identifiable, Codable, Hashable {
         case port
         case eternalTerminalPort
         case username
+        case teleportHostLogin
         case connectionMode
         case authMethod
         case cloudflareAccessMode
@@ -136,6 +180,9 @@ struct Server: Identifiable, Codable, Hashable {
         let decodedETPort = try container.decodeIfPresent(Int.self, forKey: .eternalTerminalPort) ?? 2022
         eternalTerminalPort = (1...65535).contains(decodedETPort) ? decodedETPort : 2022
         username = try container.decode(String.self, forKey: .username)
+        teleportHostLogin = Server.normalizedTeleportHostLogin(
+            try container.decodeIfPresent(String.self, forKey: .teleportHostLogin)
+        )
         connectionMode = try container.decodeIfPresent(SSHConnectionMode.self, forKey: .connectionMode) ?? .standard
         authMethod = try container.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .password
         if let rawCloudflareMode = try container.decodeIfPresent(String.self, forKey: .cloudflareAccessMode) {
@@ -170,6 +217,7 @@ struct Server: Identifiable, Codable, Hashable {
         try container.encode(port, forKey: .port)
         try container.encode(eternalTerminalPort, forKey: .eternalTerminalPort)
         try container.encode(username, forKey: .username)
+        try container.encodeIfPresent(teleportHostLogin, forKey: .teleportHostLogin)
         try container.encode(connectionMode, forKey: .connectionMode)
         try container.encode(authMethod, forKey: .authMethod)
         try container.encodeIfPresent(cloudflareAccessMode, forKey: .cloudflareAccessMode)

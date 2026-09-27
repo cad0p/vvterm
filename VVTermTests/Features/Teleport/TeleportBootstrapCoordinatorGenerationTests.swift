@@ -210,6 +210,10 @@ private final class GatedTeleportCredentialStore: TeleportCredentialStore {
         underlying.liveEd25519PrivateKey(for: clusterId)
     }
 
+    func liveCredentialSnapshot(for clusterId: UUID) async -> (certPEM: String, privateKeyPEM: Data)? {
+        await underlying.liveCredentialSnapshot(for: clusterId)
+    }
+
     func registeredCredentialID(for clusterId: UUID) async -> Data? {
         underlying.registeredCredentialID(for: clusterId)
     }
@@ -331,7 +335,10 @@ private final class GatedWebAuthenticationSessionPresenter: WebAuthenticationSes
 final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
 
     private func makeCluster() -> TeleportCluster {
-        TeleportCluster(host: "teleport.pcad.it", username: "pier")
+        // The fixture user cert's keyID is `user-cert-ed25519`; the bootstrap
+        // coordinator binds `cert.keyID` to the cluster's Teleport user, so
+        // the test cluster must name that user (see #262).
+        TeleportCluster(host: "teleport.pcad.it", username: "user-cert-ed25519")
     }
 
     private func makeCoordinator(

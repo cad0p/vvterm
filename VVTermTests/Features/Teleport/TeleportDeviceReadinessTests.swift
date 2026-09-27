@@ -5,10 +5,11 @@
 //
 //  Layer 1 unit tests for `TeleportDeviceReadinessResolver`.
 //
-//  The resolver is a pure function over three injected probes (hasBootstrapCert,
-//  hasSEPKey, certExpiry). This file covers all 4 states × cert-valid/cert-expired
-//  × key-present/key-absent, plus the cross-device case (server record present,
-//  empty keychain → needsBootstrap).
+//  The resolver is a pure function over four injected probes (hasBootstrapCert,
+//  hasSEPKey, certExpiry, hasHostCAKeys — the last defaulting to fail-closed
+//  false). This file covers all 4 states × cert-valid/cert-expired ×
+//  key-present/key-absent, the reuse state (key + anchors, no cert), and the
+//  cross-device case (server record present, empty keychain → needsBootstrap).
 //
 //  See:
 //    - 2026-07-23-strategy-b-session2.2-teleport-ui-design.md (mockup B — the
@@ -21,7 +22,7 @@ import XCTest
 
 final class TeleportDeviceReadinessTests: XCTestCase {
 
-    // MARK: - needsBootstrap (no cert)
+    // MARK: - needsBootstrap (no usable setup)
 
     func testNeedsBootstrap_whenNoCertAndNoSEPKey() {
         // New device via iCloud, or never bootstrapped. No cert, no SEP key.
@@ -36,13 +37,25 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         )
     }
 
-    func testNeedsBootstrap_whenNoCertButSEPKeySomehowPresent() {
-        // Edge case: SEP key present but no cert. This shouldn't happen in
-        // practice (the SEP key is only created after a bootstrap cert is
-        // obtained), but the resolver is defensive: no cert → needsBootstrap
-        // regardless of SEP key state. (The registration coordinator requires
-        // the Phase-1 cert to authenticate Phase 2; without it, bootstrap must
-        // re-run.)
+    func testNeedsLogin_whenNoCertButSEPKeyAndAnchorsPresent() {
+        // Reuse state (#262): a seeded duplicate row has the SEP key + the
+        // cluster TLS anchors but no cert yet. The registration is complete, so
+        // only the Face ID login (+ picker) remains.
+        let resolver = TeleportDeviceReadinessResolver(
+            hasBootstrapCert: { _ in false },
+            hasSEPKey: { _ in true },
+            certExpiry: { _ in nil },
+            hasHostCAKeys: { _ in true }
+        )
+        XCTAssertEqual(
+            resolver.resolve(clusterId: UUID()),
+            .needsLogin
+        )
+    }
+
+    func testNeedsBootstrap_whenNoCertNoAnchorsButSEPKeySomehowPresent() {
+        // Fail-closed pin: without a provable complete setup (no pinned Host CA
+        // keys), a key without a cert still routes to bootstrap.
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in false },
             hasSEPKey: { _ in true },
@@ -98,7 +111,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in true },
             hasSEPKey: { _ in true },
-            certExpiry: { _ in nil }  // no cert at all
+            certExpiry: { _ in nil },  // no cert at all
+            hasHostCAKeys: { _ in true }
         )
         XCTAssertEqual(
             resolver.resolve(clusterId: UUID()),
@@ -113,7 +127,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in true },
             hasSEPKey: { _ in true },
-            certExpiry: { _ in now.addingTimeInterval(-1) }  // expired 1s ago
+            certExpiry: { _ in now.addingTimeInterval(-1) },  // expired 1s ago
+            hasHostCAKeys: { _ in true }
         )
         XCTAssertEqual(
             resolver.resolve(clusterId: UUID(), now: now),
@@ -128,7 +143,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in true },
             hasSEPKey: { _ in true },
-            certExpiry: { _ in now }  // exactly now
+            certExpiry: { _ in now },  // exactly now
+            hasHostCAKeys: { _ in true }
         )
         XCTAssertEqual(
             resolver.resolve(clusterId: UUID(), now: now),
@@ -144,7 +160,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in true },
             hasSEPKey: { _ in true },
-            certExpiry: { _ in now.addingTimeInterval(3600) }  // 1h in future
+            certExpiry: { _ in now.addingTimeInterval(3600) },  // 1h in future
+            hasHostCAKeys: { _ in true }
         )
         XCTAssertEqual(
             resolver.resolve(clusterId: UUID(), now: now),
@@ -158,7 +175,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { _ in true },
             hasSEPKey: { _ in true },
-            certExpiry: { _ in now.addingTimeInterval(1) }
+            certExpiry: { _ in now.addingTimeInterval(1) },
+            hasHostCAKeys: { _ in true }
         )
         XCTAssertEqual(
             resolver.resolve(clusterId: UUID(), now: now),
@@ -203,7 +221,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { readyState.contains($0) },
             hasSEPKey: { sepKeys.contains($0) },
-            certExpiry: { expiries[$0] }
+            certExpiry: { expiries[$0] },
+            hasHostCAKeys: { _ in true }
         )
 
         XCTAssertEqual(resolver.resolve(clusterId: clusterA, now: now), .ready)
@@ -240,15 +259,17 @@ final class TeleportDeviceReadinessTests: XCTestCase {
         let validExpiry = now.addingTimeInterval(3600)
         let expiredExpiry = now.addingTimeInterval(-3600)
 
-        // (hasBootstrapCert, hasSEPKey, certExpiry) → expected state
+        // (hasBootstrapCert, hasSEPKey, certExpiry) → expected state. These
+        // cases inject a complete setup (`hasHostCAKeys: { _ in true }`).
         let cases: [(Bool, Bool, Date?, TeleportDeviceReadiness)] = [
-            // No cert → needsBootstrap regardless of SEP key / expiry.
+            // No cert, no key → needsBootstrap regardless of expiry.
             (false, false, nil,            .needsBootstrap),
             (false, false, validExpiry,    .needsBootstrap),
             (false, false, expiredExpiry,  .needsBootstrap),
-            (false, true,  nil,            .needsBootstrap),
-            (false, true,  validExpiry,    .needsBootstrap),
-            (false, true,  expiredExpiry,  .needsBootstrap),
+            // No cert, key + pinned anchors → the reuse state (Face ID login).
+            (false, true,  nil,            .needsLogin),
+            (false, true,  validExpiry,    .needsLogin),
+            (false, true,  expiredExpiry,  .needsLogin),
             // Cert present, no SEP key → needsRegistration (regardless of expiry).
             (true,  false, nil,            .needsRegistration),
             (true,  false, validExpiry,    .needsRegistration),
@@ -264,7 +285,8 @@ final class TeleportDeviceReadinessTests: XCTestCase {
             let resolver = TeleportDeviceReadinessResolver(
                 hasBootstrapCert: { _ in hasCert },
                 hasSEPKey: { _ in hasKey },
-                certExpiry: { _ in expiry }
+                certExpiry: { _ in expiry },
+                hasHostCAKeys: { _ in true }
             )
             let actual = resolver.resolve(clusterId: UUID(), now: now)
             XCTAssertEqual(

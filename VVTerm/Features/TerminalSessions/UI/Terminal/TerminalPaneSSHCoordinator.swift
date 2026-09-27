@@ -262,6 +262,12 @@ final class TerminalPaneSSHCoordinator {
                     switch sshError {
                     case .notConnected, .connectionFailed, .socketError, .timeout:
                         return true
+                    case .teleportHostLoginUnresolvable:
+                        // The connect path already cleared the credential, so
+                        // readiness flips to re-setup; resetting the client
+                        // drops the failed session and lets the user retry
+                        // through setup.
+                        return true
                     case .channelOpenFailed, .shellRequestFailed:
                         let hasOtherRegistrations = await TerminalTabManager.shared.hasOtherRegistrations(
                             using: sshClient,

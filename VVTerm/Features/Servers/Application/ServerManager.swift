@@ -17,6 +17,10 @@ final class ServerManager: ObservableObject {
     private let cloudKit = CloudKitManager.shared
     private let syncCoordinator = CloudKitSyncCoordinator.shared
     private let keychain = KeychainManager.shared
+    /// The Teleport credential invalidation seam. Defaulted so `shared` and
+    /// the app keep today's wiring; tests inject a recording fake to assert
+    /// the invalidation rule without a real keyring.
+    private let teleportCredentialInvalidator: any TeleportCredentialInvalidating
     private let logger = Logger.forCategory("ServerManager")
     private var isSyncEnabled: Bool { SyncSettings.isEnabled }
 
@@ -32,7 +36,12 @@ final class ServerManager: ObservableObject {
         let canReplaceLocalState: Bool
     }
 
-    private init() {
+    /// - Note: `internal` (not `private`) is deliberate so the invalidation
+    ///   wiring tests can build an isolated manager with a recording
+    ///   invalidator (`TeleportCredentialInvalidationWiringTests`); production
+    ///   callers use `ServerManager.shared`.
+    init(teleportCredentialInvalidator: any TeleportCredentialInvalidating = TeleportKeyRingHost.shared) {
+        self.teleportCredentialInvalidator = teleportCredentialInvalidator
         // Load local data first (fast)
         loadLocalData()
         refreshFreePlanGeneration(persistCurrentIfNeeded: !isSyncEnabled, reason: "local_load")
@@ -702,7 +711,11 @@ final class ServerManager: ObservableObject {
         Array(serverMap.values).sorted { $0.name < $1.name }
     }
 
-    private func applyCloudKitChanges(_ changes: CloudKitChanges, canReplaceLocalState: Bool = true) {
+    /// - Note: `internal` (not `private`) is deliberate so the CloudKit
+    ///   merge-path tests can drive the incremental and full-fetch merges
+    ///   (`TeleportCredentialInvalidationWiringTests`). Production callers
+    ///   reach it through `loadData`/`CloudKitManager` only.
+    func applyCloudKitChanges(_ changes: CloudKitChanges, canReplaceLocalState: Bool = true) {
         if changes.isFullFetch && canReplaceLocalState {
             applyFullFetchCloudKitChanges(changes)
             return
@@ -711,9 +724,44 @@ final class ServerManager: ObservableObject {
         applyIncrementalCloudKitChanges(changes)
     }
 
+    /// Apply the credential-invalidation rule for a server-row identity change
+    /// (local edit or CloudKit merge). A `nil` previous row (a brand-new row)
+    /// has no credential to clear.
+    ///
+    /// - Returns: `true` when the rule cleared a credential record, so the
+    ///   caller can also drop the stored host login in the same save.
+    @discardableResult
+    private func invalidateTeleportCredentialIfNeeded(from previous: Server?, to updated: Server) -> Bool {
+        guard let previous else { return false }
+        let shouldClear = TeleportCredentialInvalidationPolicy.shouldClearCredential(
+            oldHost: previous.host,
+            newHost: updated.host,
+            oldUsername: previous.username,
+            newUsername: updated.username,
+            hasCredential: teleportCredentialInvalidator.hasCredential(for: updated.id),
+            certKeyID: teleportCredentialInvalidator.certKeyID(for: updated.id)
+        )
+        guard shouldClear else { return false }
+        logger.info(
+            "Invalidating the Teleport credential for server \(updated.id.uuidString, privacy: .public) after a host/user identity change"
+        )
+        teleportCredentialInvalidator.clearCredential(for: updated.id)
+        return true
+    }
+
     private func applyFullFetchCloudKitChanges(_ changes: CloudKitChanges) {
+        let previousServersByID = makeServerMap(from: servers)
         workspaces = dedupedWorkspaces(from: changes.workspaces)
         servers = dedupedServers(from: changes.servers)
+        for index in servers.indices {
+            let server = servers[index]
+            if invalidateTeleportCredentialIfNeeded(from: previousServersByID[server.id], to: server) {
+                // The merged row belongs to the new identity; the previous
+                // identity's stored login must not survive the same save (the
+                // A6 rule, applied to the CloudKit merge paths too).
+                servers[index].teleportHostLogin = nil
+            }
+        }
     }
 
     private func applyIncrementalCloudKitChanges(_ changes: CloudKitChanges) {
@@ -760,7 +808,12 @@ final class ServerManager: ObservableObject {
 
     private func upsertServers(_ updates: [Server]) {
         var serverMap = makeServerMap(from: servers)
-        for server in updates {
+        for var server in updates {
+            if invalidateTeleportCredentialIfNeeded(from: serverMap[server.id], to: server) {
+                // See `applyFullFetchCloudKitChanges`: an identity-changing
+                // merge drops the previous identity's login in the same save.
+                server.teleportHostLogin = nil
+            }
             serverMap[server.id] = server
             logger.info("Server updated from CloudKit: \(server.name) (id: \(server.id), workspaceId: \(server.workspaceId))")
         }
@@ -777,6 +830,9 @@ final class ServerManager: ObservableObject {
         let removedServers = servers.filter { idSet.contains($0.id) }
         for server in removedServers {
             removeKnownHostIfUnused(for: server, excluding: idSet)
+            // The credential (SEP-key metadata + cert + cluster TLS state)
+            // belongs to the deleted row and is not reusable after removal.
+            teleportCredentialInvalidator.clearCredential(for: server.id)
         }
         servers.removeAll { idSet.contains($0.id) }
     }
@@ -823,6 +879,7 @@ final class ServerManager: ObservableObject {
                     port: servers[i].port,
                     eternalTerminalPort: servers[i].eternalTerminalPort,
                     username: servers[i].username,
+                    teleportHostLogin: servers[i].teleportHostLogin,
                     connectionMode: servers[i].connectionMode,
                     authMethod: servers[i].authMethod,
                     cloudflareAccessMode: servers[i].cloudflareAccessMode,
@@ -895,6 +952,7 @@ final class ServerManager: ObservableObject {
             port: server.port,
             eternalTerminalPort: server.eternalTerminalPort,
             username: server.username,
+            teleportHostLogin: server.teleportHostLogin,
             connectionMode: server.connectionMode,
             authMethod: server.authMethod,
             cloudflareAccessMode: server.cloudflareAccessMode,
@@ -937,6 +995,7 @@ final class ServerManager: ObservableObject {
     }
 
     func updateServer(_ server: Server) async throws {
+        let previousServer = servers.first(where: { $0.id == server.id })
         var updatedServer = server
         updatedServer = Server(
             id: server.id,
@@ -947,6 +1006,7 @@ final class ServerManager: ObservableObject {
             port: server.port,
             eternalTerminalPort: server.eternalTerminalPort,
             username: server.username,
+            teleportHostLogin: server.teleportHostLogin,
             connectionMode: server.connectionMode,
             authMethod: server.authMethod,
             cloudflareAccessMode: server.cloudflareAccessMode,
@@ -964,14 +1024,41 @@ final class ServerManager: ObservableObject {
         )
 
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
+            if invalidateTeleportCredentialIfNeeded(from: previousServer, to: updatedServer) {
+                // The stored login belonged to the old identity; the forced
+                // re-setup must pick a login for the new one (a host/user
+                // edit cannot keep a login from the previous identity).
+                updatedServer.teleportHostLogin = nil
+            }
             servers[index] = updatedServer
         }
         enqueuePendingServerUpsert(updatedServer)
         await persistLocalMutations(logMessage: "Updated server: \(updatedServer.name)")
     }
 
+    /// The one persist API for the setup picker's chosen Teleport host login.
+    /// Reads the current server row from `servers` so a concurrent edit is not
+    /// clobbered by a stale copy.
+    ///
+    /// Throws when the row no longer exists or the login is shape-invalid
+    /// (the picker only offers parsed principals, so an invalid value is a
+    /// caller bug). A failed persist never clears a previously stored login,
+    /// and the caller must keep the sheet open instead of dismissing.
+    func setTeleportHostLogin(_ login: String, for serverId: UUID) async throws {
+        guard let normalized = Server.normalizedTeleportHostLogin(login) else {
+            throw VVTermError.invalidHostLogin
+        }
+        guard let index = servers.firstIndex(where: { $0.id == serverId }) else {
+            throw VVTermError.serverNotFound
+        }
+        var updatedServer = servers[index]
+        updatedServer.teleportHostLogin = normalized
+        try await updateServer(updatedServer)
+    }
+
     func deleteServer(_ server: Server) async throws {
         try keychain.deleteCredentials(for: server.id)
+        teleportCredentialInvalidator.clearCredential(for: server.id)
 
         removeKnownHostIfUnused(for: server)
         servers.removeAll { $0.id == server.id }
@@ -1434,6 +1521,10 @@ enum VVTermError: LocalizedError {
     case connectionFailed(String)
     case authenticationFailed
     case timeout
+    /// The server row a persist targeted no longer exists.
+    case serverNotFound
+    /// A value failed the model's shape validation and was not persisted.
+    case invalidHostLogin
 
     var errorDescription: String? {
         switch self {
@@ -1450,6 +1541,10 @@ enum VVTermError: LocalizedError {
             return String(localized: "Authentication failed")
         case .timeout:
             return String(localized: "Connection timed out")
+        case .serverNotFound:
+            return String(localized: "The server no longer exists.")
+        case .invalidHostLogin:
+            return String(localized: "The selected host login is not valid.")
         }
     }
 

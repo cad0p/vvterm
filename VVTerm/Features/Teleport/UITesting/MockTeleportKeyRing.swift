@@ -166,6 +166,14 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, Telep
         return cred.sshCertPEM
     }
 
+    func liveCredentialSnapshot(for clusterId: UUID) -> (certPEM: String, privateKeyPEM: Data)? {
+        guard let certPEM = liveCertPEM(for: clusterId),
+              let privateKeyPEM = liveEd25519PrivateKey(for: clusterId) else {
+            return nil
+        }
+        return (certPEM, privateKeyPEM)
+    }
+
     func registeredCredentialID(for clusterId: UUID) -> Data? {
         guard let cred = credentials[clusterId],
               !cred.credentialID.isEmpty,
@@ -197,6 +205,50 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, Telep
 
     func liveEd25519PrivateKey(for clusterId: UUID) -> Data? {
         ed25519PrivateKeys[clusterId]
+    }
+
+    // MARK: - Credential reuse (duplicate server rows)
+
+    func isReusableRegistrationSource(for serverId: UUID, clusterName: String?) -> Bool {
+        guard let credential = credentials[serverId], !credential.credentialID.isEmpty else {
+            return false
+        }
+        guard fixtures[serverId]?.hasSEPKey == true else { return false }
+        guard let state = clusterTLSStates[serverId], !state.hostCACheckingKeys.isEmpty else {
+            return false
+        }
+        if let clusterName, !clusterName.isEmpty, state.clusterName != clusterName {
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    func seedRegistration(from sourceId: UUID, to targetId: UUID) -> Bool {
+        guard sourceId != targetId else { return false }
+        guard let source = credentials[sourceId], !source.credentialID.isEmpty else { return false }
+        guard let sourceTLSState = clusterTLSStates[sourceId], !sourceTLSState.hostCACheckingKeys.isEmpty else {
+            return false
+        }
+
+        let seeded = TeleportCredential(
+            clusterId: targetId,
+            credentialID: source.credentialID,
+            userHandle: source.userHandle,
+            publicKeyRaw: source.publicKeyRaw,
+            deviceName: source.deviceName
+        )
+        credentials[targetId] = seeded
+        clusterTLSStates[targetId] = sourceTLSState
+        fixtures[targetId] = Fixture(
+            hasBootstrapCert: false,
+            hasSEPKey: true,
+            certValidBefore: nil,
+            credentialID: Data(base64URLEncoded: source.credentialID) ?? Data(),
+            userHandle: Data(base64URLEncoded: source.userHandle) ?? Data(),
+            deviceName: source.deviceName
+        )
+        return true
     }
 
     /// When set, `storeEd25519PrivateKey` throws this instead of storing.
@@ -235,6 +287,23 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, Telep
         fixtures.removeValue(forKey: clusterId)
         ed25519PrivateKeys.removeValue(forKey: clusterId)
         clusterTLSStates.removeValue(forKey: clusterId)
+    }
+}
+
+// MARK: - Credential invalidation seam
+
+extension MockTeleportKeyRing: TeleportCredentialInvalidating {
+    func hasCredential(for serverId: UUID) -> Bool {
+        credentials[serverId] != nil
+    }
+
+    func certKeyID(for serverId: UUID) -> String? {
+        guard let certPEM = credentials[serverId]?.sshCertPEM else { return nil }
+        return OpenSSHCertificate.parse(authorizedKeysOrPEM: certPEM)?.keyID
+    }
+
+    func clearCredential(for serverId: UUID) {
+        clear(for: serverId)
     }
 }
 #endif

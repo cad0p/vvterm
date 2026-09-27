@@ -155,6 +155,42 @@ struct TeleportIssuedCertValidatorTests {
     }
 
     @Test
+    func rejectsCertWithOnlyInternalPrincipals() {
+        // A cert whose principals are all internal (`-…`) carries no usable
+        // SSH login: the validator must reject it so the coordinator never
+        // reaches `.success(logins: [])` (the picker would dead-end with no
+        // Continue).
+        let key = Data(repeating: 0x22, count: 32)
+        var blob = Data()
+        blob.append(OpenSSHCertificate.sshString(Data("ssh-ed25519-cert-v01@openssh.com".utf8)))
+        blob.append(OpenSSHCertificate.sshString(Data(repeating: 0x11, count: 32)))
+        blob.append(OpenSSHCertificate.sshString(key))
+        blob.append(Self.uint64(0))
+        blob.append(Self.uint32(1))  // user
+        blob.append(OpenSSHCertificate.sshString(Data("internal-only".utf8)))
+        // valid principals: one string containing the concatenated principal
+        // strings (OpenSSH PROTOCOL.certkeys).
+        blob.append(OpenSSHCertificate.sshString(OpenSSHCertificate.sshString(Data("-teleport-internal-join".utf8))))
+        blob.append(Self.uint64(0))
+        blob.append(Self.uint64(2_000_000_000))
+        blob.append(OpenSSHCertificate.sshString(Data()))
+        blob.append(OpenSSHCertificate.sshString(Data()))
+        blob.append(OpenSSHCertificate.sshString(Data()))
+        blob.append(OpenSSHCertificate.sshString(Data(repeating: 0x33, count: 51)))
+        blob.append(OpenSSHCertificate.sshString(Data(repeating: 0x44, count: 64)))
+
+        let expectedBlob = OpenSSHCertificate.sshString(Data("ssh-ed25519".utf8))
+            + OpenSSHCertificate.sshString(key)
+        let result = TeleportIssuedCertValidator.validateIssuedUserCert(
+            blob.base64EncodedString(),
+            expectedPublicKeyBlob: expectedBlob,
+            requestedTTL: Self.requestedTTL,
+            now: Date(timeIntervalSince1970: 1_900_000_000)
+        )
+        #expect(result.failure == .noPrincipals)
+    }
+
+    @Test
     func rejectsNotYetValidCert() {
         let key = Data(repeating: 0x22, count: 32)
         var blob = Data()

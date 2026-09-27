@@ -85,6 +85,21 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
     /// Clear all credential state for a cluster (metadata only — the SEP key
     /// itself is removed via `SecureEnclaveSigner.deleteKey`).
     func clear(for clusterId: UUID)
+
+    /// Whether this row's registration is a complete, live source for reuse by
+    /// a duplicate server: a credential record with a non-empty credentialID,
+    /// the SEP key still present, a cluster TLS state with non-empty Host CA
+    /// checking keys, and (when `clusterName` is non-nil) a matching cluster
+    /// name.
+    func isReusableRegistrationSource(for serverId: UUID, clusterName: String?) -> Bool
+
+    /// Copy the registration metadata (credentialID, userHandle, publicKeyRaw,
+    /// deviceName) and the cluster TLS state from `sourceId` to `targetId`.
+    /// Deliberately copies **no** certificate or ed25519 key, so the login runs
+    /// and the host-login picker shows for the new row. Returns false when the
+    /// source is not a complete live registration.
+    @discardableResult
+    func seedRegistration(from sourceId: UUID, to targetId: UUID) -> Bool
 }
 
 /// The movable keyring implements every requirement; this host-side

@@ -152,6 +152,9 @@ struct ServerFormSheet: View {
     @State private var cloudflareTeamDomainOverride: String = ""
     @State private var showCloudflareOverrides: Bool = false
     @State private var selectedWorkspaceId: UUID?
+    /// The display name of the row whose device registration was seeded into
+    /// this form's setup (duplicate-server reuse), or nil.
+    @State private var teleportReuseSourceName: String?
     @State private var selectedEnvironment: ServerEnvironment = .production
     @State private var notes: String = ""
     @State private var requiresBiometricUnlock: Bool = false
@@ -488,17 +491,26 @@ struct ServerFormSheet: View {
                 }
             }
             .sheet(isPresented: $showingTeleportLogin) {
-                TeleportLoginSheet(
-                    makeCoordinator: { makeLoginCoordinator() },
-                    cluster: teleportCluster,
-                    onSuccess: {
-                        showingTeleportLogin = false
-                    },
-                    onCancel: {
-                        showingTeleportLogin = false
-                    }
-                )
-                .adaptiveSoftScrollEdges()
+                if let server {
+                    TeleportLoginSheet(
+                        makeCoordinator: { makeLoginCoordinator() },
+                        cluster: teleportCluster,
+                        server: server,
+                        serverManager: serverManager,
+                        reuseNotice: teleportReuseSourceName.map {
+                            String(format: String(localized: "Using the existing device registration from %@."), $0)
+                        },
+                        onSuccess: { _ in
+                            teleportReuseSourceName = nil
+                            showingTeleportLogin = false
+                        },
+                        onCancel: {
+                            teleportReuseSourceName = nil
+                            showingTeleportLogin = false
+                        }
+                    )
+                    .adaptiveSoftScrollEdges()
+                }
             }
             .limitReachedAlert(.servers, isPresented: $showingServerLimitAlert)
             .onAppear {
@@ -671,7 +683,13 @@ struct ServerFormSheet: View {
             }
 
 
-            TextField("Username", text: $username, prompt: Text(String(localized: "root")))
+            TextField(
+                selectedAuthMethod == .faceIDTeleport
+                    ? "Teleport user"
+                    : "Username",
+                text: $username,
+                prompt: Text(selectedAuthMethod == .faceIDTeleport ? "" : String(localized: "root"))
+            )
                 #if os(iOS)
                 .textContentType(.username)
                 #endif
@@ -679,6 +697,14 @@ struct ServerFormSheet: View {
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
+
+            if selectedAuthMethod == .faceIDTeleport {
+                Text(String(localized: "Changing the Teleport user or host re-runs Teleport setup on this device."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.form.userCaption")
+            }
 
             Button {
                 showingLocalDiscoverySheet = true
@@ -964,6 +990,23 @@ struct ServerFormSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if let frozenHostLogin = server?.teleportHostLogin {
+                LabeledContent(String(localized: "Host login")) {
+                    Text(frozenHostLogin)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("vvterm.teleport.setup.hostLogin")
+                }
+            }
+
+            if let teleportReuseSourceName {
+                Text(String(format: String(localized: "Using the existing device registration from %@."), teleportReuseSourceName))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.setup.reuseNotice")
+            }
+
             teleportSetupButton
         }
         .padding(.vertical, 4)
@@ -1005,7 +1048,21 @@ struct ServerFormSheet: View {
                 .tint(.orange)
             case .needsBootstrap:
                 Button {
-                    showingTeleportBootstrap = true
+                    // Duplicate-server reuse (#262): if a complete live
+                    // registration for the same (host, Teleport user,
+                    // cluster) exists, seed it into this row and go straight
+                    // to Face ID login + the picker instead of the Safari
+                    // bootstrap/registration ceremony.
+                    if let sourceName = TeleportKeyRingHost.shared.seedReuseIfPossible(
+                        for: server,
+                        liveServers: serverManager.servers
+                    ) {
+                        teleportReuseSourceName = sourceName
+                        showingTeleportLogin = true
+                    } else {
+                        teleportReuseSourceName = nil
+                        showingTeleportBootstrap = true
+                    }
                 } label: {
                     Label(String(localized: "Begin setup in Safari"), systemImage: "safari")
                 }
@@ -1129,6 +1186,7 @@ struct ServerFormSheet: View {
             port: portNum,
             eternalTerminalPort: Int(eternalTerminalPort) ?? 2022,
             username: effectiveUsername,
+            teleportHostLogin: server?.teleportHostLogin,
             connectionMode: transportSelection.connectionMode,
             authMethod: transportSelection == .tailscale ? .password : selectedAuthMethod,
             cloudflareAccessMode: transportSelection == .cloudflare ? selectedCloudflareAccessMode : nil,
@@ -1534,20 +1592,35 @@ private struct TeleportRegistrationSheet: View {
 private struct TeleportLoginSheet: View {
     let makeCoordinator: () -> TeleportLoginCoordinator
     let cluster: TeleportCluster
-    let onSuccess: () -> Void
+    let server: Server
+    /// The host's injected manager (never the `.shared` singleton: a
+    /// test/preview/injected composition root must persist to its own store).
+    let serverManager: ServerManager
+    var reuseNotice: String? = nil
+    let onSuccess: (String) -> Void
     let onCancel: () -> Void
 
     @StateObject private var coordinator: TeleportLoginCoordinator
+
+    /// The last persist failure, shown as an alert while the sheet stays
+    /// open so the user can retry (dismissing would silently lose the pick).
+    @State private var persistErrorMessage: String?
 
     @MainActor
     init(
         makeCoordinator: @escaping () -> TeleportLoginCoordinator,
         cluster: TeleportCluster,
-        onSuccess: @escaping () -> Void,
+        server: Server,
+        serverManager: ServerManager,
+        reuseNotice: String? = nil,
+        onSuccess: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.makeCoordinator = makeCoordinator
         self.cluster = cluster
+        self.server = server
+        self.serverManager = serverManager
+        self.reuseNotice = reuseNotice
         self.onSuccess = onSuccess
         self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: makeCoordinator())
@@ -1557,9 +1630,31 @@ private struct TeleportLoginSheet: View {
         TeleportLoginView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: onSuccess,
-            onCancel: onCancel
+            storedHostLogin: server.teleportHostLogin,
+            onSuccess: { login in
+                Task { @MainActor in
+                    do {
+                        try await serverManager.setTeleportHostLogin(login, for: server.id)
+                        onSuccess(login)
+                    } catch {
+                        persistErrorMessage = error.localizedDescription
+                    }
+                }
+            },
+            onCancel: onCancel,
+            reuseNotice: reuseNotice
         )
+        .alert(
+            String(localized: "Couldn't Save the Host Login"),
+            isPresented: Binding(
+                get: { persistErrorMessage != nil },
+                set: { if !$0 { persistErrorMessage = nil } }
+            )
+        ) {
+            Button(String(localized: "OK"), role: .cancel) { persistErrorMessage = nil }
+        } message: {
+            Text(persistErrorMessage ?? "")
+        }
     }
 }
 
