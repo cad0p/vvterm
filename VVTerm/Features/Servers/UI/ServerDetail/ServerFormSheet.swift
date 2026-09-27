@@ -709,6 +709,17 @@ struct ServerFormSheet: View {
                 .textInputAutocapitalization(.never)
                 #endif
 
+            if selectedAuthMethod == .faceIDTeleport {
+                // #266: this field wants the Teleport identity, not the host
+                // login — the confusion that produced #262. Neutral examples
+                // only: never a real user's cluster identities in shipped copy.
+                Text(String(localized: "The Teleport user (e.g. alice). This is not the host login (e.g. ubuntu) — that is picked during setup."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.form.userHint")
+            }
+
             // #265: the reminder is about RE-running setup for an existing
             // Teleport row. A new server (Add) has no setup to re-run, and
             // switching a password row to Teleport has nothing to re-run

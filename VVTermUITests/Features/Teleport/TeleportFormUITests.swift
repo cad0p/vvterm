@@ -33,6 +33,7 @@ final class TeleportFormUITests: XCTestCase {
     // MARK: - Form copy identifiers
 
     private static let authMethodPicker = "vvterm.teleport.form.authMethodPicker"
+    private static let userHint = "vvterm.teleport.form.userHint"
     private static let userCaption = "vvterm.teleport.form.userCaption"
     private static let nodeNameCaption = "vvterm.teleport.form.nodeNameCaption"
 
@@ -98,6 +99,10 @@ final class TeleportFormUITests: XCTestCase {
             app.descendants(matching: .any)[Self.userCaption].exists,
             "the setup reminder must not exist before Face ID (Teleport) is selected"
         )
+        XCTAssertFalse(
+            app.descendants(matching: .any)[Self.userHint].exists,
+            "the Teleport-user hint must not exist on a non-Teleport form (#266)"
+        )
 
         selectAuthMethod("Face ID (Teleport)", in: app, form: form)
 
@@ -109,6 +114,10 @@ final class TeleportFormUITests: XCTestCase {
             app.descendants(matching: .any)[Self.nodeNameCaption].waitForExistence(timeout: 5),
             "the node-name caption should appear for Face ID (Teleport)"
         )
+        XCTAssertTrue(
+            app.descendants(matching: .any)[Self.userHint].waitForExistence(timeout: 5),
+            "the Teleport-user hint should appear for Face ID (Teleport) (#266)"
+        )
         XCTAssertFalse(
             app.descendants(matching: .any)[Self.userCaption].exists,
             "the setup reminder must not show on first setup (#265)"
@@ -119,7 +128,8 @@ final class TeleportFormUITests: XCTestCase {
 
     /// Editing an existing `.faceIDTeleport` row keeps the reminder: this is
     /// the only case where changing the Teleport user or host really does
-    /// re-run setup on this device.
+    /// re-run setup on this device. The Teleport-user hint shows in both modes
+    /// (#266 acceptance: Add/Edit).
     func testEditMode_teleportServer_showsTeleportCaptions() {
         let app = launch(mode: "edit")
         let form = waitForForm(in: app, title: "Edit Server")
@@ -127,6 +137,10 @@ final class TeleportFormUITests: XCTestCase {
         let reminder = app.descendants(matching: .any)[Self.userCaption]
         scrollToVisible(reminder, in: form)
         XCTAssertTrue(reminder.exists, "the setup reminder should show when editing a Teleport server (#265)")
+        XCTAssertTrue(
+            app.descendants(matching: .any)[Self.userHint].exists,
+            "the Teleport-user hint should show when editing a Teleport server (#266)"
+        )
 
         XCTAssertTrue(
             app.descendants(matching: .any)[Self.nodeNameCaption].exists,
