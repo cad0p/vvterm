@@ -505,8 +505,12 @@ actor SSHClient {
             do {
                 try await prepareTeleportInnerSession()
             } catch {
+                let message = Self.teleportInnerSessionPrepareFailureMessage(
+                    for: error,
+                    redacting: connectedServer
+                )
                 logger.warning(
-                    "Failed to prepare Teleport inner session before resolving environment: \(error.localizedDescription, privacy: .public)"
+                    "Failed to prepare Teleport inner session before resolving environment: \(message, privacy: .public)"
                 )
             }
         }
@@ -1082,6 +1086,20 @@ actor SSHClient {
         innerSessionReady: Bool
     ) -> Bool {
         authMethod == .faceIDTeleport && !innerSessionReady
+    }
+
+    /// Rendering for the swallowed `prepareTeleportInnerSession()` failure in
+    /// `remoteEnvironment()`. Extracted so the redaction contract can be unit-
+    /// tested without a live libssh2 session: the inner resolver can throw
+    /// `TeleportHostLoginFailure.ambiguousPrincipalSet`, whose
+    /// `localizedDescription` embeds the principal logins, and this message is
+    /// logged at public privacy for the diagnostics export. It must go through
+    /// the same redaction spine as the recorder.
+    nonisolated static func teleportInnerSessionPrepareFailureMessage(
+        for error: Error,
+        redacting server: Server?
+    ) -> String {
+        SSHError.diagnosticsMessage(for: error, redacting: server)
     }
 
     // MARK: - Mosh
