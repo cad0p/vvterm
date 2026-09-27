@@ -187,7 +187,12 @@ struct SSHAgentRequestDecoder {
                 break  // whole frame not here yet
             }
 
-            let message = buffer.subdata(in: 4..<totalLength)
+            // Slice relative to the buffer's own indices: `removeFirst`
+            // advances `startIndex`, and `Data.subdata(in:)` interprets its
+            // range in absolute indices (it traps once the buffer has been
+            // consumed from the front). `Data(_:)` normalizes the slice.
+            let frameStart = buffer.startIndex + 4
+            let message = Data(buffer[frameStart..<(frameStart + frameLength)])
             buffer.removeFirst(totalLength)
             requests.append(Self.parse(message))
         }

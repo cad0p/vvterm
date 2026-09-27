@@ -95,6 +95,31 @@ struct SSHAgentProtocolCodecTests {
     }
 
     @Test
+    func decoderEmitsFramesAcrossSeparateReads() throws {
+        // Regression: consuming a frame calls `removeFirst`, which advances
+        // the buffer's `startIndex`; a later frame must be sliced relative to
+        // that index. Before the fix this trapped (SIGTRAP) in the test runner
+        // and in the serving task.
+        var decoder = SSHAgentRequestDecoder()
+        #expect(try decoder.ingest(Data([0x00, 0x00, 0x00, 0x01, 0x0B])) == [.requestIdentities])
+
+        let keyBlob = Data([0x01, 0x02])
+        let data = Data([0xAB])
+        let signFrame = SSHAgentProtocolCodec.frame(
+            Data([0x0D])
+                + SSHAgentProtocolCodec.sshString(keyBlob)
+                + SSHAgentProtocolCodec.sshString(data)
+                + SSHAgentProtocolCodec.uint32(0)
+        )
+        // The second frame arrives split across two more reads.
+        #expect(try decoder.ingest(signFrame.prefix(3)) == [])
+        #expect(
+            try decoder.ingest(Data(signFrame.dropFirst(3)))
+                == [.signRequest(keyBlob: keyBlob, data: data, flags: 0)]
+        )
+    }
+
+    @Test
     func decoderParsesASignRequest() throws {
         let keyBlob = Data([0x01, 0x02, 0x03])
         let data = Data([0xDE, 0xAD, 0xBE, 0xEF])
