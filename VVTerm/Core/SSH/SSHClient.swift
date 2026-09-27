@@ -3532,16 +3532,17 @@ actor SSHSession {
                 },
                 sleep: { try? await Task.sleep(nanoseconds: 5_000_000) }
             )
-            var errmsg: UnsafeMutablePointer<CChar>?
-            var errmsgLen: Int32 = 0
-            libssh2_session_last_error(outerSession, &errmsg, &errmsgLen, 0)
-            let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
             let failureMessage = TeleportSubsystemFailureMessage.display(
                 code: subsystemResult,
                 stderr: stderrData
             )
+            // Payload-free: the proxy's channel stderr is arbitrary server
+            // text (it can embed the node name or the host login) and the
+            // OSLog/ring merge feeds the shareable diagnostics report. Log the
+            // code and byte count only; the text travels through the thrown
+            // error to the transient terminal banner.
             logger.error(
-                "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(failureMessage, privacy: .public)"
+                "teleport_proxy_subsystem_failed code=\(subsystemResult) stderr_bytes=\(stderrData.count)"
             )
             if let proxyToken {
                 startupTrace?.end(proxyToken, outcome: "failed", detail: "code_\(subsystemResult)")
@@ -4985,11 +4986,11 @@ actor SSHSession {
         if let error = error {
             request.resume(throwing: error)
         } else {
-            if !request.stderr.isEmpty,
-               let stderr = String(data: request.stderr, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !stderr.isEmpty {
-                logger.debug("Exec command stderr: \(stderr, privacy: .public)")
+            if !request.stderr.isEmpty {
+                // Remote stderr is arbitrary server text and the OSLog/ring
+                // merge feeds the shareable diagnostics report: log the byte
+                // count only, never the payload.
+                logger.debug("Exec command stderr bytes=\(request.stderr.count)")
             }
             let output = String(data: request.output, encoding: .utf8) ?? ""
             request.resume(returning: output)

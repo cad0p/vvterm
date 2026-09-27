@@ -166,7 +166,36 @@ struct TeleportAgentForwardingPinsTests {
         )
     }
 
+    @Test
+    func proxySubsystemFailureLogIsPayloadFree() throws {
+        // The proxy's channel stderr (and the subsystem name, which embeds the
+        // node name) must never reach OSLog/the diagnostics ring: the E2E
+        // workflow uploads the simulator log and the ring merges into the
+        // shareable report. Only the code and byte count are logged.
+        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let lines = source.components(separatedBy: "\n")
+        let markerLines = lines.indices.filter { lines[$0].contains("teleport_proxy_subsystem_failed") }
+        #expect(markerLines.count == 1, "expected exactly one proxy-subsystem failure log line")
+        let markerLine = try #require(markerLines.first)
+        let line = lines[markerLine]
+        #expect(!line.contains("stderr="), "the stderr payload must not be logged: \(line)")
+        #expect(!line.contains("subsystem="), "the node-embedding subsystem name must not be logged: \(line)")
+        #expect(!line.contains("privacy: .public"), "the log line must carry no public payload: \(line)")
+        #expect(line.contains("stderr_bytes="), "the byte count is the payload-free diagnostic: \(line)")
+    }
 
+    @Test
+    func execStderrLogIsPayloadFree() throws {
+        // Same class of sink: remote exec stderr is arbitrary server text.
+        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let lines = source.components(separatedBy: "\n")
+        let markerLines = lines.indices.filter { lines[$0].contains("Exec command stderr") }
+        #expect(markerLines.count == 1, "expected exactly one exec-stderr log line")
+        let markerLine = try #require(markerLines.first)
+        let line = lines[markerLine]
+        #expect(!line.contains("privacy: .public"), "the exec stderr payload must not be logged: \(line)")
+        #expect(line.contains("bytes="), "the byte count is the payload-free diagnostic: \(line)")
+    }
 
     @Test
     func prepareFailureRingEmissionUsesTheRedactionSpine() throws {
