@@ -719,8 +719,12 @@ final class ServerManager: ObservableObject {
     /// Apply the credential-invalidation rule for a server-row identity change
     /// (local edit or CloudKit merge). A `nil` previous row (a brand-new row)
     /// has no credential to clear.
-    private func invalidateTeleportCredentialIfNeeded(from previous: Server?, to updated: Server) {
-        guard let previous else { return }
+    ///
+    /// - Returns: `true` when the rule cleared a credential record, so the
+    ///   caller can also drop the stored host login in the same save.
+    @discardableResult
+    private func invalidateTeleportCredentialIfNeeded(from previous: Server?, to updated: Server) -> Bool {
+        guard let previous else { return false }
         let shouldClear = TeleportCredentialInvalidationPolicy.shouldClearCredential(
             oldHost: previous.host,
             newHost: updated.host,
@@ -729,11 +733,12 @@ final class ServerManager: ObservableObject {
             hasCredential: teleportCredentialInvalidator.hasCredential(for: updated.id),
             certKeyID: teleportCredentialInvalidator.certKeyID(for: updated.id)
         )
-        guard shouldClear else { return }
+        guard shouldClear else { return false }
         logger.info(
             "Invalidating the Teleport credential for server \(updated.id.uuidString, privacy: .public) after a host/user identity change"
         )
         teleportCredentialInvalidator.clearCredential(for: updated.id)
+        return true
     }
 
     private func applyFullFetchCloudKitChanges(_ changes: CloudKitChanges) {
@@ -1001,21 +1006,35 @@ final class ServerManager: ObservableObject {
         )
 
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
+            if invalidateTeleportCredentialIfNeeded(from: previousServer, to: updatedServer) {
+                // The stored login belonged to the old identity; the forced
+                // re-setup must pick a login for the new one (a host/user
+                // edit cannot keep a login from the previous identity).
+                updatedServer.teleportHostLogin = nil
+            }
             servers[index] = updatedServer
         }
-        invalidateTeleportCredentialIfNeeded(from: previousServer, to: updatedServer)
         enqueuePendingServerUpsert(updatedServer)
         await persistLocalMutations(logMessage: "Updated server: \(updatedServer.name)")
     }
 
     /// The one persist API for the setup picker's chosen Teleport host login.
     /// Reads the current server row from `servers` so a concurrent edit is not
-    /// clobbered by a stale copy. Shape-invalid values are dropped (never
-    /// persisted).
+    /// clobbered by a stale copy.
+    ///
+    /// Throws when the row no longer exists or the login is shape-invalid
+    /// (the picker only offers parsed principals, so an invalid value is a
+    /// caller bug). A failed persist never clears a previously stored login,
+    /// and the caller must keep the sheet open instead of dismissing.
     func setTeleportHostLogin(_ login: String, for serverId: UUID) async throws {
-        guard let index = servers.firstIndex(where: { $0.id == serverId }) else { return }
+        guard let normalized = Server.normalizedTeleportHostLogin(login) else {
+            throw VVTermError.invalidHostLogin
+        }
+        guard let index = servers.firstIndex(where: { $0.id == serverId }) else {
+            throw VVTermError.serverNotFound
+        }
         var updatedServer = servers[index]
-        updatedServer.teleportHostLogin = Server.normalizedTeleportHostLogin(login)
+        updatedServer.teleportHostLogin = normalized
         try await updateServer(updatedServer)
     }
 
@@ -1484,6 +1503,10 @@ enum VVTermError: LocalizedError {
     case connectionFailed(String)
     case authenticationFailed
     case timeout
+    /// The server row a persist targeted no longer exists.
+    case serverNotFound
+    /// A value failed the model's shape validation and was not persisted.
+    case invalidHostLogin
 
     var errorDescription: String? {
         switch self {
@@ -1500,6 +1523,10 @@ enum VVTermError: LocalizedError {
             return String(localized: "Authentication failed")
         case .timeout:
             return String(localized: "Connection timed out")
+        case .serverNotFound:
+            return String(localized: "The server no longer exists.")
+        case .invalidHostLogin:
+            return String(localized: "The selected host login is not valid.")
         }
     }
 

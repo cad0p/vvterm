@@ -1598,6 +1598,10 @@ private struct TeleportLoginSheet: View {
 
     @StateObject private var coordinator: TeleportLoginCoordinator
 
+    /// The last persist failure, shown as an alert while the sheet stays
+    /// open so the user can retry (dismissing would silently lose the pick).
+    @State private var persistErrorMessage: String?
+
     @MainActor
     init(
         makeCoordinator: @escaping () -> TeleportLoginCoordinator,
@@ -1623,13 +1627,28 @@ private struct TeleportLoginSheet: View {
             storedHostLogin: server.teleportHostLogin,
             onSuccess: { login in
                 Task { @MainActor in
-                    try? await ServerManager.shared.setTeleportHostLogin(login, for: server.id)
-                    onSuccess(login)
+                    do {
+                        try await ServerManager.shared.setTeleportHostLogin(login, for: server.id)
+                        onSuccess(login)
+                    } catch {
+                        persistErrorMessage = error.localizedDescription
+                    }
                 }
             },
             onCancel: onCancel,
             reuseNotice: reuseNotice
         )
+        .alert(
+            String(localized: "Couldn't Save the Host Login"),
+            isPresented: Binding(
+                get: { persistErrorMessage != nil },
+                set: { if !$0 { persistErrorMessage = nil } }
+            )
+        ) {
+            Button(String(localized: "OK"), role: .cancel) { persistErrorMessage = nil }
+        } message: {
+            Text(persistErrorMessage ?? "")
+        }
     }
 }
 

@@ -92,7 +92,7 @@ struct ServerManagerTeleportHostLoginTests {
     }
 
     @Test
-    func setTeleportHostLoginPersistsThePickedLoginAndDropsInvalidValues() async throws {
+    func setTeleportHostLoginPersistsThePickedLoginAndRejectsInvalidValues() async throws {
         try await withIsolatedManager { manager in
             var server = makeFixture(teleportHostLogin: nil)
             manager.servers = [server]
@@ -103,10 +103,29 @@ struct ServerManagerTeleportHostLoginTests {
             server = try #require(manager.servers.first(where: { $0.id == server.id }))
             #expect(server.teleportHostLogin == "root")
 
-            // A shape-invalid value must never be persisted.
-            try await manager.setTeleportHostLogin("  ", for: server.id)
+            // A shape-invalid value must be rejected, never persisted, and
+            // must not clear the previously stored login.
+            do {
+                try await manager.setTeleportHostLogin("  ", for: server.id)
+                Issue.record("a shape-invalid host login must not persist")
+            } catch {
+                // expected
+            }
             server = try #require(manager.servers.first(where: { $0.id == server.id }))
-            #expect(server.teleportHostLogin == nil)
+            #expect(server.teleportHostLogin == "root")
+        }
+    }
+
+    @Test
+    func setTeleportHostLoginThrowsForAnUnknownRow() async throws {
+        try await withIsolatedManager { manager in
+            manager.servers = []
+            do {
+                try await manager.setTeleportHostLogin("root", for: UUID())
+                Issue.record("an unknown row must not report success")
+            } catch {
+                // expected: the caller keeps the sheet open on failure
+            }
         }
     }
 }

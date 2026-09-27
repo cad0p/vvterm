@@ -209,6 +209,60 @@ struct TeleportCredentialInvalidationWiringTests {
     }
 
     @Test
+    func hostChangeClearsTheStoredHostLoginInTheSameSave() async throws {
+        try await withManager { manager, invalidator in
+            let server = makeServer()
+            manager.servers = [server]
+            invalidator.seedCredential(for: server.id, certKeyID: "pier")
+
+            var edited = server
+            edited.host = "other.example.com"
+            try await manager.updateServer(edited)
+
+            #expect(invalidator.cleared == [server.id])
+            let stored = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(
+                stored.teleportHostLogin == nil,
+                "a host change must not keep a host login from the previous identity"
+            )
+        }
+    }
+
+    @Test
+    func usernameChangeClearsTheStoredHostLoginInTheSameSave() async throws {
+        try await withManager { manager, invalidator in
+            let server = makeServer()
+            manager.servers = [server]
+            invalidator.seedCredential(for: server.id, certKeyID: "pier")
+
+            var edited = server
+            edited.username = "someone-else"
+            try await manager.updateServer(edited)
+
+            #expect(invalidator.cleared == [server.id])
+            let stored = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(stored.teleportHostLogin == nil)
+        }
+    }
+
+    @Test
+    func sameHostRenameBackKeepsTheStoredHostLogin() async throws {
+        try await withManager { manager, invalidator in
+            let server = makeServer(username: "typo")
+            manager.servers = [server]
+            invalidator.seedCredential(for: server.id, certKeyID: "pier")
+
+            var edited = server
+            edited.username = "pier"
+            try await manager.updateServer(edited)
+
+            #expect(invalidator.cleared.isEmpty)
+            let stored = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(stored.teleportHostLogin == "deploy")
+        }
+    }
+
+    @Test
     func fullFetchMergeHostChangeClearsTheCredential() async throws {
         try await withManager { manager, invalidator in
             let server = makeServer()
