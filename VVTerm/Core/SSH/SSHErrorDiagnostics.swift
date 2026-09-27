@@ -40,6 +40,9 @@ extension SSHError {
             )
             result = redactToken(server.host, in: result, as: "<host>")
             result = redactToken(server.username, in: result, as: "<user>")
+            // The host login is identity material too: the fail-closed
+            // resolver and the connect errors can embed it.
+            result = redactToken(server.teleportHostLogin ?? "", in: result, as: "<login>")
         }
         // DNS-resolved endpoints embedded by the transport (e.g. "Connection
         // refused (10.0.0.5:22)") are not covered by the configured host.

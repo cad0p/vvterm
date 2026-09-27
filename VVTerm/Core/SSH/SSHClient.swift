@@ -2129,8 +2129,11 @@ actor SSHSession {
             }
             return TeleportAuthMaterial(username: login, certData: certData, keyData: snapshot.privateKeyPEM)
         case .failure(let failure):
+            // Log the case name only: the failure's principal payload is
+            // identity material and must not be rendered into logs or the
+            // diagnostics export.
             logger.error(
-                "Teleport host login unresolvable for cluster \(clusterId.uuidString, privacy: .public): \(String(describing: failure), privacy: .public) — clearing credential"
+                "Teleport host login unresolvable for cluster \(clusterId.uuidString, privacy: .public): \(failure.caseDescription, privacy: .public) — clearing credential"
             )
             throw await TeleportHostLoginFailureRoute.clearAndFail(
                 failure,
@@ -2426,9 +2429,11 @@ actor SSHSession {
             if config.authMethod == .faceIDTeleport,
                let cert = OpenSSHCertificate.parse(blob: blob) {
                 // Actionable diagnostics: the presented principals let an
-                // operator correct the expected set from evidence.
+                // operator correct the expected set from evidence. Identity
+                // values stay at the default (private) interpolation so they
+                // cannot reach the shareable diagnostics export.
                 logger.error(
-                    "teleport_host_cert_rejected key_id=\(cert.keyID, privacy: .public) principals=\(cert.validPrincipals.joined(separator: ","), privacy: .public) expected=\(expectedPrincipals.joined(separator: ","), privacy: .public)"
+                    "teleport_host_cert_rejected key_id=\(cert.keyID) principals=\(cert.validPrincipals.joined(separator: ",")) expected=\(expectedPrincipals.joined(separator: ","))"
                 )
             }
             logger.error(

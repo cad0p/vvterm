@@ -6,14 +6,16 @@ struct SSHErrorDiagnosticsTests {
     private func makeServer(
         host: String = "teleport.pcad.it",
         port: Int = 443,
-        username: String = "pier"
+        username: String = "pier",
+        teleportHostLogin: String? = nil
     ) -> Server {
         Server(
             workspaceId: UUID(),
             name: "pcad-dev",
             host: host,
             port: port,
-            username: username
+            username: username,
+            teleportHostLogin: teleportHostLogin
         )
     }
 
@@ -52,6 +54,36 @@ struct SSHErrorDiagnosticsTests {
             redacting: makeServer()
         )
         #expect(withUser == #"unknown("publickey rejected for <user>")"#)
+    }
+
+    @Test
+    func redactsConfiguredTeleportHostLogin() {
+        // The stored host login is identity material and can appear in
+        // connect-path error renderings; it must not reach the export.
+        let message = SSHError.diagnosticsMessage(
+            for: SSHError.unknown("publickey rejected for login deploy"),
+            redacting: makeServer(teleportHostLogin: "deploy")
+        )
+
+        #expect(message == #"unknown("publickey rejected for login <login>")"#)
+        #expect(!message.contains("deploy"))
+    }
+
+    @Test
+    func hostLoginFailureRendersCaseNameOnly() {
+        // The associated principal array must never render through
+        // String(describing:) — the log/diagnostics spine uses it.
+        let failure = TeleportHostLoginFailure.ambiguousPrincipalSet(["deploy", "root"])
+        #expect(String(describing: failure) == "ambiguousPrincipalSet")
+        #expect(failure.errorDescription?.contains("deploy, root") == true)
+
+        let message = SSHError.diagnosticsMessage(
+            for: SSHError.teleportHostLoginUnresolvable(failure),
+            redacting: makeServer(teleportHostLogin: "deploy")
+        )
+        #expect(!message.contains("deploy"))
+        #expect(!message.contains("root"))
+        #expect(message.contains("ambiguousPrincipalSet"))
     }
 
     @Test

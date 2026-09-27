@@ -34,7 +34,7 @@
 import Foundation
 
 /// Why the SSH username could not be resolved from the certificate.
-enum TeleportHostLoginFailure: Error, Equatable, LocalizedError {
+enum TeleportHostLoginFailure: Error, Equatable, LocalizedError, CustomStringConvertible {
     /// The stored certificate could not be parsed as an OpenSSH certificate.
     case certificateUnreadable
     /// The certificate carries no non-internal principal.
@@ -42,6 +42,21 @@ enum TeleportHostLoginFailure: Error, Equatable, LocalizedError {
     /// The certificate carries several non-internal principals and no stored
     /// login matches one of them — the client must not guess.
     case ambiguousPrincipalSet([String])
+
+    /// A stable, non-rendering case name for logs and diagnostics. The
+    /// associated principal list is deliberately omitted so it can never
+    /// reach the shareable diagnostics report through `String(describing:)`.
+    var caseDescription: String {
+        switch self {
+        case .certificateUnreadable: return "certificateUnreadable"
+        case .noPrincipals: return "noPrincipals"
+        case .ambiguousPrincipalSet: return "ambiguousPrincipalSet"
+        }
+    }
+
+    /// `String(describing:)` (logs, diagnostics) renders the case name only;
+    /// the user-facing message stays in `errorDescription`.
+    var description: String { caseDescription }
 
     var errorDescription: String? {
         switch self {

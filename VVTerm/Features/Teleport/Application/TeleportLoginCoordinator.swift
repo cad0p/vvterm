@@ -329,8 +329,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             // would authenticate as the wrong identity. Clear whatever the row
             // holds and fail closed.
             guard cert.keyID == cluster.username else {
+                // No username in the log: identity values use the default
+                // (private) interpolation and never `.public`.
                 logger.error(
-                    "issued certificate keyID does not match the configured Teleport user \(cluster.username, privacy: .public) — rejecting and clearing the credential"
+                    "issued certificate keyID does not match the configured Teleport user for cluster \(cluster.id.uuidString, privacy: .public) — rejecting and clearing the credential"
                 )
                 await keyRing.clear(for: cluster.id)
                 state = .failed(.server("Certificate user binding check failed: the certificate does not belong to this Teleport user"))
