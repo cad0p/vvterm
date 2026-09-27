@@ -36,6 +36,10 @@ final class ServerManager: ObservableObject {
         let canReplaceLocalState: Bool
     }
 
+    /// - Note: `internal` (not `private`) is deliberate so the invalidation
+    ///   wiring tests can build an isolated manager with a recording
+    ///   invalidator (`TeleportCredentialInvalidationWiringTests`); production
+    ///   callers use `ServerManager.shared`.
     init(teleportCredentialInvalidator: any TeleportCredentialInvalidating = TeleportKeyRingHost.shared) {
         self.teleportCredentialInvalidator = teleportCredentialInvalidator
         // Load local data first (fast)
@@ -707,6 +711,10 @@ final class ServerManager: ObservableObject {
         Array(serverMap.values).sorted { $0.name < $1.name }
     }
 
+    /// - Note: `internal` (not `private`) is deliberate so the CloudKit
+    ///   merge-path tests can drive the incremental and full-fetch merges
+    ///   (`TeleportCredentialInvalidationWiringTests`). Production callers
+    ///   reach it through `loadData`/`CloudKitManager` only.
     func applyCloudKitChanges(_ changes: CloudKitChanges, canReplaceLocalState: Bool = true) {
         if changes.isFullFetch && canReplaceLocalState {
             applyFullFetchCloudKitChanges(changes)

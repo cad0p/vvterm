@@ -798,6 +798,7 @@ struct ServerSidebarView: View {
                 makeCoordinator: { makeLoginCoordinator() },
                 cluster: cluster,
                 server: server,
+                serverManager: serverManager,
                 reuseNotice: reuseNotice,
                 onSuccess: { _ in
                     // Phase 3 complete — the live cert is issued and the host
@@ -1092,6 +1093,9 @@ private struct TeleportLoginSheet: View {
     let makeCoordinator: () -> TeleportLoginCoordinator
     let cluster: TeleportCluster
     let server: Server
+    /// The host's injected manager (never the `.shared` singleton: a
+    /// test/preview/injected composition root must persist to its own store).
+    let serverManager: ServerManager
     var reuseNotice: String? = nil
     let onSuccess: (String) -> Void
     let onCancel: () -> Void
@@ -1107,6 +1111,7 @@ private struct TeleportLoginSheet: View {
         makeCoordinator: @escaping () -> TeleportLoginCoordinator,
         cluster: TeleportCluster,
         server: Server,
+        serverManager: ServerManager,
         reuseNotice: String? = nil,
         onSuccess: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
@@ -1114,6 +1119,7 @@ private struct TeleportLoginSheet: View {
         self.makeCoordinator = makeCoordinator
         self.cluster = cluster
         self.server = server
+        self.serverManager = serverManager
         self.reuseNotice = reuseNotice
         self.onSuccess = onSuccess
         self.onCancel = onCancel
@@ -1128,7 +1134,7 @@ private struct TeleportLoginSheet: View {
             onSuccess: { login in
                 Task { @MainActor in
                     do {
-                        try await ServerManager.shared.setTeleportHostLogin(login, for: server.id)
+                        try await serverManager.setTeleportHostLogin(login, for: server.id)
                         onSuccess(login)
                     } catch {
                         persistErrorMessage = error.localizedDescription

@@ -132,23 +132,3 @@ enum TeleportHostLogin {
         return logins.count == 1 ? logins[0] : nil
     }
 }
-
-/// The connect-time route for a fail-closed resolver failure.
-///
-/// A `TeleportHostLoginFailure` means the username cannot be resolved against
-/// the certificate being sent. The connect path must clear the row's
-/// credential (so readiness flips to `.needsBootstrap` and the setup sheet —
-/// with the picker — becomes reachable again) and then fail with the named
-/// error. Split out so the clear-on-failure guarantee is unit-testable without
-/// a live SSH session.
-enum TeleportHostLoginFailureRoute {
-    /// Clear the credential and produce the connect-path error.
-    static func clearAndFail(
-        _ failure: TeleportHostLoginFailure,
-        store: any TeleportCredentialStore,
-        clusterId: UUID
-    ) async -> SSHError {
-        await store.clear(for: clusterId)
-        return .teleportHostLoginUnresolvable(failure)
-    }
-}

@@ -106,33 +106,3 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
 /// extension is where the observation conformance is declared so the movable
 /// file never names `TeleportKeyRingStoring`.
 extension TeleportKeyRing: TeleportKeyRingStoring {}
-
-// MARK: - Duplicate-server reuse
-
-extension TeleportKeyRingStoring {
-    /// The one shared reuse attempt for the add-server / row-tap entry points:
-    /// finds a complete live registration for the same (proxy host, Teleport
-    /// user, cluster) and seeds it into `newServer`'s row.
-    ///
-    /// Returns the source row's display name when seeding succeeded (for the
-    /// reuse notice), or nil when there is no reusable source.
-    ///
-    /// Must be called from a tap handler, never from a view body: it mutates
-    /// the observed keyring.
-    func seedReuseIfPossible(for newServer: Server, liveServers: [Server]) -> String? {
-        let newClusterName = clusterTLSState(for: newServer.id)?.clusterName
-        guard let source = TeleportCredentialReuse.match(
-            newServer: newServer,
-            liveServers: liveServers,
-            credentials: credentials,
-            clusterName: { [weak self] id in self?.clusterTLSState(for: id)?.clusterName },
-            isReusable: { [weak self] id in
-                self?.isReusableRegistrationSource(for: id, clusterName: newClusterName) == true
-            }
-        ) else {
-            return nil
-        }
-        guard seedRegistration(from: source.id, to: newServer.id) else { return nil }
-        return source.name
-    }
-}
