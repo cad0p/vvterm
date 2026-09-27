@@ -388,6 +388,69 @@ struct SSHProxySubsystemTransportTests {
         #expect(detector.maxDepth <= 1, "SessionMutex allowed concurrent critical sections")
     }
 
+    // MARK: - Agent channel serving (idle subsystem regression, #269)
+
+    /// The record-at-proxy failure window: the proxy opens its
+    /// `auth-agent@openssh.com` channel and asks for identities while the
+    /// proxy-subsystem channel is idle (the app is still setting up the inner
+    /// session). The agent service must answer on its own dedicated task — if
+    /// it only moved when the subsystem channel had data, the proxy's
+    /// `StartAgentChannel`/`userAgent.Signers()` would block forever.
+    @Test
+    func agentChannelIsAnsweredWhileTheSubsystemChannelIsIdle() async throws {
+        let pair = SSHPubKey.generateEd25519KeyPair(comment: "idle-subsystem-test")
+        let signingKey = try OpenSSHEd25519PrivateKey.parse(pem: pair.privateKeyPEM)
+        let material = TeleportAgentIdentityMaterial(
+            certBlob: Data("idle-subsystem-cert".utf8),
+            signingKey: signingKey
+        )
+        let agentChannel = OpaquePointer(bitPattern: 0xBEEF)!
+        let agentBytes = FakeAgentChannel()
+        let service = TeleportAgentForwardingService(
+            identityMaterial: material,
+            readChannel: { _, buffer, maxLen in agentBytes.read(buffer, maxLen) },
+            writeChannel: { _, buffer, count in agentBytes.write(buffer, count) },
+            closeChannel: { channel in agentBytes.close(channel) },
+            cancelToken: PumpCancelToken()
+        )
+
+        service.start()
+        service.enqueue(agentChannel)
+        agentBytes.enqueue(
+            Array(SSHAgentProtocolCodec.frame(Data([SSHAgentProtocolCodec.requestIdentities])))
+        )
+        agentBytes.endOfStream()
+        service.resolveRequest(succeeded: true)
+        service.markTransportStarted()
+
+        // The subsystem channel stays open and empty for the whole test.
+        let subsystemInbound = LockedByteQueue()
+        let transport = SSHProxySubsystemTransport(
+            channelRead: { buf, maxLen in
+                let chunk = subsystemInbound.blockingDequeue(maxLen: maxLen)
+                guard !chunk.isEmpty else { return 0 }
+                for (index, byte) in chunk.enumerated() { buf[index] = byte }
+                return chunk.count
+            },
+            channelWrite: { _, _ in 0 }
+        )
+        let fd = try await transport.start()
+        defer {
+            subsystemInbound.close()
+            Task { await transport.close() }
+            _ = service.cancelAndDrain()
+        }
+        #expect(fd >= 0)
+
+        let expected = SSHAgentProtocolCodec.identitiesAnswerFrame(
+            SSHAgentProtocolCodec.Identity(keyBlob: material.certBlob)
+        )
+        try await waitForCondition(timeoutSeconds: 3) {
+            agentBytes.writtenBytes.count >= expected.count
+        }
+        #expect(Data(agentBytes.writtenBytes) == expected)
+    }
+
     // MARK: - Helpers
 
     /// Write all bytes to a fd (retrying on partial writes).

@@ -1652,6 +1652,11 @@ actor SSHSession {
     /// tunnel. Retained so `cleanup` can free it after the inner session is
     /// torn down (the pump reads/writes this channel).
     private var proxySubsystemChannel: OpaquePointer?
+    /// The dedicated ssh-agent serving task for proxy-recorded clusters
+    /// (#269). Installed before the `auth-agent-req@openssh.com` request and
+    /// torn down (cancelled, drained, freed) in the same pre-free window as
+    /// the bridge pump.
+    private var agentForwardingService: TeleportAgentForwardingService?
     /// The inner socketpair's libssh2-facing FD. Mirrors `socket` for the
     /// outer session; closed via `innerAtomicSocket` after the inner libssh2
     /// session is freed.
@@ -2542,6 +2547,9 @@ actor SSHSession {
         // session is freed next by cleanupLibssh2). The full actor-isolated
         // close() is deferred to cleanupLibssh2 for bookkeeping.
         innerTransport?.cancelPumpSync()
+        // Stop the agent-serving task and free its channels before the outer
+        // session is freed — the same pre-free window as the pump cancel.
+        teardownAgentForwarding()
         socket = -1
         innerSocket = -1
     }
@@ -2588,6 +2596,11 @@ actor SSHSession {
         if let innerTransport = innerTransport {
             innerTransport.cancelPumpSync()
         }
+
+        // Belt and braces: the agent service is normally torn down by
+        // invalidateTransport, but cleanupLibssh2 is the window that precedes
+        // `libssh2_session_free`, so drain/free here too (idempotent).
+        teardownAgentForwarding()
 
         // Free the outer proxy-subsystem channel if it's still around (the
         // outer session free below may reap it, but close it explicitly to
@@ -3348,6 +3361,14 @@ actor SSHSession {
             throw SSHError.notConnected
         }
 
+        // Resolve the exact cert+key pair once, before anything uses it. The
+        // forwarded agent identity and the inner authentication MUST be the
+        // same pair (an agent certificate that differs from the inner-auth
+        // certificate would sign for an identity the node rejects), and the
+        // identity must be loaded before the auth-agent request — the proxy
+        // can open its agent channel while it handles the subsystem request.
+        let material = try await resolveTeleportAuthMaterial()
+
         var shouldInvalidateTransport = false
         defer {
             if shouldInvalidateTransport {
@@ -3373,6 +3394,29 @@ actor SSHSession {
             throw error
         }
         proxySubsystemChannel = outerChannel
+
+        // 1b. Forward an SSH agent. Cluster configurations that record at the
+        //     proxy (`session_recording: proxy` / `proxy-sync`) make the proxy
+        //     dial the node itself with the SSH agent the client forwards; the
+        //     agent request must precede the subsystem request because the
+        //     proxy opens its agent channel while handling the subsystem.
+        //     Non-fatal by design: a non-recording cluster needs no agent, and
+        //     on a recording cluster the now-surfaced subsystem error is the
+        //     actionable failure.
+        do {
+            try await installAgentForwarding(
+                session: outerSession,
+                channel: outerChannel,
+                material: material
+            )
+        } catch is CancellationError {
+            shouldInvalidateTransport = true
+            throw CancellationError()
+        } catch {
+            // Identity/callback setup failures never fail the connect: inner
+            // auth surfaces the real error. Static label only.
+            logger.error("teleport_agent_forwarding_setup_failed")
+        }
 
         // 2. Request the proxy:<node>:0 subsystem. libssh2 returns 0 on
         //    success, LIBSSH2_ERROR_CHANNEL_FAILURE if the proxy rejects the
@@ -3457,6 +3501,11 @@ actor SSHSession {
         innerTransport = transport
         innerSocket = innerFD
         innerAtomicSocket.install(innerFD)
+        // The bridge pump is running, so every outer-session libssh2 call is
+        // now serialized through `outerSessionMutex`. Only from this point may
+        // the agent-serving task read the agent channel (the prepare path
+        // above used the outer session without the mutex).
+        agentForwardingService?.markTransportStarted()
 
         // 4. Create the inner libssh2 session + set the same method
         //    preferences. The target node presents a host cert (same HostCA
@@ -3548,7 +3597,7 @@ actor SSHSession {
 
         // 7. Auth with the same cert + ed25519 key.
         do {
-            try await authenticateInner(session: innerSession)
+            try await authenticateInner(session: innerSession, material: material)
         } catch {
             if let innerAuthToken {
                 startupTrace?.end(
@@ -3564,6 +3613,78 @@ actor SSHSession {
 
         // Switch the inner session to non-blocking for I/O.
         libssh2_session_set_blocking(innerSession, 0)
+    }
+
+    /// Install the forwarded-agent callback, register the per-session service,
+    /// and request `auth-agent-req@openssh.com` on the outer channel.
+    ///
+    /// The identity is loaded from the same material the inner session will
+    /// authenticate with (resolved once by `prepareTeleportInnerSession`).
+    /// An unreadable/mismatched identity is logged and skipped — the connect
+    /// proceeds without an agent, so non-recording clusters are unaffected.
+    private func installAgentForwarding(
+        session: OpaquePointer,
+        channel: OpaquePointer,
+        material: TeleportAuthMaterial
+    ) async throws {
+        let identityMaterial: TeleportAgentIdentityMaterial
+        do {
+            identityMaterial = try TeleportAgentIdentity.make(
+                certPEM: String(decoding: material.certData, as: UTF8.self),
+                privateKeyPEM: material.keyData
+            )
+        } catch {
+            // Case-name-only failure (never the PEM/key bytes). No agent is
+            // served; a recording cluster then fails the subsystem and the
+            // caller surfaces the proxy's own reason.
+            logger.error("teleport_agent_identity_unavailable")
+            return
+        }
+
+        let service = TeleportAgentForwardingService.makeForSession(
+            identityMaterial: identityMaterial,
+            mutex: outerSessionMutex
+        )
+        // Register the libssh2 callback BEFORE the request: it is the only way
+        // libssh2 accepts a server-initiated `auth-agent@openssh.com` channel,
+        // and the proxy may open that channel while it handles the request.
+        // The callback routes through the session-keyed registry (the
+        // keyboard-interactive context already owns `session->abstract`).
+        let callback = unsafeBitCast(
+            TeleportAgentForwardingService.sessionCallback,
+            to: (@convention(c) () -> Void).self
+        )
+        _ = libssh2_session_callback_set2(session, Int32(LIBSSH2_CALLBACK_AUTHAGENT), callback)
+        // Start the task and register the service before the request so a
+        // channel opened during it has a queue to land in.
+        service.start()
+        TeleportAgentCallbackRegistry.shared.register(service, for: session)
+        agentForwardingService = service
+
+        let requestResult = try await performShellStartupCall(session: session) {
+            libssh2_channel_request_auth_agent(channel)
+        }
+        service.resolveRequest(succeeded: requestResult == 0)
+        if requestResult != 0 {
+            // OpenSSH treats a failed `auth-agent-req` as a warning and
+            // proceeds; the recording-cluster failure is then the proxy's
+            // subsystem rejection, which carries the actionable text.
+            logger.warning("teleport_agent_request_rejected code=\(requestResult)")
+        }
+    }
+
+    /// Stop the agent-serving task, drop the callback registry entry, and free
+    /// every channel the service still owns. Runs synchronously in the
+    /// pre-`libssh2_session_free` window (idempotent).
+    private func teardownAgentForwarding() {
+        guard let service = agentForwardingService else { return }
+        if let session = libssh2Session {
+            TeleportAgentCallbackRegistry.shared.remove(for: session)
+        }
+        agentForwardingService = nil
+        for channel in service.cancelAndDrain() {
+            service.closeAndFree(channel)
+        }
     }
 
     /// Start a shell via the Teleport proxy subsystem + a second SSH handshake
@@ -3781,18 +3902,21 @@ actor SSHSession {
         )
     }
 
-    /// Authenticate the inner (target-node) session with the same Teleport
-    /// cert + ed25519 key used for the outer session, and the same resolved
-    /// username.
+    /// Authenticate the inner (target-node) session with the Teleport cert +
+    /// ed25519 key and the resolved username of the caller-provided material.
+    ///
+    /// The caller (`prepareTeleportInnerSession`) resolves the pair once so
+    /// this authentication and the forwarded agent identity (#269) can never
+    /// use different certificate/key generations.
     ///
     /// The SSH `user` for the inner session must be a certificate principal
     /// (the host login, e.g. `deploy`), NOT the Teleport username — Teleport
     /// runs the same `CertChecker` principal check on the node as on the
-    /// proxy. The username is resolved from the exact cert + key pair read
-    /// together here (via `resolveTeleportAuthMaterial`), so the inner session
-    /// can never send a login the outer session would not.
-    private func authenticateInner(session: OpaquePointer) async throws {
-        let material = try await resolveTeleportAuthMaterial()
+    /// proxy.
+    private func authenticateInner(
+        session: OpaquePointer,
+        material: TeleportAuthMaterial
+    ) async throws {
         let username = material.username
         let certData = material.certData
         let keyData = material.keyData
@@ -4786,11 +4910,11 @@ actor SSHSession {
         if let error = error {
             request.resume(throwing: error)
         } else {
-            if !request.stderr.isEmpty,
-               let stderr = String(data: request.stderr, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !stderr.isEmpty {
-                logger.debug("Exec command stderr: \(stderr, privacy: .public)")
+            if !request.stderr.isEmpty {
+                // Remote stderr is arbitrary server text and the OSLog/ring
+                // merge feeds the shareable diagnostics report: log the byte
+                // count only, never the payload.
+                logger.debug("Exec command stderr bytes=\(request.stderr.count)")
             }
             let output = String(data: request.output, encoding: .utf8) ?? ""
             request.resume(returning: output)
