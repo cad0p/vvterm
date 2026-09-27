@@ -452,12 +452,14 @@ jobs:
           # Each entry's `only-testing` is a comma-separated list of
           # Target/Class/method — no spaces.
           #
-          # The 21 TeleportUITests (mock-driven; measured 15-26s each, not the
+          # The 23 TeleportUITests (mock-driven; measured 15-26s each, not the
           # ~5-10s an earlier split assumed) are distributed across the 4 shards
-          # (~4-5 per shard) rather than a 5th, preserving the 5-job cap. #262's
+          # (3/10/6/4) rather than a 5th, preserving the 5-job cap. #262's
           # host-login picker tests (5: multiple/single/frozen/empty/cancel) are
           # appended to shard-1, the smallest measured bin (517.8s), so the
-          # max/min ratio stays well under 1.3.
+          # projected max/min ratio (≈593-648s vs the fastest bin ≈517.8s →
+          # ≈1.14-1.25) stays under the 1.3 rebalance threshold; the bin sums
+          # are refreshed at the next ≥3-clean-run re-measurement.
           - name: shard-0
             needs-fixture: true
             only-testing: "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPosition,VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesSession,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"
