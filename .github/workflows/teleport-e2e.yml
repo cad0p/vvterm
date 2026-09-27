@@ -241,7 +241,7 @@ jobs:
         # the lever.
         run: |
           set -euo pipefail
-          env_file="$RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env"
+          env_file="${VVTERM_TELEPORT_ENV_FILE:?teleport-server.sh bootstrap did not export VVTERM_TELEPORT_ENV_FILE}"
           env_user="$(sed -n 's/^VVTERM_TELEPORT_USER=//p' "$env_file" | head -1)"
           env_login="$(sed -n 's/^VVTERM_TELEPORT_LOGIN=//p' "$env_file" | head -1)"
           if [ -z "$env_user" ] || [ -z "$env_login" ]; then

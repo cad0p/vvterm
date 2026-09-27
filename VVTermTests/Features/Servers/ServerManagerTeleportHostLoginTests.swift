@@ -24,12 +24,15 @@ import Testing
 @MainActor
 struct ServerManagerTeleportHostLoginTests {
 
-    /// Runs `body` with sync disabled and the manager's in-memory server list
-    /// restored afterwards.
+    /// Runs `body` with sync disabled, the manager's in-memory server list
+    /// restored afterwards, and the persisted `servers`/`workspaces` keys
+    /// snapshotted and restored so the fixtures never leak into other suites.
     private func withIsolatedManager<T>(_ body: (ServerManager) async throws -> T) async rethrows -> T {
         let manager = ServerManager.shared
         let savedServers = manager.servers
         let savedSyncFlag = UserDefaults.standard.object(forKey: CloudKitSyncConstants.syncEnabledKey)
+        let savedServersData = UserDefaults.standard.object(forKey: CloudKitSyncConstants.serverStorageKey)
+        let savedWorkspacesData = UserDefaults.standard.object(forKey: CloudKitSyncConstants.workspaceStorageKey)
         UserDefaults.standard.set(false, forKey: CloudKitSyncConstants.syncEnabledKey)
         defer {
             if let savedSyncFlag {
@@ -38,8 +41,18 @@ struct ServerManagerTeleportHostLoginTests {
                 UserDefaults.standard.removeObject(forKey: CloudKitSyncConstants.syncEnabledKey)
             }
             manager.servers = savedServers
+            Self.restore(savedServersData, forKey: CloudKitSyncConstants.serverStorageKey)
+            Self.restore(savedWorkspacesData, forKey: CloudKitSyncConstants.workspaceStorageKey)
         }
         return try await body(manager)
+    }
+
+    private static func restore(_ value: Any?, forKey key: String) {
+        if let value {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     private func makeFixture(teleportHostLogin: String? = "deploy") -> Server {

@@ -8,7 +8,7 @@
 //  One-tap Face ID. The coordinator does `loginBegin` → `WebAuthn.login`
 //  (SEP signature, Face ID prompt fires automatically) → `loginFinish` →
 //  cert lands in `TeleportKeyRing` → sheet dismisses → row badge flips to
-//  green → auto-connect.
+//  green (the user connects from the row).
 //
 //  The cert TTL is dynamic — read from `cert.ValidBefore`, never hardcoded.
 //  Before login: generic copy ("Your SSH certificate will be issued by
@@ -44,7 +44,8 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
     /// Called when the user continues past the host-login step (cert issued +
     /// stored). The argument is the chosen certificate principal; the caller
-    /// persists it on the server row, dismisses the sheet, and auto-connects.
+    /// persists it on the server row and dismisses the sheet when the persist
+    /// succeeds. No caller auto-connects.
     var onSuccess: (String) -> Void
 
     /// Called when the user cancels. The caller dismisses the sheet.
@@ -69,6 +70,18 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                 header
 
                 clusterInfo
+
+                if let reuseNotice {
+                    // Shown before the cert is issued too, so the user knows
+                    // the registration came from another row while Face ID
+                    // runs.
+                    Text(reuseNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("vvterm.teleport.login.reuseNotice")
+                }
 
                 signInButton
 
@@ -184,15 +197,6 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("vvterm.teleport.login.successMessage")
-
-                if let reuseNotice {
-                    Text(reuseNotice)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("vvterm.teleport.login.reuseNotice")
-                }
             }
 
             hostLoginStep(logins: logins)
@@ -226,18 +230,16 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     .accessibilityIdentifier("vvterm.teleport.login.hostLoginError")
             } else if let frozenLogin = frozenHostLogin(logins: logins) {
                 // The row already has a frozen login and it is still a
-                // principal: show it read-only, never the picker.
-                LabeledContent(String(localized: "Host login")) {
-                    Text(frozenLogin)
-                        .font(.body.weight(.medium))
-                        .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
-                }
+                // principal: show it read-only, never the picker. The section
+                // header above already names the field.
+                Text(frozenLogin)
+                    .font(.body.weight(.medium))
+                    .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
             } else if logins.count == 1 {
-                LabeledContent(String(localized: "Host login")) {
-                    Text(effectiveHostLogin(logins: logins) ?? "")
-                        .font(.body.weight(.medium))
-                        .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
-                }
+                // The section header above already names the field.
+                Text(effectiveHostLogin(logins: logins) ?? "")
+                    .font(.body.weight(.medium))
+                    .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
             } else {
                 Text(String(localized: "This certificate carries several logins. Pick the one to use for this server."))
                     .font(.caption)

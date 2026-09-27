@@ -113,6 +113,12 @@ PID_FILE="${WORK_DIR}/teleport.pid"
 LOG_FILE="${WORK_DIR}/teleport.log"
 ENV_FILE="${WORK_DIR}/vvterm-teleport.env"
 
+# Export the effective env-file path for later workflow steps. A plain
+# `export` does not cross GitHub Actions steps; `$GITHUB_ENV` does.
+if [ -n "${GITHUB_ENV:-}" ]; then
+  printf 'VVTERM_TELEPORT_ENV_FILE=%s\n' "${ENV_FILE}" >> "${GITHUB_ENV}"
+fi
+
 # Resolve OS/ARCH for the download URL (darwin/linux × arm64/amd64).
 UNAME_S="$(uname -s)"
 UNAME_M="$(uname -m)"

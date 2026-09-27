@@ -46,6 +46,15 @@ struct TeleportServerIntegrationTests {
             && env["VVTERM_TELEPORT_APP_TLS_CERT"] != nil
     }
 
+    /// The remote login from an `id -un` exec as whole trimmed lines: an
+    /// exact-line match, so a MOTD or an echoed command cannot satisfy the
+    /// assertion the way a substring match could.
+    private static func remoteLoginLines(in output: String) -> [String] {
+        output
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
     /// Full E2E connection helper shared by the transport tests: reads the
     /// VVTERM_TELEPORT_* fixtures, seeds the keyring, connects through the
     /// TLS-routing proxy (`proxy:<node>:0` subsystem, outer + inner libssh2
@@ -165,9 +174,10 @@ struct TeleportServerIntegrationTests {
             )
             #expect(output.contains("VVTERM_TELEPORT_E2E_OK"))
             // Leg 1 (stored host login): the SSH username must be the
-            // certificate principal, not the Teleport user.
+            // certificate principal, not the Teleport user. A whole-line
+            // match, so a MOTD or an echoed command cannot satisfy it.
             #expect(
-                output.contains(storedLogin),
+                Self.remoteLoginLines(in: output).contains(storedLogin),
                 "the remote login must be the certificate principal (\(storedLogin)); got: \(output)"
             )
             await client.disconnect()
@@ -188,7 +198,7 @@ struct TeleportServerIntegrationTests {
         do {
             let output = try await client.execute("id -un", timeout: .seconds(60))
             #expect(
-                output.contains(storedLogin),
+                Self.remoteLoginLines(in: output).contains(storedLogin),
                 "the derived login must be the certificate principal (\(storedLogin)); got: \(output)"
             )
             await client.disconnect()

@@ -138,11 +138,15 @@ struct TeleportCredentialInvalidationPolicyTests {
 struct TeleportCredentialInvalidationWiringTests {
 
     /// A manager with a recording invalidator, iCloud sync disabled for the
-    /// duration, and an empty server list to start from.
+    /// duration, an empty server list to start from, and the persisted
+    /// `servers`/`workspaces` keys snapshotted and restored so the fixtures
+    /// never leak into other suites.
     private func withManager<T>(
         _ body: (ServerManager, RecordingTeleportCredentialInvalidator) async throws -> T
     ) async rethrows -> T {
         let savedSyncFlag = UserDefaults.standard.object(forKey: CloudKitSyncConstants.syncEnabledKey)
+        let savedServersData = UserDefaults.standard.object(forKey: CloudKitSyncConstants.serverStorageKey)
+        let savedWorkspacesData = UserDefaults.standard.object(forKey: CloudKitSyncConstants.workspaceStorageKey)
         UserDefaults.standard.set(false, forKey: CloudKitSyncConstants.syncEnabledKey)
         defer {
             if let savedSyncFlag {
@@ -150,6 +154,8 @@ struct TeleportCredentialInvalidationWiringTests {
             } else {
                 UserDefaults.standard.removeObject(forKey: CloudKitSyncConstants.syncEnabledKey)
             }
+            Self.restore(savedServersData, forKey: CloudKitSyncConstants.serverStorageKey)
+            Self.restore(savedWorkspacesData, forKey: CloudKitSyncConstants.workspaceStorageKey)
         }
         let invalidator = RecordingTeleportCredentialInvalidator()
         let manager = ServerManager(teleportCredentialInvalidator: invalidator)
@@ -157,6 +163,14 @@ struct TeleportCredentialInvalidationWiringTests {
         manager.servers = []
         defer { manager.servers = savedServers }
         return try await body(manager, invalidator)
+    }
+
+    private static func restore(_ value: Any?, forKey key: String) {
+        if let value {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     private func makeServer(

@@ -515,12 +515,9 @@ final class TeleportUITests: XCTestCase {
 
         let value = app.staticTexts["vvterm.teleport.login.hostLoginValue"]
         XCTAssertTrue(value.waitForExistence(timeout: 5), "the single principal must be shown read-only")
-        // `LabeledContent` merges the label and value into one accessibility
-        // element ("Host login, deploy"); the principal must be visible.
-        XCTAssertTrue(
-            value.label.contains("deploy"),
-            "the single principal must be shown, got: \(value.label)"
-        )
+        // The section header above already names the field, so the value
+        // element carries the principal itself (no duplicated label).
+        XCTAssertEqual(value.label, "deploy", "the single principal must be shown")
         XCTAssertFalse(app.buttons["vvterm.teleport.login.hostLoginOption.deploy"].exists)
 
         app.buttons["vvterm.teleport.login.continueButton"].tap()
