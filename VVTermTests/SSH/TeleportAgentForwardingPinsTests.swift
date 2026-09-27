@@ -27,7 +27,13 @@ import Testing
 struct TeleportAgentForwardingPinsTests {
 
     private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
+        // Counterfactual hook: the guard-sensitivity runs point this at a
+        // mutated /tmp tree to prove the pins fail there. Never set in CI.
+        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // TeleportAgentForwardingPinsTests.swift
             .deletingLastPathComponent()  // SSH/
             .deletingLastPathComponent()  // VVTermTests/
@@ -117,33 +123,89 @@ struct TeleportAgentForwardingPinsTests {
         #expect(callbackBody.contains("TeleportAgentCallbackRegistry"), "the callback must route through the registry")
     }
 
+    /// Every `logger.` call in `source` (balanced parentheses, so multi-line
+    /// calls are covered) as source text.
+    private func loggerCalls(in source: String) -> [String] {
+        var calls: [String] = []
+        var searchStart = source.startIndex
+        while let marker = source.range(of: "logger.", range: searchStart..<source.endIndex) {
+            guard let open = source[marker.upperBound...].firstIndex(of: "(") else { break }
+            var depth = 0
+            var cursor = open
+            var end: String.Index?
+            while cursor < source.endIndex {
+                if source[cursor] == "(" {
+                    depth += 1
+                } else if source[cursor] == ")" {
+                    depth -= 1
+                    if depth == 0 {
+                        end = source.index(after: cursor)
+                        break
+                    }
+                }
+                cursor = source.index(after: cursor)
+            }
+            guard let end else { break }
+            calls.append(String(source[marker.lowerBound..<end]))
+            searchStart = end
+        }
+        return calls
+    }
+
+    /// The `\(…)` interpolation expressions inside a logger call.
+    private func interpolations(in call: String) -> [String] {
+        var expressions: [String] = []
+        var searchStart = call.startIndex
+        while let open = call.range(of: "\\(", range: searchStart..<call.endIndex) {
+            var depth = 1
+            var cursor = open.upperBound
+            while cursor < call.endIndex, depth > 0 {
+                if call[cursor] == "(" {
+                    depth += 1
+                } else if call[cursor] == ")" {
+                    depth -= 1
+                }
+                if depth == 0 { break }
+                cursor = call.index(after: cursor)
+            }
+            guard depth == 0 else { break }
+            expressions.append(String(call[open.upperBound..<cursor]))
+            searchStart = call.index(after: cursor)
+        }
+        return expressions
+    }
+
     @Test
     func agentModuleNeverLogsAgentByteMaterial() throws {
+        // Property check: no `\(…)` interpolation in an agent-module logger
+        // call may reference a byte-carrying accessor of the identity/material
+        // types (certificate/key bytes, blobs, PEMs, seeds, signatures, the
+        // sign payload). A `.count` of a buffer is the payload-free
+        // alternative and is allowed.
         let agentFiles = [
             "VVTerm/Core/SSH/SSHAgentProtocolCodec.swift",
             "VVTerm/Core/SSH/OpenSSHEd25519PrivateKey.swift",
             "VVTerm/Features/Teleport/Infrastructure/TeleportAgentForwarding.swift",
             "VVTerm/Core/SSH/SSHClient.swift",
         ]
-        let forbidden = [
-            "keyBlob",
-            "certBlob",
-            "identityBlob",
-            "privateKeyPEM",
-            "publicKeyBlob",
-            "signature",
-            "requestData",
-            "rawBlob",
+        let byteAccessors = [
+            "certData", "keyData", "certPEM", "keyPEM", "privateKeyPEM",
+            "certBlob", "keyBlob", "identityBlob", "publicKeyBlob", "rawBlob",
+            "publicKeyRaw", "signingKey", "seed", "signature", "requestData",
+            "identityMaterial",
         ]
 
         for file in agentFiles {
-            let lines = try source(file).components(separatedBy: "\n")
-            for (index, line) in lines.enumerated() where line.contains("logger.") {
-                for token in forbidden {
-                    #expect(
-                        !line.contains(token),
-                        "\(file):\(index + 1) logs agent byte material (\(token)): \(line)"
-                    )
+            let source = try source(file)
+            for call in loggerCalls(in: source) {
+                for interpolation in interpolations(in: call) {
+                    let expression = interpolation.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !expression.hasSuffix(".count") else { continue }
+                    for accessor in byteAccessors where expression.contains(accessor) {
+                        Issue.record(
+                            "\(file) interpolates agent byte material (\(accessor)) into a log call: \(call)"
+                        )
+                    }
                 }
             }
         }
@@ -167,21 +229,29 @@ struct TeleportAgentForwardingPinsTests {
     }
 
     @Test
-    func proxySubsystemFailureLogIsPayloadFree() throws {
+    func proxySubsystemLogsArePayloadFree() throws {
         // The proxy's channel stderr (and the subsystem name, which embeds the
         // node name) must never reach OSLog/the diagnostics ring: the E2E
         // workflow uploads the simulator log and the ring merges into the
-        // shareable report. Only the code and byte count are logged.
+        // shareable report. Only the code and byte count are logged, and the
+        // success line carries no payload at all.
         let source = try source("VVTerm/Core/SSH/SSHClient.swift")
         let lines = source.components(separatedBy: "\n")
-        let markerLines = lines.indices.filter { lines[$0].contains("teleport_proxy_subsystem_failed") }
-        #expect(markerLines.count == 1, "expected exactly one proxy-subsystem failure log line")
-        let markerLine = try #require(markerLines.first)
-        let line = lines[markerLine]
-        #expect(!line.contains("stderr="), "the stderr payload must not be logged: \(line)")
-        #expect(!line.contains("subsystem="), "the node-embedding subsystem name must not be logged: \(line)")
-        #expect(!line.contains("privacy: .public"), "the log line must carry no public payload: \(line)")
-        #expect(line.contains("stderr_bytes="), "the byte count is the payload-free diagnostic: \(line)")
+
+        let failureLines = lines.indices.filter { lines[$0].contains("teleport_proxy_subsystem_failed") }
+        #expect(failureLines.count == 1, "expected exactly one proxy-subsystem failure log line")
+        let failureLine = lines[try #require(failureLines.first)]
+        #expect(!failureLine.contains("stderr="), "the stderr payload must not be logged: \(failureLine)")
+        #expect(!failureLine.contains("subsystem="), "the node-embedding subsystem name must not be logged: \(failureLine)")
+        #expect(!failureLine.contains("privacy: .public"), "the log line must carry no public payload: \(failureLine)")
+        #expect(failureLine.contains("stderr_bytes="), "the byte count is the payload-free diagnostic: \(failureLine)")
+
+        let successLines = lines.indices.filter { lines[$0].contains("teleport_proxy_subsystem_ok") }
+        #expect(successLines.count == 1, "expected exactly one proxy-subsystem success log line")
+        let successLine = lines[try #require(successLines.first)]
+        #expect(!successLine.contains("subsystem="), "the node-embedding subsystem name must not be logged: \(successLine)")
+        #expect(!successLine.contains("target="), "the node name must not be logged: \(successLine)")
+        #expect(!successLine.contains("privacy:"), "the success line must carry no payload: \(successLine)")
     }
 
     @Test
@@ -242,6 +312,58 @@ struct TeleportAgentForwardingPinsTests {
         #expect(
             prepareBody.contains("authenticateInner(session: innerSession, material: material)"),
             "the inner auth must use the same resolved material as the agent identity"
+        )
+    }
+
+    @Test
+    func teleportPrepareFailureRethrowsAtEveryMaskPoint() throws {
+        // #268: `remoteEnvironment()` swallows the prepare failure, so every
+        // shell/exec mask point must rethrow the stored SSHError instead of
+        // masking it as `.notConnected`.
+        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let rethrow = "throw lastTeleportPrepareFailure ?? SSHError.notConnected"
+
+        // Three guard rethrows: SSHSession.startShell and execute()'s
+        // route-to-inner + reject-on-outer guards.
+        let total = source.components(separatedBy: rethrow).count - 1
+        #expect(total == 3, "expected the stored prepare failure at three mask points, found \(total)")
+
+        let startShellGuard = try #require(
+            source.range(of: "guard isActive, let session = libssh2Session else {")
+        )
+        let startShellRethrow = source[startShellGuard.upperBound...].prefix(160)
+        #expect(
+            startShellRethrow.contains(rethrow),
+            "SSHSession.startShell must rethrow the stored failure from its isActive guard"
+        )
+
+        let executeStart = try #require(
+            source.range(of: "func execute(_ command: String) async throws -> String {")
+        )
+        let executeEnd = try #require(
+            source.range(
+                of: "nonisolated static func shouldRouteExecToInnerSession",
+                range: executeStart.upperBound..<source.endIndex
+            )
+        )
+        let executeBody = source[executeStart.lowerBound..<executeEnd.lowerBound]
+        let executeRethrows = executeBody.components(separatedBy: rethrow).count - 1
+        #expect(executeRethrows == 2, "execute() must rethrow the stored failure on both Teleport guards")
+
+        // SSHClient.startShell rethrows through the helper; the helper must
+        // throw the stored failure itself, never a fallback.
+        let helperStart = try #require(
+            source.range(of: "private func rethrowStoredTeleportPrepareFailure")
+        )
+        let helperEnd = try #require(
+            source.range(of: "// MARK: - Mosh", range: helperStart.upperBound..<source.endIndex)
+        )
+        let helperBody = source[helperStart.lowerBound..<helperEnd.lowerBound]
+        #expect(helperBody.contains("lastTeleportPrepareFailure"))
+        #expect(helperBody.contains("throw failure"), "the helper must throw the stored failure")
+        #expect(
+            source.contains("try await rethrowStoredTeleportPrepareFailure(from: sshSession)"),
+            "SSHClient.startShell must call the stored-failure rethrow"
         )
     }
 }
