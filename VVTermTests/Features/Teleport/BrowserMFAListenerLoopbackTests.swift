@@ -910,7 +910,17 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         return try await receiveResponse(connection)
     }
 
-    /// Start `connection` and await `.ready` (or a failure / 15s timeout).
+    /// Start `connection` and await `.ready` (or a failure / 60s timeout).
+    ///
+    /// 60s, not 15s: this probe runs in the required `unit-tests` job, where a
+    /// host-state stall can delay the continuation *and* its watchdog by tens
+    /// of seconds. Observed on run 36344144500: a ~38s stall (the sibling
+    /// `testAuthenticatedButMalformedPlaintextResolvesTerminally` took 38.3s)
+    /// let the raw-probe receive watchdog fire ~46s late and failed
+    /// `testCallbackSealedUnderADifferentKeyIsRejected` while the listener had
+    /// already answered; the same suite passes 27/27 in ~2s locally. The
+    /// longer bound is a host-state tolerance, not retry machinery: a
+    /// genuinely unusable listener still fails the test, just later. See #260.
     private func connect(_ connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
@@ -936,7 +946,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
                 }
             }
             connection.start(queue: .global(qos: .userInitiated))
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 15) {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 60) {
                 resumeOnce(.failure(BrowserMFAListenerError.listenerFailed("probe connect timed out")))
             }
         }
@@ -954,7 +964,8 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         }
     }
 
-    /// Await the first response bytes (or a failure / 15s timeout).
+    /// Await the first response bytes (or a failure / 60s timeout; see
+    /// `connect` for why this is 60s rather than 15s — #260).
     private func receiveResponse(_ connection: NWConnection) async throws -> String {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
@@ -974,7 +985,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
                     resumeOnce(.success(String(data: data ?? Data(), encoding: .utf8) ?? ""))
                 }
             }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 15) {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 60) {
                 resumeOnce(.failure(BrowserMFAListenerError.timedOut))
             }
         }
