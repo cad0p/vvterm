@@ -725,6 +725,67 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
+    /// The SEP device name is logged at both registration sites; it used to be
+    /// public (`device=\(deviceName, privacy: .public)`), so the registered
+    /// device name reached the unified log and any exported diagnostics.
+    /// Aligns with swift-teleport#15, whose package sites are `.private`. Pin
+    /// the **interpolation's own annotation** at the source level for the same
+    /// reason as the headless-id pin above: the simulator log store does not
+    /// mask privacy on readback.
+    ///
+    /// Scope, stated honestly: this scans the two known files and requires
+    /// exactly two `device=\(` lines in total (count tripwire). It then
+    /// matches the whole interpolation — `\(deviceName, privacy: .private)`
+    /// (or `.sensitive`) — rather than checking that `.private` appears
+    /// somewhere on the line, so a second public interpolation on the same
+    /// line, or a `.private` that belongs to the cluster id, cannot satisfy
+    /// it. What it still cannot catch: an alias (`let d = deviceName`), a
+    /// `device=` line moved to another file, or a reformatted interpolation
+    /// outside the pattern. The runtime behavior is pinned by Apple's privacy
+    /// semantics, not by a simulator readback.
+    func testDeviceNameLogsArePrivacyAnnotated() throws {
+        let sources = [
+            "VVTerm/Features/Teleport/Application/TeleportKeyRing.swift",
+            "VVTerm/Features/Teleport/Application/TeleportRegistrationCoordinator.swift",
+        ]
+        var deviceNameLines: [String] = []
+        for relative in sources {
+            let sourceURL = repositoryRoot().appendingPathComponent(relative)
+            let source = try String(contentsOf: sourceURL, encoding: .utf8)
+            deviceNameLines.append(
+                contentsOf: source
+                    .components(separatedBy: "\n")
+                    .filter { $0.contains("device=\\(") }
+            )
+        }
+
+        XCTAssertEqual(
+            deviceNameLines.count,
+            2,
+            "expected exactly two device-name log lines to review; found: \(deviceNameLines)"
+        )
+
+        let privateInterpolation = try NSRegularExpression(
+            pattern: #"\\\(deviceName,\s*privacy:\s*\.(?:private|sensitive)(?:\(mask:\s*\.hash\))?\)"#
+        )
+        let publicInterpolation = try NSRegularExpression(
+            pattern: #"\\\(deviceName,\s*privacy:\s*\.public\)"#
+        )
+        for line in deviceNameLines {
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            XCTAssertEqual(
+                privateInterpolation.numberOfMatches(in: line, range: range),
+                1,
+                "the SEP device-name interpolation itself must be annotated `privacy: .private`: \(line)"
+            )
+            XCTAssertEqual(
+                publicInterpolation.numberOfMatches(in: line, range: range),
+                0,
+                "the SEP device name must not be logged publicly: \(line)"
+            )
+        }
+    }
+
     // MARK: - TeleportRegistrationCoordinator
 
     /// `CreateRegisterChallenge` is a server-derived `GRPCError`: the log
