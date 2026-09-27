@@ -54,9 +54,12 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     @Environment(\.dismiss) private var dismiss
 
     /// The in-flight retry task. Tracked so the toolbar Cancel and
-    /// `.onDisappear` can cancel a retry that has not started yet — otherwise
-    /// a retry-then-cancel ordering race could open Safari after the sheet was
-    /// dismissed (#267 review, L1-3).
+    /// `.onDisappear` can cancel a retry that has not started yet (the
+    /// double-tap guard). Task cancellation is cooperative and `retry()` never
+    /// observes it, so the guarantee against a retry surviving a dismissal
+    /// does NOT rest on this task: it rests on the Cancel action calling
+    /// `coordinator.cancel()`, which bumps the generation, cancels the POST
+    /// and dismisses the Safari session (#267 review, L1-1).
     @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
@@ -247,9 +250,11 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
         case .failed(let error) where isRetryable(error):
             Button {
                 // A rapid double-tap inside one render window must not start
-                // two retries: cancel the tracked task first. The coordinator
-                // also supersedes any still-running attempt (generation bump)
-                // and the Safari presenter cancels a replaced session.
+                // two retries: cancel the tracked task first. That is only the
+                // double-tap guard — cancellation is cooperative, so a retry
+                // already inside `retry()` is torn down by the toolbar Cancel
+                // action's `cancel()` (generation bump + POST cancel +
+                // presenter cancel), never by this task.
                 retryTask?.cancel()
                 retryTask = Task {
                     guard !Task.isCancelled else { return }

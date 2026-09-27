@@ -720,12 +720,12 @@ struct ServerFormSheet: View {
                     .accessibilityIdentifier("vvterm.teleport.form.userHint")
             }
 
-            // #265: the reminder is about RE-running setup for an existing
-            // Teleport row. A new server (Add) has no setup to re-run, and
-            // switching a password row to Teleport has nothing to re-run
-            // either — so the gate requires the edited row itself to be a
-            // Teleport row (not just `isEditing`).
-            if selectedAuthMethod == .faceIDTeleport, server?.authMethod == .faceIDTeleport {
+            // #265: the gate requires the edited row itself to be a Teleport
+            // row (not just `isEditing`) — see `ServerFormTeleportReminder`.
+            if ServerFormTeleportReminder.showsReminder(
+                existingServer: server,
+                selectedAuthMethod: selectedAuthMethod
+            ) {
                 Text(String(localized: "Changing the Teleport user or host re-runs Teleport setup on this device."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
