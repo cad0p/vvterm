@@ -380,6 +380,14 @@ ensure_recording_agent() {
     eval "$(ssh-agent -s)" >/dev/null
     log "started ssh-agent (pid ${SSH_AGENT_PID:-?})"
   fi
+  # Drop identities left by an earlier bootstrap on the same runner before
+  # loading this leg's key: otherwise a repeat run leaves two cert identities
+  # in the agent and the proxy may pick the stale signer first.
+  if ! ssh-add -D >/dev/null 2>&1; then
+    echo "error: could not clear the ssh-agent identities (SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-unset})" >&2
+    exit 1
+  fi
+  log "cleared ssh-agent identities before loading ${identity_file}"
   if ! ssh-add "${identity_file}" >/dev/null 2>&1; then
     echo "error: could not load ${identity_file} into the ssh-agent" >&2
     exit 1
