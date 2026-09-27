@@ -149,9 +149,42 @@ struct TeleportAgentForwardingPinsTests {
         }
     }
 
+    @Test
+    func proxySubsystemRejectionUsesTheBoundedCaptureAndSurfacedCase() throws {
+        // #268: the old path read stderr once with `String(cString:)` (an
+        // out-of-bounds read on a full buffer) and threw a payload-free
+        // `.shellRequestFailed`, which the shell-start guard masked as
+        // `.notConnected`.
+        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let body = try prepareBody(in: source)
+        #expect(body.contains("TeleportSubsystemStderrCapture.capture"))
+        #expect(body.contains("TeleportSubsystemFailureMessage.display"))
+        #expect(body.contains("throw SSHError.teleportPrepareFailed"))
+        #expect(
+            !body.contains("String(cString: stderrBuf"),
+            "the stderr buffer must be decoded by the actual byte count, never by a NUL scan"
+        )
+    }
 
 
 
+    @Test
+    func prepareFailureRingEmissionUsesTheRedactionSpine() throws {
+        // The prepare failure is rethrown at the connect mask points and also
+        // recorded in the on-device ring. The ring message must go through
+        // `SSHError.diagnosticsMessage` (case-only for the payload-bearing
+        // case), never `localizedDescription`.
+        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let lines = source.components(separatedBy: "\n")
+        let markerLines = lines.indices.filter {
+            lines[$0].contains("teleportPrepareFailed \\(")
+        }
+        #expect(markerLines.count == 1, "expected exactly one prepare-failure ring emission")
+        let markerLine = try #require(markerLines.first)
+        let window = lines[max(0, markerLine - 6)...markerLine].joined(separator: "\n")
+        #expect(window.contains("SSHError.diagnosticsMessage"))
+        #expect(!window.contains("localizedDescription"))
+    }
 
     @Test
     func innerAuthenticationReusesTheAgentIdentityMaterial() throws {

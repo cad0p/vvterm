@@ -688,6 +688,11 @@ actor SSHClient {
         // startShellViaTeleportProxy later calls prepareTeleportInnerSession()
         // again — that's an idempotent no-op when the inner session is ready.
         let environment = await remoteEnvironment()
+        // prepareTeleportInnerSession() is invoked (and its error swallowed)
+        // by remoteEnvironment(); rethrow the stored prepare failure here
+        // instead of letting the shell-start guard mask the proxy's real
+        // rejection as `.notConnected` (#268).
+        try await rethrowStoredTeleportPrepareFailure(from: sshSession)
         try validateShellStartupSession(sshSession)
         let terminalType = await remoteTerminalType()
         try validateShellStartupSession(sshSession)
@@ -1100,6 +1105,22 @@ actor SSHClient {
         redacting server: Server?
     ) -> String {
         SSHError.diagnosticsMessage(for: error, redacting: server)
+    }
+
+    /// Rethrow the stored Teleport inner-session prepare failure (if any).
+    ///
+    /// `remoteEnvironment()` swallows the prepare error so its resolver can
+    /// still run; by the time the shell/exec path runs, only the stored
+    /// failure carries the proxy's real rejection reason (#268). Emits a
+    /// case-only `diagError` so the device ring records the failure stage.
+    private func rethrowStoredTeleportPrepareFailure(from session: SSHSession) async throws {
+        guard connectedServer?.authMethod == .faceIDTeleport,
+              let failure = await session.lastTeleportPrepareFailure else {
+            return
+        }
+        let rendered = SSHError.diagnosticsMessage(for: failure, redacting: connectedServer)
+        logger.diagError("SSH", "teleportPrepareFailed \(rendered)")
+        throw failure
     }
 
     // MARK: - Mosh
@@ -1657,6 +1678,12 @@ actor SSHSession {
     /// torn down (cancelled, drained, freed) in the same pre-free window as
     /// the bridge pump.
     private var agentForwardingService: TeleportAgentForwardingService?
+    /// The last `prepareTeleportInnerSession()` failure (#268). The prepare is
+    /// invoked (and its error swallowed) by `SSHClient.remoteEnvironment()`,
+    /// so the shell/exec paths rethrow this stored failure instead of masking
+    /// it as `.notConnected`. Cleared on a successful prepare and on connect;
+    /// `CancellationError` is never stored.
+    private(set) var lastTeleportPrepareFailure: SSHError?
     /// The inner socketpair's libssh2-facing FD. Mirrors `socket` for the
     /// outer session; closed via `innerAtomicSocket` after the inner libssh2
     /// session is freed.
@@ -1830,6 +1857,9 @@ actor SSHSession {
     func connect() async throws {
         try Task.checkCancellation()
         try LibSSH2Runtime.ensureInitialized()
+        // A fresh connect clears any stale prepare failure from a previous
+        // attempt (#268); the next prepare re-records it if it fails again.
+        lastTeleportPrepareFailure = nil
         socket = -1
         connectedPeerAddress = nil
 
@@ -2092,6 +2122,12 @@ actor SSHSession {
         var noSigPipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
     }
+
+    /// Grace window for reading the proxy's rejection stderr after
+    /// CHANNEL_FAILURE (#268). The proxy has already written the text by the
+    /// time the failure arrives; the bound only stops a peer that keeps the
+    /// channel open without sending anything.
+    private static let proxyStderrCaptureWindowMilliseconds = 100
 
     /// The resolved auth material for a Teleport connection: the SSH username
     /// (a certificate principal) plus the exact cert/key pair it was resolved
@@ -3110,7 +3146,7 @@ actor SSHSession {
         terminalType: RemoteTerminalType = RemoteTerminalBootstrap.defaultTerminalType
     ) async throws -> ShellHandle {
         guard isActive, let session = libssh2Session else {
-            throw SSHError.notConnected
+            throw lastTeleportPrepareFailure ?? SSHError.notConnected
         }
         guard let wireCols = Int32(exactly: cols),
               let wireRows = Int32(exactly: rows) else {
@@ -3357,6 +3393,37 @@ actor SSHSession {
         // already established the tunnel + second handshake.
         if innerLibssh2Session != nil { return }
 
+        do {
+            try await prepareTeleportInnerSessionBody()
+        } catch is CancellationError {
+            // A user cancel must not be rethrown later as a connection
+            // failure: never store it.
+            throw CancellationError()
+        } catch {
+            lastTeleportPrepareFailure = Self.storedTeleportPrepareFailure(
+                for: error,
+                previous: lastTeleportPrepareFailure
+            )
+            throw error
+        }
+        // Successful prepare: nothing stale to rethrow at the mask points.
+        lastTeleportPrepareFailure = nil
+    }
+
+    /// Pure storage rule for the prepare failure (#268): store `SSHError`s,
+    /// never a cancellation, and never clear a previously stored failure for
+    /// an unrelated (non-`SSHError`) throw.
+    nonisolated static func storedTeleportPrepareFailure(
+        for error: Error,
+        previous: SSHError?
+    ) -> SSHError? {
+        if error is CancellationError { return previous }
+        return (error as? SSHError) ?? previous
+    }
+
+    /// The body of `prepareTeleportInnerSession()`, split out so the entry
+    /// point can record every thrown failure without touching each throw site.
+    private func prepareTeleportInnerSessionBody() async throws {
         guard isActive, let outerSession = libssh2Session else {
             throw SSHError.notConnected
         }
@@ -3451,28 +3518,36 @@ actor SSHSession {
             throw error
         }
         guard subsystemResult == 0 else {
+            // Read the rejection reason the proxy wrote to the channel's
+            // extended-data (stderr) before CHANNEL_FAILURE. Bounded, decoded
+            // by the actual byte count, and sanitized before it reaches the
+            // terminal banner; the actionable text must not be masked as
+            // `.notConnected` (#268).
+            // libssh2_channel_read_stderr doesn't exist as a symbol; use
+            // libssh2_channel_read_ex with stream_id=1 (SSH_EXTENDED_DATA_STDERR).
+            let stderrData = await TeleportSubsystemStderrCapture.capture(
+                deadline: ContinuousClock.now + .milliseconds(Self.proxyStderrCaptureWindowMilliseconds),
+                read: { buffer in
+                    Int(libssh2_channel_read_ex(outerChannel, 1, buffer.baseAddress, buffer.count))
+                },
+                sleep: { try? await Task.sleep(nanoseconds: 5_000_000) }
+            )
             var errmsg: UnsafeMutablePointer<CChar>?
             var errmsgLen: Int32 = 0
             libssh2_session_last_error(outerSession, &errmsg, &errmsgLen, 0)
             let errorMsg = errmsg != nil ? String(cString: errmsg!) : "no libssh2 error string"
-            // Read any extended data (stderr) the proxy may have sent before
-            // rejecting. Teleport sometimes writes a human-readable error to
-            // channel stderr before the CHANNEL_FAILURE.
-            // libssh2_channel_read_stderr doesn't exist as a symbol; use
-            // libssh2_channel_read_ex with stream_id=1 (SSH_EXTENDED_DATA_STDERR).
-            var stderrBuf = [CChar](repeating: 0, count: 4096)
-            let stderrLen = libssh2_channel_read_ex(outerChannel, 1, &stderrBuf, stderrBuf.count)
-            let stderrMsg = stderrLen > 0
-                ? String(cString: stderrBuf, encoding: .utf8) ?? "<non-utf8>"
-                : "<no stderr>"
+            let failureMessage = TeleportSubsystemFailureMessage.display(
+                code: subsystemResult,
+                stderr: stderrData
+            )
             logger.error(
-                "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(stderrMsg, privacy: .public)"
+                "teleport_proxy_subsystem_failed code=\(subsystemResult) libssh2=\(errorMsg, privacy: .public) subsystem=\(subsystem, privacy: .public) stderr=\(failureMessage, privacy: .public)"
             )
             if let proxyToken {
                 startupTrace?.end(proxyToken, outcome: "failed", detail: "code_\(subsystemResult)")
             }
             shouldInvalidateTransport = true
-            throw SSHError.shellRequestFailed
+            throw SSHError.teleportPrepareFailed(failureMessage)
         }
         logger.info(
             "teleport_proxy_subsystem_ok subsystem=\(subsystem, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
@@ -4910,11 +4985,11 @@ actor SSHSession {
         if let error = error {
             request.resume(throwing: error)
         } else {
-            if !request.stderr.isEmpty {
-                // Remote stderr is arbitrary server text and the OSLog/ring
-                // merge feeds the shareable diagnostics report: log the byte
-                // count only, never the payload.
-                logger.debug("Exec command stderr bytes=\(request.stderr.count)")
+            if !request.stderr.isEmpty,
+               let stderr = String(data: request.stderr, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !stderr.isEmpty {
+                logger.debug("Exec command stderr: \(stderr, privacy: .public)")
             }
             let output = String(data: request.output, encoding: .utf8) ?? ""
             request.resume(returning: output)
@@ -5423,7 +5498,7 @@ actor SSHSession {
                   innerSocket >= 0,
                   innerAtomicSocket.isUsable,
                   !hasBeenCleaned else {
-                throw SSHError.notConnected
+                throw lastTeleportPrepareFailure ?? SSHError.notConnected
             }
             startInnerIOLoopIfNeeded()
             return try await enqueueExecRequest(command, isInner: true)
@@ -5439,7 +5514,9 @@ actor SSHSession {
             authMethod: config.authMethod,
             innerSessionReady: innerLibssh2Session != nil
         ) {
-            throw SSHError.notConnected
+            // The prepare failed and left no inner session: surface its real
+            // failure instead of the generic `.notConnected` (#268).
+            throw lastTeleportPrepareFailure ?? SSHError.notConnected
         }
 
         guard libssh2Session != nil else {
@@ -6025,6 +6102,12 @@ enum SSHError: LocalizedError {
     /// cert). The connect path clears the credential before throwing, so
     /// readiness flips to `.needsBootstrap` and setup is reachable again.
     case teleportHostLoginUnresolvable(TeleportHostLoginFailure)
+    /// A Teleport prepare-step failure (outer channel, proxy-subsystem
+    /// request, transport, inner handshake/hostkey/auth) carrying the proxy's
+    /// rejection text. The payload is arbitrary server output: it is shown
+    /// transiently in `errorDescription` and rendered case-only by
+    /// `diagnosticsMessage` (#268).
+    case teleportPrepareFailed(String)
     case unknown(String)
 
     /// Marker prefix for `hostKeyUnknown`'s message. `ConnectionState.failed`
@@ -6074,6 +6157,7 @@ enum SSHError: LocalizedError {
              .hostKeyUnknown,
              .teleportCertMissing,
              .teleportHostLoginUnresolvable,
+             .teleportPrepareFailed,
              .unknown:
             return false
         }
@@ -6118,6 +6202,8 @@ enum SSHError: LocalizedError {
             return String(localized: "Teleport certificate is missing or expired. Sign in with Face ID to refresh it.")
         case .teleportHostLoginUnresolvable(let failure):
             return failure.errorDescription
+        case .teleportPrepareFailed(let message):
+            return "Teleport connection failed: \(message)"
         case .unknown(let msg): return "Unknown error: \(msg)"
         }
     }

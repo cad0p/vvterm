@@ -260,7 +260,7 @@ final class TerminalPaneSSHCoordinator {
                 },
                 shouldResetClient: { sshError in
                     switch sshError {
-                    case .notConnected, .connectionFailed, .socketError, .timeout:
+                    case .notConnected, .connectionFailed, .socketError, .timeout, .teleportPrepareFailed:
                         return true
                     case .teleportHostLoginUnresolvable:
                         // The connect path already cleared the credential, so

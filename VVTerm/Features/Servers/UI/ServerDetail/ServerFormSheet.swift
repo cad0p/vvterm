@@ -661,6 +661,17 @@ struct ServerFormSheet: View {
                 .textContentType(.name)
                 #endif
 
+            if selectedAuthMethod == .faceIDTeleport {
+                // #268: `Server.name` IS the Teleport node name for Teleport
+                // servers, but the form never said so — a typo or a renamed
+                // node produced the same masked connect failure.
+                Text(String(localized: "This is the Teleport node name (for example pc-host-01) — run `tsh ls` to list the cluster's nodes. It is also this server's display name."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.form.nodeNameCaption")
+            }
+
             HStack(spacing: 12) {
                 TextField(
                     "Host",

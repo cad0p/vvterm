@@ -21,7 +21,15 @@ extension SSHError {
     static func diagnosticsMessage(for error: Error, redacting server: Server?) -> String {
         let raw: String
         if let sshError = error as? SSHError {
-            raw = String(describing: sshError)
+            // `String(describing:)` enumerates an associated payload, and
+            // `.teleportPrepareFailed`'s payload is arbitrary proxy text that
+            // can embed the node name or the host login. Render that case
+            // name only (#268).
+            if case .teleportPrepareFailed = sshError {
+                raw = "teleportPrepareFailed"
+            } else {
+                raw = String(describing: sshError)
+            }
         } else {
             raw = String(describing: error)
         }
