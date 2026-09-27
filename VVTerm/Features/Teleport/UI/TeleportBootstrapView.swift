@@ -36,8 +36,10 @@ import AppKit
 struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     @ObservedObject var coordinator: Coordinator
 
-    /// The cluster being bootstrapped. Held by the view so `retry()` can
-    /// re-invoke `begin()` with the same config.
+    /// The cluster being bootstrapped. Held by the view so the initial
+    /// `.task` can start the bootstrap and the manual-Safari fallback can
+    /// build the approval URL. `retry()` re-runs the coordinator's stored
+    /// copy of this config.
     let cluster: TeleportCluster
 
     /// Called when Phase 1 succeeds (cert in hand). The caller advances to
@@ -50,6 +52,12 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     var onCancel: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+
+    /// The in-flight retry task. Tracked so the toolbar Cancel and
+    /// `.onDisappear` can cancel a retry that has not started yet — otherwise
+    /// a retry-then-cancel ordering race could open Safari after the sheet was
+    /// dismissed (#267 review, L1-3).
+    @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -73,6 +81,7 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(String(localized: "Cancel")) {
+                        retryTask?.cancel()
                         Task { await coordinator.cancel() }
                         onCancel()
                     }
@@ -87,6 +96,9 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
             if case .success = newValue, let result = coordinator.lastBootstrapResult {
                 onSuccess(result)
             }
+        }
+        .onDisappear {
+            retryTask?.cancel()
         }
     }
 
@@ -234,7 +246,15 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
         switch coordinator.state {
         case .failed(let error) where isRetryable(error):
             Button {
-                Task { await coordinator.retry() }
+                // A rapid double-tap inside one render window must not start
+                // two retries: cancel the tracked task first. The coordinator
+                // also supersedes any still-running attempt (generation bump)
+                // and the Safari presenter cancels a replaced session.
+                retryTask?.cancel()
+                retryTask = Task {
+                    guard !Task.isCancelled else { return }
+                    await coordinator.retry()
+                }
             } label: {
                 Label(String(localized: "Reopen Safari"), systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
