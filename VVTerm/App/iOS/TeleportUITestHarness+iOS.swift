@@ -197,6 +197,11 @@ struct TeleportUITestHarness: View {
             return .happyPath(certTTL: 12 * 3600, logins: ["deploy", "root"])
         case .hostLoginSingle:
             return .happyPath(certTTL: 12 * 3600, logins: ["deploy"])
+        case .hostLoginEmpty:
+            // A cert whose principals are all internal: the validator rejects
+            // this in production, so the step's defensive error branch is
+            // exercised here (the coordinator must never reach `.success`).
+            return .happyPath(certTTL: 12 * 3600, logins: [])
         }
     }
 
@@ -237,7 +242,7 @@ struct TeleportUITestHarness: View {
     private enum LoginScenario: String {
         case happyPath12h, happyPath1h, certExpiredOnTap
         case faceIDCancelled, faceIDUnavailable, serverUnreachable
-        case hostLoginMultiple, hostLoginSingle
+        case hostLoginMultiple, hostLoginSingle, hostLoginEmpty
     }
 }
 

@@ -26,7 +26,7 @@ enum TeleportIssuedCertValidator {
         case notAUserCertificate
         /// The certificate's public key does not match the generated key.
         case publicKeyMismatch
-        /// The certificate has no principals.
+        /// The certificate has no non-internal principals.
         case noPrincipals
         /// The validity window is inconsistent with the requested TTL.
         case invalidValidityWindow(String)
@@ -44,7 +44,7 @@ enum TeleportIssuedCertValidator {
             case .publicKeyMismatch:
                 return "issued cert public key does not match the requested keypair"
             case .noPrincipals:
-                return "issued cert carries no principals"
+                return "issued cert carries no non-internal principals"
             case .invalidValidityWindow(let detail):
                 return "issued cert validity window is invalid (\(detail))"
             case .tlsCertificateUnreadable:
@@ -81,7 +81,11 @@ enum TeleportIssuedCertValidator {
         guard cert.publicKeyBlob == expectedPublicKeyBlob else {
             return .failure(.publicKeyMismatch)
         }
-        guard !cert.validPrincipals.isEmpty else {
+        // Internal Teleport principals (`-teleport-internal-join` and any
+        // other `-…` name) are not usable SSH logins, so a cert that carries
+        // only those must be rejected here: otherwise the coordinator reaches
+        // `.success(logins: [])` and the setup step dead-ends with no Continue.
+        guard !TeleportHostLogin.nonInternalPrincipals(of: cert).isEmpty else {
             return .failure(.noPrincipals)
         }
 

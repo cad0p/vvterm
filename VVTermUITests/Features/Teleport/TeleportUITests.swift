@@ -563,4 +563,37 @@ final class TeleportUITests: XCTestCase {
         XCTAssertTrue(continued.waitForExistence(timeout: 3))
         XCTAssertEqual(continued.label, "continued: root", "the frozen login must be kept")
     }
+
+    /// A cert with no usable principal must never render a Continue that
+    /// persists an empty login: the validator rejects it before `.success`
+    /// in production, and the view's defensive branch explains the setup
+    /// error instead.
+    func testHostLogin_emptyPrincipals_showsSetupError() {
+        let app = launch(phase: "login", scenario: "hostLoginEmpty")
+        tapSignInButton(app)
+
+        let error = app.staticTexts["vvterm.teleport.login.hostLoginError"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5), "the setup error must be shown")
+        XCTAssertFalse(
+            app.buttons["vvterm.teleport.login.continueButton"].exists,
+            "there is no login to continue with"
+        )
+        XCTAssertFalse(app.staticTexts["vvterm.teleport.harness.continuedHostLogin"].exists)
+        attachScreenshot(app, named: "login-hostLogin-empty-principals")
+    }
+
+    /// Cancel on the host-login step must not persist anything: Continue is
+    /// the only path that reports a login back to the caller.
+    func testHostLogin_pickerCancel_storesNothing() {
+        let app = launch(phase: "login", scenario: "hostLoginMultiple")
+        tapSignInButton(app)
+
+        XCTAssertTrue(app.buttons["vvterm.teleport.login.hostLoginOption.deploy"].waitForExistence(timeout: 5))
+        app.buttons["vvterm.teleport.login.cancelButton"].tap()
+
+        XCTAssertFalse(
+            app.staticTexts["vvterm.teleport.harness.continuedHostLogin"].exists,
+            "cancel must not report a chosen login"
+        )
+    }
 }
