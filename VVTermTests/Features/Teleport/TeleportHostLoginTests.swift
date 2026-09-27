@@ -28,6 +28,7 @@ struct TeleportHostLoginTests {
         principals: [String]
     ) -> OpenSSHCertificate {
         OpenSSHCertificate(
+            rawBlob: Data([0x01, 0x02]),
             certKeyType: "ssh-ed25519-cert-v01@openssh.com",
             nonce: Data([0, 1, 2, 3]),
             publicKeyBlob: Data([9, 9, 9]),
