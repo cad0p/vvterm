@@ -50,9 +50,12 @@
 #   no WebAuthn. Teleport's own e2e runner does the same thing (seeds users
 #   + credentials directly into the cluster state, then signs in over HTTP).
 #   The app's SSH path consumes exactly this cert shape: an OpenSSH
-#   authorized_keys-format cert (`ssh-ed25519-cert-v01@openssh.com …`) +
-#   the OpenSSH PEM ed25519 private key + the cluster TLS CA PEMs (see
-#   `SSHSession.authenticate` / `connectTeleportTLS` in SSHClient.swift).
+#   authorized_keys-format cert + the OpenSSH PEM private key + the cluster
+#   TLS CA PEMs (see `SSHSession.authenticate` / `connectTeleportTLS` in
+#   SSHClient.swift). tctl v16.4.0 mints an RSA key for it, which the SSH
+#   auth accepts; the proxy-recording leg (#269) additionally needs an
+#   ed25519 identity because the app's forwarded-agent signer parses only
+#   `openssh-key-v1` ed25519 keys — see `mint_recording_identity` below.
 #   M2 (TOTP + headless approval) and M3 (passwordless WebAuthn) build on
 #   this same server, later.#
 # Ports (all overridable):
@@ -301,6 +304,99 @@ cmd_start() {
   echo "error: teleport did not become ready in 90s (see ${LOG_FILE})" >&2
   tail -40 "${LOG_FILE}" >&2 || true
   exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Recording-leg identity (#269)
+# ---------------------------------------------------------------------------
+#
+# A cluster that records at the proxy terminates the client's SSH in an
+# in-memory forwarding server and dials the node itself, authenticating with
+# the SSH agent the client forwards. `tsh ssh -A` forwards the SYSTEM agent
+# ($SSH_AUTH_SOCK), so the recording leg must have an agent running that
+# holds a certificate the node trusts — and the app's own forwarded-agent
+# signer parses the stored private key as `openssh-key-v1` ed25519, so the
+# app fixture must be ed25519 too. `tctl auth sign --format=openssh` mints an
+# RSA identity in v16.4.0, so the recording leg generates its own ed25519 key
+# and has the webapi sign it (POST /v1/webapi/ssh/certs signs a
+# caller-provided public key with the password login).
+
+# Mint the recording leg's ed25519 OpenSSH identity and make it the fixture
+# the app tests read (overwrites the tctl RSA `identity` pair).
+# Requires the invite to be completed (TELEPORT_PASSWORD is set).
+mint_recording_identity() {
+  local key_file="${FIXTURES_DIR}/identity-ed25519"
+  local cert_file="${key_file}-cert.pub"
+  rm -f "${key_file}" "${key_file}.pub" "${cert_file}"
+  ssh-keygen -q -t ed25519 -N "" -f "${key_file}" -C "${TELEPORT_LOGIN}"
+
+  local pub_b64
+  pub_b64="$(base64 < "${key_file}.pub" | tr -d '\n')"
+  # `off` (the recording matrix leg) authenticates with the password alone;
+  # `otp` adds the TOTP second factor. `webauthn` clusters reject this
+  # endpoint, and no webauthn leg records at the proxy.
+  local second_factor_field=""
+  if [ "${TELEPORT_SECOND_FACTOR}" = "otp" ]; then
+    second_factor_field=",\"otp_token\":\"$(python3 "${SCRIPT_DIR}/teleport-totp.py" code "${TOTP_SECRET}")\""
+  fi
+  local response_file="${WORK_DIR}/recording-ssh-cert.json"
+  if ! curl -ksS -X POST \
+      "https://${TELEPORT_HOST}:${TELEPORT_WEB_PORT}/v1/webapi/ssh/certs" \
+      -H 'Content-Type: application/json' \
+      -d "{\"user\":\"${TELEPORT_USER}\",\"password\":\"${TELEPORT_PASSWORD}\",\"pub_key\":\"${pub_b64}\",\"ttl\":43200000000000,\"compatibility\":\"\"${second_factor_field}}" \
+      -o "${response_file}" -w '%{http_code}' | grep -q '200'; then
+    echo "error: recording-leg cert request failed:" >&2
+    cat "${response_file}" >&2 || true
+    exit 1
+  fi
+  python3 - "${response_file}" "${cert_file}" <<'PY'
+import base64, json, sys
+with open(sys.argv[1]) as fh:
+    response = json.load(fh)
+cert = base64.b64decode(response["cert"]).decode()
+with open(sys.argv[2], "w") as fh:
+    fh.write(cert if cert.endswith("\n") else cert + "\n")
+PY
+  if ! head -1 "${cert_file}" | grep -q '^ssh-ed25519-cert-v01@openssh.com '; then
+    echo "error: recording-leg identity is not an ed25519 OpenSSH certificate:" >&2
+    head -c 100 "${cert_file}" >&2
+    exit 1
+  fi
+  # The app reads VVTERM_TELEPORT_CERT/KEY from this pair (write_env_file).
+  cp "${key_file}" "${FIXTURES_DIR}/identity"
+  cp "${cert_file}" "${FIXTURES_DIR}/identity-cert.pub"
+  log "recording-leg ed25519 identity minted (webapi-signed)"
+}
+
+# Ensure an ssh-agent is running with the recording identity loaded. The
+# agent daemon survives across workflow steps; the socket/pid are written to
+# $GITHUB_ENV so the separate probe invocation inherits them (and a later
+# step can re-run this helper to recover lazily).
+ensure_recording_agent() {
+  local identity_file="$1"
+  local agent_status=0
+  ssh-add -l >/dev/null 2>&1 || agent_status=$?
+  if [ -z "${SSH_AUTH_SOCK:-}" ] || [ "${agent_status}" -eq 2 ]; then
+    eval "$(ssh-agent -s)" >/dev/null
+    log "started ssh-agent (pid ${SSH_AGENT_PID:-?})"
+  fi
+  if ! ssh-add "${identity_file}" >/dev/null 2>&1; then
+    echo "error: could not load ${identity_file} into the ssh-agent" >&2
+    exit 1
+  fi
+  # The plain key alone cannot authenticate to the node: the certificate must
+  # be in the agent (ssh-add picks up the adjacent -cert.pub automatically).
+  if ! ssh-add -L 2>/dev/null | grep -q -- '-cert-v01@openssh.com'; then
+    echo "error: ssh-agent holds no OpenSSH certificate for the recording leg (identity ${identity_file})" >&2
+    ssh-add -L >&2 || true
+    exit 1
+  fi
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    {
+      printf 'SSH_AUTH_SOCK=%s\n' "${SSH_AUTH_SOCK}"
+      printf 'SSH_AGENT_PID=%s\n' "${SSH_AGENT_PID:-}"
+    } >> "${GITHUB_ENV}"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -562,6 +658,16 @@ cmd_bootstrap() {
   fi
 
   log "cert: $(head -c 40 "${cert_file}")…"
+
+  # 3b. The recording leg replaces that RSA pair with an ed25519 OpenSSH
+  #     identity: the app's forwarded-agent signer parses only
+  #     `openssh-key-v1` ed25519 keys, and the tsh -A smoke/probe need a
+  #     cert-bearing agent (started here; its env is persisted for later
+  #     steps). Non-recording legs keep the tctl RSA identity unchanged.
+  if [ "${TELEPORT_SESSION_RECORDING}" != "off" ]; then
+    mint_recording_identity
+    ensure_recording_agent "${FIXTURES_DIR}/identity"
+  fi
 
   # 4. Export the cluster TLS CA (PEM bundle) — the SSH path uses these as
   #    NWProtocolTLS trust anchors (see connectTeleportTLS).
@@ -1037,10 +1143,13 @@ cmd_probe() {
   local tsh_home="${WORK_DIR}/tsh-home"
   mkdir -p "${tsh_home}"
   # Same record-at-proxy requirement as the bootstrap smoke: the probe must
-  # forward an agent on the recording leg. -A belongs to the `ssh` subcommand
+  # forward a cert-bearing agent on the recording leg. The agent env comes
+  # from bootstrap ($GITHUB_ENV); re-run the helper to recover if the agent
+  # is gone (it fails loudly otherwise). -A belongs to the `ssh` subcommand
   # (#269).
   local forward_agent_flag=""
   if [ "${TELEPORT_SESSION_RECORDING}" != "off" ]; then
+    ensure_recording_agent "${FIXTURES_DIR}/identity"
     forward_agent_flag="-A"
   fi
   local out
