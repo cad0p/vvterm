@@ -138,6 +138,14 @@ struct VVTermApp: App {
     private var usesTeleportPhaseChainUITestHarness: Bool {
         Foundation.ProcessInfo.processInfo.arguments.contains("--vvterm-ui-test-teleport-phase-chain")
     }
+
+    /// The form harness takes a value (`--vvterm-ui-test-teleport-form=add|edit`),
+    /// so this must prefix-match rather than compare for equality.
+    private var usesTeleportFormUITestHarness: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains {
+            $0.hasPrefix("--vvterm-ui-test-teleport-form")
+        }
+    }
     #endif
 
     /// True when ANY UI test harness launch arg is present. Used to skip
@@ -164,6 +172,9 @@ struct VVTermApp: App {
                 .modifier(AppearanceModifier())
         } else if usesTeleportPhaseChainUITestHarness {
             TeleportPhaseChainUITestHarness()
+                .modifier(AppearanceModifier())
+        } else if usesTeleportFormUITestHarness {
+            TeleportFormUITestHarness()
                 .modifier(AppearanceModifier())
         } else if usesTeleportUITestHarness {
             TeleportUITestHarness()
