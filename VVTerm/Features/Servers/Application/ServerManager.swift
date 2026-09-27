@@ -753,8 +753,14 @@ final class ServerManager: ObservableObject {
         let previousServersByID = makeServerMap(from: servers)
         workspaces = dedupedWorkspaces(from: changes.workspaces)
         servers = dedupedServers(from: changes.servers)
-        for server in servers {
-            invalidateTeleportCredentialIfNeeded(from: previousServersByID[server.id], to: server)
+        for index in servers.indices {
+            let server = servers[index]
+            if invalidateTeleportCredentialIfNeeded(from: previousServersByID[server.id], to: server) {
+                // The merged row belongs to the new identity; the previous
+                // identity's stored login must not survive the same save (the
+                // A6 rule, applied to the CloudKit merge paths too).
+                servers[index].teleportHostLogin = nil
+            }
         }
     }
 
@@ -802,8 +808,12 @@ final class ServerManager: ObservableObject {
 
     private func upsertServers(_ updates: [Server]) {
         var serverMap = makeServerMap(from: servers)
-        for server in updates {
-            invalidateTeleportCredentialIfNeeded(from: serverMap[server.id], to: server)
+        for var server in updates {
+            if invalidateTeleportCredentialIfNeeded(from: serverMap[server.id], to: server) {
+                // See `applyFullFetchCloudKitChanges`: an identity-changing
+                // merge drops the previous identity's login in the same save.
+                server.teleportHostLogin = nil
+            }
             serverMap[server.id] = server
             logger.info("Server updated from CloudKit: \(server.name) (id: \(server.id), workspaceId: \(server.workspaceId))")
         }

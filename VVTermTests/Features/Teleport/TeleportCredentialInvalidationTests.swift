@@ -347,6 +347,62 @@ struct TeleportCredentialInvalidationWiringTests {
     }
 
     @Test
+    func fullFetchMergeHostChangeClearsTheStoredHostLogin() async throws {
+        try await withManager { manager, invalidator in
+            let server = makeServer()
+            manager.servers = [server]
+            invalidator.seedCredential(for: server.id, certKeyID: "pier")
+
+            var remote = server
+            remote.host = "remote-edited.example.com"
+            manager.applyCloudKitChanges(
+                CloudKitChanges(
+                    servers: [remote],
+                    workspaces: [],
+                    deletedServerIDs: [],
+                    deletedWorkspaceIDs: [],
+                    isFullFetch: true
+                )
+            )
+
+            #expect(invalidator.cleared == [server.id])
+            let stored = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(
+                stored.teleportHostLogin == nil,
+                "a full-fetch merge that clears the credential must also drop the previous identity's host login"
+            )
+        }
+    }
+
+    @Test
+    func incrementalMergeUsernameChangeClearsTheStoredHostLogin() async throws {
+        try await withManager { manager, invalidator in
+            let server = makeServer()
+            manager.servers = [server]
+            invalidator.seedCredential(for: server.id, certKeyID: "pier")
+
+            var remote = server
+            remote.username = "someone-else"
+            manager.applyCloudKitChanges(
+                CloudKitChanges(
+                    servers: [remote],
+                    workspaces: [],
+                    deletedServerIDs: [],
+                    deletedWorkspaceIDs: [],
+                    isFullFetch: false
+                )
+            )
+
+            #expect(invalidator.cleared == [server.id])
+            let stored = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(
+                stored.teleportHostLogin == nil,
+                "an incremental identity-changing merge must also drop the previous identity's host login"
+            )
+        }
+    }
+
+    @Test
     func deleteServerClearsTheCredentialRecord() async throws {
         try await withManager { manager, invalidator in
             let server = makeServer()
