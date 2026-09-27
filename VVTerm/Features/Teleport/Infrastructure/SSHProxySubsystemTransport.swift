@@ -557,6 +557,11 @@ extension SSHProxySubsystemTransport {
     /// call; the EAGAIN `usleep` retry happens outside the lock so a
     /// backpressured channel doesn't stall keepalives.
     ///
+    /// The cancel token is re-checked *inside* the mutex, immediately before
+    /// each libssh2 call, so the synchronous teardown (which flips the token,
+    /// then frees the outer session under the same mutex) cannot race a call
+    /// into the freed outer session.
+    ///
     /// - Parameters:
     ///   - channel: The outer session channel (already has the `proxy:...`
     ///     subsystem requested). The transport does NOT take ownership — the
@@ -577,6 +582,12 @@ extension SSHProxySubsystemTransport {
         // pin it forever. The token is a small Sendable class that the
         // transport flips via cancelPumpSync().
         let cancelToken = PumpCancelToken()
+        // Sentinel returned from inside `withLock` when the token is already
+        // cancelled. libssh2 never returns this from a read/write (it collides
+        // with neither EOF (0) nor an error), and both closures map it back to
+        // 0 so the pump loops exit via their EOF/closed-channel paths instead
+        // of touching a freed session.
+        let cancelledReturn = Int.min
         let transportLog = Logger.forCategory("SSH-Proxy-Subsystem-Pump")
         let transport = SSHProxySubsystemTransport(
             channelRead: { buf, maxLen in
@@ -586,12 +597,20 @@ extension SSHProxySubsystemTransport {
                 // outer-session mutex (see class doc) — the EAGAIN sleep is
                 // outside the lock so a backpressured channel doesn't stall
                 // keepalives or the FD->channel loop.
+                //
+                // The cancel token is re-checked *inside* the mutex (same
+                // discipline as the agent service's closures): the teardown
+                // flips the token and then frees the outer session under this
+                // mutex, so a call that just passed the token check cannot
+                // race the free. Cancellation surfaces to the pump loop as
+                // EOF (0), which closes the pump FD and exits.
                 var eagainSpins = 0
                 while true {
-                    if cancelToken.isCancelled { return 0 }  // EOF
-                    let n = outerSessionMutex.withLock {
-                        libssh2_channel_read_ex(channel, 0, buf, maxLen)
+                    let n = outerSessionMutex.withLock { () -> Int in
+                        guard !cancelToken.isCancelled else { return cancelledReturn }
+                        return libssh2_channel_read_ex(channel, 0, buf, maxLen)
                     }
+                    if n == cancelledReturn { return 0 }  // EOF — pump loop exits
                     if n == LIBSSH2_ERROR_EAGAIN {
                         eagainSpins += 1
                         if eagainSpins == 1_000 {
@@ -610,12 +629,17 @@ extension SSHProxySubsystemTransport {
                 }
             },
             channelWrite: { buf, len in
+                // Same guard-inside-the-mutex discipline as `channelRead`:
+                // re-check the token under the outer-session mutex before the
+                // libssh2 call, then surface cancellation to the pump loop as
+                // a closed channel (0), which makes it exit.
                 var eagainSpins = 0
                 while true {
-                    if cancelToken.isCancelled { return 0 }
-                    let n = outerSessionMutex.withLock {
-                        libssh2_channel_write_ex(channel, 0, buf, len)
+                    let n = outerSessionMutex.withLock { () -> Int in
+                        guard !cancelToken.isCancelled else { return cancelledReturn }
+                        return libssh2_channel_write_ex(channel, 0, buf, len)
                     }
+                    if n == cancelledReturn { return 0 }  // closed — loop exits
                     if n == LIBSSH2_ERROR_EAGAIN {
                         eagainSpins += 1
                         if eagainSpins == 1_000 {

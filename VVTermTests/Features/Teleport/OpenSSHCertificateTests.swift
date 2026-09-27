@@ -48,6 +48,18 @@ struct OpenSSHCertificateTests {
     }
 
     @Test
+    func rawBlobIsTheFullDecodedCertificateBlob() throws {
+        // The agent identity is this blob (not `publicKeyBlob`, not
+        // `signedData`): it must be the exact bytes of the authorized_keys
+        // line's base64 payload, signature field included.
+        let (_, blob) = try #require(OpenSSHCertificate.parseAuthorizedKeysLine(Self.userCert))
+        let cert = try #require(OpenSSHCertificate.parse(authorizedKeysOrPEM: Self.userCert))
+        #expect(cert.rawBlob == blob)
+        #expect(cert.rawBlob.count > cert.signedData.count)
+        #expect(cert.rawBlob != cert.publicKeyBlob)
+    }
+
+    @Test
     func certifiedPublicKeyMatchesThePlainAuthorizedKeysKeyBlob() throws {
         // The `public key` field in the cert must reconstruct the same blob as
         // the authorized_keys line of the certified key. This is the byte
