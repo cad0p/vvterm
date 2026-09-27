@@ -17,6 +17,10 @@ final class ServerManager: ObservableObject {
     private let cloudKit = CloudKitManager.shared
     private let syncCoordinator = CloudKitSyncCoordinator.shared
     private let keychain = KeychainManager.shared
+    /// The Teleport credential invalidation seam. Defaulted so `shared` and
+    /// the app keep today's wiring; tests inject a recording fake to assert
+    /// the invalidation rule without a real keyring.
+    private let teleportCredentialInvalidator: any TeleportCredentialInvalidating
     private let logger = Logger.forCategory("ServerManager")
     private var isSyncEnabled: Bool { SyncSettings.isEnabled }
 
@@ -32,7 +36,8 @@ final class ServerManager: ObservableObject {
         let canReplaceLocalState: Bool
     }
 
-    private init() {
+    init(teleportCredentialInvalidator: any TeleportCredentialInvalidating = TeleportKeyRingHost.shared) {
+        self.teleportCredentialInvalidator = teleportCredentialInvalidator
         // Load local data first (fast)
         loadLocalData()
         refreshFreePlanGeneration(persistCurrentIfNeeded: !isSyncEnabled, reason: "local_load")
@@ -702,7 +707,7 @@ final class ServerManager: ObservableObject {
         Array(serverMap.values).sorted { $0.name < $1.name }
     }
 
-    private func applyCloudKitChanges(_ changes: CloudKitChanges, canReplaceLocalState: Bool = true) {
+    func applyCloudKitChanges(_ changes: CloudKitChanges, canReplaceLocalState: Bool = true) {
         if changes.isFullFetch && canReplaceLocalState {
             applyFullFetchCloudKitChanges(changes)
             return
@@ -711,9 +716,33 @@ final class ServerManager: ObservableObject {
         applyIncrementalCloudKitChanges(changes)
     }
 
+    /// Apply the credential-invalidation rule for a server-row identity change
+    /// (local edit or CloudKit merge). A `nil` previous row (a brand-new row)
+    /// has no credential to clear.
+    private func invalidateTeleportCredentialIfNeeded(from previous: Server?, to updated: Server) {
+        guard let previous else { return }
+        let shouldClear = TeleportCredentialInvalidationPolicy.shouldClearCredential(
+            oldHost: previous.host,
+            newHost: updated.host,
+            oldUsername: previous.username,
+            newUsername: updated.username,
+            hasCredential: teleportCredentialInvalidator.hasCredential(for: updated.id),
+            certKeyID: teleportCredentialInvalidator.certKeyID(for: updated.id)
+        )
+        guard shouldClear else { return }
+        logger.info(
+            "Invalidating the Teleport credential for server \(updated.id.uuidString, privacy: .public) after a host/user identity change"
+        )
+        teleportCredentialInvalidator.clearCredential(for: updated.id)
+    }
+
     private func applyFullFetchCloudKitChanges(_ changes: CloudKitChanges) {
+        let previousServersByID = makeServerMap(from: servers)
         workspaces = dedupedWorkspaces(from: changes.workspaces)
         servers = dedupedServers(from: changes.servers)
+        for server in servers {
+            invalidateTeleportCredentialIfNeeded(from: previousServersByID[server.id], to: server)
+        }
     }
 
     private func applyIncrementalCloudKitChanges(_ changes: CloudKitChanges) {
@@ -761,6 +790,7 @@ final class ServerManager: ObservableObject {
     private func upsertServers(_ updates: [Server]) {
         var serverMap = makeServerMap(from: servers)
         for server in updates {
+            invalidateTeleportCredentialIfNeeded(from: serverMap[server.id], to: server)
             serverMap[server.id] = server
             logger.info("Server updated from CloudKit: \(server.name) (id: \(server.id), workspaceId: \(server.workspaceId))")
         }
@@ -777,6 +807,9 @@ final class ServerManager: ObservableObject {
         let removedServers = servers.filter { idSet.contains($0.id) }
         for server in removedServers {
             removeKnownHostIfUnused(for: server, excluding: idSet)
+            // The credential (SEP-key metadata + cert + cluster TLS state)
+            // belongs to the deleted row and is not reusable after removal.
+            teleportCredentialInvalidator.clearCredential(for: server.id)
         }
         servers.removeAll { idSet.contains($0.id) }
     }
@@ -939,6 +972,7 @@ final class ServerManager: ObservableObject {
     }
 
     func updateServer(_ server: Server) async throws {
+        let previousServer = servers.first(where: { $0.id == server.id })
         var updatedServer = server
         updatedServer = Server(
             id: server.id,
@@ -969,6 +1003,7 @@ final class ServerManager: ObservableObject {
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
             servers[index] = updatedServer
         }
+        invalidateTeleportCredentialIfNeeded(from: previousServer, to: updatedServer)
         enqueuePendingServerUpsert(updatedServer)
         await persistLocalMutations(logMessage: "Updated server: \(updatedServer.name)")
     }
@@ -986,6 +1021,7 @@ final class ServerManager: ObservableObject {
 
     func deleteServer(_ server: Server) async throws {
         try keychain.deleteCredentials(for: server.id)
+        teleportCredentialInvalidator.clearCredential(for: server.id)
 
         removeKnownHostIfUnused(for: server)
         servers.removeAll { $0.id == server.id }

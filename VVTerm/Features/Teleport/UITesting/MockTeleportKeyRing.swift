@@ -245,4 +245,21 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, Telep
         clusterTLSStates.removeValue(forKey: clusterId)
     }
 }
+
+// MARK: - Credential invalidation seam
+
+extension MockTeleportKeyRing: TeleportCredentialInvalidating {
+    func hasCredential(for serverId: UUID) -> Bool {
+        credentials[serverId] != nil
+    }
+
+    func certKeyID(for serverId: UUID) -> String? {
+        guard let certPEM = credentials[serverId]?.sshCertPEM else { return nil }
+        return OpenSSHCertificate.parse(authorizedKeysOrPEM: certPEM)?.keyID
+    }
+
+    func clearCredential(for serverId: UUID) {
+        clear(for: serverId)
+    }
+}
 #endif

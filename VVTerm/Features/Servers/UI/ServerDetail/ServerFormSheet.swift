@@ -689,6 +689,14 @@ struct ServerFormSheet: View {
                 .textInputAutocapitalization(.never)
                 #endif
 
+            if selectedAuthMethod == .faceIDTeleport {
+                Text(String(localized: "Changing the Teleport user or host re-runs Teleport setup on this device."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.form.userCaption")
+            }
+
             Button {
                 showingLocalDiscoverySheet = true
             } label: {
