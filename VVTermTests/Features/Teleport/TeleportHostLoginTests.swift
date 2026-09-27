@@ -261,6 +261,9 @@ struct TeleportHostLoginTests {
         // The diagnostics spine renders through `String(describing:)`, which
         // honours the child's `description`; pinned here so the read-only
         // `SSHErrorDiagnostics` path cannot start leaking the principals.
+        // Regression guard, not the counterfactual: measured, it passed before
+        // the `CustomReflectable` conformance (the `description` path was
+        // already case-only).
         let diagnostics = SSHError.diagnosticsMessage(for: wrapped, redacting: nil)
         #expect(!diagnostics.contains("deploy"))
         #expect(!diagnostics.contains("root"))

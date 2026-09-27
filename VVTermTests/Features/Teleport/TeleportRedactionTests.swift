@@ -114,6 +114,38 @@ final class TeleportRedactionTests: XCTestCase {
             .deletingLastPathComponent()  // VVTermTests/
     }
 
+    /// Every line in `relativeDirectory` (recursively, `.swift` files only)
+    /// that contains `needle`, each prefixed with its repo-relative path so a
+    /// failure names the exact site. Walking the tree — rather than a fixed
+    /// file list — means a newly added log site inside it trips the caller's
+    /// count assertion instead of passing unnoticed.
+    private func sourceLines(
+        under relativeDirectory: String,
+        matching needle: String
+    ) throws -> [String] {
+        let root = repositoryRoot().appendingPathComponent(relativeDirectory)
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        var matches: [String] = []
+        while let url = enumerator.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let relativePath = String(url.path.dropFirst(root.path.count + 1))
+            let source = try String(contentsOf: url, encoding: .utf8)
+            matches.append(
+                contentsOf: source
+                    .components(separatedBy: "\n")
+                    .filter { $0.contains(needle) }
+                    .map { "\(relativePath): \($0)" }
+            )
+        }
+        return matches.sorted()
+    }
+
     // MARK: - BrowserMFACeremony
 
     /// A gRPC stub that captures the redirect URL and returns a challenge with
@@ -679,24 +711,23 @@ final class TeleportRedactionTests: XCTestCase {
     /// reason as the headless-id pin above: the simulator log store does not
     /// mask privacy on readback.
     ///
-    /// Scope, stated honestly: this scans one file and requires exactly one
-    /// `user=\(` line (count tripwire). It then matches the whole
+    /// Scope, stated honestly: this walks the whole `VVTerm/Features/Teleport`
+    /// tree and requires exactly one `user=\(` line there (count tripwire), so
+    /// a moved line or a newly added site inside the feature trips the
+    /// assertion rather than passing unnoticed. It then matches the whole
     /// interpolation — `\(cluster.username, privacy: .private)` (or
     /// `.sensitive`) — rather than checking that `.private` appears somewhere
     /// on the line, so a second public interpolation on the same line, or a
     /// `.private` that belongs to the dial target, cannot satisfy it. What it
-    /// still cannot catch: an alias (`let u = cluster.username`), a `user=`
-    /// line moved to another file, or a reformatted interpolation outside the
-    /// pattern. The runtime behavior is pinned by Apple's privacy semantics,
-    /// not by a simulator readback.
+    /// still cannot catch: an alias (`let u = cluster.username`), a site added
+    /// outside the walked tree (e.g. `VVTerm/Core/SSH`), or a reformatted
+    /// interpolation outside the pattern. The runtime behavior is pinned by
+    /// Apple's privacy semantics, not by a simulator readback.
     func testTeleportBootstrapCoordinator_usernameLogsArePrivacyAnnotated() throws {
-        let sourceURL = repositoryRoot()
-            .appendingPathComponent("VVTerm/Features/Teleport/Application/TeleportBootstrapCoordinator.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        let usernameLines = source
-            .components(separatedBy: "\n")
-            .filter { $0.contains("user=\\(") }
+        let usernameLines = try sourceLines(
+            under: "VVTerm/Features/Teleport",
+            matching: "user=\\("
+        )
 
         XCTAssertEqual(
             usernameLines.count,
@@ -733,31 +764,23 @@ final class TeleportRedactionTests: XCTestCase {
     /// reason as the headless-id pin above: the simulator log store does not
     /// mask privacy on readback.
     ///
-    /// Scope, stated honestly: this scans the two known files and requires
-    /// exactly two `device=\(` lines in total (count tripwire). It then
-    /// matches the whole interpolation — `\(deviceName, privacy: .private)`
-    /// (or `.sensitive`) — rather than checking that `.private` appears
-    /// somewhere on the line, so a second public interpolation on the same
-    /// line, or a `.private` that belongs to the cluster id, cannot satisfy
-    /// it. What it still cannot catch: an alias (`let d = deviceName`), a
-    /// `device=` line moved to another file, or a reformatted interpolation
-    /// outside the pattern. The runtime behavior is pinned by Apple's privacy
+    /// Scope, stated honestly: this walks the whole `VVTerm/Features/Teleport`
+    /// tree and requires exactly two `device=\(` lines there (count tripwire),
+    /// so a moved line or a newly added site inside the feature trips the
+    /// assertion rather than passing unnoticed. It then matches the whole
+    /// interpolation — `\(deviceName, privacy: .private)` (or `.sensitive`) —
+    /// rather than checking that `.private` appears somewhere on the line, so
+    /// a second public interpolation on the same line, or a `.private` that
+    /// belongs to the cluster id, cannot satisfy it. What it still cannot
+    /// catch: an alias (`let d = deviceName`), a site added outside the walked
+    /// tree (e.g. `VVTerm/Core/SSH`), or a reformatted interpolation outside
+    /// the pattern. The runtime behavior is pinned by Apple's privacy
     /// semantics, not by a simulator readback.
     func testDeviceNameLogsArePrivacyAnnotated() throws {
-        let sources = [
-            "VVTerm/Features/Teleport/Application/TeleportKeyRing.swift",
-            "VVTerm/Features/Teleport/Application/TeleportRegistrationCoordinator.swift",
-        ]
-        var deviceNameLines: [String] = []
-        for relative in sources {
-            let sourceURL = repositoryRoot().appendingPathComponent(relative)
-            let source = try String(contentsOf: sourceURL, encoding: .utf8)
-            deviceNameLines.append(
-                contentsOf: source
-                    .components(separatedBy: "\n")
-                    .filter { $0.contains("device=\\(") }
-            )
-        }
+        let deviceNameLines = try sourceLines(
+            under: "VVTerm/Features/Teleport",
+            matching: "device=\\("
+        )
 
         XCTAssertEqual(
             deviceNameLines.count,
