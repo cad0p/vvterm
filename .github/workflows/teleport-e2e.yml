@@ -18,6 +18,12 @@
 #     registration, password+WebAuthn login, headless approval, and
 #     passwordless login (scripts/ci/teleport-webauthn.py + fido2)
 #
+#   - the #269 proxy-recording leg: a cluster booted with
+#     `session_recording: proxy` makes the proxy take Teleport's
+#     dialAndForward path, which requires the client to forward an SSH agent;
+#     `TELEPORT_SESSION_RECORDING=proxy` selects it (matrix.include, so the
+#     default `off` legs keep the direct-dial path).
+#
 # Why dispatch/schedule and not PR CI:
 #   - PR CI peaks at 5 concurrent macOS jobs (unit-tests + the 4 UI
 #     shards; the build job runs first alone) with a ~20m wall-clock budget
@@ -165,13 +171,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # off — M1: the app's SSH path against a no-MFA cluster.
-        # webauthn — M4: additionally drives the app's real Phase-2
-        # registration + Phase-3 passwordless ceremonies (env-gated tests
-        # self-skip on the leg they don't belong to).
-        second-factor: ['off', 'webauthn']
+        # Explicit include (NOT a cross-product): `session-recording` is the
+        # #269 lever. `proxy` makes Teleport record at the proxy, so the
+        # proxy takes its dialAndForward path and requires the client to
+        # forward an SSH agent; `off` keeps the historical direct-dial path.
+        #
+        # Job budget (L3-A8): three legs here + three server-smoke legs = up
+        # to 6 concurrent macOS jobs on a dispatch against the 5-slot
+        # account cap, so one job briefly queues. This workflow is
+        # dispatch/schedule-only, so the PR ≤20m budget is untouched, and the
+        # smoke legs are short.
+        include:
+          - second-factor: off
+            session-recording: off
+          - second-factor: webauthn
+            session-recording: off
+          - second-factor: off
+            session-recording: proxy
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
+      # Job-level env reaches every step; the start/bootstrap/probe steps
+      # read it to gate tsh's -A and the proxy-recording config lever.
+      TELEPORT_SESSION_RECORDING: ${{ matrix.session-recording }}
 
     steps:
       - name: Checkout
@@ -206,7 +227,7 @@ jobs:
           fi
           python3 -c 'import importlib.metadata as m; print("fido2", m.version("fido2"))'
 
-      - name: Start Teleport cluster (TLS routing on :443, ${{ matrix.second-factor }})
+      - name: Start Teleport cluster (TLS routing on :443, mfa=${{ matrix.second-factor }}, recording=${{ matrix.session-recording }})
         run: |
           set -euo pipefail
           # sudo -n (passwordless on GH runners) is handled inside the
@@ -215,9 +236,11 @@ jobs:
           # ambient teleport env on dev machines, so never inherit them.
           # off — the M1 app SSH path. webauthn — the M3 smokes + the M4
           # app ceremony (Phase-2 registration + Phase-3 passwordless).
+          # recording=proxy — the #269 record-at-proxy agent-forwarding leg.
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
           TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_SESSION_RECORDING=${{ matrix.session-recording }} \
           TELEPORT_PASSWORD=VmTestPassw0rd! \
           bash scripts/ci/teleport-server.sh start
 
@@ -227,6 +250,7 @@ jobs:
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
           TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_SESSION_RECORDING=${{ matrix.session-recording }} \
           TELEPORT_PASSWORD=VmTestPassw0rd! \
           bash scripts/ci/teleport-server.sh bootstrap
 
@@ -283,11 +307,18 @@ jobs:
         # time attributes the next failure decisively: probe FAILS = server
         # can't complete SSH at test time (server-side), probe passes = the
         # app side stalled (app-side).
+        #
+        # Known red fixed here (L3-A5, run 36302712010): the probe reused
+        # `write_env_file`'s quoted values via a sed read that did not strip
+        # the quotes, so tsh presented the SSH principal `"ci-login"`
+        # (auth log: `principal "\"ci-login\"" not in the set of valid
+        # principals`). `cmd_probe` now strips the surrounding quotes.
         run: |
           set -euo pipefail
           TELEPORT_WEB_PORT=443 TELEPORT_HOST=127.0.0.1 TELEPORT_NODE=ci-node \
           TELEPORT_CLUSTER=ci-cluster TELEPORT_USER=ci-user TELEPORT_LOGIN=ci-login \
           TELEPORT_SECOND_FACTOR=${{ matrix.second-factor }} \
+          TELEPORT_SESSION_RECORDING=${{ matrix.session-recording }} \
           bash scripts/ci/teleport-server.sh probe
 
       - name: Pre-resolve SPM dependencies (retry)
@@ -454,7 +485,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: teleport-e2e-${{ matrix.second-factor }}-logs
+          name: teleport-e2e-${{ matrix.second-factor }}-${{ matrix.session-recording }}-logs
           path: |
             ${{ runner.temp }}/vvterm-teleport/teleport.log
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
@@ -468,7 +499,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: teleport-e2e-${{ matrix.second-factor }}-test-results
+          name: teleport-e2e-${{ matrix.second-factor }}-${{ matrix.session-recording }}-test-results
           path: |
             ${{ runner.temp }}/test.log
             ${{ runner.temp }}/sim-vvterm.log

@@ -96,6 +96,12 @@ TELEPORT_LOGIN="${TELEPORT_LOGIN:-ci-login}"
 # breaking the first-device path.
 TELEPORT_APP_USER="${TELEPORT_APP_USER:-ci-app}"
 TELEPORT_SECOND_FACTOR="${TELEPORT_SECOND_FACTOR:-off}"  # off | otp | webauthn
+# Session-recording mode for the cluster (off | proxy). `proxy` makes the
+# proxy terminate the client's SSH in its in-memory forwarding server and
+# dial the node itself, authenticating with the SSH agent the client must
+# forward — the record-at-proxy path #269 fixes. Default `off` preserves the
+# historical behavior for every caller that does not opt in.
+TELEPORT_SESSION_RECORDING="${TELEPORT_SESSION_RECORDING:-off}"
 # WebAuthn relying-party ID — must match the clientDataJSON origin host the
 # signer emits (lib/auth/webauthn/origin.go: only host==rp_id or subdomains
 # are accepted). Defaults to the dial host.
@@ -219,11 +225,16 @@ auth_service:
   listen_addr: 0.0.0.0:${TELEPORT_AUTH_PORT}
   cluster_name: ${TELEPORT_CLUSTER}
   proxy_listener_mode: multiplex
-  # CI cluster: no session recording — the node-mode recording pipe sits
-  # on the exec-ready path and its audit writes queue behind the lite
-  # backend's write-lock stalls on shared runners ("Child process never
-  # became ready" after ~20s). The M1/M4 tests don't exercise recording.
-  session_recording: "off"
+  # CI cluster session recording. The default "off" is historical:
+  # node-mode recording sat on the exec-ready path and its audit writes
+  # queued behind the lite backend's write-lock stalls on shared runners
+  # ("Child process never became ready" after ~20s). The `dir` backend no
+  # longer has that contention, and `proxy` mode records in-process, so
+  # `TELEPORT_SESSION_RECORDING=proxy` is the #269 lever: the proxy takes
+  # Teleport's dialAndForward path and requires the client's forwarded SSH
+  # agent. v16 needs no `audit_sessions_uri` (it falls back to
+  # <data_dir>/records) and the role's ForwardAgent option defaults true.
+  session_recording: "${TELEPORT_SESSION_RECORDING}"
   authentication:
     # M1: no MFA (off). M2: TOTP (otp) — bootstrap registers a server-side
     # TOTP device and completes the invite with its code. M3 adds
@@ -622,10 +633,20 @@ cmd_bootstrap() {
   fi
   local tsh_home="${WORK_DIR}/tsh-home"
   mkdir -p "${tsh_home}"
+  # A record-at-proxy cluster needs a forwarded agent for the proxy's
+  # `proxy:<node>:0` subsystem. tsh's -A is opt-in and is a flag of the
+  # `ssh` subcommand (not a root-level flag), so it goes after `ssh` on the
+  # recording leg — otherwise the smoke fails here before any app test runs
+  # (#269).
+  local forward_agent_flag=""
+  if [ "${TELEPORT_SESSION_RECORDING}" != "off" ]; then
+    forward_agent_flag="-A"
+  fi
   local smoke
   smoke="$(
     HOME="${tsh_home}" timeout 60 "${BIN_DIR}/tsh" --insecure \
       -i "${identity_file}" --proxy="${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" ssh \
+      ${forward_agent_flag:+$forward_agent_flag } \
       -o StrictHostKeyChecking=no "${TELEPORT_LOGIN}@${TELEPORT_NODE}" 'echo TELEPORT_E2E_OK'
   )"
   if ! printf '%s' "${smoke}" | grep -q 'TELEPORT_E2E_OK'; then
@@ -997,6 +1018,13 @@ cmd_probe() {
   if [ -f "${ENV_FILE}" ]; then
     local env_login
     env_login="$(sed -n 's/^VVTERM_TELEPORT_LOGIN=//p' "${ENV_FILE}" | head -1)"
+    # `write_env_file` quotes every value (the workflow `source`s the file, so
+    # the shell strips the quotes for the app tests). This sed-based read does
+    # not, and the raw quotes made the probe present the SSH principal
+    # `"ci-login"` — the auth failure of run 36302712010
+    # ("principal \"ci-login\" not in the set of valid principals").
+    env_login="${env_login%\"}"
+    env_login="${env_login#\"}"
     if [ -n "${env_login}" ]; then
       TELEPORT_LOGIN="${env_login}"
     fi
@@ -1008,10 +1036,18 @@ cmd_probe() {
   fi
   local tsh_home="${WORK_DIR}/tsh-home"
   mkdir -p "${tsh_home}"
+  # Same record-at-proxy requirement as the bootstrap smoke: the probe must
+  # forward an agent on the recording leg. -A belongs to the `ssh` subcommand
+  # (#269).
+  local forward_agent_flag=""
+  if [ "${TELEPORT_SESSION_RECORDING}" != "off" ]; then
+    forward_agent_flag="-A"
+  fi
   local out
   out="$(
     HOME="${tsh_home}" timeout 60 "${BIN_DIR}/tsh" --insecure \
       -i "${identity_file}" --proxy="${TELEPORT_HOST}:${TELEPORT_WEB_PORT}" ssh \
+      ${forward_agent_flag:+$forward_agent_flag } \
       -o StrictHostKeyChecking=no "${TELEPORT_LOGIN}@${TELEPORT_NODE}" 'echo TELEPORT_PROBE_OK'
   )" || {
     echo "error: test-time tsh probe FAILED (server-side stall?) — output:" >&2
