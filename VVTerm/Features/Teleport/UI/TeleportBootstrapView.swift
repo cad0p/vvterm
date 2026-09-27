@@ -56,10 +56,13 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     /// The in-flight retry task. Tracked so the toolbar Cancel and
     /// `.onDisappear` can cancel a retry that has not started yet (the
     /// double-tap guard). Task cancellation is cooperative and `retry()` never
-    /// observes it, so the guarantee against a retry surviving a dismissal
-    /// does NOT rest on this task: it rests on the Cancel action calling
-    /// `coordinator.cancel()`, which bumps the generation, cancels the POST
-    /// and dismisses the Safari session (#267 review, L1-1).
+    /// observes it, so the toolbar Cancel's guarantee against a retry surviving
+    /// the dismissal does NOT rest on this task: it rests on that action
+    /// calling `coordinator.cancel()`, which bumps the generation, cancels the
+    /// POST and dismisses the Safari session (#267 review, L1-1). A swipe-down
+    /// dismissal runs only `.onDisappear` (no `coordinator.cancel()`), so a
+    /// `retry()` already past its first suspension can still re-invoke
+    /// `begin()` after it — a pre-existing gap, recorded, not changed here.
     @State private var retryTask: Task<Void, Never>?
 
     var body: some View {

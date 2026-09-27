@@ -62,12 +62,13 @@ struct TeleportFormUITestHarness: View {
 
     private let mode: Mode
 
-    /// A fresh, never-persisted manager: `ServerManager()` still reads
-    /// `UserDefaults.standard` (there is no dedicated suite), but the harness
-    /// never writes through it — the edit fixture is a plain `Server` value
-    /// passed to the form, the `--vvterm-ui-test-*` arg skips the CloudKit
-    /// container and `-iCloudSyncEnabled NO` disables sync — so the harness
-    /// never touches `ServerManager.shared`.
+    /// A fresh manager that never persists the edit fixture:
+    /// `ServerManager()` still reads (and does its own bookkeeping writes to)
+    /// `UserDefaults.standard` — there is no dedicated suite — but the fixture
+    /// is a plain `Server` value passed to the form, never inserted into
+    /// `ServerManager.servers`; the `--vvterm-ui-test-*` arg skips the CloudKit
+    /// container and `-iCloudSyncEnabled NO` disables sync, so the harness never
+    /// touches `ServerManager.shared`.
     @StateObject private var serverManager = ServerManager()
     @State private var presentingSheet = true
 
