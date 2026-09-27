@@ -172,6 +172,37 @@ struct TeleportHostLoginTests {
         )
     }
 
+    // MARK: - Setup picker initial selection
+
+    @Test
+    func initialSelectionPrefersAStillValidStoredLogin() {
+        #expect(
+            TeleportHostLogin.initialSelection(logins: ["deploy", "root"], stored: "root") == "root"
+        )
+    }
+
+    @Test
+    func initialSelectionAutoSelectsASinglePrincipal() {
+        #expect(TeleportHostLogin.initialSelection(logins: ["deploy"], stored: nil) == "deploy")
+    }
+
+    @Test
+    func initialSelectionRequiresAnExplicitPickForMultiplePrincipals() {
+        // The CA's wire order must never be frozen silently.
+        #expect(TeleportHostLogin.initialSelection(logins: ["deploy", "root"], stored: nil) == nil)
+        // A stored value that is no longer a principal is not a valid default
+        // either: the fresh cert is ambiguous, so the user must pick.
+        #expect(
+            TeleportHostLogin.initialSelection(logins: ["deploy", "root"], stored: "old-login") == nil
+        )
+    }
+
+    @Test
+    func initialSelectionIgnoresBlankStoredValuesAndEmptyLogins() {
+        #expect(TeleportHostLogin.initialSelection(logins: ["deploy"], stored: "   ") == "deploy")
+        #expect(TeleportHostLogin.initialSelection(logins: [], stored: "deploy") == nil)
+    }
+
     // MARK: - Failure descriptions
 
     @Test

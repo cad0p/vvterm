@@ -470,8 +470,9 @@ final class TeleportUITests: XCTestCase {
 
     // MARK: - Phase 3: host login step (#262)
 
-    /// Several non-internal principals: the picker offers each one, the first
-    /// is selected by default, and Continue passes the chosen principal on.
+    /// Several non-internal principals: no login is selected by default, so
+    /// Continue stays disabled until the user taps one explicitly (the CA's
+    /// wire order must never be frozen silently).
     func testHostLogin_multiplePrincipals_pickerSelectsAndContinues() {
         let app = launch(phase: "login", scenario: "hostLoginMultiple")
         tapSignInButton(app)
@@ -488,10 +489,16 @@ final class TeleportUITests: XCTestCase {
 
         let continueButton = app.buttons["vvterm.teleport.login.continueButton"]
         XCTAssertTrue(continueButton.waitForExistence(timeout: 3))
+        XCTAssertFalse(deploy.isSelected, "no principal may be selected before the user picks one")
+        XCTAssertFalse(root.isSelected)
+        XCTAssertFalse(continueButton.isEnabled, "Continue must require an explicit pick")
 
         // Pick the second principal, then continue. The harness surfaces what
         // `onSuccess` received.
         root.tap()
+        XCTAssertTrue(root.isSelected)
+        XCTAssertFalse(deploy.isSelected)
+        XCTAssertTrue(continueButton.isEnabled)
         continueButton.tap()
 
         let continued = app.staticTexts["vvterm.teleport.harness.continuedHostLogin"]
@@ -524,9 +531,10 @@ final class TeleportUITests: XCTestCase {
         attachScreenshot(app, named: "login-hostLogin-single-principal")
     }
 
-    /// The stored login pre-selects when it is still a principal; the picker
-    /// still lists the other principals and the user can switch.
-    func testHostLogin_storedLoginPreselects() {
+    /// The stored login is frozen per row: a re-login shows the read-only row
+    /// for the already-chosen principal and never re-opens the picker, so the
+    /// persisted identity cannot be switched by a later Face ID refresh.
+    func testHostLogin_storedLogin_noReLoginPicker() {
         let app = launch(
             phase: "login",
             scenario: "hostLoginMultiple",
@@ -534,11 +542,25 @@ final class TeleportUITests: XCTestCase {
         )
         tapSignInButton(app)
 
-        XCTAssertTrue(app.buttons["vvterm.teleport.login.continueButton"].waitForExistence(timeout: 5))
-        app.buttons["vvterm.teleport.login.continueButton"].tap()
+        let value = app.staticTexts["vvterm.teleport.login.hostLoginValue"]
+        XCTAssertTrue(value.waitForExistence(timeout: 5), "the frozen login must be shown read-only")
+        XCTAssertTrue(
+            value.label.contains("root"),
+            "the frozen login must be visible, got: \(value.label)"
+        )
+        XCTAssertFalse(
+            app.buttons["vvterm.teleport.login.hostLoginOption.deploy"].exists,
+            "a stored login must not re-open the picker on re-login"
+        )
+        XCTAssertFalse(app.buttons["vvterm.teleport.login.hostLoginOption.root"].exists)
+
+        let continueButton = app.buttons["vvterm.teleport.login.continueButton"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(continueButton.isEnabled)
+        continueButton.tap()
 
         let continued = app.staticTexts["vvterm.teleport.harness.continuedHostLogin"]
         XCTAssertTrue(continued.waitForExistence(timeout: 3))
-        XCTAssertEqual(continued.label, "continued: root", "the stored login must pre-select")
+        XCTAssertEqual(continued.label, "continued: root", "the frozen login must be kept")
     }
 }

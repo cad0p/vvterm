@@ -37,8 +37,9 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     let cluster: TeleportCluster
 
     /// The host login already stored on the server row, if any. When it is
-    /// still a principal of the fresh certificate it is pre-selected; the
-    /// picker step freezes the choice per row (there is no re-login picker).
+    /// still a principal of the fresh certificate the step renders it
+    /// read-only (the choice is frozen per row); the picker only appears
+    /// when no stored login applies.
     let storedHostLogin: String?
 
     /// Called when the user continues past the host-login step (cert issued +
@@ -97,13 +98,13 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                 return
             }
             // Prefer the stored login only while it is still a principal of
-            // the fresh cert; otherwise the first non-internal principal.
+            // the fresh cert; single-principal certs auto-select, and several
+            // principals with no stored login start with no selection.
             if selectedHostLogin == nil || !logins.contains(selectedHostLogin ?? "") {
-                if let storedHostLogin, logins.contains(storedHostLogin) {
-                    selectedHostLogin = storedHostLogin
-                } else {
-                    selectedHostLogin = logins.first
-                }
+                selectedHostLogin = TeleportHostLogin.initialSelection(
+                    logins: logins,
+                    stored: storedHostLogin
+                )
             }
         }
     }
@@ -201,9 +202,11 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     // MARK: - Host login step
 
     /// The Phase-3 "Host login" step, appended below the success copy (which
-    /// stays visible). With several principals the user picks one; with a
-    /// single principal it is pre-selected and shown read-only (never
-    /// silent). Continue persists the choice.
+    /// stays visible). A stored login that is still a principal of the fresh
+    /// certificate is shown read-only — no re-login picker, the choice is
+    /// frozen per server row. Otherwise: with a single principal it is
+    /// auto-selected and shown read-only (never silent); with several
+    /// principals the user must pick one explicitly before Continue.
     @ViewBuilder
     private func hostLoginStep(logins: [String]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -214,13 +217,21 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
 
             if logins.isEmpty {
                 // Defensive: the issued-cert validator rejects a cert with no
-                // principals before `.success`, so this is a setup error, not
-                // a retry loop.
+                // **non-internal** principals before `.success`, so this is a
+                // setup error, not a retry loop.
                 Text(String(localized: "The certificate carries no login for this host. Ask an administrator to grant a login for this host on the Teleport role, then run setup again."))
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("vvterm.teleport.login.hostLoginError")
+            } else if let frozenLogin = frozenHostLogin(logins: logins) {
+                // The row already has a frozen login and it is still a
+                // principal: show it read-only, never the picker.
+                LabeledContent(String(localized: "Host login")) {
+                    Text(frozenLogin)
+                        .font(.body.weight(.medium))
+                        .accessibilityIdentifier("vvterm.teleport.login.hostLoginValue")
+                }
             } else if logins.count == 1 {
                 LabeledContent(String(localized: "Host login")) {
                     Text(effectiveHostLogin(logins: logins) ?? "")
@@ -247,6 +258,8 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("vvterm.teleport.login.hostLoginOption.\(login)")
+                    .accessibilityAddTraits(effectiveHostLogin(logins: logins) == login ? .isSelected : [])
+                    .accessibilityHint(String(localized: "Use this login for the server"))
                 }
             }
 
@@ -259,24 +272,32 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(effectiveHostLogin(logins: logins) == nil)
                 .accessibilityIdentifier("vvterm.teleport.login.continueButton")
             }
         }
         .padding(.top, 4)
     }
 
-    /// The selection shown, defaulting to the stored login (when it is still a
-    /// principal) or the first principal. Keeps the step usable even if the
-    /// `.onChange` initialization did not run (e.g. the coordinator was
-    /// already in `.success` when the view appeared).
+    /// The row's stored login while it is still a principal of the fresh
+    /// certificate. Present ⇒ the step renders read-only (no re-login picker).
+    private func frozenHostLogin(logins: [String]) -> String? {
+        guard let stored = Server.normalizedTeleportHostLogin(storedHostLogin),
+              logins.contains(stored) else {
+            return nil
+        }
+        return stored
+    }
+
+    /// The selection shown: the user's explicit pick when it is still a
+    /// principal, otherwise the pure selection policy. Also keeps the step
+    /// usable when the `.onChange` initialization did not run (e.g. the
+    /// coordinator was already in `.success` when the view appeared).
     private func effectiveHostLogin(logins: [String]) -> String? {
         if let selectedHostLogin, logins.contains(selectedHostLogin) {
             return selectedHostLogin
         }
-        if let storedHostLogin, logins.contains(storedHostLogin) {
-            return storedHostLogin
-        }
-        return logins.first
+        return TeleportHostLogin.initialSelection(logins: logins, stored: storedHostLogin)
     }
 
     // MARK: - Error

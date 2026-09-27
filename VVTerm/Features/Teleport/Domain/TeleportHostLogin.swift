@@ -100,6 +100,22 @@ enum TeleportHostLogin {
     static func nonInternalPrincipals(of cert: OpenSSHCertificate) -> [String] {
         cert.validPrincipals.filter { !$0.isEmpty && !$0.hasPrefix("-") }
     }
+
+    /// The host login the setup Phase-3 step starts with (the pure selection
+    /// policy, kept out of the view).
+    ///
+    /// - A stored login that is still a principal of the fresh certificate is
+    ///   the frozen per-row choice; the step renders it read-only.
+    /// - A single non-internal principal is auto-selected but still shown.
+    /// - Several non-internal principals with no stored login start with
+    ///   **no selection**: the user must tap one explicitly, so Continue can
+    ///   never freeze whichever login the CA happened to list first.
+    static func initialSelection(logins: [String], stored: String?) -> String? {
+        if let stored = Server.normalizedTeleportHostLogin(stored), logins.contains(stored) {
+            return stored
+        }
+        return logins.count == 1 ? logins[0] : nil
+    }
 }
 
 /// The connect-time route for a fail-closed resolver failure.
