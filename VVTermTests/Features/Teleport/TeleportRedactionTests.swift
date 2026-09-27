@@ -114,6 +114,38 @@ final class TeleportRedactionTests: XCTestCase {
             .deletingLastPathComponent()  // VVTermTests/
     }
 
+    /// Every line in `relativeDirectory` (recursively, `.swift` files only)
+    /// that contains `needle`, each prefixed with its repo-relative path so a
+    /// failure names the exact site. Walking the tree — rather than a fixed
+    /// file list — means a newly added log site inside it trips the caller's
+    /// count assertion instead of passing unnoticed.
+    private func sourceLines(
+        under relativeDirectory: String,
+        matching needle: String
+    ) throws -> [String] {
+        let root = repositoryRoot().appendingPathComponent(relativeDirectory)
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        var matches: [String] = []
+        while let url = enumerator.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let relativePath = String(url.path.dropFirst(root.path.count + 1))
+            let source = try String(contentsOf: url, encoding: .utf8)
+            matches.append(
+                contentsOf: source
+                    .components(separatedBy: "\n")
+                    .filter { $0.contains(needle) }
+                    .map { "\(relativePath): \($0)" }
+            )
+        }
+        return matches.sorted()
+    }
+
     // MARK: - BrowserMFACeremony
 
     /// A gRPC stub that captures the redirect URL and returns a challenge with
@@ -668,6 +700,111 @@ final class TeleportRedactionTests: XCTestCase {
             XCTAssertTrue(
                 line.contains("privacy: .private"),
                 "the headless id must be logged with a privacy annotation: \(line)"
+            )
+        }
+    }
+
+    /// The bootstrap log used to publish the Teleport username
+    /// (`user=\(cluster.username, privacy: .public)`), so the Teleport user
+    /// reached the unified log and any exported diagnostics. Pin the
+    /// **interpolation's own annotation** at the source level for the same
+    /// reason as the headless-id pin above: the simulator log store does not
+    /// mask privacy on readback.
+    ///
+    /// Scope, stated honestly: this walks the whole `VVTerm/Features/Teleport`
+    /// tree and requires exactly one `user=\(` line there (count tripwire), so
+    /// a moved line or a newly added site inside the feature trips the
+    /// assertion rather than passing unnoticed. It then matches the whole
+    /// interpolation — `\(cluster.username, privacy: .private)` (or
+    /// `.sensitive`) — rather than checking that `.private` appears somewhere
+    /// on the line, so a second public interpolation on the same line, or a
+    /// `.private` that belongs to the dial target, cannot satisfy it. What it
+    /// still cannot catch: an alias (`let u = cluster.username`), a site added
+    /// outside the walked tree (e.g. `VVTerm/Core/SSH`), or a reformatted
+    /// interpolation outside the pattern. The runtime behavior is pinned by
+    /// Apple's privacy semantics, not by a simulator readback.
+    func testTeleportBootstrapCoordinator_usernameLogsArePrivacyAnnotated() throws {
+        let usernameLines = try sourceLines(
+            under: "VVTerm/Features/Teleport",
+            matching: "user=\\("
+        )
+
+        XCTAssertEqual(
+            usernameLines.count,
+            1,
+            "expected exactly one username log line to review; found: \(usernameLines)"
+        )
+
+        let privateInterpolation = try NSRegularExpression(
+            pattern: #"\\\(cluster\.username,\s*privacy:\s*\.(?:private|sensitive)(?:\(mask:\s*\.hash\))?\)"#
+        )
+        let publicInterpolation = try NSRegularExpression(
+            pattern: #"\\\(cluster\.username,\s*privacy:\s*\.public\)"#
+        )
+        for line in usernameLines {
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            XCTAssertEqual(
+                privateInterpolation.numberOfMatches(in: line, range: range),
+                1,
+                "the Teleport username interpolation itself must be annotated `privacy: .private`: \(line)"
+            )
+            XCTAssertEqual(
+                publicInterpolation.numberOfMatches(in: line, range: range),
+                0,
+                "the Teleport username must not be logged publicly: \(line)"
+            )
+        }
+    }
+
+    /// The SEP device name is logged at both registration sites; it used to be
+    /// public (`device=\(deviceName, privacy: .public)`), so the registered
+    /// device name reached the unified log and any exported diagnostics.
+    /// Aligns with swift-teleport#15, whose package sites are `.private`. Pin
+    /// the **interpolation's own annotation** at the source level for the same
+    /// reason as the headless-id pin above: the simulator log store does not
+    /// mask privacy on readback.
+    ///
+    /// Scope, stated honestly: this walks the whole `VVTerm/Features/Teleport`
+    /// tree and requires exactly two `device=\(` lines there (count tripwire),
+    /// so a moved line or a newly added site inside the feature trips the
+    /// assertion rather than passing unnoticed. It then matches the whole
+    /// interpolation — `\(deviceName, privacy: .private)` (or `.sensitive`) —
+    /// rather than checking that `.private` appears somewhere on the line, so
+    /// a second public interpolation on the same line, or a `.private` that
+    /// belongs to the cluster id, cannot satisfy it. What it still cannot
+    /// catch: an alias (`let d = deviceName`), a site added outside the walked
+    /// tree (e.g. `VVTerm/Core/SSH`), or a reformatted interpolation outside
+    /// the pattern. The runtime behavior is pinned by Apple's privacy
+    /// semantics, not by a simulator readback.
+    func testDeviceNameLogsArePrivacyAnnotated() throws {
+        let deviceNameLines = try sourceLines(
+            under: "VVTerm/Features/Teleport",
+            matching: "device=\\("
+        )
+
+        XCTAssertEqual(
+            deviceNameLines.count,
+            2,
+            "expected exactly two device-name log lines to review; found: \(deviceNameLines)"
+        )
+
+        let privateInterpolation = try NSRegularExpression(
+            pattern: #"\\\(deviceName,\s*privacy:\s*\.(?:private|sensitive)(?:\(mask:\s*\.hash\))?\)"#
+        )
+        let publicInterpolation = try NSRegularExpression(
+            pattern: #"\\\(deviceName,\s*privacy:\s*\.public\)"#
+        )
+        for line in deviceNameLines {
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            XCTAssertEqual(
+                privateInterpolation.numberOfMatches(in: line, range: range),
+                1,
+                "the SEP device-name interpolation itself must be annotated `privacy: .private`: \(line)"
+            )
+            XCTAssertEqual(
+                publicInterpolation.numberOfMatches(in: line, range: range),
+                0,
+                "the SEP device name must not be logged publicly: \(line)"
             )
         }
     }
