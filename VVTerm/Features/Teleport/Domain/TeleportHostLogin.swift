@@ -34,7 +34,7 @@
 import Foundation
 
 /// Why the SSH username could not be resolved from the certificate.
-enum TeleportHostLoginFailure: Error, Equatable, LocalizedError, CustomStringConvertible {
+enum TeleportHostLoginFailure: Error, Equatable, LocalizedError, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     /// The stored certificate could not be parsed as an OpenSSH certificate.
     case certificateUnreadable
     /// The certificate carries no non-internal principal.
@@ -57,6 +57,18 @@ enum TeleportHostLoginFailure: Error, Equatable, LocalizedError, CustomStringCon
     /// `String(describing:)` (logs, diagnostics) renders the case name only;
     /// the user-facing message stays in `errorDescription`.
     var description: String { caseDescription }
+
+    /// `debugPrint` / `String(reflecting:)` render the case name only.
+    var debugDescription: String { caseDescription }
+
+    /// `dump(_:)` and `Mirror(reflecting:)` bypass `description` and read the
+    /// reflection surface. The synthesized mirror exposed the associated
+    /// principal list (`["deploy", "root"]`), so the custom mirror keeps
+    /// reflection payload-free: a single labelled child carrying the stable
+    /// case name.
+    var customMirror: Mirror {
+        Mirror(self, children: [(label: "case", value: caseDescription)], displayStyle: .enum)
+    }
 
     var errorDescription: String? {
         switch self {

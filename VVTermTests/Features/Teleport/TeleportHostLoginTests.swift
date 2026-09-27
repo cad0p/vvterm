@@ -214,6 +214,58 @@ struct TeleportHostLoginTests {
         #expect(TeleportHostLoginFailure.certificateUnreadable.errorDescription?.isEmpty == false)
     }
 
+    /// The reflection pin: `dump(_:)` and `Mirror(reflecting:)` bypass
+    /// `description` and read the reflection surface, which used to expose the
+    /// associated principal list (`["deploy", "root"]`) — directly and
+    /// recursively through the `SSHError` wrapper. The conformance makes the
+    /// reflection surface payload-free — one labelled child carrying the
+    /// stable case name.
+    @Test
+    func failureDescriptionsNeverRenderThePrincipalsThroughReflection() {
+        let ambiguous = TeleportHostLoginFailure.ambiguousPrincipalSet(["deploy", "root"])
+
+        var dumped = ""
+        dump(ambiguous, to: &dumped)
+        #expect(!dumped.contains("deploy"))
+        #expect(!dumped.contains("root"))
+
+        let mirror = Mirror(reflecting: ambiguous)
+        #expect(mirror.children.count == 1)
+        #expect(mirror.children.first?.label == "case")
+        #expect(mirror.children.first.map { String(describing: $0.value) } == ambiguous.caseDescription)
+
+        // Regression guards, not the counterfactual: these render through
+        // `CustomStringConvertible` and already rendered case-only before the
+        // `CustomReflectable` conformance.
+        #expect(String(reflecting: ambiguous) == ambiguous.caseDescription)
+        #expect(ambiguous.debugDescription == ambiguous.caseDescription)
+
+        // The nested `SSHError` wrapper path: `dump`/`Mirror` recurse into the
+        // payload, so the wrapper must not resurrect the principals the direct
+        // conformance keeps out.
+        let wrapped = SSHError.teleportHostLoginUnresolvable(ambiguous)
+        var wrappedDump = ""
+        dump(wrapped, to: &wrappedDump)
+        #expect(!wrappedDump.contains("deploy"))
+        #expect(!wrappedDump.contains("root"))
+
+        guard let wrappedPayload = Mirror(reflecting: wrapped).children.first?.value else {
+            Issue.record("the SSHError wrapper must expose its payload child")
+            return
+        }
+        let nestedMirror = Mirror(reflecting: wrappedPayload)
+        #expect(nestedMirror.children.count == 1)
+        #expect(nestedMirror.children.first?.label == "case")
+        #expect(nestedMirror.children.first.map { String(describing: $0.value) } == ambiguous.caseDescription)
+
+        // The diagnostics spine renders through `String(describing:)`, which
+        // honours the child's `description`; pinned here so the read-only
+        // `SSHErrorDiagnostics` path cannot start leaking the principals.
+        let diagnostics = SSHError.diagnosticsMessage(for: wrapped, redacting: nil)
+        #expect(!diagnostics.contains("deploy"))
+        #expect(!diagnostics.contains("root"))
+    }
+
     // MARK: - Fail-closed route
 
     /// The connect-time fail-closed route must clear the credential (readiness
