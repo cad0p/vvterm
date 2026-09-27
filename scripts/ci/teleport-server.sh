@@ -84,7 +84,10 @@ TELEPORT_AUTH_PORT="${TELEPORT_AUTH_PORT:-3025}"
 TELEPORT_NODE="${TELEPORT_NODE:-ci-node}"
 TELEPORT_CLUSTER="${TELEPORT_CLUSTER:-ci-cluster}"
 TELEPORT_USER="${TELEPORT_USER:-ci-user}"
-TELEPORT_LOGIN="${TELEPORT_LOGIN:-ci-user}"       # SSH login/principal in the cert
+# The SSH login/principal in the cert. Deliberately different from
+# TELEPORT_USER: #262 was the app sending the Teleport user as the SSH
+# username, and the regression lever is a cluster where the two differ.
+TELEPORT_LOGIN="${TELEPORT_LOGIN:-ci-login}"
 # The ceremony-test user (M4): a device-less user the APP registers its
 # first MFA device for via Phase 2 gRPC (first-device path — no Safari
 # Browser-MFA ceremony). The invite is deliberately left pending: the user
@@ -980,6 +983,18 @@ cmd_probe() {
   # window) — this probe attributes them decisively: a failing probe means
   # the server can't complete an SSH exec at test time (server-side), a
   # passing probe means the app side stalled (app-side).
+  #
+  # The effective login comes from the bootstrap-written env file when
+  # present: `ensure_local_login_user` can fall back to the runner's own
+  # account when the requested login cannot be created, and the probe must
+  # use the same login the fixtures (and later the app tests) use.
+  if [ -f "${ENV_FILE}" ]; then
+    local env_login
+    env_login="$(sed -n 's/^VVTERM_TELEPORT_LOGIN=//p' "${ENV_FILE}" | head -1)"
+    if [ -n "${env_login}" ]; then
+      TELEPORT_LOGIN="${env_login}"
+    fi
+  fi
   local identity_file="${WORK_DIR}/smoke-identity"
   if [ ! -s "${identity_file}" ]; then
     echo "error: probe needs bootstrap first (smoke-identity missing)" >&2
