@@ -201,6 +201,20 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
         return cred.sshCertPEM
     }
 
+    /// One consistent read of the live cert + its paired private key. Both
+    /// reads happen in this synchronous MainActor body, so a concurrent
+    /// re-login cannot interleave between them. (The *writes* still store the
+    /// cert and the key in two calls, so a reader could observe a new cert
+    /// with the old key if it ran between them — fail-closed at the server and
+    /// the connect-time keyID binding gate the username.)
+    func liveCredentialSnapshot(for clusterId: UUID) -> (certPEM: String, privateKeyPEM: Data)? {
+        guard let certPEM = liveCertPEM(for: clusterId),
+              let privateKeyPEM = liveEd25519PrivateKey(for: clusterId) else {
+            return nil
+        }
+        return (certPEM, privateKeyPEM)
+    }
+
     func registeredCredentialID(for clusterId: UUID) -> Data? {
         guard let cred = credentials[clusterId],
               !cred.credentialID.isEmpty,

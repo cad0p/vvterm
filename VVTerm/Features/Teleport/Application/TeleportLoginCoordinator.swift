@@ -320,6 +320,19 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         let certValidBefore: Date
         switch validation {
         case .success(let cert):
+            // The certificate must belong to the Teleport user this row is
+            // configured with: the connect path resolves the SSH username from
+            // the cert's principals, so a foreign cert (a different keyID)
+            // would authenticate as the wrong identity. Clear whatever the row
+            // holds and fail closed.
+            guard cert.keyID == cluster.username else {
+                logger.error(
+                    "issued certificate keyID does not match the configured Teleport user \(cluster.username, privacy: .public) — rejecting and clearing the credential"
+                )
+                await keyRing.clear(for: cluster.id)
+                state = .failed(.server("Certificate user binding check failed: the certificate does not belong to this Teleport user"))
+                return
+            }
             certValidBefore = cert.validBeforeDate
         case .failure(let failure):
             logger.error(

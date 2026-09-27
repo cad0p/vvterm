@@ -207,4 +207,41 @@ final class TeleportServerModelTests: XCTestCase {
         XCTAssertEqual(config.host, "teleport.pcad.it")
         XCTAssertEqual(config.teleportNodeName, "pcad-dev")
     }
+
+    /// `SSHSessionConfig.teleportHostLogin` carries the server row's stored
+    /// host login so the connect path can validate it against the live cert's
+    /// principals. `config.username` stays the Teleport user.
+    func testSSHSessionConfig_carriesTeleportHostLoginSeparatelyFromUsername() {
+        let config = SSHSessionConfig(
+            host: "teleport.pcad.it",
+            port: 443,
+            username: "pier",
+            connectionMode: .standard,
+            authMethod: .faceIDTeleport,
+            credentials: ServerCredentials(
+                serverId: UUID(),
+                password: nil
+            ),
+            teleportHostLogin: "deploy",
+            teleportNodeName: "pcad-dev"
+        )
+
+        XCTAssertEqual(config.username, "pier", "username is the Teleport user")
+        XCTAssertEqual(config.teleportHostLogin, "deploy", "teleportHostLogin is the certificate principal")
+    }
+
+    /// The fail-closed host-login error is never auto-retried: the connect
+    /// path already cleared the credential, so a retry would only loop.
+    func testTeleportHostLoginUnresolvableDoesNotAllowAutomaticRetry() {
+        XCTAssertFalse(
+            SSHError.teleportHostLoginUnresolvable(.noPrincipals).allowsAutomaticReconnectRetry
+        )
+        XCTAssertFalse(
+            SSHError.teleportHostLoginUnresolvable(.ambiguousPrincipalSet(["a", "b"])).allowsAutomaticReconnectRetry
+        )
+        XCTAssertEqual(
+            SSHError.teleportHostLoginUnresolvable(.noPrincipals).localizedDescription,
+            TeleportHostLoginFailure.noPrincipals.errorDescription
+        )
+    }
 }

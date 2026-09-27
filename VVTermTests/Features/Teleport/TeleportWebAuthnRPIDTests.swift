@@ -23,7 +23,10 @@ import Testing
 struct TeleportWebAuthnRPIDTests {
 
     private func makeCluster(rpID: String? = nil) -> TeleportCluster {
-        TeleportCluster(host: "teleport.pcad.it", username: "pier", rpID: rpID)
+        // The fixture user cert's keyID is `user-cert-ed25519`; the login
+        // coordinator requires the issued cert's keyID to equal the configured
+        // Teleport user.
+        TeleportCluster(host: "teleport.pcad.it", username: "user-cert-ed25519", rpID: rpID)
     }
 
     // MARK: - Pure resolver

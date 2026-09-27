@@ -54,6 +54,17 @@ final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked 
         await MainActor.run { keyRingProvider().liveCertPEM(for: clusterId) }
     }
 
+    func liveCredentialSnapshot(for clusterId: UUID) async -> (certPEM: String, privateKeyPEM: Data)? {
+        await MainActor.run {
+            let keyRing = keyRingProvider()
+            guard let certPEM = keyRing.liveCertPEM(for: clusterId),
+                  let privateKeyPEM = keyRing.liveEd25519PrivateKey(for: clusterId) else {
+                return nil
+            }
+            return (certPEM, privateKeyPEM)
+        }
+    }
+
     func liveEd25519PrivateKey(for clusterId: UUID) async -> Data? {
         await MainActor.run { keyRingProvider().liveEd25519PrivateKey(for: clusterId) }
     }
