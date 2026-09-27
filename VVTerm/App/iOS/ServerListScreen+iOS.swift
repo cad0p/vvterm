@@ -43,6 +43,10 @@ struct ServerListScreen: View {
     /// registration sheet can resume without redoing Phase 1. Mirrors
     /// `ServerSidebarView.teleportBootstrapResult`.
     @State private var teleportBootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
+    /// The display name of the row whose device registration was seeded into
+    /// the current setup (duplicate-server reuse), or nil. Drives the reuse
+    /// notice on the login sheet.
+    @State private var teleportReuseSourceName: String?
 
     private var canAddServer: Bool {
         !serverManager.workspaces.isEmpty
@@ -240,7 +244,7 @@ struct ServerListScreen: View {
         }
         .sheet(isPresented: Binding(
             get: { teleportSetupServer != nil },
-            set: { if !$0 { teleportSetupServer = nil; teleportSetupReadiness = nil; teleportBootstrapResult = nil } }
+            set: { if !$0 { teleportSetupServer = nil; teleportSetupReadiness = nil; teleportBootstrapResult = nil; teleportReuseSourceName = nil } }
         )) {
             if let server = teleportSetupServer, let readiness = teleportSetupReadiness {
                 teleportSetupSheet(server: server, readiness: readiness)
@@ -328,8 +332,27 @@ struct ServerListScreen: View {
                         onMove: { serverToMove = server },
                         onLockedTap: { lockedServerAlert = server },
                         onTeleportSetup: { srv, readiness in
-                            teleportSetupServer = srv
-                            teleportSetupReadiness = readiness
+                            // Duplicate-server reuse (#262): a fresh row whose
+                            // (host, Teleport user, cluster) matches a
+                            // complete live registration skips the
+                            // bootstrap/registration ceremony and goes
+                            // straight to Face ID login + the picker. Seeding
+                            // happens here in the tap handler — never in the
+                            // row's body.
+                            let keyRing = TeleportKeyRingHost.shared
+                            if readiness == .needsBootstrap,
+                               let sourceName = keyRing.seedReuseIfPossible(
+                                   for: srv,
+                                   liveServers: serverManager.servers
+                               ) {
+                                teleportReuseSourceName = sourceName
+                                teleportSetupServer = srv
+                                teleportSetupReadiness = keyRing.readiness(for: srv.id)
+                            } else {
+                                teleportReuseSourceName = nil
+                                teleportSetupServer = srv
+                                teleportSetupReadiness = readiness
+                            }
                         }
                     )
                     .accessibilityIdentifier(
@@ -509,7 +532,11 @@ struct ServerListScreen: View {
             port: server.port,
             username: server.username
         )
-        switch readiness {
+        let reuseNotice = teleportReuseSourceName.map {
+            String(format: String(localized: "Using the existing device registration from %@."), $0)
+        }
+        Group {
+            switch readiness {
         case .needsBootstrap:
             TeleportBootstrapSheet(
                 makeCoordinator: { makeBootstrapCoordinator() },
@@ -578,23 +605,27 @@ struct ServerListScreen: View {
                 makeCoordinator: { makeLoginCoordinator() },
                 cluster: cluster,
                 server: server,
+                reuseNotice: reuseNotice,
                 onSuccess: { _ in
                     // Phase 3 complete — the live cert is issued and the host
                     // login is persisted. Dismiss.
                     teleportSetupServer = nil
                     teleportSetupReadiness = nil
                     teleportBootstrapResult = nil
+                    teleportReuseSourceName = nil
                 },
                 onCancel: {
                     teleportSetupServer = nil
                     teleportSetupReadiness = nil
                     teleportBootstrapResult = nil
+                    teleportReuseSourceName = nil
                 }
             )
             .adaptiveSoftScrollEdges()
         case .ready:
             // Shouldn't happen — ready servers don't trigger the setup sheet.
             EmptyView()
+        }
         }
     }
 
@@ -705,6 +736,7 @@ private struct TeleportLoginSheet: View {
     let makeCoordinator: () -> TeleportLoginCoordinator
     let cluster: TeleportCluster
     let server: Server
+    var reuseNotice: String? = nil
     let onSuccess: (String) -> Void
     let onCancel: () -> Void
 
@@ -715,12 +747,14 @@ private struct TeleportLoginSheet: View {
         makeCoordinator: @escaping () -> TeleportLoginCoordinator,
         cluster: TeleportCluster,
         server: Server,
+        reuseNotice: String? = nil,
         onSuccess: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.makeCoordinator = makeCoordinator
         self.cluster = cluster
         self.server = server
+        self.reuseNotice = reuseNotice
         self.onSuccess = onSuccess
         self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: makeCoordinator())
@@ -737,7 +771,8 @@ private struct TeleportLoginSheet: View {
                     onSuccess(login)
                 }
             },
-            onCancel: onCancel
+            onCancel: onCancel,
+            reuseNotice: reuseNotice
         )
     }
 }

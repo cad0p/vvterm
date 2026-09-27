@@ -152,6 +152,9 @@ struct ServerFormSheet: View {
     @State private var cloudflareTeamDomainOverride: String = ""
     @State private var showCloudflareOverrides: Bool = false
     @State private var selectedWorkspaceId: UUID?
+    /// The display name of the row whose device registration was seeded into
+    /// this form's setup (duplicate-server reuse), or nil.
+    @State private var teleportReuseSourceName: String?
     @State private var selectedEnvironment: ServerEnvironment = .production
     @State private var notes: String = ""
     @State private var requiresBiometricUnlock: Bool = false
@@ -493,10 +496,15 @@ struct ServerFormSheet: View {
                         makeCoordinator: { makeLoginCoordinator() },
                         cluster: teleportCluster,
                         server: server,
+                        reuseNotice: teleportReuseSourceName.map {
+                            String(format: String(localized: "Using the existing device registration from %@."), $0)
+                        },
                         onSuccess: { _ in
+                            teleportReuseSourceName = nil
                             showingTeleportLogin = false
                         },
                         onCancel: {
+                            teleportReuseSourceName = nil
                             showingTeleportLogin = false
                         }
                     )
@@ -990,6 +998,14 @@ struct ServerFormSheet: View {
                 }
             }
 
+            if let teleportReuseSourceName {
+                Text(String(format: String(localized: "Using the existing device registration from %@."), teleportReuseSourceName))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.setup.reuseNotice")
+            }
+
             teleportSetupButton
         }
         .padding(.vertical, 4)
@@ -1031,7 +1047,21 @@ struct ServerFormSheet: View {
                 .tint(.orange)
             case .needsBootstrap:
                 Button {
-                    showingTeleportBootstrap = true
+                    // Duplicate-server reuse (#262): if a complete live
+                    // registration for the same (host, Teleport user,
+                    // cluster) exists, seed it into this row and go straight
+                    // to Face ID login + the picker instead of the Safari
+                    // bootstrap/registration ceremony.
+                    if let sourceName = TeleportKeyRingHost.shared.seedReuseIfPossible(
+                        for: server,
+                        liveServers: serverManager.servers
+                    ) {
+                        teleportReuseSourceName = sourceName
+                        showingTeleportLogin = true
+                    } else {
+                        teleportReuseSourceName = nil
+                        showingTeleportBootstrap = true
+                    }
                 } label: {
                     Label(String(localized: "Begin setup in Safari"), systemImage: "safari")
                 }
@@ -1562,6 +1592,7 @@ private struct TeleportLoginSheet: View {
     let makeCoordinator: () -> TeleportLoginCoordinator
     let cluster: TeleportCluster
     let server: Server
+    var reuseNotice: String? = nil
     let onSuccess: (String) -> Void
     let onCancel: () -> Void
 
@@ -1572,12 +1603,14 @@ private struct TeleportLoginSheet: View {
         makeCoordinator: @escaping () -> TeleportLoginCoordinator,
         cluster: TeleportCluster,
         server: Server,
+        reuseNotice: String? = nil,
         onSuccess: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.makeCoordinator = makeCoordinator
         self.cluster = cluster
         self.server = server
+        self.reuseNotice = reuseNotice
         self.onSuccess = onSuccess
         self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: makeCoordinator())
@@ -1594,7 +1627,8 @@ private struct TeleportLoginSheet: View {
                     onSuccess(login)
                 }
             },
-            onCancel: onCancel
+            onCancel: onCancel,
+            reuseNotice: reuseNotice
         )
     }
 }

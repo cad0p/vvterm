@@ -49,6 +49,10 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
     /// Called when the user cancels. The caller dismisses the sheet.
     var onCancel: () -> Void
 
+    /// An optional notice shown above the host-login step (e.g. the reuse
+    /// notice when the credential came from a duplicate server's setup).
+    var reuseNotice: String? = nil
+
     /// The host login chosen in the Phase-3 step. Initialized from the stored
     /// login / the certificate's single principal when the coordinator
     /// reaches `.success`.
@@ -179,6 +183,15 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("vvterm.teleport.login.successMessage")
+
+                if let reuseNotice {
+                    Text(reuseNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("vvterm.teleport.login.reuseNotice")
+                }
             }
 
             hostLoginStep(logins: logins)

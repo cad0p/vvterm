@@ -85,9 +85,54 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
     /// Clear all credential state for a cluster (metadata only — the SEP key
     /// itself is removed via `SecureEnclaveSigner.deleteKey`).
     func clear(for clusterId: UUID)
+
+    /// Whether this row's registration is a complete, live source for reuse by
+    /// a duplicate server: a credential record with a non-empty credentialID,
+    /// the SEP key still present, a cluster TLS state with non-empty Host CA
+    /// checking keys, and (when `clusterName` is non-nil) a matching cluster
+    /// name.
+    func isReusableRegistrationSource(for serverId: UUID, clusterName: String?) -> Bool
+
+    /// Copy the registration metadata (credentialID, userHandle, publicKeyRaw,
+    /// deviceName) and the cluster TLS state from `sourceId` to `targetId`.
+    /// Deliberately copies **no** certificate or ed25519 key, so the login runs
+    /// and the host-login picker shows for the new row. Returns false when the
+    /// source is not a complete live registration.
+    @discardableResult
+    func seedRegistration(from sourceId: UUID, to targetId: UUID) -> Bool
 }
 
 /// The movable keyring implements every requirement; this host-side
 /// extension is where the observation conformance is declared so the movable
 /// file never names `TeleportKeyRingStoring`.
 extension TeleportKeyRing: TeleportKeyRingStoring {}
+
+// MARK: - Duplicate-server reuse
+
+extension TeleportKeyRingStoring {
+    /// The one shared reuse attempt for the add-server / row-tap entry points:
+    /// finds a complete live registration for the same (proxy host, Teleport
+    /// user, cluster) and seeds it into `newServer`'s row.
+    ///
+    /// Returns the source row's display name when seeding succeeded (for the
+    /// reuse notice), or nil when there is no reusable source.
+    ///
+    /// Must be called from a tap handler, never from a view body: it mutates
+    /// the observed keyring.
+    func seedReuseIfPossible(for newServer: Server, liveServers: [Server]) -> String? {
+        let newClusterName = clusterTLSState(for: newServer.id)?.clusterName
+        guard let source = TeleportCredentialReuse.match(
+            newServer: newServer,
+            liveServers: liveServers,
+            credentials: credentials,
+            clusterName: { [weak self] id in self?.clusterTLSState(for: id)?.clusterName },
+            isReusable: { [weak self] id in
+                self?.isReusableRegistrationSource(for: id, clusterName: newClusterName) == true
+            }
+        ) else {
+            return nil
+        }
+        guard seedRegistration(from: source.id, to: newServer.id) else { return nil }
+        return source.name
+    }
+}
