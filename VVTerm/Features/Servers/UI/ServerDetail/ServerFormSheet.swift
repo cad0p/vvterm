@@ -1129,6 +1129,7 @@ struct ServerFormSheet: View {
             port: portNum,
             eternalTerminalPort: Int(eternalTerminalPort) ?? 2022,
             username: effectiveUsername,
+            teleportHostLogin: server?.teleportHostLogin,
             connectionMode: transportSelection.connectionMode,
             authMethod: transportSelection == .tailscale ? .password : selectedAuthMethod,
             cloudflareAccessMode: transportSelection == .cloudflare ? selectedCloudflareAccessMode : nil,

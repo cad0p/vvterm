@@ -82,6 +82,7 @@ extension Server {
             self.eternalTerminalPort = 2022
         }
         self.username = username
+        self.teleportHostLogin = Server.normalizedTeleportHostLogin(record["teleportHostLogin"] as? String)
         self.connectionMode = connectionMode
         self.authMethod = authMethod
         self.cloudflareAccessMode = cloudflareAccessMode
@@ -120,6 +121,7 @@ extension Server {
         record["port"] = port
         record["eternalTerminalPort"] = eternalTerminalPort
         record["username"] = username
+        record["teleportHostLogin"] = Server.normalizedTeleportHostLogin(teleportHostLogin)
         if connectionMode != .standard {
             record["connectionMode"] = connectionMode.rawValue
         } else {
