@@ -59,9 +59,22 @@ struct OpenSSHEd25519PrivateKey: Sendable, Equatable {
     /// The `ssh-ed25519` wire blob for `publicKeyRaw` — the same bytes as
     /// `OpenSSHCertificate.publicKeyBlob` for a matching certificate.
     var publicKeyBlob: Data {
-        var blob = OpenSSHCertificate.sshString(Data("ssh-ed25519".utf8))
-        blob.append(OpenSSHCertificate.sshString(publicKeyRaw))
+        var blob = Self.sshString(Data("ssh-ed25519".utf8))
+        blob.append(Self.sshString(publicKeyRaw))
         return blob
+    }
+
+    /// `uint32_be(length) || payload`. Local SSH wire helper: this Core/SSH
+    /// parser must not reach into `Features/Teleport`'s `OpenSSHCertificate`.
+    private static func sshString(_ data: Data) -> Data {
+        var out = Data(capacity: 4 + data.count)
+        let length = UInt32(data.count)
+        out.append(UInt8((length >> 24) & 0xFF))
+        out.append(UInt8((length >> 16) & 0xFF))
+        out.append(UInt8((length >> 8) & 0xFF))
+        out.append(UInt8(length & 0xFF))
+        out.append(data)
+        return out
     }
 
     /// Raw 64-byte ed25519 signature over `data`, or nil when signing fails

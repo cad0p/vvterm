@@ -304,7 +304,35 @@ struct TeleportAgentForwardingTests {
         try await waitUntil { fake.readCount > 0 }
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(fake.closeCount == 0, "the serving task must not free the channel on EOF")
-        #expect(service.cancelAndDrain() == [channel])
+        #expect(service.cancelAndDrain().isEmpty, "a channel whose serve loop ended is retired from the store")
+    }
+
+    @Test
+    func storeTracksAChannelHandedToAWaitedNext() async throws {
+        // The waiter path (a channel delivered directly to a parked `next()`)
+        // must land in the in-flight set so the teardown can still drain it.
+        let store = TeleportAgentChannelStore()
+        let channel = OpaquePointer(bitPattern: 0xE000)!
+        let parked = Task { await store.next() }
+        try await waitUntil { store.isWaitingForChannel }
+        store.push(channel)
+        #expect(await parked.value == channel)
+        #expect(store.cancelAndDrain() == [channel])
+        #expect(store.cancelAndDrain().isEmpty)
+    }
+
+    @Test
+    func storeRetiresAChannelAfterItsServeLoopEnds() async throws {
+        // The in-flight list must not grow for the session's lifetime: a
+        // completed channel is retired and left to the session free.
+        let store = TeleportAgentChannelStore()
+        let channel = OpaquePointer(bitPattern: 0xF000)!
+        let parked = Task { await store.next() }
+        try await waitUntil { store.isWaitingForChannel }
+        store.push(channel)
+        #expect(await parked.value == channel)
+        store.retire(channel)
+        #expect(store.cancelAndDrain().isEmpty, "a retired channel is no longer owned by the store")
     }
 
     @Test

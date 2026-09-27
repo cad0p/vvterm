@@ -43,10 +43,13 @@
 //    (b) the transport having started; libssh2 confirms the server-initiated
 //    channel on callback registration alone, so the app itself must enforce
 //    the request outcome.
-//  - Ownership: the serving task never frees a channel. It stops on EOF, a
-//    hard error, or cancellation and leaves the channel for the synchronous
-//    teardown, which frees every channel it still owns. That removes the
-//    free-vs-session-free race for a cancelled task.
+//  - Ownership: the serving task never frees a channel. It retires the
+//    channel from the handoff store when its serve loop ends (EOF, a hard
+//    error, or cancellation); `cancelAndDrain` returns every channel still
+//    queued or in flight and the synchronous teardown frees those before the
+//    outer session is freed. A retired channel is reaped by
+//    `libssh2_session_free`. That removes the free-vs-session-free race for a
+//    cancelled task.
 //
 //  Logging contract: this file logs lifecycle counts only — never the
 //  identity blob, a signature, the request `data`, or key material.
@@ -167,11 +170,14 @@ nonisolated(unsafe) private let teleportAuthAgentCallback: @convention(c) (
 /// Lock-protected handoff of server-initiated channels from the libssh2
 /// callback to the serving task.
 ///
-/// Ownership: `next()` moves a channel from `pending` to `inFlight`; the
-/// synchronous `cancelAndDrain()` takes everything that is still queued or in
-/// flight, and the teardown frees it. The serving task never frees, so a
-/// cancelled task cannot free a channel after `libssh2_session_free` reaped
-/// it.
+/// Ownership: `next()` moves a channel from `pending` to `inFlight`, and
+/// `push()` puts a channel it hands directly to a parked `next()` straight
+/// into `inFlight`; the serving task retires the channel once its serve loop
+/// ends. The synchronous `cancelAndDrain()` takes everything that is still
+/// queued or in flight, and the teardown frees it. The serving task never
+/// frees, so a cancelled task cannot free a channel after
+/// `libssh2_session_free` reaped it; a retired channel is reaped by that
+/// session free.
 final class TeleportAgentChannelStore: @unchecked Sendable {
     private struct State {
         var pending: [OpaquePointer] = []
@@ -188,6 +194,10 @@ final class TeleportAgentChannelStore: @unchecked Sendable {
             guard !state.cancelled else { return }
             if let waiter = state.waiter {
                 state.waiter = nil
+                // Track the channel before handing it to the parked `next()`:
+                // the teardown must still be able to drain it while the
+                // serving task owns it.
+                state.inFlight.append(channel)
                 waiter.resume(returning: channel)
             } else {
                 state.pending.append(channel)
@@ -210,6 +220,24 @@ final class TeleportAgentChannelStore: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Remove a channel whose serve loop has ended from `inFlight`. The
+    /// serving task calls this after `serve`; if the teardown already drained
+    /// the channel it is a no-op (the teardown owns the free), and a retired
+    /// channel is left for `libssh2_session_free` to reap.
+    func retire(_ channel: OpaquePointer) {
+        lock.withLock { state in
+            if let index = state.inFlight.firstIndex(of: channel) {
+                state.inFlight.remove(at: index)
+            }
+        }
+    }
+
+    /// Test-observability seam: true while a `next()` caller is parked on the
+    /// continuation (the waiter path). Never used by production code.
+    var isWaitingForChannel: Bool {
+        lock.withLock { $0.waiter != nil }
     }
 
     /// Cancel the store and return every channel the service still owns.
@@ -448,6 +476,7 @@ final class TeleportAgentForwardingService: @unchecked Sendable {
         while !cancelToken.isCancelled {
             guard let channel = await channels.next() else { break }
             await serve(channel)
+            channels.retire(channel)
         }
         logger.info("teleport_agent_service_stopped")
     }

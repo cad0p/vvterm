@@ -2658,11 +2658,17 @@ actor SSHSession {
             return
         }
 
+        // The free is serialized through `outerSessionMutex` against the
+        // agent service's and the bridge pump's libssh2 closures: those
+        // re-check their cancel token inside the same mutex, so a call that
+        // just passed the token check cannot touch a freed session.
         var freeResult = Int32(LIBSSH2_ERROR_EAGAIN)
-        for _ in 0..<1_024 {
-            freeResult = libssh2_session_free(session)
-            if freeResult != LIBSSH2_ERROR_EAGAIN {
-                break
+        outerSessionMutex.withLock {
+            for _ in 0..<1_024 {
+                freeResult = libssh2_session_free(session)
+                if freeResult != LIBSSH2_ERROR_EAGAIN {
+                    break
+                }
             }
         }
         if freeResult == 0 {
@@ -3550,9 +3556,9 @@ actor SSHSession {
             shouldInvalidateTransport = true
             throw SSHError.teleportPrepareFailed(failureMessage)
         }
-        logger.info(
-            "teleport_proxy_subsystem_ok subsystem=\(subsystem, privacy: .public) target=\(nodeName, privacy: .private(mask: .hash))"
-        )
+        // Payload-free like the failure twin: the subsystem name embeds the
+        // node name, and the OSLog/ring merge feeds the shareable report.
+        logger.info("teleport_proxy_subsystem_ok")
         if let proxyToken { startupTrace?.end(proxyToken, detail: nodeName) }
 
         // 3. Bridge the outer channel to a socketpair for the inner session.
