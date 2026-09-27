@@ -775,8 +775,10 @@ struct ServerSidebarView: View {
             TeleportLoginSheet(
                 makeCoordinator: { makeLoginCoordinator() },
                 cluster: cluster,
-                onSuccess: {
-                    // Phase 3 complete — the live cert is issued. Dismiss.
+                server: server,
+                onSuccess: { _ in
+                    // Phase 3 complete — the live cert is issued and the host
+                    // login is persisted. Dismiss.
                     teleportSetupServer = nil
                     teleportSetupReadiness = nil
                     teleportBootstrapResult = nil
@@ -1063,7 +1065,8 @@ private struct TeleportRegistrationSheet: View {
 private struct TeleportLoginSheet: View {
     let makeCoordinator: () -> TeleportLoginCoordinator
     let cluster: TeleportCluster
-    let onSuccess: () -> Void
+    let server: Server
+    let onSuccess: (String) -> Void
     let onCancel: () -> Void
 
     @StateObject private var coordinator: TeleportLoginCoordinator
@@ -1072,11 +1075,13 @@ private struct TeleportLoginSheet: View {
     init(
         makeCoordinator: @escaping () -> TeleportLoginCoordinator,
         cluster: TeleportCluster,
-        onSuccess: @escaping () -> Void,
+        server: Server,
+        onSuccess: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.makeCoordinator = makeCoordinator
         self.cluster = cluster
+        self.server = server
         self.onSuccess = onSuccess
         self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: makeCoordinator())
@@ -1086,7 +1091,13 @@ private struct TeleportLoginSheet: View {
         TeleportLoginView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: onSuccess,
+            storedHostLogin: server.teleportHostLogin,
+            onSuccess: { login in
+                Task { @MainActor in
+                    try? await ServerManager.shared.setTeleportHostLogin(login, for: server.id)
+                    onSuccess(login)
+                }
+            },
             onCancel: onCancel
         )
     }

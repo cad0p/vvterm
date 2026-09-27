@@ -164,7 +164,12 @@ struct TeleportWebAuthnRPIDTests {
         await coordinator.begin(cluster: cluster)
 
         #expect(builder.capturedLoginRPID == "teleport.pcad.it")
-        #expect(coordinator.state == .success(certValidUntil: Date(timeIntervalSince1970: 2_082_758_400)))
+        #expect(
+            coordinator.state == .success(
+                certValidUntil: Date(timeIntervalSince1970: 2_082_758_400),
+                logins: ["alice"]
+            )
+        )
     }
 
     // MARK: - Phase 2 registration coordinator

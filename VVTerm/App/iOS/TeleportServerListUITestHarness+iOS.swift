@@ -281,7 +281,8 @@ private struct ReadinessLoginSheet: View {
         TeleportLoginView(
             coordinator: coordinator,
             cluster: cluster,
-            onSuccess: {},
+            storedHostLogin: nil,
+            onSuccess: { _ in },
             onCancel: {}
         )
     }

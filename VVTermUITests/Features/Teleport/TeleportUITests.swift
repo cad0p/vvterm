@@ -54,11 +54,17 @@ final class TeleportUITests: XCTestCase {
     /// The harness arg is what VVTermApp.iOSRootContent gates on; phase +
     /// scenario are read by the harness itself.
     private func launch(phase: String, scenario: String) -> XCUIApplication {
+        launch(phase: phase, scenario: scenario, extraArguments: [])
+    }
+
+    /// Launch with extra harness args (e.g. the pre-seeded host login).
+    private func launch(phase: String, scenario: String, extraArguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "--vvterm-ui-test-teleport-harness",
             "--vvterm-ui-test-teleport-phase=\(phase)",
             "--vvterm-ui-test-teleport-scenario=\(scenario)",
+        ] + extraArguments + [
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
             "-hasSeenWelcome", "YES",
@@ -460,5 +466,79 @@ final class TeleportUITests: XCTestCase {
         let retry = app.buttons["vvterm.teleport.login.retryButton"]
         XCTAssertTrue(retry.waitForExistence(timeout: 3))
         attachScreenshot(app, named: "login-serverUnreachable-error")
+    }
+
+    // MARK: - Phase 3: host login step (#262)
+
+    /// Several non-internal principals: the picker offers each one, the first
+    /// is selected by default, and Continue passes the chosen principal on.
+    func testHostLogin_multiplePrincipals_pickerSelectsAndContinues() {
+        let app = launch(phase: "login", scenario: "hostLoginMultiple")
+        tapSignInButton(app)
+
+        let title = app.staticTexts["vvterm.teleport.login.hostLoginTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "the Host login step must appear on success")
+        // The success copy stays visible behind the step.
+        XCTAssertTrue(app.staticTexts["vvterm.teleport.login.successTitle"].exists)
+
+        let deploy = app.buttons["vvterm.teleport.login.hostLoginOption.deploy"]
+        let root = app.buttons["vvterm.teleport.login.hostLoginOption.root"]
+        XCTAssertTrue(deploy.waitForExistence(timeout: 3))
+        XCTAssertTrue(root.exists)
+
+        let continueButton = app.buttons["vvterm.teleport.login.continueButton"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 3))
+
+        // Pick the second principal, then continue. The harness surfaces what
+        // `onSuccess` received.
+        root.tap()
+        continueButton.tap()
+
+        let continued = app.staticTexts["vvterm.teleport.harness.continuedHostLogin"]
+        XCTAssertTrue(continued.waitForExistence(timeout: 3))
+        XCTAssertEqual(continued.label, "continued: root")
+        attachScreenshot(app, named: "login-hostLogin-picker-selected-root")
+    }
+
+    /// A single non-internal principal auto-selects but is still shown
+    /// read-only (never silent), and Continue persists it.
+    func testHostLogin_singlePrincipal_isShownAndContinues() {
+        let app = launch(phase: "login", scenario: "hostLoginSingle")
+        tapSignInButton(app)
+
+        let value = app.staticTexts["vvterm.teleport.login.hostLoginValue"]
+        XCTAssertTrue(value.waitForExistence(timeout: 5), "the single principal must be shown read-only")
+        // `LabeledContent` merges the label and value into one accessibility
+        // element ("Host login, deploy"); the principal must be visible.
+        XCTAssertTrue(
+            value.label.contains("deploy"),
+            "the single principal must be shown, got: \(value.label)"
+        )
+        XCTAssertFalse(app.buttons["vvterm.teleport.login.hostLoginOption.deploy"].exists)
+
+        app.buttons["vvterm.teleport.login.continueButton"].tap()
+
+        let continued = app.staticTexts["vvterm.teleport.harness.continuedHostLogin"]
+        XCTAssertTrue(continued.waitForExistence(timeout: 3))
+        XCTAssertEqual(continued.label, "continued: deploy")
+        attachScreenshot(app, named: "login-hostLogin-single-principal")
+    }
+
+    /// The stored login pre-selects when it is still a principal; the picker
+    /// still lists the other principals and the user can switch.
+    func testHostLogin_storedLoginPreselects() {
+        let app = launch(
+            phase: "login",
+            scenario: "hostLoginMultiple",
+            extraArguments: ["--vvterm-ui-test-teleport-stored-login=root"]
+        )
+        tapSignInButton(app)
+
+        XCTAssertTrue(app.buttons["vvterm.teleport.login.continueButton"].waitForExistence(timeout: 5))
+        app.buttons["vvterm.teleport.login.continueButton"].tap()
+
+        let continued = app.staticTexts["vvterm.teleport.harness.continuedHostLogin"]
+        XCTAssertTrue(continued.waitForExistence(timeout: 3))
+        XCTAssertEqual(continued.label, "continued: root", "the stored login must pre-select")
     }
 }

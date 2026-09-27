@@ -175,7 +175,12 @@ struct TeleportCertBindingCoordinatorTests {
         )
         await coordinator.begin(cluster: cluster)
 
-        #expect(coordinator.state == .success(certValidUntil: Date(timeIntervalSince1970: 2_082_758_400)))
+        #expect(
+            coordinator.state == .success(
+                certValidUntil: Date(timeIntervalSince1970: 2_082_758_400),
+                logins: ["alice"]
+            )
+        )
         #expect(keyRing.liveCertPEM(for: cluster.id) == TeleportFixtureSupport.fixedIssuedUserCert)
         #expect(keyRing.liveEd25519PrivateKey(for: cluster.id) != nil)
     }

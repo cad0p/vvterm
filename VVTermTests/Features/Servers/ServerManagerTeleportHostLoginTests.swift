@@ -8,7 +8,8 @@
 //    - a name-only `updateServer` edit preserves the stored login (and other
 //      fields — `isFavorite`, `cloudflareAppDomainOverride` — so a future
 //      field drop is caught);
-//    - `addServer` persists the login it was given.
+//    - `addServer` persists the login it was given;
+//    - `setTeleportHostLogin` is the one persist API the setup picker calls.
 //
 //  Uses the shared manager (there is no composition-root injection today) and
 //  disables iCloud sync for the duration so the test never attempts a
@@ -87,6 +88,25 @@ struct ServerManagerTeleportHostLoginTests {
 
             let stored = try #require(manager.servers.first(where: { $0.id == server.id }))
             #expect(stored.teleportHostLogin == "deploy")
+        }
+    }
+
+    @Test
+    func setTeleportHostLoginPersistsThePickedLoginAndDropsInvalidValues() async throws {
+        try await withIsolatedManager { manager in
+            var server = makeFixture(teleportHostLogin: nil)
+            manager.servers = [server]
+            try await manager.updateServer(server)
+
+            try await manager.setTeleportHostLogin("root", for: server.id)
+
+            server = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(server.teleportHostLogin == "root")
+
+            // A shape-invalid value must never be persisted.
+            try await manager.setTeleportHostLogin("  ", for: server.id)
+            server = try #require(manager.servers.first(where: { $0.id == server.id }))
+            #expect(server.teleportHostLogin == nil)
         }
     }
 }

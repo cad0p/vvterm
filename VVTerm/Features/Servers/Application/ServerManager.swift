@@ -973,6 +973,17 @@ final class ServerManager: ObservableObject {
         await persistLocalMutations(logMessage: "Updated server: \(updatedServer.name)")
     }
 
+    /// The one persist API for the setup picker's chosen Teleport host login.
+    /// Reads the current server row from `servers` so a concurrent edit is not
+    /// clobbered by a stale copy. Shape-invalid values are dropped (never
+    /// persisted).
+    func setTeleportHostLogin(_ login: String, for serverId: UUID) async throws {
+        guard let index = servers.firstIndex(where: { $0.id == serverId }) else { return }
+        var updatedServer = servers[index]
+        updatedServer.teleportHostLogin = Server.normalizedTeleportHostLogin(login)
+        try await updateServer(updatedServer)
+    }
+
     func deleteServer(_ server: Server) async throws {
         try keychain.deleteCredentials(for: server.id)
 
