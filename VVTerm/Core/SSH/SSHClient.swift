@@ -2373,6 +2373,10 @@ actor SSHSession {
         discardedShellStartupChannelCount
     }
 
+    /// Test seam for #286: observes whether the synchronous teardown
+    /// (`cleanupLibssh2()`, including its no-session return) has completed.
+    var hasBeenCleanedForTesting: Bool { hasBeenCleaned }
+
     private func notifyShellStartupTestHook(
         _ stage: ShellStartupStage,
         session: OpaquePointer

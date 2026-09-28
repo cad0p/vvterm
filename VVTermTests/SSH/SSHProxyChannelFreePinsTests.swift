@@ -477,4 +477,190 @@ struct SSHProxyChannelFreePinsTests {
             "\(libssh2Call) must sit inside the outerSessionMutex span"
         )
     }
+
+    // MARK: - Pins for #286: the Teleport prepare-teardown sequencing
+    //
+    // Issue #286: `SSHSession.cleanupLibssh2()` frees the Teleport inner
+    // session (and the outer proxy-subsystem channel) while an
+    // exec-only/stats/SFTP `prepareTeleportInnerSession()` body is parked at an
+    // `await`. The fix registers the prepare in `innerPreparesInFlight`, which
+    // the cleanup guard now also checks; the initiator's `defer` re-enters
+    // `cleanupLibssh2()` after removing the token if the teardown ran while it
+    // was parked.
+    //
+    // Why source pins: same reason as the #283 pins above — no in-process
+    // SSH/libssh2 fixture exists, and the private `innerLibssh2Session` cannot
+    // be populated through any seam. These are tripwires for the regression
+    // shape, not proof; the deferral is covered behaviourally by
+    // `PrepareInnerSessionDedupTests.teardownIsDeferredWhileAPrepareIsParked`.
+    // The real connect/prepare/teardown path is exercised by the dispatched
+    // `teleport-e2e.yml` run.
+
+    /// The `SSHSession` actor's `prepareTeleportInnerSession()` body span,
+    /// resolved after the `actor SSHSession` declaration so it cannot bind the
+    /// `SSHClient` wrapper of the same name (which occurs earlier in the file).
+    /// Positive controls assert the resolved span is the real body.
+    private static func sshSessionPrepareBody(in text: String) throws -> Range<String.Index> {
+        let actorAnchor = try #require(
+            text.range(of: "actor SSHSession"),
+            "SSHClient.swift must keep the SSHSession actor declaration"
+        )
+        let prepareAnchor = try #require(
+            text.range(
+                of: "func prepareTeleportInnerSession() async throws",
+                range: actorAnchor.upperBound..<text.endIndex
+            ),
+            "SSHSession must keep prepareTeleportInnerSession()"
+        )
+        let body = try bracedBlock(after: prepareAnchor, in: text)
+
+        // Positive control: the wrapper `SSHClient.prepareTeleportInnerSession()`
+        // contains `guard let session = session` and never calls the
+        // body-storing split; the actor body is the reverse. A mis-slice
+        // therefore fails here instead of passing vacuously below.
+        #expect(
+            text[body].contains("prepareTeleportInnerSessionBodyStoringFailure"),
+            "the resolved span must be the SSHSession prepare body"
+        )
+        #expect(
+            !text[body].contains("guard let session = session"),
+            "the resolved span must not be the SSHClient prepare wrapper"
+        )
+        return body
+    }
+
+    /// Pin A (#286): `cleanupLibssh2()`'s in-flight guard must check BOTH
+    /// `shellStartupsInFlight.isEmpty` and `innerPreparesInFlight.isEmpty`,
+    /// conjunctively. Dropping either conjunct reopens the premature free for
+    /// that class of parked work; an `||` would keep both tokens meaningless.
+    @Test
+    func testCleanupGuardChecksBothInFlightSets() throws {
+        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+
+        let cleanupAnchor = try #require(
+            text.range(of: "private func cleanupLibssh2()"),
+            "SSHClient.swift must keep SSHSession.cleanupLibssh2()"
+        )
+        let cleanupBody = try Self.bracedBlock(after: cleanupAnchor, in: text)
+
+        let guardAnchor = try #require(
+            text.range(of: "guard shellStartupsInFlight.isEmpty", range: cleanupBody),
+            "cleanupLibssh2() must still gate the free on shellStartupsInFlight"
+        )
+        let guardElse = try #require(
+            text.range(of: "else", range: guardAnchor.upperBound..<cleanupBody.upperBound),
+            "the in-flight guard must keep its else branch"
+        )
+        let guardSpan = guardAnchor.lowerBound..<guardElse.lowerBound
+
+        #expect(
+            text[guardSpan].contains("innerPreparesInFlight.isEmpty"),
+            "the cleanup guard must also defer while a Teleport prepare is in flight"
+        )
+        #expect(
+            !text[guardSpan].contains("||"),
+            "the two in-flight checks must be conjunctive (`guard`, not `||`)"
+        )
+    }
+
+    /// Pin B (#286): the `SSHSession` prepare body must register an
+    /// `innerPreparesInFlight` token before creating its body task, and remove
+    /// it in a `defer`. The anchor is scoped after `actor SSHSession` — the
+    /// wrapper of the same name appears first in the file and has no
+    /// registration.
+    @Test
+    func testPrepareBodyRegistersTheInnerPreparesInFlightToken() throws {
+        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let prepareBody = try Self.sshSessionPrepareBody(in: text)
+
+        let inserts = Self.occurrences(
+            of: "innerPreparesInFlight.insert",
+            in: text,
+            range: prepareBody
+        )
+        let removes = Self.occurrences(
+            of: "innerPreparesInFlight.remove",
+            in: text,
+            range: prepareBody
+        )
+        #expect(inserts.count == 1, "the prepare body must register exactly one token")
+        #expect(removes.count == 1, "the prepare body's defer must remove exactly one token")
+
+        let taskCreation = try #require(
+            text.range(of: "Task { [weak self]", range: prepareBody),
+            "the prepare body must keep its owned body task"
+        )
+        let insert = try #require(inserts.first)
+        let remove = try #require(removes.first)
+        #expect(
+            insert.lowerBound < taskCreation.lowerBound,
+            "the token must be registered BEFORE the body task is created"
+        )
+        #expect(
+            insert.upperBound <= remove.lowerBound,
+            "the token insert must precede its remove in the defer"
+        )
+    }
+
+    /// Pin C (#286): exactly three `if !isActive { cleanupLibssh2() }`
+    /// defer shapes may exist — the two shell-start defers plus the prepare
+    /// defer — and the prepare one must sit strictly inside the Pin B span.
+    /// An unconditional `cleanupLibssh2()` in the prepare defer (dropping the
+    /// `!isActive` guard) would tear down a live session after a successful
+    /// prepare; a fourth shape means a new deferral site must be reviewed
+    /// deliberately.
+    @Test
+    func testEveryNotActiveDeferCallsCleanupLibssh2() throws {
+        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let prepareBody = try Self.sshSessionPrepareBody(in: text)
+
+        let occurrences = Self.occurrences(of: "if !isActive", in: text)
+        #expect(
+            occurrences.count == 3,
+            "exactly the two shell-start defers plus the prepare defer may re-enter cleanupLibssh2() on !isActive (found \(occurrences.count))"
+        )
+
+        var insidePrepare = 0
+        for occurrence in occurrences {
+            let block = try Self.bracedBlock(after: occurrence, in: text)
+            #expect(
+                text[block].contains("cleanupLibssh2()"),
+                "every `if !isActive` guard must re-enter cleanupLibssh2()"
+            )
+            if Self.isInside(prepareBody, occurrence.lowerBound) {
+                insidePrepare += 1
+            }
+        }
+        #expect(
+            insidePrepare == 1,
+            "the prepare defer's `if !isActive` must be inside the SSHSession prepare body"
+        )
+    }
+
+    /// Pin D (#286): with comments stripped and the declaration excluded,
+    /// `SSHClient.swift` has exactly five `cleanupLibssh2()` call sites:
+    /// `disconnect()`, `cleanup()`, the two shell-start defers, and the
+    /// prepare defer. A legitimate new call site must be re-derived
+    /// deliberately (the same census idiom as the file-wide `count == 1`
+    /// channel pins above).
+    @Test
+    func testCleanupLibssh2CallSiteCensus() throws {
+        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+
+        let declaration = try #require(
+            text.range(of: "private func cleanupLibssh2()"),
+            "SSHClient.swift must keep SSHSession.cleanupLibssh2()"
+        )
+        let all = Self.occurrences(of: "cleanupLibssh2()", in: text)
+        let calls = all.filter { !Self.isInside(declaration, $0.lowerBound) }
+
+        #expect(
+            all.count == 6,
+            "the declaration plus exactly five cleanupLibssh2() calls must exist (found \(all.count))"
+        )
+        #expect(
+            calls.count == 5,
+            "exactly five cleanupLibssh2() call sites must exist: disconnect, cleanup, the two shell defers, and the prepare defer (found \(calls.count))"
+        )
+    }
 }
