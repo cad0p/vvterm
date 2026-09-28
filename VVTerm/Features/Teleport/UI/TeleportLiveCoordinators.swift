@@ -186,7 +186,7 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
         // CA bundle) or a reachability/TLS issue at the NWConnection layer.
         let certLen = clientCertPEM.utf8.count
         let caCount = clusterCAPEMs.count
-        logger.info("gRPC dial host=\(host, privacy: .public):443 cluster=\(clusterName, privacy: .public) ca_certs=\(caCount) cert_len=\(certLen)")
+        logger.info("gRPC dial host=\(host, privacy: .private(mask: .hash)):443 cluster=\(clusterName, privacy: .private(mask: .hash)) ca_certs=\(caCount) cert_len=\(certLen)")
         if certLen == 0 {
             logger.error("gRPC dial rejected: empty client cert (tls_cert missing from Phase 1)")
             throw GRPCError.tls("empty client cert PEM — Phase 1 returned no tls_cert")
@@ -209,10 +209,10 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
             // Surface the concrete error (NWError/TLS) rather than letting the
             // coordinator log `error.localizedDescription` → "error 1".
             let detail = (error as? CustomStringConvertible).map { $0.description } ?? error.localizedDescription
-            logger.error("gRPC dial failed host=\(host, privacy: .public):443 cluster=\(clusterName, privacy: .public) error=\(detail, privacy: .public)")
+            logger.error("gRPC dial failed host=\(host, privacy: .private(mask: .hash)):443 cluster=\(clusterName, privacy: .private(mask: .hash)) error=\(detail, privacy: .public)")
             throw error
         }
-        logger.info("gRPC connected to \(host, privacy: .public)")
+        logger.info("gRPC connected to \(host, privacy: .private(mask: .hash))")
     }
 
     func createAuthenticateChallenge(

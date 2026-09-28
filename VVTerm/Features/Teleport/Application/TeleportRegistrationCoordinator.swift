@@ -162,7 +162,7 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
         bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
     ) async {
         state = .connectingGRPC
-        logger.info("beginning registration for cluster \(cluster.host, privacy: .public) device=\(deviceName, privacy: .private)")
+        logger.info("beginning registration for cluster \(cluster.host, privacy: .private(mask: .hash)) device=\(deviceName, privacy: .private)")
 
         // ── Step 1: connect the gRPC client with the Phase-1 cert ────────
         // The cert authenticates the call (ContextUser, mTLS). The cluster
@@ -287,7 +287,7 @@ final class TeleportRegistrationCoordinator: ObservableObject, TeleportRegistrat
         // The user handle is the raw UUID string's UTF-8 bytes — NOT
         // base64url-decoded. See the 2.2 prompt gotcha.
         let userHandle = Data(webauthnCC.user.id.utf8)
-        logger.info("got register challenge: \(challenge.count)B, rpID=\(rpID, privacy: .public), userHandle=\(userHandle.count)B")
+        logger.info("got register challenge: \(challenge.count)B, rpID=\(rpID, privacy: .private(mask: .hash)), userHandle=\(userHandle.count)B")
 
         // ── Step 4: create the SEP key + build the WebAuthn registration ──
         // This is the in-app Face ID prompt (Face ID #2). The SEP key is

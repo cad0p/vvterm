@@ -313,7 +313,7 @@ enum GRPCTLSOptions {
         // for the encoded auth route name + teleport.cluster.local, and
         // accepted only when the negotiated ALPN is the auth route or `h2`
         // (or absent — servers without a NextProtos list).
-        logger.info("tls_setup cluster=\(clusterName, privacy: .public) alpn=\(alpnProto, privacy: .public) ca_certs=\(certRefs.count)")
+        logger.info("tls_setup cluster=\(clusterName, privacy: .private(mask: .hash)) alpn=\(alpnProto, privacy: .private(mask: .hash)) ca_certs=\(certRefs.count)")
         sec_protocol_options_set_verify_block(
             secOpts,
             TeleportTLSTrust.makeVerifyBlock(
@@ -563,7 +563,7 @@ final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendab
     }
 
     func channelActive(context: ChannelHandlerContext) {
-        logger.info("conn_active channel active for \(self.host, privacy: .public)")
+        logger.info("conn_active channel active for \(self.host, privacy: .private(mask: .hash))")
         context.fireChannelActive()
     }
 
@@ -573,7 +573,7 @@ final class GRPCConnectionStateHandler: ChannelInboundHandler, @unchecked Sendab
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        logger.info("conn_inactive channel closed for \(self.host, privacy: .public)")
+        logger.info("conn_inactive channel closed for \(self.host, privacy: .private(mask: .hash))")
         context.fireChannelInactive()
     }
 }
