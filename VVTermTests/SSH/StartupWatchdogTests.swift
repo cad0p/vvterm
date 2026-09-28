@@ -176,9 +176,11 @@ struct StartupWatchdogTests {
         #expect(source.contains("remoteEnvironment(from:"), "the hop line must name the caller")
         #expect(source.contains("startup watchdog: session.startShell"), "the shell-start await must be labelled")
 
-        // T5: the strings above survive a mutation that keeps the label but
-        // stops *watching* the await, so pin the placement too — the watchdog
-        // must directly wrap `session.startShell` in `startValidatedSSHShell`.
+        // T5/C1: the strings above survive a mutation that keeps the label but
+        // stops *watching* the await. The check must therefore be structural:
+        // inside `startValidatedSSHShell`, the watchdog call's trailing closure
+        // must contain the `expectedSession.startShell` await, and no
+        // `startShell` call may exist outside that closure.
         let shellStart = try #require(source.range(of: "func startValidatedSSHShell"))
         let shellEnd = try #require(
             source.range(of: "// MARK: - Mosh", range: shellStart.upperBound..<source.endIndex)
@@ -188,21 +190,29 @@ struct StartupWatchdogTests {
             shellBody.range(of: "withStartupWatchdog("),
             "the shell-start await must be wrapped in a watchdog"
         )
-        // The emitter closure sits between the call and the wrapped
-        // operation, so search the remainder of the function for the awaited
-        // `startShell` rather than a fixed-width window.
-        let wrappedAwait = shellBody[watchdog.upperBound...]
-        #expect(
-            wrappedAwait.contains("try await expectedSession.startShell("),
-            "the watchdog must wrap the session.startShell await, not sit near it"
+
+        // The trailing closure is the block after the call's closing `) {`.
+        // Find the argument list's end by matching the `emitter:` closure, then
+        // take the remainder as the watched operation.
+        let afterWatchdog = shellBody[watchdog.upperBound...]
+        let operationStart = try #require(
+            afterWatchdog.range(of: "\n        ) {"),
+            "the watchdog must be called with a trailing operation closure"
         )
-        // The wrapped await must be the first `startShell` call after the
-        // watchdog: a mutation that moved the real await outside the closure
-        // would leave an earlier call before it.
-        let beforeWatchdog = shellBody[shellBody.startIndex..<watchdog.lowerBound]
+        let watchedOperation = afterWatchdog[operationStart.upperBound...]
         #expect(
-            !beforeWatchdog.contains("expectedSession.startShell("),
-            "no unwatched startShell call may precede the watchdog"
+            watchedOperation.contains("try await expectedSession.startShell("),
+            "the watchdog's trailing closure must contain the startShell await"
+        )
+
+        // Any `startShell` call in this function must live inside that trailing
+        // closure: a mutation that wrapped a no-op and left the real await
+        // outside would be caught here.
+        let callSites = shellBody.components(separatedBy: "expectedSession.startShell(").count - 1
+        let watchedSites = watchedOperation.components(separatedBy: "expectedSession.startShell(").count - 1
+        #expect(
+            callSites == 1 && watchedSites == 1,
+            "the only startShell call must be the one inside the watchdog (found \(callSites) call(s), \(watchedSites) watched)"
         )
     }
 }

@@ -283,9 +283,29 @@ struct StartupDeadlineTests {
             source.contains("nonisolated static let terminalTypeStageDeadline: Duration = .seconds(25)"),
             "the terminal-type stage deadline must stay at the derived >= 25 s budget"
         )
+
+        // C2: `stageBody.contains("return RemoteTerminalBootstrap…")` would be
+        // satisfied by any of the four identical returns (the value win, the
+        // deadline, the cancellation and the generic failure), so a mutation
+        // that returned `.xtermGhostty` from the deadline catch would survive.
+        // Anchor the assertion to the deadline branch specifically.
+        let deadlineCatch = try #require(
+            stageBody.range(of: "catch is SSHClient.StartupDeadlineExceeded"),
+            "the deadline branch must be distinguishable"
+        )
+        let afterDeadlineCatch = stageBody[deadlineCatch.upperBound...]
+        let nextCatch = try #require(
+            afterDeadlineCatch.range(of: "catch is CancellationError"),
+            "the deadline branch must end before the cancellation branch"
+        )
+        let deadlineBranch = afterDeadlineCatch[..<nextCatch.lowerBound]
         #expect(
-            stageBody.contains("return RemoteTerminalBootstrap.defaultTerminalType"),
+            deadlineBranch.contains("return RemoteTerminalBootstrap.defaultTerminalType"),
             "the deadline fallback must return the compatibility TERM"
+        )
+        #expect(
+            !deadlineBranch.contains(".xtermGhostty"),
+            "the deadline fallback must not claim the Ghostty TERM"
         )
     }
 
