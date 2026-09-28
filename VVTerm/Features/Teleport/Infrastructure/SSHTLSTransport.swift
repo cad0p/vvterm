@@ -255,6 +255,16 @@ actor SSHTLSTransport {
         let connection = NWConnection(to: endpoint, using: params)
         self.connection = connection
 
+        // Arm the state handler BEFORE `connection.start(...)`: NWConnection
+        // does not replay its current state to a handler assigned after the
+        // transition, so a handler installed after `start` can miss a fast
+        // `.ready` (the loopback TLS handshake completes in tens of
+        // milliseconds) and leave the wait below suspended forever.
+        // `ReadyWaiter` buffers the first terminal state, closing that
+        // pre-existing race.
+        let readyWaiter = ReadyWaiter(logger: logger)
+        connection.stateUpdateHandler = { readyWaiter.handle($0) }
+
         // Create the socketpair + start the pump before connecting, so the
         // libssh2 FD is valid as soon as connect() returns (or fails, in
         // which case close() cleans it up).
@@ -303,7 +313,7 @@ actor SSHTLSTransport {
 
         // Wait for the connection to be ready (TLS handshake complete).
         do {
-            try await waitForReady(connection: connection)
+            try await readyWaiter.wait()
         } catch {
             // TLS handshake failed — clean up the socketpair + NWConnection
             // so no FDs leak. Capture the pump task and the guard and clear
@@ -320,7 +330,7 @@ actor SSHTLSTransport {
             self.pumpFDCloser = nil
             // Release only from a path that has joined the pump. If a
             // concurrent `close()` took the task (it nils `pumpTask` while
-            // this path was suspended in `waitForReady`), `runPump` owns the
+            // this path was suspended in `readyWaiter.wait()`), `runPump` owns the
             // release: its detached body holds the pair/closer strongly and
             // always runs shutdownOnce -> cancel -> waitForAll -> closeOnce.
             // Releasing here without a captured task would free the number
@@ -390,60 +400,6 @@ actor SSHTLSTransport {
     var pumpFdForTesting: Int32? { socketPair?.pumpFD }
 
     // MARK: - Pump internals
-
-    /// Wait for the NWConnection to reach `.ready` (TLS handshake done).
-    private func waitForReady(connection: NWConnection) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            // OSAllocatedUnfairLock is Sendable; the stateUpdateHandler
-            // closure runs on an arbitrary queue, so a Sendable lock avoids
-            // the captured-var concurrency warning.
-            let resumed = OSAllocatedUnfairLock(initialState: false)
-
-            connection.stateUpdateHandler = { state in
-                // Diagnose stalls: log every transition (esp. .waiting —
-                // sandbox-denied paths sit there forever).
-                switch state {
-                case .waiting(let error):
-                    self.logger.error("tls_conn_waiting error=\(String(describing: error), privacy: .public)")
-                case .ready:
-                    self.logger.info("tls_conn_ready")
-                case .failed(let error):
-                    self.logger.error("tls_conn_failed error=\(String(describing: error), privacy: .public)")
-                case .cancelled:
-                    self.logger.info("tls_conn_cancelled")
-                default:
-                    break
-                }
-                switch state {
-                case .ready:
-                    let already = resumed.withLock { isResumed -> Bool in
-                        if isResumed { return true }
-                        isResumed = true
-                        return false
-                    }
-                    if !already { continuation.resume() }
-                case .failed(let error):
-                    let already = resumed.withLock { isResumed -> Bool in
-                        if isResumed { return true }
-                        isResumed = true
-                        return false
-                    }
-                    if !already { continuation.resume(throwing: error) }
-                case .cancelled:
-                    let already = resumed.withLock { isResumed -> Bool in
-                        if isResumed { return true }
-                        isResumed = true
-                        return false
-                    }
-                    if !already {
-                        continuation.resume(throwing: TeleportPackageError.connectionFailed("TLS transport cancelled"))
-                    }
-                default:
-                    break
-                }
-            }
-        }
-    }
 
     /// The bidirectional pump. Two loops run concurrently:
     ///   - NWConnection -> pumpFD: receive from NWConnection, write to pumpFD.
@@ -645,6 +601,127 @@ actor SSHTLSTransport {
             return false
         }
         return true
+    }
+}
+
+/// Resolves `connect()` when the `NWConnection` reaches a terminal state.
+///
+/// The state handler must be armed BEFORE `connection.start(...)`:
+/// `NWConnection` does not replay its current state to a handler assigned
+/// after the transition, so a fast `.ready` can land between `start` and the
+/// handler assignment. This type buffers the first terminal state, so either
+/// ordering resolves the wait exactly once.
+///
+/// The lock serializes the state; the continuation and the error are stored
+/// and resumed outside it, so `@unchecked Sendable` is sound.
+private final class ReadyWaiter: @unchecked Sendable {
+    private enum State {
+        case pending
+        case waiting(CheckedContinuation<Void, Error>)
+        case ready
+        case failed(Error)
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State.pending)
+    private let logger: Logger
+
+    nonisolated init(logger: Logger) {
+        self.logger = logger
+    }
+
+    /// `NWConnection.stateUpdateHandler` body: log every transition (esp.
+    /// `.waiting` — sandbox-denied paths sit there forever), then resolve the
+    /// wait on the first terminal state. States after a terminal one are
+    /// dropped.
+    nonisolated func handle(_ connectionState: NWConnection.State) {
+        switch connectionState {
+        case .waiting(let error):
+            logger.error("tls_conn_waiting error=\(String(describing: error), privacy: .public)")
+        case .ready:
+            logger.info("tls_conn_ready")
+        case .failed(let error):
+            logger.error("tls_conn_failed error=\(String(describing: error), privacy: .public)")
+        case .cancelled:
+            logger.info("tls_conn_cancelled")
+        default:
+            break
+        }
+        switch connectionState {
+        case .ready:
+            resolve(.success(()))
+        case .failed(let error):
+            resolve(.failure(error))
+        case .cancelled:
+            resolve(.failure(TeleportPackageError.connectionFailed("TLS transport cancelled")))
+        default:
+            break
+        }
+    }
+
+    /// Wait for the first terminal state. Safe whether the handler fired
+    /// before this attaches (the result is buffered) or after (the
+    /// continuation is attached).
+    nonisolated func wait() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let buffered: Result<Void, Error>? = state.withLock { current -> Result<Void, Error>? in
+                switch current {
+                case .pending:
+                    current = .waiting(continuation)
+                    return nil
+                case .ready:
+                    return .success(())
+                case .failed(let error):
+                    return .failure(error)
+                case .waiting:
+                    // One waiter per connect(); a second concurrent wait is a
+                    // caller bug — fail it instead of leaking the continuation.
+                    return .failure(TeleportPackageError.connectionFailed("TLS transport ready wait already attached"))
+                }
+            }
+            if let buffered {
+                switch buffered {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Store the first terminal result, or hand an attached continuation the
+    /// result to resume. Repeats and states after a terminal one are dropped.
+    nonisolated private func resolve(_ result: Result<Void, Error>) {
+        let continuation: CheckedContinuation<Void, Error>? = state.withLock { current -> CheckedContinuation<Void, Error>? in
+            switch current {
+            case .pending:
+                switch result {
+                case .success:
+                    current = .ready
+                case .failure(let error):
+                    current = .failed(error)
+                }
+                return nil
+            case .waiting(let continuation):
+                switch result {
+                case .success:
+                    current = .ready
+                case .failure(let error):
+                    current = .failed(error)
+                }
+                return continuation
+            case .ready, .failed:
+                // Already resolved — drop the repeat.
+                return nil
+            }
+        }
+        guard let continuation else { return }
+        switch result {
+        case .success:
+            continuation.resume()
+        case .failure(let error):
+            continuation.resume(throwing: error)
+        }
     }
 }
 
