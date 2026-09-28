@@ -3135,9 +3135,13 @@ actor SSHSession {
         // outer proxy-subsystem channel across the stderr-capture awaits), and
         // its defer releases the token before re-entering here. A deferred
         // cleanup leaves `innerLibssh2Session` / `proxySubsystemChannel`
-        // allocated while `isActive` is already `false`, so every readiness /
-        // liveness gate must test `isActive` rather than a raw pointer —
-        // registration and the liveness gates must stay in sync.
+        // allocated while `isActive` is already `false`. The two gates this fix
+        // touched (the prepare idempotence check and `isInnerSessionReady`) test
+        // `isActive`; the exec/SFTP gates still route on
+        // `innerLibssh2Session != nil` and are carried by the `innerSocket = -1`
+        // / `innerAtomicSocket.isUsable` / `!hasBeenCleaned` invariants that
+        // `invalidateTransport()` sets before any deferral — plus the
+        // cached-SFTP fast path, which is #288's window.
         guard shellStartupsInFlight.isEmpty, innerPreparesInFlight.isEmpty else { return }
         // Prevent double cleanup
         guard !hasBeenCleaned else { return }
@@ -3994,9 +3998,10 @@ actor SSHSession {
         // frame awaits the initiator's body and touches no libssh2 after
         // resuming, so the initiator's token already covers the whole body.
         // Every prepare caller must instead hold its own token (the shell
-        // paths) or re-validate before its next libssh2 call; the one known
-        // unregistered caller-side window is the SFTP EAGAIN loop, tracked
-        // separately (#286 follow-up).
+        // paths) or re-validate before its next libssh2 call. Within the #286
+        // audit's caller set, the one known unregistered caller-side window is
+        // the SFTP EAGAIN loop (#288); the shell write/resize post-wait window
+        // found outside that set is #290.
         if let inFlight = prepareTeleportInnerSessionTask {
             return try await inFlight.value
         }
@@ -6260,7 +6265,10 @@ actor SSHSession {
     // MARK: - Keep Alive
 
     func sendKeepAlive() {
-        guard let session = libssh2Session else { return }
+        // Liveness gate (#286): during the deferred-teardown window
+        // `libssh2Session` stays non-nil while the session's free is pending;
+        // skipping the call there is behaviour-neutral for a healthy session.
+        guard isActive, let session = libssh2Session else { return }
         var secondsToNext: Int32 = 0
         // Acquire the outer-session mutex: the Teleport proxy-subsystem pump
         // may be reading/writing the outer session's proxy channel off-actor
