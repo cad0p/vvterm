@@ -475,7 +475,10 @@ actor SSHClient {
         }
     }
 
-    func remoteEnvironment(forceRefresh: Bool = false) async -> RemoteEnvironment {
+    func remoteEnvironment(
+        forceRefresh: Bool = false,
+        watchdogOrigin: String = "unspecified"
+    ) async -> RemoteEnvironment {
         // Teleport's outer session is the PROXY, which rejects exec with -22.
         // The resolver's exec probes must run on the INNER (target-node)
         // session, established by `prepareTeleportInnerSession()`. If the
@@ -486,16 +489,52 @@ actor SSHClient {
         // `.unknown`, matching the prior behavior. This makes every caller of
         // remoteEnvironment()/remoteTerminalType() safe without each one
         // needing to know about Teleport.
+        // #276/V3: capture the connection generation at entry so the cache
+        // write below cannot land on a newer session (the epoch guard is
+        // checked immediately before the write, with no await in between).
+        let capturedSession = session
         let authMethod = connectedServer?.authMethod ?? .password
-        let innerReady = await (session?.isInnerSessionReady ?? false)
-        if !forceRefresh,
-           let resolvedRemoteEnvironment,
-           // For Teleport, a cached `.unknown` platform means env was resolved
-           // before the inner session existed (the prepare failed or hadn't
-           // run yet). Treat it as a miss when the inner session is now ready
-           // so we re-resolve against the real target node.
-           !(authMethod == .faceIDTeleport && innerReady && resolvedRemoteEnvironment.platform == .unknown) {
-            return resolvedRemoteEnvironment
+        // Pre-hop fast path (#276/D2a): a usable cache skips the
+        // `isInnerSessionReady` actor hop entirely — that hop is what parked
+        // the incident connect (`SSHClient.swift:490` in the pre-fix tree).
+        // Teleport + a cached `.unknown` platform always hops: the platform
+        // was resolved before the inner session existed and must be
+        // re-resolved against the real target node once the inner session is
+        // ready.
+        if let cached = resolvedRemoteEnvironment,
+           Self.canReuseCachedEnvironmentBeforeInnerCheck(
+               forceRefresh: forceRefresh,
+               cached: cached,
+               authMethod: authMethod
+           ) {
+            return cached
+        }
+        // #276/D4: name the park if this hop is still suspended after the
+        // short watchdog deadline (startShell and the terminal-type stage
+        // label their calls; other callers use the default label).
+        let innerReady = await Self.withStartupWatchdog(
+            deadline: Self.startupHopWatchdogDeadline,
+            emitter: { detail in
+                Logger.forCategory("SSH").diagError(
+                    "SSH",
+                    "startup watchdog: remoteEnvironment(from:\(watchdogOrigin)) \(detail)"
+                )
+            }
+        ) {
+            await (self.session?.isInnerSessionReady ?? false)
+        }
+        // Post-hop reuse decision (the pre-fix composite, kept verbatim):
+        // reuse unless this is a Teleport connection whose cached platform is
+        // `.unknown` and the inner session is now ready — the case that must
+        // re-resolve for real.
+        if let cached = resolvedRemoteEnvironment,
+           Self.canReuseCachedEnvironmentAfterInnerCheck(
+               forceRefresh: forceRefresh,
+               cached: cached,
+               authMethod: authMethod,
+               innerReady: innerReady
+           ) {
+            return cached
         }
 
         if Self.shouldPrepareInnerSessionBeforeResolvingEnvironment(
@@ -520,7 +559,9 @@ actor SSHClient {
         if let token {
             startupTrace?.end(token, detail: environment.platform.rawValue)
         }
-        resolvedRemoteEnvironment = environment
+        if Self.isCurrentSession(capturedSession, current: session) {
+            resolvedRemoteEnvironment = environment
+        }
         logger.info(
             "Resolved remote environment [platform: \(environment.platform.rawValue, privacy: .public), shell: \(environment.shellProfile.family.rawValue, privacy: .public), active: \(environment.activeShellName ?? "unknown", privacy: .public)]"
         )
@@ -532,8 +573,89 @@ actor SSHClient {
             return resolvedRemoteTerminalType
         }
 
-        let environment = await remoteEnvironment(forceRefresh: forceRefresh)
+        // #276/D2b: bound the WHOLE stage — including the
+        // `remoteEnvironment(forceRefresh:)` re-entry below — with an
+        // abandonable deadline. The trace token is begun here, before the
+        // race, and ended exactly once by this caller; the abandoned worker
+        // must not end it (`SSHStartupTrace.end` is not idempotent, so a late
+        // `end` would emit a second event with a huge `stageMs`). Side
+        // effect: the `.terminalType` stage now spans the env re-entry.
+        //
+        // The deadline bounds the *caller*, not the exec request: the
+        // abandoned worker keeps running (never cancelled — cancelling it can
+        // resume a parked exec request and tear the session down) and fills
+        // the cache when it completes, epoch-guarded.
         let token = startupTrace?.begin(.terminalType)
+        let capturedSession = session
+        do {
+            let terminalType = try await SSHClient.withStartupDeadline(
+                deadline: SSHClient.terminalTypeStageDeadline,
+                emitter: { detail in
+                    Logger.forCategory("SSH").diagError(
+                        "SSH",
+                        "startup watchdog: terminalType stage \(detail), falling back to \(RemoteTerminalBootstrap.defaultTerminalType.rawValue)"
+                    )
+                },
+                operation: { [weak self] in
+                    guard let self else { throw SSHError.notConnected }
+                    return try await self.resolveRemoteTerminalTypeForStage(
+                        forceRefresh: forceRefresh,
+                        capturedSession: capturedSession
+                    )
+                }
+            )
+            if let token {
+                startupTrace?.end(token, detail: terminalType.rawValue)
+            }
+            return terminalType
+        } catch is SSHClient.StartupDeadlineExceeded {
+            // Degrade within the deadline; the fallback is deliberately NOT
+            // cached (a later call re-probes until the abandoned resolution
+            // completes and fills the cache itself).
+            if let token {
+                startupTrace?.end(
+                    token,
+                    outcome: "fallback",
+                    detail: RemoteTerminalBootstrap.defaultTerminalType.rawValue
+                )
+            }
+            return RemoteTerminalBootstrap.defaultTerminalType
+        } catch is CancellationError {
+            // V10: the caller was cancelled (dismissal), so this non-throwing
+            // API returns the fallback rather than rethrowing — the enclosing
+            // shell start unwinds at its own next cancellation check. The
+            // abandoned worker keeps resolving (including
+            // `prepareTeleportInnerSession`) and epoch-guards its late cache
+            // fill.
+            if let token {
+                startupTrace?.end(token, outcome: "cancelled", detail: "cancelled")
+            }
+            return RemoteTerminalBootstrap.defaultTerminalType
+        } catch {
+            if let token {
+                startupTrace?.end(token, outcome: "failed", detail: "resolution_error")
+            }
+            return RemoteTerminalBootstrap.defaultTerminalType
+        }
+    }
+
+    /// The worker body of `remoteTerminalType()` (#276/D2b): the environment
+    /// re-entry plus the resolver, plus the epoch-guarded worker-side cache
+    /// fill. It must NOT end the stage token — the race caller owns it.
+    ///
+    /// The worker may outlive the caller's deadline (it is abandoned, never
+    /// cancelled); a completion after a fallback on the same session fills
+    /// `resolvedRemoteTerminalType` so the next call returns it, while a
+    /// completion after a reconnect does not overwrite the new session's
+    /// cache (N7 epoch guard).
+    private func resolveRemoteTerminalTypeForStage(
+        forceRefresh: Bool,
+        capturedSession: SSHSession?
+    ) async throws -> RemoteTerminalType {
+        let environment = await remoteEnvironment(
+            forceRefresh: forceRefresh,
+            watchdogOrigin: "terminalTypeStage"
+        )
         let redactionServer = connectedServer
         let terminalType = await RemoteTerminalTypeResolver.resolve(
             environment: environment,
@@ -546,11 +668,10 @@ actor SSHClient {
                 Logger.forCategory("SSH").diagError("SSH", "terminalType exec failed: \(message)")
             }
         )
-        if let token {
-            startupTrace?.end(token, detail: terminalType.rawValue)
+        if Self.isCurrentSession(capturedSession, current: session) {
+            resolvedRemoteTerminalType = terminalType
+            logger.info("Resolved remote terminal type: \(terminalType.rawValue, privacy: .public)")
         }
-        resolvedRemoteTerminalType = terminalType
-        logger.info("Resolved remote terminal type: \(terminalType.rawValue, privacy: .public)")
         return terminalType
     }
 
@@ -687,7 +808,7 @@ actor SSHClient {
         // exec probes route to the inner session (never the outer proxy).
         // startShellViaTeleportProxy later calls prepareTeleportInnerSession()
         // again — that's an idempotent no-op when the inner session is ready.
-        let environment = await remoteEnvironment()
+        let environment = await remoteEnvironment(watchdogOrigin: "startShell")
         // prepareTeleportInnerSession() is invoked (and its error swallowed)
         // by remoteEnvironment(); rethrow the stored prepare failure here
         // instead of letting the shell-start guard mask the proxy's real
@@ -813,14 +934,27 @@ actor SSHClient {
         terminalType: RemoteTerminalType
     ) async throws -> ShellHandle {
         try validateShellStartupSession(expectedSession)
-        let shell = try await expectedSession.startShell(
-            cols: cols,
-            rows: rows,
-            pixelSize: pixelSize,
-            startupCommand: startupCommand,
-            environment: environment,
-            terminalType: terminalType
-        )
+        // #276/D4: name the park if the shell start is still suspended after
+        // the short watchdog deadline. Non-interrupting: the shell start is
+        // awaited normally.
+        let shell = try await SSHClient.withStartupWatchdog(
+            deadline: SSHClient.startupHopWatchdogDeadline,
+            emitter: { detail in
+                Logger.forCategory("SSH").diagError(
+                    "SSH",
+                    "startup watchdog: session.startShell \(detail)"
+                )
+            }
+        ) {
+            try await expectedSession.startShell(
+                cols: cols,
+                rows: rows,
+                pixelSize: pixelSize,
+                startupCommand: startupCommand,
+                environment: environment,
+                terminalType: terminalType
+            )
+        }
         do {
             try validateShellStartupSession(expectedSession)
             return shell
@@ -1093,6 +1227,39 @@ actor SSHClient {
         authMethod == .faceIDTeleport && !innerSessionReady
     }
 
+    /// Pre-hop fast path for a cached remote environment (#276/D2a). No
+    /// `innerReady` input by construction: that flag is exactly what the
+    /// `isInnerSessionReady` actor hop computes and a pre-hop decision cannot
+    /// depend on it.
+    ///
+    /// Teleport + a cached `.unknown` platform always hops — the cache was
+    /// resolved before the inner session existed, so the platform must be
+    /// re-resolved against the now-ready target node. Every other cached
+    /// combination is reusable without touching the session actor.
+    nonisolated static func canReuseCachedEnvironmentBeforeInnerCheck(
+        forceRefresh: Bool,
+        cached: RemoteEnvironment?,
+        authMethod: AuthMethod
+    ) -> Bool {
+        guard !forceRefresh, let cached else { return false }
+        return !(authMethod == .faceIDTeleport && cached.platform == .unknown)
+    }
+
+    /// Post-hop reuse decision — the pre-fix `remoteEnvironment()` composite,
+    /// kept verbatim. Teleport + `.unknown` + inner-**not**-ready still
+    /// returns the cache after the hop (no `prepareTeleportInnerSession()`
+    /// side effect on that path); Teleport + `.unknown` + inner-ready falls
+    /// through so the environment is re-resolved.
+    nonisolated static func canReuseCachedEnvironmentAfterInnerCheck(
+        forceRefresh: Bool,
+        cached: RemoteEnvironment?,
+        authMethod: AuthMethod,
+        innerReady: Bool
+    ) -> Bool {
+        guard !forceRefresh, let cached else { return false }
+        return !(authMethod == .faceIDTeleport && innerReady && cached.platform == .unknown)
+    }
+
     /// Rendering for the swallowed `prepareTeleportInnerSession()` failure in
     /// `remoteEnvironment()`. Extracted so the redaction contract can be unit-
     /// tested without a live libssh2 session: the inner resolver can throw
@@ -1115,7 +1282,7 @@ actor SSHClient {
     /// case-only `diagError` so the device ring records the failure stage.
     private func rethrowStoredTeleportPrepareFailure(from session: SSHSession) async throws {
         guard connectedServer?.authMethod == .faceIDTeleport,
-              let failure = await session.lastTeleportPrepareFailure else {
+              let failure = session.lastTeleportPrepareFailure else {
             return
         }
         let rendered = SSHError.diagnosticsMessage(for: failure, redacting: connectedServer)
@@ -1396,11 +1563,20 @@ actor SSHClient {
         }
     }
 
-    private nonisolated static func runWithTimeout<T: Sendable>(
+    /// Race `operation` against a sleep; whichever finishes first wins.
+    ///
+    /// #276/D1: `group.cancelAll()` is now on every exit path (`defer`)
+    /// instead of only the success path — clarity only. Cancellation is a
+    /// *request*, not a bound: the task-group scope still awaits the
+    /// operation child before it can return, so a child suspended inside a
+    /// synchronously-wedged `SSHSession` actor keeps this call parked past
+    /// the deadline (the E2 characterization test pins that).
+    nonisolated static func runWithTimeout<T: Sendable>(
         _ timeout: Duration,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
+            defer { group.cancelAll() }
             group.addTask {
                 try await operation()
             }
@@ -1412,9 +1588,243 @@ actor SSHClient {
             guard let result = try await group.next() else {
                 throw SSHError.timeout
             }
-            group.cancelAll()
             return result
         }
+    }
+
+    /// Thrown by `withStartupDeadline` when the deadline (not the operation)
+    /// wins.
+    struct StartupDeadlineExceeded: Error {}
+
+    /// Wall-clock budget for the whole `remoteTerminalType()` body (#276/N6):
+    /// a 12 s terminfo install plus up to three 2 s environment probes plus
+    /// slack. A false fire degrades the running shell's `TERM` to
+    /// `xterm-256color` with no retro-fix, so this must not be tightened
+    /// without re-deriving that budget.
+    nonisolated static let terminalTypeStageDeadline: Duration = .seconds(25)
+
+    /// Race `operation` against a wall-clock `deadline` (#276/D2b).
+    ///
+    /// A one-shot continuation is claimed by whichever of {operation task,
+    /// detached timer, caller cancellation} reaches it first. On a deadline
+    /// win the operation task is **abandoned — never awaited, never
+    /// cancelled**: cancelling it can resume a parked exec request and,
+    /// through `invalidateTransport()`, tear down a live session. It may still
+    /// finish later and fill a cache; the caller's epoch guard
+    /// (`isCurrentSession(_:current:)`) decides whether that write lands.
+    ///
+    /// - `deadline` is injected by the caller (tests use milliseconds).
+    /// - `emitter` receives a short detail string when the deadline wins and
+    ///   is injectable so tests can record it; the production default logs on
+    ///   the `SSH` diag channel.
+    /// - Throws `StartupDeadlineExceeded` on a deadline win, or
+    ///   `CancellationError` when the caller's task was cancelled (V10: resume
+    ///   early so a dismissal does not block the full deadline).
+    nonisolated static func withStartupDeadline<T: Sendable>(
+        deadline: Duration,
+        emitter: @escaping @Sendable (String) -> Void = { detail in
+            Logger.forCategory("SSH").diagError("SSH", "startup watchdog: \(detail)")
+        },
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let race = StartupDeadlineRace<T>()
+        defer { race.cancelTimer() }
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                // Pre-install cancellation (V10): the onCancel handler can
+                // fire before this body runs; `install` then applies it and
+                // we must not start the abandoned worker.
+                guard race.install(continuation) else { return }
+                // Unstructured on purpose: the deadline must be able to
+                // abandon the operation, so the caller never awaits it
+                // structurally. Detached also avoids inheriting this
+                // task's cancellation.
+                Task.detached {
+                    do {
+                        race.resume(returning: try await operation())
+                    } catch {
+                        race.resume(throwing: error)
+                    }
+                }
+                race.armTimer(deadline: deadline, emitter: emitter)
+            }
+        }, onCancel: {
+            // V10: resume the *caller* early — never cancel the operation.
+            race.cancel()
+        })
+    }
+
+    /// One-shot claim holder for `withStartupDeadline` (#276/V6). Claim-once
+    /// under the lock; every `resume` happens after the lock is released.
+    /// Mirrors `SSHSession.ExecRequest`'s holder shape (D1).
+    private nonisolated final class StartupDeadlineRace<T: Sendable>: @unchecked Sendable {
+        private struct State: Sendable {
+            var continuation: CheckedContinuation<T, Error>?
+            var resumed = false
+            var pendingCancellation = false
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+        private let timer = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+
+        /// Install the continuation. Returns `false` (and resumes with
+        /// `CancellationError`) when a cancellation already arrived.
+        func install(_ continuation: CheckedContinuation<T, Error>) -> Bool {
+            let shouldCancel = state.withLock { state -> Bool in
+                guard !state.resumed else { return true }
+                guard !state.pendingCancellation else {
+                    state.resumed = true
+                    return true
+                }
+                state.continuation = continuation
+                return false
+            }
+            if shouldCancel {
+                continuation.resume(throwing: CancellationError())
+                return false
+            }
+            return true
+        }
+
+        /// Claim the continuation for the deadline outcome. Returns the
+        /// continuation when this call won (the operation has not resumed),
+        /// nil when the operation already won — so a losing timer never emits
+        /// a misleading line.
+        func claimDeadline() -> CheckedContinuation<T, Error>? {
+            state.withLock { state in
+                guard !state.resumed else { return nil }
+                state.resumed = true
+                let continuation = state.continuation
+                state.continuation = nil
+                return continuation
+            }
+        }
+
+        func resume(returning value: T) {
+            guard let continuation = claim() else { return }
+            continuation.resume(returning: value)
+        }
+
+        func resume(throwing error: Error) {
+            guard let continuation = claim() else { return }
+            continuation.resume(throwing: error)
+        }
+
+        /// Caller cancellation: claim or record a pending cancellation for
+        /// `install`.
+        func cancel() {
+            let continuation = state.withLock { state -> CheckedContinuation<T, Error>? in
+                guard !state.resumed else { return nil }
+                guard let continuation = state.continuation else {
+                    state.pendingCancellation = true
+                    return nil
+                }
+                state.resumed = true
+                state.continuation = nil
+                return continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+
+        func armTimer(
+            deadline: Duration,
+            emitter: @escaping @Sendable (String) -> Void
+        ) {
+            let task = Task.detached { [weak self] in
+                do {
+                    try await Task.sleep(for: deadline)
+                } catch {
+                    return // cancelled — the operation won or the caller left
+                }
+                guard let self else { return }
+                guard let continuation = self.claimDeadline() else { return }
+                emitter("deadline after \(SSHClient.secondsText(deadline))s")
+                continuation.resume(throwing: StartupDeadlineExceeded())
+            }
+            // Store and check atomically: if the race already settled (the
+            // operation, the caller's cancellation, or a deadline claim) while
+            // this body was between `install` and here, the caller's
+            // `defer { cancelTimer() }` has already run and seen `nil`, so the
+            // timer would escape. Cancel it here instead of leaking a task that
+            // sleeps the full deadline. `S1` (lens 1).
+            let escaped = timer.withLock { stored -> Bool in
+                stored = task
+                return state.withLock { $0.resumed }
+            }
+            if escaped { task.cancel() }
+        }
+
+        func cancelTimer() {
+            let task = timer.withLock { task -> Task<Void, Never>? in
+                let stored = task
+                task = nil
+                return stored
+            }
+            task?.cancel()
+        }
+
+        private func claim() -> CheckedContinuation<T, Error>? {
+            state.withLock { state in
+                guard !state.resumed else { return nil }
+                state.resumed = true
+                let continuation = state.continuation
+                state.continuation = nil
+                return continuation
+            }
+        }
+    }
+
+    /// Human-readable seconds for a `Duration` in diag lines (`25s`, `0.20s`).
+    nonisolated static func secondsText(_ duration: Duration) -> String {
+        let components = duration.components
+        let seconds = Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        if seconds == seconds.rounded() {
+            return String(Int(seconds))
+        }
+        return String(format: "%.2f", seconds)
+    }
+
+    /// Epoch guard for a late cache write (#276/N7): `SSHSession` is recreated
+    /// per connect, so session identity is the connection generation. A worker
+    /// that resolved against an older session must not overwrite the current
+    /// one's cache. `nil === nil` is true, so a session-less resolution may
+    /// still fill the cache while no session exists.
+    nonisolated static func isCurrentSession(_ captured: SSHSession?, current: SSHSession?) -> Bool {
+        captured === current
+    }
+
+    /// Short per-call deadline for the D4 naming watchdogs (#276/N8): if the
+    /// watched await is still parked after this, emit one labelled diag line.
+    /// Nothing is bounded here — `withStartupDeadline` owns bounding.
+    nonisolated static let startupHopWatchdogDeadline: Duration = .seconds(3)
+
+    /// Non-interrupting startup watchdog (#276/D4).
+    ///
+    /// Arms a detached timer; if `operation` is still parked at `deadline` the
+    /// timer emits `detail` through `emitter` **once** (the `catch { return }`
+    /// disarm pattern — a cancelled sleep must not fall through to an emit).
+    /// The operation is awaited normally and its result/error is returned: this
+    /// names a park, it does not bound one. The benign boundary race (the
+    /// operation completes exactly as the timer fires) can produce one extra
+    /// line — an extra line is not a failure signal.
+    nonisolated static func withStartupWatchdog<T: Sendable>(
+        deadline: Duration,
+        emitter: @escaping @Sendable (String) -> Void = { detail in
+            Logger.forCategory("SSH").diagError("SSH", "startup watchdog: \(detail)")
+        },
+        operation: @escaping @Sendable () async throws -> T
+    ) async rethrows -> T {
+        let timer = Task.detached {
+            do {
+                try await Task.sleep(for: deadline)
+            } catch {
+                return // cancelled — the watched operation completed in time
+            }
+            emitter("still parked after \(secondsText(deadline))s")
+        }
+        defer { timer.cancel() }
+        return try await operation()
     }
 
     private func fallbackReason(for error: Error) -> MoshFallbackReason {
@@ -1566,10 +1976,30 @@ actor SSHSession {
     }
     #endif
 
-    final class ExecRequest {
+    /// All lock-protected state is immutable-after-claim; the mutable
+    /// channel/output fields are only touched from this actor. The shared
+    /// holder must cross into the off-actor cancellation handler, hence
+    /// `@unchecked Sendable` (the lock is the synchronization).
+    nonisolated final class ExecRequest: @unchecked Sendable {
+        /// Cancellation/once state shared between the session actor
+        /// (registration, loop-side completion, teardown) and the
+        /// **off-actor** `withTaskCancellationHandler(onCancel:)` handler.
+        /// #276/D1: the handler used to hop back into this actor
+        /// (`Task { await self?.cancelExecRequest(…) }`); that hop never
+        /// arrives while the actor is parked, so a timed-out exec request
+        /// stayed in flight. The holder is now the single once-guard and the
+        /// handler resumes the continuation directly, off-actor.
+        ///
+        /// Claim-once under the lock; every `resume` call happens after the
+        /// lock is released.
+        struct State: Sendable {
+            var continuation: CheckedContinuation<String, Error>?
+            var cancelled = false
+            var resumed = false
+        }
+
         let id: UUID
         let command: String
-        let continuation: CheckedContinuation<String, Error>
         var channel: OpaquePointer?
         var output = Data()
         var stderr = Data()
@@ -1580,38 +2010,96 @@ actor SSHSession {
         /// inner socketpair FD (data for the inner channel arrives via the
         /// proxy-subsystem pump, not the outer session's socket). Mirrors the
         /// `ShellChannelState.isInner` flag.
-        var isInner: Bool = false
-        /// Set by the off-loop cancellation path (`cancelExecRequest` — probe
-        /// timeouts, task cancellation), which resumes the continuation with
-        /// the cancellation error but must NOT close/free the channel (the
-        /// owning I/O loop may be suspended between reads on it; issue #121).
-        /// The loop checks this flag on every pass and performs the channel
-        /// teardown itself, exactly once.
-        var isCancelled = false
-        /// Guards the single-resume invariant: a checked continuation crashes
-        /// if resumed twice, and cancellation (`cancelExecRequest`),
-        /// loop-side completion (`finishExecRequest`) and session teardown
-        /// (`failAllExecRequests`) race to complete the same request.
-        private(set) var continuationResumed = false
+        var isInner: Bool
 
-        init(id: UUID, command: String, continuation: CheckedContinuation<String, Error>) {
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        init(id: UUID, command: String, isInner: Bool) {
             self.id = id
             self.command = command
-            self.continuation = continuation
+            self.isInner = isInner
+        }
+
+        /// The off-loop cancellation path marks the request (probe timeouts,
+        /// task cancellation) but must NOT close/free the channel: the owning
+        /// I/O loop may be suspended between reads on it (issue #121). The
+        /// loop checks this on every pass — it wakes at least every 5ms via
+        /// the poll timeout in `waitForSocket` — and performs the channel
+        /// teardown exactly once. The request stays in `execRequests` until
+        /// then, which also keeps the loop alive.
+        nonisolated var isCancelled: Bool {
+            state.withLock { $0.cancelled }
+        }
+
+        /// `true` once the continuation was claimed for resume. Kept for the
+        /// single-resume tests and the teardown comments; production code
+        /// only observes it through the resume guards.
+        nonisolated var continuationResumed: Bool {
+            state.withLock { $0.resumed }
+        }
+
+        /// Install the continuation.
+        ///
+        /// Applies a cancellation that landed before install: the `onCancel`
+        /// handler can fire before this actor ever reached the continuation
+        /// body (it is invoked immediately when the task is already cancelled
+        /// at handler installation). In that case the continuation is resumed
+        /// with `CancellationError` here and `false` is returned so the caller
+        /// can drop the freshly registered `execRequests` entry (the request
+        /// never started, so it has no channel for the loop to tear down).
+        @discardableResult
+        nonisolated func install(_ continuation: CheckedContinuation<String, Error>) -> Bool {
+            let shouldCancel = state.withLock { state -> Bool in
+                guard !state.resumed else { return true }
+                guard !state.cancelled else {
+                    state.resumed = true
+                    return true
+                }
+                state.continuation = continuation
+                return false
+            }
+            if shouldCancel {
+                continuation.resume(throwing: CancellationError())
+                return false
+            }
+            return true
+        }
+
+        /// Off-actor cancellation: mark the request cancelled and resume its
+        /// continuation directly — no session-actor hop. Safe to call before
+        /// `install(_:)`; the pending cancellation is applied at install.
+        nonisolated func cancel() {
+            let continuation = state.withLock { state -> CheckedContinuation<String, Error>? in
+                state.cancelled = true
+                guard !state.resumed else { return nil }
+                guard let continuation = state.continuation else { return nil }
+                state.resumed = true
+                state.continuation = nil
+                return continuation
+            }
+            continuation?.resume(throwing: CancellationError())
         }
 
         /// Resume exactly once; later calls are no-ops.
-        func resume(returning output: String) {
-            guard !continuationResumed else { return }
-            continuationResumed = true
+        nonisolated func resume(returning output: String) {
+            guard let continuation = claimContinuation() else { return }
             continuation.resume(returning: output)
         }
 
         /// Resume exactly once; later calls are no-ops.
-        func resume(throwing error: Error) {
-            guard !continuationResumed else { return }
-            continuationResumed = true
+        nonisolated func resume(throwing error: Error) {
+            guard let continuation = claimContinuation() else { return }
             continuation.resume(throwing: error)
+        }
+
+        private nonisolated func claimContinuation() -> CheckedContinuation<String, Error>? {
+            state.withLock { state in
+                guard !state.resumed else { return nil }
+                state.resumed = true
+                let continuation = state.continuation
+                state.continuation = nil
+                return continuation
+            }
         }
     }
 
@@ -1683,7 +2171,27 @@ actor SSHSession {
     /// so the shell/exec paths rethrow this stored failure instead of masking
     /// it as `.notConnected`. Cleared on a successful prepare and on connect;
     /// `CancellationError` is never stored.
-    private(set) var lastTeleportPrepareFailure: SSHError?
+    ///
+    /// #276/D3: a **per-session** lock-protected box instead of an
+    /// actor-isolated property, so
+    /// `SSHClient.rethrowStoredTeleportPrepareFailure(from:)` reads it without
+    /// hopping into this actor (that hop is a startup park candidate). The box
+    /// is owned by this session — a client-owned shared snapshot would be
+    /// stale across sessions and would miss the `connect()` clear. Same value,
+    /// same lifetime, same throw type as the pre-fix field.
+    private let lastTeleportPrepareFailureBox = OSAllocatedUnfairLock<SSHError?>(initialState: nil)
+
+    /// Off-actor read of the stored prepare failure; same value and lifetime
+    /// as the pre-fix actor-isolated property.
+    private(set) nonisolated var lastTeleportPrepareFailure: SSHError? {
+        get { lastTeleportPrepareFailureBox.withLock { $0 } }
+        set { lastTeleportPrepareFailureBox.withLock { $0 = newValue } }
+    }
+    /// The in-flight `prepareTeleportInnerSession()` body (#276/V1).
+    /// Concurrent callers await this task instead of starting a second body
+    /// that would clobber `proxySubsystemChannel` / `agentForwardingService`
+    /// mid-handshake. Cleared by the task itself when the body completes.
+    private var prepareTeleportInnerSessionTask: Task<Void, Error>?
     /// The inner socketpair's libssh2-facing FD. Mirrors `socket` for the
     /// outer session; closed via `innerAtomicSocket` after the inner libssh2
     /// session is freed.
@@ -1746,6 +2254,10 @@ actor SSHSession {
     #if DEBUG
     private var shellStartupTestHook: (@Sendable (ShellStartupTestEvent) -> Void)?
     private var discardedShellStartupChannelCount = 0
+    /// Parks the prepare body so the V1 in-flight dedup can be observed
+    /// without a live libssh2 session (#276). Each body entry awaits it; the
+    /// dedup test asserts only one entry while the first is parked.
+    private var prepareTeleportInnerSessionBodyTestHook: (@Sendable () async -> Void)?
     #endif
 
     init(
@@ -1833,6 +2345,12 @@ actor SSHSession {
         _ hook: (@Sendable (ShellStartupTestEvent) -> Void)?
     ) {
         shellStartupTestHook = hook
+    }
+
+    func setPrepareTeleportInnerSessionBodyTestHook(
+        _ hook: (@Sendable () async -> Void)?
+    ) {
+        prepareTeleportInnerSessionBodyTestHook = hook
     }
 
     func discardedShellStartupChannelsForTesting() -> Int {
@@ -3399,6 +3917,42 @@ actor SSHSession {
         // already established the tunnel + second handshake.
         if innerLibssh2Session != nil { return }
 
+        // #276/V1: in-flight dedup. A concurrent caller joins the running
+        // prepare instead of starting a second body that would clobber
+        // `proxySubsystemChannel` / `agentForwardingService` mid-handshake
+        // (the inner session only becomes non-nil after the handshake, so
+        // the idempotence check above does not cover this window).
+        //
+        // The slot is cleared by the *initiator* once it has resumed from
+        // `task.value`, so a later caller after a failure starts a fresh
+        // attempt (the pre-fix retry behavior). Precisely: a caller that
+        // arrives after the body finished but before the initiator's
+        // continuation resumed joins the finished task and rethrows its
+        // result instead of retrying. That window is one actor scheduling
+        // turn and the outcome (the same error) is indistinguishable to the
+        // caller; clearing from inside the task body would need an extra
+        // actor hop to write the property, which is worse.
+        //
+        // The slot is per-session and the task is unstructured: a cancelled
+        // caller does not cancel a body another caller may be waiting on.
+        if let inFlight = prepareTeleportInnerSessionTask {
+            return try await inFlight.value
+        }
+
+        let task = Task { [weak self] () -> Void in
+            guard let self else { throw SSHError.notConnected }
+            try await self.prepareTeleportInnerSessionBodyStoringFailure()
+        }
+        prepareTeleportInnerSessionTask = task
+        defer { prepareTeleportInnerSessionTask = nil }
+        try await task.value
+    }
+
+    /// `prepareTeleportInnerSessionBody()` plus the stored-failure rule (#268):
+    /// store `SSHError`s, never a cancellation, and clear on success. Split out
+    /// so the V1 dedup task can call it with `await` from a nonisolated task
+    /// context.
+    private func prepareTeleportInnerSessionBodyStoringFailure() async throws {
         do {
             try await prepareTeleportInnerSessionBody()
         } catch is CancellationError {
@@ -3430,6 +3984,9 @@ actor SSHSession {
     /// The body of `prepareTeleportInnerSession()`, split out so the entry
     /// point can record every thrown failure without touching each throw site.
     private func prepareTeleportInnerSessionBody() async throws {
+        #if DEBUG
+        await prepareTeleportInnerSessionBodyTestHook?()
+        #endif
         guard isActive, let outerSession = libssh2Session else {
             throw SSHError.notConnected
         }
@@ -4964,23 +5521,6 @@ actor SSHSession {
         return true
     }
 
-    /// Off-loop cancellation path (probe timeouts via
-    /// `withTaskCancellationHandler`, task cancellation). Marks the request
-    /// cancelled and resumes its continuation with the error, but does NOT
-    /// touch the libssh2 channel: the owning I/O loop is the only execution
-    /// context that reads the channel, and closing/freeing it here while the
-    /// loop is suspended between reads corrupts the session (issue #121:
-    /// `Exec read failed: -43` + `channelOpenFailed` cascade + reconnect
-    /// loop). The loop detects `isCancelled` on its next pass — it wakes at
-    /// least every 5ms via the poll timeout in `waitForSocket` — and
-    /// performs the teardown exactly once. The request stays in
-    /// `execRequests` until then, which also keeps the loop alive.
-    private func cancelExecRequest(_ requestId: UUID, error: Error) {
-        guard let request = execRequests[requestId], !request.isCancelled else { return }
-        request.isCancelled = true
-        request.resume(throwing: error)
-    }
-
     /// Loop-side completion of an exec request: removes the request from
     /// `execRequests` (transferring channel ownership to this context),
     /// closes + frees the channel EAGAIN-aware, then resumes the
@@ -5602,17 +6142,25 @@ actor SSHSession {
     }
 
     private func enqueueExecRequest(_ command: String, isInner: Bool) async throws -> String {
-        let requestId = UUID()
+        let request = ExecRequest(id: UUID(), command: command, isInner: isInner)
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
-                let request = ExecRequest(id: requestId, command: command, continuation: continuation)
-                request.isInner = isInner
                 execRequests[request.id] = request
+                let installed = request.install(continuation)
+                // Cancel-before-install, both windows: `onCancel` may have
+                // fired before the continuation was installed (handled by
+                // `install`), or the task may already be cancelled while
+                // this body is being scheduled. Either way the request never
+                // started, so the freshly registered entry is removed before
+                // the loop can pick it up (it has no channel to tear down)
+                // and the holder resumes exactly once.
+                if !installed || Task.isCancelled {
+                    execRequests.removeValue(forKey: request.id)
+                    request.cancel()
+                }
             }
-        }, onCancel: { [weak self] in
-            Task {
-                await self?.cancelExecRequest(requestId, error: CancellationError())
-            }
+        }, onCancel: {
+            request.cancel()
         })
     }
 
