@@ -3162,8 +3162,17 @@ actor SSHSession {
         // outer session free below may reap it, but close it explicitly to
         // avoid leaking it if the outer free is abandoned).
         if let proxyChannel = proxySubsystemChannel {
-            _ = libssh2_channel_close(proxyChannel)
-            _ = libssh2_channel_free(proxyChannel)
+            // Serialized through `outerSessionMutex` against the bridge
+            // pump's read/write closures: those re-check their cancel token
+            // inside the same mutex, so a call that just passed the check
+            // cannot race this free, and `cancelPumpSync()` (above) flipped
+            // the token, so no new pump call can start after this point. The
+            // pre-transport stderr-capture read on this channel is a separate
+            // window, not covered here (#286).
+            outerSessionMutex.withLock {
+                _ = libssh2_channel_close(proxyChannel)
+                _ = libssh2_channel_free(proxyChannel)
+            }
             proxySubsystemChannel = nil
         }
 
@@ -3178,10 +3187,12 @@ actor SSHSession {
             return
         }
 
-        // The free is serialized through `outerSessionMutex` against the
-        // agent service's and the bridge pump's libssh2 closures: those
+        // Both frees on the outer session and its bridge channel are
+        // serialized through `outerSessionMutex` against the agent service's
+        // and the bridge pump's libssh2 closures: the read/write closures
         // re-check their cancel token inside the same mutex, so a call that
-        // just passed the token check cannot touch a freed session.
+        // just passed the token check cannot touch a freed channel or session.
+        // (The inner-session free above is a separate window — #286.)
         var freeResult = Int32(LIBSSH2_ERROR_EAGAIN)
         outerSessionMutex.withLock {
             for _ in 0..<1_024 {
