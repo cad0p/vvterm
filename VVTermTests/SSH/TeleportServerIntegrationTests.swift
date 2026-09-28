@@ -271,23 +271,45 @@ struct TeleportServerIntegrationTests {
         }
     }
 
-    /// Drain a shell's output stream until `marker` appears or the deadline
-    /// passes; returns everything received so the assertion message can show
-    /// the real output. The shell's stream ends when the channel closes, so a
-    /// failed `startShell` cannot spin here.
+    /// Collects shell output off the test's actor so the deadline path can
+    /// still surface whatever arrived before the timeout fired.
+    private actor ShellOutputBuffer {
+        private(set) var text = ""
+
+        func append(_ chunk: Data) -> String {
+            text += String(decoding: chunk, as: UTF8.self)
+            return text
+        }
+    }
+
+    /// Drain a shell's output stream until `marker` appears, the stream ends,
+    /// or the deadline passes; returns everything received so the assertion
+    /// message can show the real output. The drain and a sleep-until-deadline
+    /// task race, so a silent stream returns at the deadline (45 s) instead of
+    /// parking on `next()` until the suite's 3-minute limit; `cancelAll()` then
+    /// ends the stream iteration (`AsyncStream.next()` returns nil on task
+    /// cancellation). The shell's stream also ends when the channel closes, so
+    /// a failed `startShell` cannot spin here.
     private static func shellOutput(
         from shell: ShellHandle,
         until marker: String,
         timeoutSeconds: Int
     ) async -> String {
-        var output = ""
-        let deadline = ContinuousClock.now + .seconds(timeoutSeconds)
-        var iterator = shell.stream.makeAsyncIterator()
-        while ContinuousClock.now < deadline, !output.contains(marker) {
-            guard let chunk = await iterator.next() else { break }
-            output += String(decoding: chunk, as: UTF8.self)
+        let buffer = ShellOutputBuffer()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for await chunk in shell.stream {
+                    let text = await buffer.append(chunk)
+                    if text.contains(marker) { break }
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+            }
+            _ = await group.next()
+            group.cancelAll()
         }
-        return output
+        return await buffer.text
     }
 
     /// OSC 8 transport reproduction (issue #93 link-click debug): the full

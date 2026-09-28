@@ -3318,10 +3318,15 @@ actor SSHSession {
         }
         let normalizedPath = RemoteFilePath.normalize(path)
         let handle = try await openDirectoryHandle(at: normalizedPath, sftp: sftp)
-        // Conditional close: when the loop-top guard throws because the
-        // session went away, its free already reaped the handle, so calling
-        // libssh2 on it here would be the very use-after-free this guards
-        // against.
+        // Conditional close: if the loop-top guard throws because the session
+        // went away, the session free has already freed the `LIBSSH2_SFTP`
+        // struct this `handle` points back to (the SFTP channel's close
+        // callback frees it), so calling libssh2 here would dereference a
+        // dangling back-pointer. The captured `handle` itself is NOT freed by
+        // the session free — libssh2 leaves a TODO to walk `sftp->sftp_handles`
+        // and this app never calls `libssh2_sftp_shutdown` — so skipping the
+        // close leaks it; that leak is bounded and deliberate, because the
+        // alternative is the use-after-free this guard exists to prevent.
         defer {
             if isActive, !hasBeenCleaned, sftp == sftpSession {
                 libssh2_sftp_close_handle(handle)
@@ -3334,10 +3339,12 @@ actor SSHSession {
 
         while entries.count < limit {
             try Task.checkCancellation()
-            // Loop-top liveness re-check: the captured `sftp`/`session`/
-            // `handle` can be reaped by the session free while this loop is
-            // parked in the EAGAIN branch below. This placement also covers
-            // the loop's second re-entry path — the `await readlink` below
+            // Loop-top liveness re-check: a session free can invalidate the
+            // captured `sftp`/`session` while this loop is parked in the
+            // EAGAIN branch below, and it frees the `LIBSSH2_SFTP` struct the
+            // captured `handle` points back to (the handle itself leaks; see
+            // the conditional close above). This placement also covers the
+            // loop's second re-entry path — the `await readlink` below
             // resumes and the next iteration re-enters
             // `libssh2_sftp_readdir_ex`, which a guard placed only after the
             // wait would miss. The wait helper is same-actor and
@@ -3441,6 +3448,17 @@ actor SSHSession {
         }
 
         if offset > 0 {
+            // Pre-loop liveness gate: `openFileHandle` awaited, and
+            // `libssh2_sftp_seek64` dereferences `handle` and its
+            // `LIBSSH2_SFTP` back-pointer, so the loop-top predicate must
+            // guard the seek too (the loop-top guard below runs only after
+            // it).
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
             libssh2_sftp_seek64(handle, offset)
         }
 
@@ -3450,8 +3468,10 @@ actor SSHSession {
         while data.count < maxBytes {
             try Task.checkCancellation()
             // Loop-top liveness re-check (see `listDirectory`): the captured
-            // handle and session must not be re-entered after the session
-            // free reaped them.
+            // handle and session must not be re-entered once a session free
+            // frees the `LIBSSH2_SFTP` struct the handle points back to (the
+            // handle itself is leaked, not freed; see `listDirectory`'s
+            // conditional close).
             guard isActive,
                   !hasBeenCleaned,
                   sftp == sftpSession,
@@ -3526,8 +3546,10 @@ actor SSHSession {
             while true {
                 try Task.checkCancellation()
                 // Loop-top liveness re-check (see `listDirectory`): the
-                // captured handle and session must not be re-entered after
-                // the session free reaped them.
+                // captured handle and session must not be re-entered once a
+                // session free frees the `LIBSSH2_SFTP` struct the handle
+                // points back to (the handle itself is leaked, not freed; see
+                // `listDirectory`'s conditional close).
                 guard isActive,
                       !hasBeenCleaned,
                       sftp == sftpSession,
@@ -3598,8 +3620,10 @@ actor SSHSession {
         while totalBytesWritten < data.count {
             try Task.checkCancellation()
             // Loop-top liveness re-check (see `listDirectory`): the captured
-            // handle and session must not be re-entered after the session
-            // free reaped them.
+            // handle and session must not be re-entered once a session free
+            // frees the `LIBSSH2_SFTP` struct the handle points back to (the
+            // handle itself is leaked, not freed; see `listDirectory`'s
+            // conditional close).
             guard isActive,
                   !hasBeenCleaned,
                   sftp == sftpSession,
@@ -6595,7 +6619,9 @@ actor SSHSession {
             try Task.checkCancellation()
             // Loop-top liveness re-check (see `listDirectory`): the SFTP
             // handle (and the session it belongs to) must not be re-entered
-            // after the session free reaped them.
+            // once a session free frees the `LIBSSH2_SFTP` struct the handle
+            // points back to (the handle itself is leaked, not freed; see
+            // `listDirectory`'s conditional close).
             guard isActive,
                   !hasBeenCleaned,
                   sftp == sftpSession,

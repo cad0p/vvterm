@@ -7,8 +7,9 @@
 //  `resize(cols:rows:pixelSize:for:)` EAGAIN retry loops re-enter libssh2 on a
 //  shell channel that `cleanupLibssh2()`'s session free reaps
 //  (`abandonAllShellChannels()` empties `shellChannels` without freeing, so
-//  the session free is what invalidates the channel). The fix re-checks the
-//  captured `ShellChannelState` at the top of every loop body:
+//  the session free is what invalidates the channel — `session_free()` walks
+//  the session's channel list). The fix re-checks the captured
+//  `ShellChannelState` at the top of every loop body:
 //
 //      guard isActive, shellChannels[shellId] === state else {
 //          throw SSHError.notConnected
@@ -34,15 +35,29 @@
 //  which is normal-path regression coverage, not a reproduction of the
 //  parked window.
 //
-//  FORMATTING HEURISTIC, NOT A PROOF: a pin is defeated by an alias
-//  (`let ch = state.channel`), a renamed variable, a multi-line call, a
-//  guard hoisted into a helper, or a comment-stripped scan that a string
-//  literal satisfies. Every pin here is a tripwire for the regression shape,
-//  not proof of the discipline; the same-actor/non-suspending reasoning in
-//  the fix commit is the proof. Comments are stripped before every scan, so a
-//  commented-out guard cannot satisfy an assertion. The `count == 1`
-//  assertions deliberately make a duplicated loop red: a new retry loop in
-//  this family must extend the pin on purpose.
+//  WHAT THESE PINS ASSERT (and what they do not see). Each loop pin
+//  whitespace-normalizes the source and matches the guard's EXACT predicate
+//  text (`guard isActive, shellChannels[shellId] === state else {`), then
+//  asserts the guard is the loop body's first statement — only
+//  `try Task.checkCancellation()` may precede it. That closes the two blind
+//  spots of the first pin draft:
+//    - a logic mutation that preserves every individual token (`&&` -> `||`,
+//      `,` -> `||`, a dropped negation) no longer matches the exact predicate
+//      and goes red (the fold-round counterfactual measures this);
+//    - a guard nested inside an early `if`, or moved below the wait or any
+//      other call, is red on the first-statement assertion even though it
+//      still precedes the libssh2 re-entry.
+//  It is still a tripwire, not a proof. What remains invisible: a suspension
+//  added to the wait helper or to the loop body (the exact future change
+//  these pins exist to contain), an unguarded re-entry that uses a token the
+//  pin does not list, and any behavioural change outside the pinned text. A
+//  renamed variable or an aliased handle makes the exact-text match red — a
+//  deliberate tripwire firing that forces the author to re-affirm the pin,
+//  not a silent pass. Comments are stripped before every scan, so a
+//  commented-out guard cannot satisfy an assertion, but a string literal
+//  containing the guard text could. The `count == 1` assertions deliberately
+//  make a duplicated loop or re-entry red: a new retry loop in this family
+//  must extend the pin on purpose.
 //
 
 import Foundation
@@ -222,12 +237,6 @@ struct SSHShellLoopLivenessPinsTests {
         return try bracedBlock(openingAt: open, in: text)
     }
 
-    /// Whether `index` falls strictly inside the `block` span (the span
-    /// returned by `bracedBlock` excludes the braces themselves).
-    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
-        block.lowerBound < index && index < block.upperBound
-    }
-
     /// Every occurrence of `needle` in `text` (optionally within `range`),
     /// in source order.
     private static func occurrences(
@@ -245,11 +254,69 @@ struct SSHShellLoopLivenessPinsTests {
         return result
     }
 
+    /// The whitespace-normalized form of `text`: every run of whitespace
+    /// collapses to a single space (empty for an all-whitespace span).
+    private static func normalizedWhitespace(_ text: Substring) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    /// The range of the first whitespace-flexible occurrence of `needle`
+    /// within `text[searchRange]`. `needle` is split on single spaces, and
+    /// each piece must occur in order, separated by at least one whitespace
+    /// character in `text` — so this matches the guard's exact *expression*
+    /// while tolerating the source's line breaks and indentation. A `||`
+    /// weakening or a dropped term does not match.
+    private static func rangeOfWhitespaceFlexible(
+        _ needle: String,
+        in text: String,
+        range searchRange: Range<String.Index>
+    ) -> Range<String.Index>? {
+        let tokens = needle.split(separator: " ").map(String.init)
+        guard let first = tokens.first else { return nil }
+        var searchStart = searchRange.lowerBound
+        while let candidate = text.range(of: first, range: searchStart..<searchRange.upperBound) {
+            if let end = whitespaceFlexibleMatchEnd(
+                tokens: tokens,
+                in: text,
+                after: candidate,
+                limit: searchRange.upperBound
+            ) {
+                return candidate.lowerBound..<end
+            }
+            searchStart = text.index(after: candidate.lowerBound)
+        }
+        return nil
+    }
+
+    /// The end index of a match whose first token is `firstMatch`, or nil when
+    /// the remaining tokens do not line up token-for-token.
+    private static func whitespaceFlexibleMatchEnd(
+        tokens: [String],
+        in text: String,
+        after firstMatch: Range<String.Index>,
+        limit: String.Index
+    ) -> String.Index? {
+        var upper = firstMatch.upperBound
+        for token in tokens.dropFirst() {
+            var cursor = upper
+            var consumedWhitespace = false
+            while cursor < limit, text[cursor].isWhitespace {
+                consumedWhitespace = true
+                cursor = text.index(after: cursor)
+            }
+            guard consumedWhitespace else { return nil }
+            guard let tokenRange = text.range(of: token, range: cursor..<limit),
+                  tokenRange.lowerBound == cursor else { return nil }
+            upper = tokenRange.upperBound
+        }
+        return upper
+    }
+
     // MARK: - Pins
 
     /// Pin 1 (#290): the `SSHSession.write(_:to:)` loop body must re-check
-    /// `isActive` and the captured `ShellChannelState` identity at its top,
-    /// before the `libssh2_channel_write_ex` call.
+    /// `isActive` and the captured `ShellChannelState` identity as its first
+    /// statement, before the `libssh2_channel_write_ex` call.
     @Test
     func testShellWriteLoopRechecksChannelLivenessAtTheLoopTop() throws {
         let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
@@ -259,7 +326,7 @@ struct SSHShellLoopLivenessPinsTests {
             loopAnchor: "while remaining > 0 {",
             waitToken: "await waitForSocket()",
             reentryTokens: ["libssh2_channel_write_ex("],
-            guardTokens: ["isActive", "shellChannels[shellId] === state"],
+            expectedGuard: Self.shellLoopGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -267,7 +334,7 @@ struct SSHShellLoopLivenessPinsTests {
 
     /// Pin 2 (#290): the `SSHSession.resize(cols:rows:pixelSize:for:)` loop
     /// body must re-check `isActive` and the captured `ShellChannelState`
-    /// identity at its top, before the
+    /// identity as its first statement, before the
     /// `libssh2_channel_request_pty_size_ex` call.
     @Test
     func testShellResizeLoopRechecksChannelLivenessAtTheLoopTop() throws {
@@ -278,13 +345,17 @@ struct SSHShellLoopLivenessPinsTests {
             loopAnchor: "while true {",
             waitToken: "await waitForSocket()",
             reentryTokens: ["libssh2_channel_request_pty_size_ex("],
-            guardTokens: ["isActive", "shellChannels[shellId] === state"],
+            expectedGuard: Self.shellLoopGuard,
             in: text,
             actorSpan: actorSpan
         )
     }
 
     // MARK: - Pin mechanics
+
+    /// The exact predicate every shell retry loop must re-check at its top.
+    private static let shellLoopGuard =
+        "guard isActive, shellChannels[shellId] === state else {"
 
     /// The search span of the `SSHSession` actor: everything after the
     /// `actor SSHSession {` declaration. Eight helper names are duplicated on
@@ -301,9 +372,10 @@ struct SSHShellLoopLivenessPinsTests {
     }
 
     /// Assert that `functionAnchor`'s loop opened by `loopAnchor` contains
-    /// exactly one `waitToken` and one of each `reentryTokens`, and that every
-    /// `guardTokens` occurrence sits inside that loop body **before** every
-    /// re-entry token.
+    /// exactly one `waitToken` and one of each `reentryTokens`, that the loop
+    /// body's first statement is the exact `expectedGuard` (only
+    /// `try Task.checkCancellation()` may precede it), and that the guard sits
+    /// before every re-entry token.
     ///
     /// The function body is resolved after `actor SSHSession {` so the
     /// `SSHClient` facade wrapper of the same name can never satisfy the
@@ -313,7 +385,7 @@ struct SSHShellLoopLivenessPinsTests {
         loopAnchor: String,
         waitToken: String,
         reentryTokens: [String],
-        guardTokens: [String],
+        expectedGuard: String,
         in text: String,
         actorSpan: Range<String.Index>
     ) throws {
@@ -361,10 +433,23 @@ struct SSHShellLoopLivenessPinsTests {
             "the `\(loopAnchor)` loop body must contain the single `\(waitToken)`"
         )
 
+        // T-a: the exact predicate text, not just its individual tokens.
+        // T-b: the guard is the loop body's first statement — only whitespace
+        // and the optional `try Task.checkCancellation()` may precede it. A
+        // guard nested inside an early `if` (or moved below the wait) is red.
+        let guardRange = try #require(
+            rangeOfWhitespaceFlexible(expectedGuard, in: text, range: loopBody),
+            "the `\(loopAnchor)` loop body must contain the exact guard `\(expectedGuard)` at its top"
+        )
+        let prefix = normalizedWhitespace(text[loopBody.lowerBound..<guardRange.lowerBound])
+        #expect(
+            prefix.isEmpty || prefix == "try Task.checkCancellation()",
+            "the guard must be the loop body's first statement after `try Task.checkCancellation()`; found `\(prefix)` between the loop open and the guard in `\(loopAnchor)`"
+        )
+
         // Every re-entry the loop can resume into must sit after the guard:
         // the EAGAIN `wait → continue → top` path and any other path back to
-        // the libssh2 call go through the loop top (issue #288's L1 defect is
-        // the same shape in `listDirectory`).
+        // the libssh2 call go through the loop top.
         for reentry in reentryTokens {
             let inLoop = occurrences(of: reentry, in: text, range: loopBody)
             #expect(
@@ -372,22 +457,10 @@ struct SSHShellLoopLivenessPinsTests {
                 "the `\(loopAnchor)` loop body must contain `\(reentry)` exactly once"
             )
             let reentryRange = try #require(inLoop.first)
-            for guardToken in guardTokens {
-                let guards = occurrences(of: guardToken, in: text, range: loopBody)
-                #expect(
-                    !guards.isEmpty,
-                    "the `\(loopAnchor)` loop body must re-check `\(guardToken)` at its top"
-                )
-                let guardRange = try #require(guards.first)
-                #expect(
-                    isInside(loopBody, guardRange.lowerBound),
-                    "`\(guardToken)` must sit inside the `\(loopAnchor)` loop body"
-                )
-                #expect(
-                    guardRange.lowerBound < reentryRange.lowerBound,
-                    "`\(guardToken)` must precede `\(reentry)` in the `\(loopAnchor)` loop body"
-                )
-            }
+            #expect(
+                guardRange.lowerBound < reentryRange.lowerBound,
+                "the guard must precede `\(reentry)` in the `\(loopAnchor)` loop body"
+            )
         }
     }
 }

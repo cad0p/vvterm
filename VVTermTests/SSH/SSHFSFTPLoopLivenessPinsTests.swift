@@ -27,11 +27,20 @@
 //  wait helper or to a loop body would silently reopen the window, and a
 //  guard deletion is what these pins catch.
 //
+//  A session free frees the `LIBSSH2_SFTP` struct (via the SFTP channel's
+//  close callback), NOT the `LIBSSH2_SFTP_HANDLE`: libssh2 leaves a TODO to
+//  walk `sftp->sftp_handles`, and this app never calls
+//  `libssh2_sftp_shutdown`. So a stale re-entry dereferences the handle's
+//  dangling back-pointer, and the conditional close skips (the handle leak is
+//  bounded and deliberate). See `SSHClient.swift`'s `listDirectory` close.
+//
 //  Placement is the point, so the pins assert it: the guard must sit at the
 //  loop top, before every libssh2 re-entry. `listDirectory` is the reason —
 //  it has a second suspension (`await readlink(at:)`) after which the next
 //  iteration re-enters `libssh2_sftp_readdir_ex`, so a guard placed only
 //  after the EAGAIN wait would miss it. Both re-entry tokens are asserted.
+//  `readFile` additionally has a pre-loop `libssh2_sftp_seek64` (guarded by
+//  the same predicate since the fold round).
 //
 //  Why source pins instead of a behavioural test: this target has no
 //  SSH-server/libssh2 fixture (`LoopbackTLSServerTestSupport` is TLS-only and
@@ -46,21 +55,34 @@
 //  (`TeleportServerIntegrationTests.teleportSFTPRoundTripAndShellResize`) —
 //  not a reproduction of the parked window.
 //
-//  FORMATTING HEURISTIC, NOT A PROOF: a pin is defeated by an alias
-//  (`let s = sftp; s == sftpSession`), a renamed variable, a multi-line call,
-//  a guard hoisted into a helper, or braces inside a string literal in a
-//  walked block. Every pin here is a tripwire for the regression shape, not
-//  proof of the discipline; the same-actor/non-suspending reasoning in the
-//  fix commit is the proof. Comments are stripped before every scan, so a
-//  commented-out guard cannot satisfy an assertion. The per-function
-//  `count == 1` assertions deliberately make a duplicated loop or re-entry
-//  red: a new retry loop in this family must extend the pin on purpose.
+//  WHAT THESE PINS ASSERT (and what they do not see). Each loop pin
+//  whitespace-normalizes the source and matches the guard's EXACT predicate
+//  text, then asserts the guard is the loop body's first statement — only
+//  `try Task.checkCancellation()` may precede it. That closes the two blind
+//  spots of the first pin draft:
+//    - a logic mutation that preserves every individual token (`&&` -> `||`,
+//      `,` -> `||`, a dropped negation) no longer matches the exact predicate
+//      and goes red (the fold-round counterfactual measures this);
+//    - a guard nested inside an early `if`, or moved below the wait or any
+//      other call, is red on the first-statement assertion even though it
+//      still precedes the libssh2 re-entry.
+//  It is still a tripwire, not a proof. What remains invisible: a suspension
+//  added to the wait helper or to the loop body (the exact future change
+//  these pins exist to contain), an unguarded re-entry that uses a token the
+//  pin does not list, and any behavioural change outside the pinned text. A
+//  renamed variable or an aliased handle makes the exact-text match red — a
+//  deliberate tripwire firing that forces the author to re-affirm the pin,
+//  not a silent pass. Comments are stripped before every scan, so a
+//  commented-out guard cannot satisfy an assertion, but a string literal
+//  containing the guard text could. The per-function `count == 1` assertions
+//  deliberately make a duplicated loop or re-entry red: a new retry loop in
+//  this family must extend the pin on purpose.
 //
 //  NOT PINNED HERE: the conditional handle closes (the four
 //  `defer { if isActive, !hasBeenCleaned, sftp == sftpSession { … } }` owners)
 //  and the `ensureSFTPSession()` init-loop top guards are asserted through the
-//  same guard tokens as the loops above; the conditional-close *shape* is
-//  deliberately left to review (the plan's pin count is loops + fast path).
+//  same exact guard text as the loops above; the conditional-close *shape* is
+//  deliberately left to review.
 //
 
 import Foundation
@@ -240,12 +262,6 @@ struct SSHFSFTPLoopLivenessPinsTests {
         return try bracedBlock(openingAt: open, in: text)
     }
 
-    /// Whether `index` falls strictly inside the `block` span (the span
-    /// returned by `bracedBlock` excludes the braces themselves).
-    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
-        block.lowerBound < index && index < block.upperBound
-    }
-
     /// Every occurrence of `needle` in `text` (optionally within `range`),
     /// in source order.
     private static func occurrences(
@@ -261,6 +277,70 @@ struct SSHFSFTPLoopLivenessPinsTests {
             searchStart = found.upperBound
         }
         return result
+    }
+
+    /// Whether `index` falls strictly inside the `block` span (the span
+    /// returned by `bracedBlock` excludes the braces themselves).
+    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
+        block.lowerBound < index && index < block.upperBound
+    }
+
+    /// The whitespace-normalized form of `text`: every run of whitespace
+    /// collapses to a single space (empty for an all-whitespace span).
+    private static func normalizedWhitespace(_ text: Substring) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    /// The range of the first whitespace-flexible occurrence of `needle`
+    /// within `text[searchRange]`. `needle` is split on single spaces, and
+    /// each piece must occur in order, separated by at least one whitespace
+    /// character in `text` — so this matches the guard's exact *expression*
+    /// while tolerating the source's line breaks and indentation. A `||`
+    /// weakening or a dropped term does not match.
+    private static func rangeOfWhitespaceFlexible(
+        _ needle: String,
+        in text: String,
+        range searchRange: Range<String.Index>
+    ) -> Range<String.Index>? {
+        let tokens = needle.split(separator: " ").map(String.init)
+        guard let first = tokens.first else { return nil }
+        var searchStart = searchRange.lowerBound
+        while let candidate = text.range(of: first, range: searchStart..<searchRange.upperBound) {
+            if let end = whitespaceFlexibleMatchEnd(
+                tokens: tokens,
+                in: text,
+                after: candidate,
+                limit: searchRange.upperBound
+            ) {
+                return candidate.lowerBound..<end
+            }
+            searchStart = text.index(after: candidate.lowerBound)
+        }
+        return nil
+    }
+
+    /// The end index of a match whose first token is `firstMatch`, or nil when
+    /// the remaining tokens do not line up token-for-token.
+    private static func whitespaceFlexibleMatchEnd(
+        tokens: [String],
+        in text: String,
+        after firstMatch: Range<String.Index>,
+        limit: String.Index
+    ) -> String.Index? {
+        var upper = firstMatch.upperBound
+        for token in tokens.dropFirst() {
+            var cursor = upper
+            var consumedWhitespace = false
+            while cursor < limit, text[cursor].isWhitespace {
+                consumedWhitespace = true
+                cursor = text.index(after: cursor)
+            }
+            guard consumedWhitespace else { return nil }
+            guard let tokenRange = text.range(of: token, range: cursor..<limit),
+                  tokenRange.lowerBound == cursor else { return nil }
+            upper = tokenRange.upperBound
+        }
+        return upper
     }
 
     // MARK: - Pins: the twelve SFTP retry loops
@@ -279,13 +359,15 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_readdir_ex(", "await readlink(at: entryPath)"],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
     }
 
-    /// Pin 2 (#288): `readFile`.
+    /// Pin 2 (#288): `readFile`. The pre-loop `libssh2_sftp_seek64` re-entry
+    /// must also be preceded by the same exact predicate (F2: it runs after
+    /// the `openFileHandle` await and before the loop-top guard).
     @Test
     func testReadFileLoopRechecksLivenessAtTheLoopTop() throws {
         let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
@@ -296,7 +378,8 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_read("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
+            preLoopReentryTokens: ["libssh2_sftp_seek64(handle, offset)"],
             in: text,
             actorSpan: actorSpan
         )
@@ -313,7 +396,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_read("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -330,7 +413,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_write("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -347,7 +430,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_statvfs("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -364,7 +447,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_stat_ex("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -381,7 +464,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForInnerSocket()",
             reentryTokens: ["libssh2_sftp_init(inner)"],
-            guardTokens: ["isActive", "!hasBeenCleaned", "innerLibssh2Session == inner"],
+            expectedGuard: Self.innerInitGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -398,7 +481,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 1,
             waitToken: "await waitForSocket()",
             reentryTokens: ["libssh2_sftp_init(session)"],
-            guardTokens: ["isActive", "!hasBeenCleaned", "libssh2Session == session"],
+            expectedGuard: Self.outerInitGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -416,7 +499,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_open_ex("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -434,7 +517,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["mutation(sftp, pathPtr, pathLength)"],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -451,7 +534,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_stat_ex("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -469,7 +552,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             loopOccurrence: 0,
             waitToken: "await waitForSFTPSocket()",
             reentryTokens: ["libssh2_sftp_symlink_ex("],
-            guardTokens: Self.fullSFTPGuardTokens,
+            expectedGuard: Self.fullSFTPGuard,
             in: text,
             actorSpan: actorSpan
         )
@@ -478,10 +561,11 @@ struct SSHFSFTPLoopLivenessPinsTests {
     // MARK: - Pin: the cached fast path
 
     /// Pin 13 (#288): the `ensureSFTPSession()` cached fast path must gate the
-    /// `return sftpSession` on session liveness. This is a BEHAVIOUR CHANGE
-    /// (documented in the PR body): in the deferred-teardown window the
-    /// handle is still allocated but the transport is going down, so the call
-    /// now fails fast with `.disconnected` instead of handing it out.
+    /// `return sftpSession` on the exact liveness predicate, as its first
+    /// statement. This is a BEHAVIOUR CHANGE (documented in the PR body): in
+    /// the deferred-teardown window the handle is still allocated but the
+    /// transport is going down, so the call now fails fast with
+    /// `.disconnected` instead of handing it out.
     @Test
     func testEnsureSFTPSessionCachedFastPathIsGatedOnLiveness() throws {
         let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
@@ -529,33 +613,34 @@ struct SSHFSFTPLoopLivenessPinsTests {
             "the first `return sftpSession` must be the gated fast path"
         )
 
-        for token in [
-            "isActive",
-            "!hasBeenCleaned",
-            "sftpSessionIsInner ? innerLibssh2Session : libssh2Session"
-        ] {
-            let hits = Self.occurrences(of: token, in: text, range: fastPathBlock)
-            #expect(
-                !hits.isEmpty,
-                "the cached fast path must gate `return sftpSession` on `\(token)`"
-            )
-            let first = try #require(hits.first)
-            #expect(
-                first.lowerBound < fastPathReturn.lowerBound,
-                "`\(token)` must precede the fast-path `return sftpSession`"
-            )
-        }
+        // T-a: the exact predicate text (not just individual tokens).
+        let guardRange = try #require(
+            Self.rangeOfWhitespaceFlexible(Self.fastPathGuard, in: text, range: fastPathBlock),
+            "the cached fast path must gate `return sftpSession` on `\(Self.fastPathGuard)`"
+        )
+        #expect(
+            guardRange.lowerBound < fastPathReturn.lowerBound,
+            "the fast-path guard must precede `return sftpSession`"
+        )
+        // Placement: the guard is the fast-path block's first statement.
+        let prefix = Self.normalizedWhitespace(text[fastPathBlock.lowerBound..<guardRange.lowerBound])
+        #expect(
+            prefix.isEmpty,
+            "the fast-path guard must be the block's first statement; found `\(prefix)` before it"
+        )
     }
 
     // MARK: - Pin mechanics
 
-    /// The guard tokens every handle-based SFTP loop must re-check.
-    private static let fullSFTPGuardTokens = [
-        "isActive",
-        "!hasBeenCleaned",
-        "sftp == sftpSession",
-        "sftpSessionIsInner ? innerLibssh2Session : libssh2Session"
-    ]
+    /// The exact predicates the SFTP loops must re-check at their tops.
+    private static let fullSFTPGuard =
+        "guard isActive, !hasBeenCleaned, sftp == sftpSession, (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {"
+    private static let innerInitGuard =
+        "guard isActive, !hasBeenCleaned, innerLibssh2Session == inner, innerSocket >= 0, innerAtomicSocket.isUsable else {"
+    private static let outerInitGuard =
+        "guard isActive, !hasBeenCleaned, libssh2Session == session else {"
+    private static let fastPathGuard =
+        "guard isActive, !hasBeenCleaned, (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) != nil else {"
 
     /// The search span of the `SSHSession` actor: everything after the
     /// `actor SSHSession {` declaration. Several helper names are duplicated
@@ -572,15 +657,19 @@ struct SSHFSFTPLoopLivenessPinsTests {
 
     /// Assert that `functionAnchor`'s `loopOccurrence`-th loop opened by
     /// `loopAnchor` contains exactly one `waitToken` and one of each
-    /// `reentryTokens`, and that every `guardTokens` occurrence sits inside
-    /// that loop body **before** every re-entry token.
+    /// `reentryTokens`, that the loop body's first statement is the exact
+    /// `expectedGuard` (only `try Task.checkCancellation()` may precede it),
+    /// and that the guard sits before every re-entry token. Each
+    /// `preLoopReentryTokens` token must additionally be preceded by the same
+    /// guard somewhere in the function body (F2's pre-loop seek).
     private static func assertLoopTopGuard(
         functionAnchor: String,
         loopAnchor: String,
         loopOccurrence: Int,
         waitToken: String,
         reentryTokens: [String],
-        guardTokens: [String],
+        expectedGuard: String,
+        preLoopReentryTokens: [String] = [],
         in text: String,
         actorSpan: Range<String.Index>
     ) throws {
@@ -607,6 +696,26 @@ struct SSHFSFTPLoopLivenessPinsTests {
             )
         }
 
+        // Pre-loop re-entries: the same exact predicate must precede any
+        // libssh2 call that runs before the loop's own top guard.
+        for token in preLoopReentryTokens {
+            let hits = Self.occurrences(of: token, in: text, range: functionBody)
+            #expect(
+                hits.count == 1,
+                "`\(functionAnchor)` must contain exactly one `\(token)`"
+            )
+            let tokenRange = try #require(hits.first)
+            let guardBefore = Self.rangeOfWhitespaceFlexible(
+                expectedGuard,
+                in: text,
+                range: functionBody.lowerBound..<tokenRange.lowerBound
+            )
+            #expect(
+                guardBefore != nil,
+                "`\(token)` must be preceded by the guard `\(expectedGuard)` in `\(functionAnchor)`"
+            )
+        }
+
         // Per-function loop anchor (not a `while true` filter): the loop body
         // is the braced block opened by the anchor.
         let loopAnchors = Self.occurrences(of: loopAnchor, in: text, range: functionBody)
@@ -627,6 +736,20 @@ struct SSHFSFTPLoopLivenessPinsTests {
             "the `\(loopAnchor)` loop body must contain the single `\(waitToken)`"
         )
 
+        // T-a: the exact predicate text, not just its individual tokens.
+        // T-b: the guard is the loop body's first statement — only whitespace
+        // and the optional `try Task.checkCancellation()` may precede it. A
+        // guard nested inside an early `if` (or moved below the wait) is red.
+        let guardRange = try #require(
+            Self.rangeOfWhitespaceFlexible(expectedGuard, in: text, range: loopBody),
+            "the `\(loopAnchor)` loop body must contain the exact guard `\(expectedGuard)` at its top"
+        )
+        let prefix = Self.normalizedWhitespace(text[loopBody.lowerBound..<guardRange.lowerBound])
+        #expect(
+            prefix.isEmpty || prefix == "try Task.checkCancellation()",
+            "the guard must be the loop body's first statement after `try Task.checkCancellation()`; found `\(prefix)` between the loop open and the guard in `\(loopAnchor)`"
+        )
+
         // Every re-entry the loop can resume into must sit after the guard:
         // the EAGAIN `wait -> continue -> top` path and any other path back
         // to the libssh2 call go through the loop top (the `listDirectory`
@@ -638,22 +761,10 @@ struct SSHFSFTPLoopLivenessPinsTests {
                 "the `\(loopAnchor)` loop body must contain `\(reentry)` exactly once"
             )
             let reentryRange = try #require(inLoop.first)
-            for guardToken in guardTokens {
-                let guards = Self.occurrences(of: guardToken, in: text, range: loopBody)
-                #expect(
-                    !guards.isEmpty,
-                    "the `\(loopAnchor)` loop body must re-check `\(guardToken)` at its top"
-                )
-                let guardRange = try #require(guards.first)
-                #expect(
-                    Self.isInside(loopBody, guardRange.lowerBound),
-                    "`\(guardToken)` must sit inside the `\(loopAnchor)` loop body"
-                )
-                #expect(
-                    guardRange.lowerBound < reentryRange.lowerBound,
-                    "`\(guardToken)` must precede `\(reentry)` in the `\(loopAnchor)` loop body"
-                )
-            }
+            #expect(
+                guardRange.lowerBound < reentryRange.lowerBound,
+                "the guard must precede `\(reentry)` in the `\(loopAnchor)` loop body"
+            )
         }
     }
 }
