@@ -2212,6 +2212,17 @@ actor SSHSession {
     /// The IO loop draining inner (target-node) shell channels. `nil` until
     /// `startShellViaTeleportProxy` starts it; cancelled in `cleanup`.
     private var innerIOTask: Task<Void, Never>?
+    /// Session liveness. Set `true` at the end of a successful `connect()`;
+    /// cleared by `invalidateTransport()` and by `cleanup()` before any free.
+    /// The re-entry guards inside this actor use it as the session-free gate.
+    ///
+    /// Those guards lean on the invariant that one `SSHSession` serves
+    /// exactly one `connect()`: `SSHClient.connect()` returns an
+    /// already-connected session instead of reconnecting it (and always
+    /// builds a fresh `pendingSession` otherwise), while `hasBeenCleaned` is
+    /// never reset — a second `connect()` on the same instance would alias
+    /// stale pointers to new allocations. Keep both halves of that invariant
+    /// true.
     private var isActive = false
     private var ioTask: Task<Void, Never>?
     private var execRequests: [UUID: ExecRequest] = [:]
@@ -3277,14 +3288,17 @@ actor SSHSession {
             socket = -1
         }
         connectedPeerAddress = nil
-        // Reachability of the deferred-teardown re-check (#286): `cleanup()`
-        // is connect-failure-only today — its callers run before
+        // Clear the liveness flag before the free: `cleanup()` is
+        // connect-failure-only today (its callers run before
         // `isActive = true`, and `SSHClient` publishes `session` only after
-        // `connect()` returns, so no prepare can be in flight. It does NOT
-        // clear `isActive` (unlike `invalidateTransport()`), so a future
-        // post-connect caller must clear `isActive` — or set a
-        // `teardownRequested` flag the shell/prepare defers re-check — for
-        // the `if !isActive` re-entry to complete the free.
+        // `connect()` returns), so this is a no-op on those paths — but a
+        // future post-connect caller must not leave `isActive == true`
+        // across the free, or the re-entry guards elsewhere in this actor
+        // would pass on a freed session. The guards also lean on one
+        // `SSHSession` per `connect()` (see the `isActive` declaration):
+        // `hasBeenCleaned` is never reset, so a second `connect()` on the
+        // same instance would alias stale pointers to a new allocation.
+        isActive = false
         cleanupLibssh2()
     }
 
@@ -5750,6 +5764,20 @@ actor SSHSession {
         var offset = 0
 
         while remaining > 0 {
+            // Re-check the channel at every loop top: `state` was captured
+            // before the loop, and `invalidateTransport()` empties
+            // `shellChannels` (and the session free reaps the channels) while
+            // this loop is parked in the EAGAIN branch below. `isActive` is
+            // the session-free gate; the dictionary identity check rejects a
+            // stale entry. Today the awaited wait helper is same-actor and
+            // non-suspending, so this is a structural invariant (pinned by
+            // `SSHShellLoopLivenessPinsTests`) rather than a fix for a
+            // reachable use-after-free — but any future suspension added to
+            // the wait or to this loop body would silently reopen that
+            // window, and this guard is what closes it.
+            guard isActive, shellChannels[shellId] === state else {
+                throw SSHError.notConnected
+            }
             // Use _ex variant since macros not available in Swift (stream_id 0 = stdin)
             let written = bytes.withUnsafeMutableBufferPointer { buffer -> Int in
                 guard let ptr = buffer.baseAddress else { return -1 }
@@ -6098,6 +6126,15 @@ actor SSHSession {
         // is nonblocking, so an EAGAIN result has not transmitted the resize.
         while true {
             try Task.checkCancellation()
+            // Same loop-top re-check as `write(_:to:)`: the captured `state`
+            // may be reaped by the session free while this loop is parked in
+            // the EAGAIN branch. The guard throws like `write`'s entry guard
+            // (callers already catch/log it); the silent `return` below stays
+            // for a non-EAGAIN hard error, which is already logged as a
+            // warning and is not a liveness signal.
+            guard isActive, shellChannels[shellId] === state else {
+                throw SSHError.notConnected
+            }
             let result = libssh2_channel_request_pty_size_ex(
                 state.channel,
                 wireCols,
