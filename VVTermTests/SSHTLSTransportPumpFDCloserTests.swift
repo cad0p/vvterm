@@ -93,24 +93,35 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         )
     }
 
-    /// A source-level tripwire: no line in `SSHTLSTransport.swift` may contain
-    /// both `Darwin.close(` and `pumpFD` — every close of the pump end must
-    /// route through `PumpFDCloser`. This is a FORMATTING HEURISTIC, NOT A
-    /// PROOF: it is defeated by an unqualified `close(pumpFD)`, a multi-line
-    /// call, or `let fd = pair.pumpFD; Darwin.close(fd)`. The behavioural test
-    /// above is the real gate; this only catches the obvious reintroduction.
+    /// A source-level tripwire over **both** transports that own a pump end:
+    /// no line in `SSHTLSTransport.swift` or
+    /// `SSHProxySubsystemTransport.swift` may contain both `Darwin.close(` and
+    /// `pumpFD` — every close of the pump end must route through
+    /// `PumpFDCloser`. This is a FORMATTING HEURISTIC, NOT A PROOF: it is
+    /// defeated by an unqualified `close(pumpFD)`, a multi-line call, or
+    /// `let fd = pair.pumpFD; Darwin.close(fd)`. The behavioural tests above
+    /// are the real gate; this only catches the obvious reintroduction. The
+    /// proxy twin is covered because its `runPump` owns a release too
+    /// (`closer.closeOnce(pair.pumpFD)` after the join), so a TLS-only filter
+    /// missed exactly the regression class this pin exists for.
     func testPumpEndIsClosedOnlyThroughTheSingleOwnerGuard() throws {
-        let sourceURL = repositoryRoot()
-            .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/SSHTLSTransport.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        let rawPumpCloses = source
-            .components(separatedBy: .newlines)
-            .filter { $0.contains("Darwin.close(") && $0.contains("pumpFD") }
-        XCTAssertTrue(
-            rawPumpCloses.isEmpty,
-            "the pump fd must only be closed by PumpFDCloser; found: \(rawPumpCloses)"
-        )
+        let relativePaths = [
+            "VVTerm/Features/Teleport/Infrastructure/SSHTLSTransport.swift",
+            "VVTerm/Features/Teleport/Infrastructure/SSHProxySubsystemTransport.swift",
+        ]
+        for relativePath in relativePaths {
+            let source = try String(
+                contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            let rawPumpCloses = source
+                .components(separatedBy: .newlines)
+                .filter { $0.contains("Darwin.close(") && $0.contains("pumpFD") }
+            XCTAssertTrue(
+                rawPumpCloses.isEmpty,
+                "\(relativePath): the pump fd must only be closed by PumpFDCloser; found: \(rawPumpCloses)"
+            )
+        }
     }
 
     /// `PumpFDCloser.closeOnce` shuts the descriptor down before closing it, so
@@ -236,17 +247,22 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     func testShutdownOnceAfterCloseOnceDoesNotTouchAReusedDescriptor() throws {
         continueAfterFailure = false
         let pair = try SSHTLSTransport.makeSocketPair()
+        // Registered at creation: a throw from the second `makeSocketPair`
+        // must not leak this pair (the `F_GETFD` guard skips a number the
+        // closer freed in the meantime).
+        addDescriptorTeardown([pair.libssh2FD, pair.pumpFD])
 
         // The unrelated descriptor the freed number is reused for is a real
         // socket, so a stale wake is observable on the wire. It comes from
         // `makeSocketPair` so `SO_NOSIGPIPE` is set (the write below must not
         // raise SIGPIPE even under a mutation).
         let unrelated = try SSHTLSTransport.makeSocketPair()
-        // `pair.pumpFD` is listed up front: by teardown time the closer has
-        // freed it and `dup2` has reused it for `unrelated.pumpFD`, so both
-        // live descriptors must be closed; a number the closer freed without
-        // reuse fails the `F_GETFD` guard and is skipped.
-        addDescriptorTeardown([pair.libssh2FD, unrelated.libssh2FD, unrelated.pumpFD, pair.pumpFD])
+        // `pair.pumpFD` stays covered by the first teardown: by then the
+        // closer has freed it and `dup2` has reused it for `unrelated.pumpFD`,
+        // so that guard closes whichever number currently owns it. This block
+        // runs first (teardowns are LIFO) and the guards make a double-close
+        // of a number impossible.
+        addDescriptorTeardown([unrelated.libssh2FD, unrelated.pumpFD])
 
         let closer = PumpFDCloser()
         closer.closeOnce(pair.pumpFD)
@@ -304,7 +320,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         // mutation cannot leave a task spinning through the suite, and the
         // descriptors cannot leak.
         addTeardownBlock {
-            Darwin.close(pair.libssh2FD)
+            if Darwin.fcntl(pair.libssh2FD, F_GETFD) != -1 { Darwin.close(pair.libssh2FD) }
             _ = await writeTask.value
             if Darwin.fcntl(pair.pumpFD, F_GETFD) != -1 { Darwin.close(pair.pumpFD) }
         }
@@ -495,20 +511,28 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     /// Lexical pins for the shutdown/release split. These are **heuristics,
     /// not proofs**: they slice the source on exact declaration text, so a
     /// rename or a reshuffle fails loudly instead of silently disarming the
-    /// behavioural tests above. The behavioural counterexamples they stand in
-    /// for cannot be forced deterministically (a preemption window between a
-    /// state check and a syscall is exactly what the in-lock design removes).
+    /// behavioural tests above. Comment tokens are stripped before every
+    /// token/containment scan (`strippingComments`), so a commented-out call
+    /// cannot satisfy a pin; a token inside a string literal still can. The
+    /// behavioural counterexamples they stand in for cannot be forced
+    /// deterministically (a preemption window between a state check and a
+    /// syscall is exactly what the in-lock design removes).
     func testPumpSourcePinsHoldAfterTheSplit() throws {
         let sourceURL = repositoryRoot()
             .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/SSHTLSTransport.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let lines = source.components(separatedBy: .newlines)
+        // Line-level token scans run on the comment-stripped copy so a
+        // commented-out call cannot satisfy them; line numbers (and therefore
+        // `enclosingFunctionName` lookups) are unchanged because stripping
+        // preserves the newlines. The positional slices below are stripped
+        // after extraction, on the same principle.
+        let codeLines = Self.strippingComments(source).components(separatedBy: .newlines)
 
         // (a) Every closeOnce( call site lives in an allowlisted function.
         // `close()` must never release the number itself — only wake it. The
         // closer is declared in the proxy transport file, so this file has
         // exactly the two call sites (connect-failure + runPump).
-        let closeOnceLines = lines.enumerated().filter { _, line in
+        let closeOnceLines = codeLines.enumerated().filter { _, line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.hasPrefix("//") else { return false }
             return line.contains("closeOnce(")
@@ -521,7 +545,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         var enclosingFunctions: [String] = []
         for (index, line) in closeOnceLines where !line.contains("func closeOnce(") {
             let enclosing = try XCTUnwrap(
-                Self.enclosingFunctionName(before: index, in: lines),
+                Self.enclosingFunctionName(before: index, in: codeLines),
                 "no enclosing function for the closeOnce( call on line \(index + 1)"
             )
             enclosingFunctions.append(enclosing)
@@ -539,7 +563,8 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             "close() slice end not found"
         )
         XCTAssertFalse(
-            closeTail[closeTail.startIndex..<closeEnd.lowerBound].contains("closeOnce("),
+            Self.strippingComments(String(closeTail[closeTail.startIndex..<closeEnd.lowerBound]))
+                .contains("closeOnce("),
             "close() must only wake the pump end; the release belongs to runPump after the join"
         )
 
@@ -554,13 +579,13 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             runPumpTail.range(of: "\n    nonisolated private static func pumpNWToFD("),
             "runPump body end not found"
         )
-        let runPumpBody = runPumpTail[runPumpTail.startIndex..<runPumpEnd.lowerBound]
+        let runPumpCode = Self.strippingComments(String(runPumpTail[runPumpTail.startIndex..<runPumpEnd.lowerBound]))
         let joinAnchor = try XCTUnwrap(
-            runPumpBody.range(of: "await group.waitForAll()"),
+            runPumpCode.range(of: "await group.waitForAll()"),
             "runPump must join both loops before releasing the descriptor"
         )
-        let beforeJoin = runPumpBody[runPumpBody.startIndex..<joinAnchor.lowerBound]
-        let afterJoin = runPumpBody[joinAnchor.upperBound...]
+        let beforeJoin = runPumpCode[runPumpCode.startIndex..<joinAnchor.lowerBound]
+        let afterJoin = runPumpCode[joinAnchor.upperBound...]
         XCTAssertTrue(beforeJoin.contains("shutdownOnce("), "the pre-join wake must stay in runPump")
         XCTAssertFalse(beforeJoin.contains("closeOnce("), "closeOnce( must not run before the join")
         XCTAssertTrue(afterJoin.contains("closeOnce("), "runPump must release the descriptor after the join")
@@ -574,13 +599,13 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             pumpStartTail.range(of: "// Wait for the connection to be ready"),
             "pump-start closure slice end not found"
         )
-        let pumpStartClosure = pumpStartTail[pumpStartTail.startIndex..<pumpStartEnd.lowerBound]
+        let pumpStartCode = Self.strippingComments(String(pumpStartTail[pumpStartTail.startIndex..<pumpStartEnd.lowerBound]))
         XCTAssertFalse(
-            pumpStartClosure.contains("weak self"),
+            pumpStartCode.contains("weak self"),
             "the pump body must not capture the actor weakly"
         )
         XCTAssertFalse(
-            pumpStartClosure.contains("guard let self"),
+            pumpStartCode.contains("guard let self"),
             "the pump body must not be able to skip the release when the actor is gone"
         )
 
@@ -591,12 +616,12 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         // this path owning the pump task, wakes before the join, and runs
         // after it — all inside the gate's braces. Deleting `await pump.value`
         // from the catch used to leave the whole suite green, so this slice is
-        // the only pin for it. Same formatting-heuristic caveat as the pins
-        // above, and the containment asserts share it: `bracedBlock` is a
-        // character-level depth walk that does not strip string literals or
-        // comments, so a brace in either inside this slice would unbalance the
-        // gate span — the `XCTUnwrap` anchors keep that a loud failure rather
-        // than a silent pass.
+        // the only pin for it. The slice is comment-stripped before the scans,
+        // so a commented-out token cannot satisfy them; `bracedBlock` remains a
+        // character-level depth walk that does not strip string literals, so a
+        // brace inside a literal in this slice would unbalance the gate span —
+        // the `XCTUnwrap` anchors keep that a loud failure rather than a silent
+        // pass.
         let connectCatchStart = try XCTUnwrap(
             source.range(of: "let pump = pumpTask"),
             "the connect-failure catch must capture the pump task first"
@@ -606,7 +631,9 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             connectCatchTail.range(of: "throw TeleportPackageError.connectionFailed"),
             "the connect-failure catch slice end not found"
         )
-        let connectCatch = connectCatchTail[connectCatchTail.startIndex..<connectCatchEnd.lowerBound]
+        let connectCatch = Self.strippingComments(
+            String(connectCatchTail[connectCatchTail.startIndex..<connectCatchEnd.lowerBound])
+        )
         let gateAnchor = try XCTUnwrap(
             connectCatch.range(of: "if let pump"),
             "the connect-failure release must be gated on owning the pump task"
@@ -661,15 +688,20 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     /// Host-only pins for the proxy twin (`SSHProxySubsystemTransport.swift`):
     /// the package has no equivalent file, and its pump wakes differently —
     /// no `NWConnection`, so `runPump` flips the channel `PumpCancelToken`
-    /// before the join. Lexical heuristics, same caveats as the TLS pins above.
+    /// before the join. Lexical heuristics, same caveats as the TLS pins above
+    /// (comment tokens are stripped before the scans; string-literal tokens
+    /// can still satisfy them).
     func testProxyPumpSourcePinsHoldAfterTheSplit() throws {
         let source = try proxySource()
-        let lines = source.components(separatedBy: .newlines)
+        // Line-level scans run on the comment-stripped copy, as in the TLS
+        // pin: a commented-out token cannot satisfy them and the line numbers
+        // are unchanged.
+        let codeLines = Self.strippingComments(source).components(separatedBy: .newlines)
 
         // The closer stays declared exactly once, in this file, shared by both
         // pumps; the TLS transport must not grow a second declaration.
         XCTAssertEqual(
-            lines.filter { $0.contains("class PumpFDCloser") }.count,
+            codeLines.filter { $0.contains("class PumpFDCloser") }.count,
             1,
             "PumpFDCloser must be declared exactly once, in the proxy transport file"
         )
@@ -679,13 +711,13 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertFalse(
-            tlsSource.contains("class PumpFDCloser"),
+            Self.strippingComments(tlsSource).contains("class PumpFDCloser"),
             "PumpFDCloser must not be declared a second time in SSHTLSTransport.swift"
         )
 
         // (a) Every closeOnce( call site lives in runPump — the proxy has no
         // handshake-failure path. `cancelPumpSync()` must only wake.
-        let closeOnceLines = lines.enumerated().filter { _, line in
+        let closeOnceLines = codeLines.enumerated().filter { _, line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.hasPrefix("//") else { return false }
             return line.contains("closeOnce(")
@@ -698,7 +730,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         var enclosingFunctions: [String] = []
         for (index, line) in closeOnceLines where !line.contains("func closeOnce(") {
             let enclosing = try XCTUnwrap(
-                Self.enclosingFunctionName(before: index, in: lines),
+                Self.enclosingFunctionName(before: index, in: codeLines),
                 "no enclosing function for the closeOnce( call on line \(index + 1)"
             )
             enclosingFunctions.append(enclosing)
@@ -718,13 +750,13 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             cancelTail.range(of: "\n    // MARK: - Pump internals"),
             "cancelPumpSync() slice end not found"
         )
-        let cancelBody = cancelTail[cancelTail.startIndex..<cancelEnd.lowerBound]
+        let cancelCode = Self.strippingComments(String(cancelTail[cancelTail.startIndex..<cancelEnd.lowerBound]))
         XCTAssertFalse(
-            cancelBody.contains("closeOnce("),
+            cancelCode.contains("closeOnce("),
             "cancelPumpSync() must only wake the pump end; the release belongs to runPump after the join"
         )
         XCTAssertTrue(
-            cancelBody.contains("shutdownOnce("),
+            cancelCode.contains("shutdownOnce("),
             "cancelPumpSync() must wake the pump end so the pump loops can exit"
         )
 
@@ -739,13 +771,13 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             runPumpTail.range(of: "\n    nonisolated private static func pumpChannelToFD("),
             "runPump body end not found"
         )
-        let runPumpBody = runPumpTail[runPumpTail.startIndex..<runPumpEnd.lowerBound]
+        let runPumpCode = Self.strippingComments(String(runPumpTail[runPumpTail.startIndex..<runPumpEnd.lowerBound]))
         let joinAnchor = try XCTUnwrap(
-            runPumpBody.range(of: "await group.waitForAll()"),
+            runPumpCode.range(of: "await group.waitForAll()"),
             "runPump must join both loops before releasing the descriptor"
         )
-        let beforeJoin = runPumpBody[runPumpBody.startIndex..<joinAnchor.lowerBound]
-        let afterJoin = runPumpBody[joinAnchor.upperBound...]
+        let beforeJoin = runPumpCode[runPumpCode.startIndex..<joinAnchor.lowerBound]
+        let afterJoin = runPumpCode[joinAnchor.upperBound...]
         XCTAssertTrue(beforeJoin.contains("shutdownOnce("), "the pre-join wake must stay in runPump")
         XCTAssertTrue(
             beforeJoin.contains("cancelToken?.cancel()"),
@@ -763,13 +795,13 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             pumpStartTail.range(of: "pumpTask = task"),
             "pump-start closure slice end not found"
         )
-        let pumpStartClosure = pumpStartTail[pumpStartTail.startIndex..<pumpStartEnd.lowerBound]
+        let pumpStartCode = Self.strippingComments(String(pumpStartTail[pumpStartTail.startIndex..<pumpStartEnd.lowerBound]))
         XCTAssertFalse(
-            pumpStartClosure.contains("weak self"),
+            pumpStartCode.contains("weak self"),
             "the pump body must not capture the actor weakly"
         )
         XCTAssertFalse(
-            pumpStartClosure.contains("guard let self"),
+            pumpStartCode.contains("guard let self"),
             "the pump body must not be able to skip the release when the actor is gone"
         )
 
@@ -859,17 +891,118 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         return tail[tail.startIndex..<end.lowerBound]
     }
 
+    /// A comment-stripped copy of `source` for the token scans: characters
+    /// inside `//` line comments and nested `/* … */` block comments become
+    /// spaces; newlines are preserved, so line numbers and slice anchors still
+    /// resolve. String contents are copied verbatim (so a `//` inside a
+    /// literal is not read as a comment); the scanner covers `"…"` (with `\`
+    /// escapes) and `"""…"""`, not raw strings (``#"…"#``) or comments
+    /// inside an interpolation. FORMATTING HEURISTIC class, like the other
+    /// pins: a token inside a string literal can still satisfy a scan.
+    private static func strippingComments(_ source: String) -> String {
+        let characters = Array(source)
+        var result = ""
+        result.reserveCapacity(characters.count)
+        var index = 0
+        var blockCommentDepth = 0
+        var inLineComment = false
+        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
+        var escaped = false
+        while index < characters.count {
+            let character = characters[index]
+            if inLineComment {
+                if character == "\n" {
+                    inLineComment = false
+                    result.append("\n")
+                } else {
+                    result.append(" ")
+                }
+                index += 1
+                continue
+            }
+            if blockCommentDepth > 0 {
+                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
+                    blockCommentDepth += 1
+                    result.append("  ")
+                    index += 2
+                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
+                    blockCommentDepth -= 1
+                    result.append("  ")
+                    index += 2
+                } else {
+                    result.append(character == "\n" ? "\n" : " ")
+                    index += 1
+                }
+                continue
+            }
+            if let delimiter = stringDelimiter {
+                result.append(character)
+                index += 1
+                if escaped {
+                    escaped = false
+                    continue
+                }
+                if character == "\\" {
+                    escaped = true
+                    continue
+                }
+                if delimiter == 1, character == "\"" {
+                    stringDelimiter = nil
+                    continue
+                }
+                if delimiter == 3,
+                   character == "\"",
+                   index + 1 < characters.count,
+                   characters[index] == "\"",
+                   characters[index + 1] == "\"" {
+                    result.append("\"\"")
+                    index += 2
+                    stringDelimiter = nil
+                }
+                continue
+            }
+            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
+                inLineComment = true
+                result.append("  ")
+                index += 2
+                continue
+            }
+            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
+                blockCommentDepth = 1
+                result.append("  ")
+                index += 2
+                continue
+            }
+            if character == "\"" {
+                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
+                    stringDelimiter = 3
+                    result.append("\"\"\"")
+                    index += 3
+                } else {
+                    stringDelimiter = 1
+                    result.append("\"")
+                    index += 1
+                }
+                continue
+            }
+            result.append(character)
+            index += 1
+        }
+        return result
+    }
+
     /// The body span `{ … }` of the first brace-delimited block after `anchor`,
     /// found by a character-level depth walk from its opening brace.
     ///
     /// Same FORMATTING HEURISTIC class as the other pins: the walk does not
-    /// strip string literals or comments, so a brace inside either inside the
-    /// slice would unbalance the match. A mis-slice cannot pass vacuously: an
-    /// absent or unbalanced block fails the `XCTUnwrap` here, and the
-    /// containment asserts it feeds fail when a pinned token sits outside.
+    /// strip string literals, so a brace inside a literal in the slice would
+    /// unbalance the match (callers pass a comment-stripped slice, so a brace
+    /// in a comment cannot). A mis-slice cannot pass vacuously: an absent or
+    /// unbalanced block fails the `XCTUnwrap` here, and the containment
+    /// asserts it feeds fail when a pinned token sits outside.
     private static func bracedBlock(
         after anchor: Range<String.Index>,
-        in text: Substring
+        in text: String
     ) throws -> Range<String.Index> {
         let open = try XCTUnwrap(
             text[anchor.upperBound...].firstIndex(of: "{"),
@@ -899,9 +1032,10 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
 
     /// Assert `syscall` occurs only inside the `state.withLock { … }` body of
     /// `body` — the lexical stand-in for the preemption window the in-lock
-    /// syscalls close.
+    /// syscalls close. The body is comment-stripped first, so a commented-out
+    /// syscall cannot satisfy (or trip) the assertion.
     private static func assertSyscallInsideLock(body: Substring, syscall: String, label: String) throws {
-        let text = String(body)
+        let text = Self.strippingComments(String(body))
         let lock = try XCTUnwrap(text.range(of: "state.withLock {"), "\(label): no state.withLock found")
 
         var depth = 0
