@@ -119,6 +119,10 @@ final class TeleportRedactionTests: XCTestCase {
     /// repo-relative path so a failure names the exact site. Walking the tree
     /// — rather than a fixed file list — means a newly added log site inside
     /// it trips the caller's count assertion instead of passing unnoticed.
+    /// Every line of every Swift file under `relativeDirectory` when
+    /// `needles` is empty (no marker filter); otherwise only the lines
+    /// containing at least one needle. The unfiltered form is for class-level
+    /// scans that must not be hidden by an unlisted label spelling.
     private func sourceLines(
         under relativeDirectory: String,
         matching needles: [String]
@@ -139,7 +143,7 @@ final class TeleportRedactionTests: XCTestCase {
             matches.append(
                 contentsOf: source
                     .components(separatedBy: "\n")
-                    .filter { line in needles.contains(where: { line.contains($0) }) }
+                    .filter { line in needles.isEmpty || needles.contains(where: { line.contains($0) }) }
                     .map { "\(relativePath): \($0)" }
             )
         }
@@ -836,14 +840,21 @@ final class TeleportRedactionTests: XCTestCase {
     /// (`clusterId.uuidString`, `Self.alpnProtocol`, the localized error
     /// description) cannot hide a public FQDN interpolation.
     ///
-    /// Scope, stated honestly: this is a formatting heuristic. A multi-line
-    /// interpolation, an alias (`let h = cluster.host`), a renamed variable,
-    /// or a `\(...)` form outside these patterns escapes it. The walk covers
-    /// `VVTerm/Features/Teleport` and `VVTerm/Core/Teleport`; the comparable
-    /// Teleport dial sites in `VVTerm/Core/SSH` (`dialHost`, `nodeName`) were
-    /// audited by PR #274 and already hash the host, so they are outside this
-    /// walk. It is a tripwire, not a proof; the behavioural tests remain the
-    /// gate.
+    /// Scope, stated honestly: this is a formatting heuristic over the marker
+    /// list and the pinned expressions — an alias (`let h = cluster.host`), an
+    /// unlisted label spelling, a multi-line interpolation, or a reformatted
+    /// interpolation escapes it. `testNoFQDNTokenExpressionIsLoggedPublicly`
+    /// closes the "new expression name" half of that gap; the name-free
+    /// residue (`\(destination, privacy: .public)`) still escapes both.
+    ///
+    /// The walk covers `VVTerm/Features/Teleport` and `VVTerm/Core/Teleport`.
+    /// In `VVTerm/Core/SSH` the comparable sites are handled: `dialHost` and
+    /// `nodeName` are hashed (`SSHClient.swift:2457/2520/2615/4208/4221`), the
+    /// `teleportProxySubsystem` startup-trace detail is a constant, and `peer=`
+    /// stays `.public` by decision — it is a numeric socket address, not the
+    /// configured host (the diagnostics redactor masks IPv4 literals only, so
+    /// an embedded IPv6 literal would survive; tracked separately). It is a
+    /// tripwire, not a proof; the behavioural tests remain the gate.
     func testFQDNClassIsNeverLoggedPublicly() throws {
         // The marker list is the tripwire's reach: a value logged with a
         // spelling not listed here escapes the walk entirely (the package
@@ -915,6 +926,61 @@ final class TeleportRedactionTests: XCTestCase {
                 "an FQDN-class interpolation is logged `privacy: .public`: \(publicMatches)"
             )
         }
+    }
+
+    /// Class-level complement to the per-expression pins above: any explicitly
+    /// `.public` interpolation whose expression *text* names an FQDN-ish value
+    /// fails even when the expression is not one of the pinned names. That is
+    /// the "new unlisted spelling" half of the gap (security-lens M1:
+    /// `host=\(proxyHost, privacy: .public)` leaves every count unchanged and
+    /// no pinned-name regex matches it).
+    ///
+    /// Exclusions are value-shaped, not name-shaped:
+    ///   - `Self.`/type-qualified constants — `Self.alpnProtocol` is the
+    ///     literal `teleport-proxy-ssh` protocol string, not a host;
+    ///   - counts (`.count`) and UUID renderings (`.uuidString`) — opaque.
+    ///
+    /// Reach limit, stated honestly: a value logged under a name carrying no
+    /// FQDN-ish token (`\(destination, privacy: .public)`) escapes this scan
+    /// exactly as it escapes the pins; the token list is the scan's reach.
+    func testNoFQDNTokenExpressionIsLoggedPublicly() throws {
+        let tokenPattern = try NSRegularExpression(
+            pattern: #"(?i)(host|nodename|rpid|alpn|clustername|fqdn|proxyhost|servername)"#
+        )
+        let interpolation = try NSRegularExpression(
+            pattern: #"\(([^()]*),\s*privacy:\s*\.public\)"#
+        )
+        // Every line of both roots — deliberately NOT marker-filtered: an
+        // unlisted label spelling must not hide the line from this scan.
+        let lines = try sourceLines(under: "VVTerm/Features/Teleport", matching: [])
+            + sourceLines(under: "VVTerm/Core/Teleport", matching: [])
+
+        var offenders: [String] = []
+        for line in lines {
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            for match in interpolation.matches(in: line, range: range) {
+                guard let expressionRange = Range(match.range(at: 1), in: line) else { continue }
+                let expression = String(line[expressionRange]).trimmingCharacters(in: .whitespaces)
+                // Structural exclusions, checked before the token scan so a
+                // constant or an opaque identifier cannot be mistaken for a
+                // host by a name coincidence.
+                guard !expression.hasPrefix("Self."),
+                      !expression.hasSuffix(".count"),
+                      !expression.hasSuffix(".uuidString")
+                else { continue }
+                let expressionRangeInExpression = NSRange(
+                    expression.startIndex..<expression.endIndex,
+                    in: expression
+                )
+                if tokenPattern.firstMatch(in: expression, range: expressionRangeInExpression) != nil {
+                    offenders.append(line)
+                }
+            }
+        }
+        XCTAssertTrue(
+            offenders.isEmpty,
+            "an FQDN-ish expression is logged `privacy: .public`: \(offenders)"
+        )
     }
 
     // MARK: - TeleportRegistrationCoordinator

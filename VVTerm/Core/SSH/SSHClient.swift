@@ -4116,7 +4116,14 @@ actor SSHSession {
         // Payload-free like the failure twin: the subsystem name embeds the
         // node name, and the OSLog/ring merge feeds the shareable report.
         logger.info("teleport_proxy_subsystem_ok")
-        if let proxyToken { startupTrace?.end(proxyToken, detail: nodeName) }
+        // The trace detail is mirrored into the always-exported diagnostics
+        // ring (`SSHStartupDiagnostics.record` -> `logger.diagInfo` ->
+        // `DiagnosticsRecorder`), and `nodeName` is
+        // `config.teleportNodeName ?? config.host` — environment metadata, and
+        // the proxy FQDN on the fallback. Constant, like the sibling
+        // `detail: "code_\(subsystemResult)"` on the failure path; the node is
+        // hashed where triage needs it (`teleport_inner_handshake_*`).
+        if let proxyToken { startupTrace?.end(proxyToken, detail: "node") }
 
         // 3. Bridge the outer channel to a socketpair for the inner session.
         //    The pump starts before start() returns the FD, so the target
