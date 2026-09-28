@@ -615,6 +615,15 @@ actor SSHTLSTransport {
 /// The lock serializes the state; the continuation and the error are stored
 /// and resumed outside it, so `@unchecked Sendable` is sound.
 private final class ReadyWaiter: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change. This one
+    // matters: `NWConnection` releases the `stateUpdateHandler` closure
+    // (which captures this waiter) on its own queue, so the final release is
+    // never task-scoped (the #206/#216/#280 class).
+    nonisolated deinit {}
+
     private enum State {
         case pending
         case waiting(CheckedContinuation<Void, Error>)
