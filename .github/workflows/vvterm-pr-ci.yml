@@ -464,13 +464,21 @@ jobs:
           # 1.33 max/min (952/1210/910/999s, run 36329610539, tracked on #248)
           # returns to ≈1.27 once the appended class is accounted for; the bin
           # sums are refreshed at the next ≥3-clean-run re-measurement. #272's
-          # swipe-dismissal test is appended to shard-2 for the same reason (a
-          # mock-driven test with one ~30s mock delay). The 3
-          # TeleportPhaseTransitionUITests are deliberately NOT added yet: they
-          # were re-run locally for #272 and 2 of 3 are red/stale (the amber
-          # Setup-pill wait and the bootstrap-header wait lose their race with
-          # the immediate mock success), so the class still has no CI gate
-          # pending a separate fix.
+          # swipe-dismissal test is appended to shard-2 for the same reason:
+          # measured 51.4/50.8/54.8s across three local runs (mock-driven, one
+          # 30s mock delay per phase, 3 phases). The 3
+          # TeleportPhaseTransitionUITests are deliberately NOT added yet, for
+          # two independent reasons measured on 2026-09-28: (1)
+          # testPhase1BootstrapSuccess_transitionsToRegistrationSheet fails
+          # deterministically at :113 because it queries
+          # `app.staticTexts["vvterm.serverRow.readinessPill.setup"]` while
+          # `PillBadge` sets `.accessibilityElement(children: .ignore)` (the
+          # element is `Other`, never `StaticText`) — the same query migration
+          # 85421b53 applied to the other suites but not this class; and (2)
+          # testPhase1BootstrapSuccess_doesNotReRunBootstrap races the
+          # harness's immediate-success mock at :158 (the bootstrap header's
+          # visible window can close before the first AX poll). The class still
+          # has no CI gate; the follow-up is tracked on #277.
           - name: shard-0
             needs-fixture: true
             only-testing: "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPosition,VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesSession,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"

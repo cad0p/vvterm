@@ -56,13 +56,20 @@ struct TeleportIOSServerListUITestHarness: View {
 
     /// The parent-owned coordinator for the #272 swipe-dismissal harness mode:
     /// `.suspended` fails the first `begin` with a retryable error (so the
-    /// Reopen Safari button appears), and the 30s delay keeps the retry's
-    /// `begin` in flight while the test swipes the sheet down.
+    /// Reopen Safari button appears). The 30s delay keeps each of the mock's
+    /// three sleeps long, so the retry's `begin` is still non-terminal when the
+    /// test swipes the sheet down. Note the mock's `try? await Task.sleep`
+    /// swallows cancellation, so after the swipe it fast-forwards to a terminal
+    /// state; the test asserts the dismissal's `cancel` counter, not the mock's
+    /// post-dismissal state.
     @StateObject private var dismissalCoordinator: MockTeleportBootstrapCoordinator
 
     @MainActor
     init() {
         _keyRing = StateObject(wrappedValue: MockTeleportKeyRing())
+        // The coordinator is created unconditionally (a `@StateObject` cannot be
+        // created lazily per mode), but it is only used by `.swipeDismiss`: the
+        // sheet kind and the counters label are both gated on that readiness.
         _dismissalCoordinator = StateObject(
             wrappedValue: MockTeleportBootstrapCoordinator(scenario: .suspended, delay: 30)
         )

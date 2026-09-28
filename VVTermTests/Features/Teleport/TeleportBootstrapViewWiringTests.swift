@@ -619,12 +619,18 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         XCTAssertEqual(http.startedCount, 1, "dismissal must not start another POST")
 
         // Release the gated POST with a success: the dismissal's generation
-        // bump must drop the continuation before any persistence.
+        // bump must drop the continuation before any persistence. Absence needs
+        // a bound, so poll for the stale write itself (the failure signal): the
+        // release → `handlePostSuccess` → store path has no I/O suspension, so a
+        // stale write that survives the drop lands within the window. (The old
+        // form pumped a fixed settle and then asserted 0, which passed whether
+        // or not the continuation had been processed.)
         await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
-        // There is no handle to the view's `.task`, so give the resumed stale
-        // continuation a bounded settle to be processed (and dropped) before
-        // asserting that it persisted nothing.
-        settle()
+        let staleWriteLanded = waitUntil(timeout: 1) { store.storedCertCount > 0 }
+        XCTAssertFalse(
+            staleWriteLanded,
+            "a stale success must not store the bootstrap cert (storedCertCount=\(store.storedCertCount))"
+        )
 
         XCTAssertEqual(coordinator.state, .failed(.userCancelled))
         XCTAssertNil(coordinator.lastBootstrapResult)

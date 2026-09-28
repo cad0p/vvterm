@@ -20,7 +20,7 @@
 //
 //  Launch-arg contract (parsed by TeleportIOSServerListUITestHarness+iOS.swift):
 //    --vvterm-ui-test-teleport-ios-serverlist          enables the harness
-//    --vvterm-ui-test-teleport-readiness=ready|needsLogin|needsRegistration|needsBootstrap|crossDevice
+//    --vvterm-ui-test-teleport-readiness=ready|needsLogin|needsRegistration|needsBootstrap|crossDevice|swipeDismiss
 //
 //  See:
 //    - VVTerm/App/iOS/TeleportIOSServerListUITestHarness+iOS.swift (the harness)
@@ -298,16 +298,21 @@ final class TeleportReadinessIOSUITests: XCTestCase {
             "the dismissal must tear the flow down (coordinator.cancel); counters=\(counters.label)"
         )
 
-        // Bounded settle: no POST may start after the sheet is gone. (The mock
-        // does not stop its already-running sleep, but it must never begin
-        // again post-dismissal.)
+        // Bounded settle, then re-read the counters. This is a can't-fail
+        // guard by construction — nothing in the mock can re-enter `begin`
+        // after the swipe, and the mock's `try? await Task.sleep` swallows
+        // cancellation, so it fast-forwards to a terminal state rather than
+        // stopping. Its value is diagnostic: a counters line captured after
+        // the settle shows whether the dismissal raced anything. The
+        // discriminating assertion is `cancel=1` above, which only the
+        // production `.onDisappear` can produce.
         let settleDeadline = Date().addingTimeInterval(2)
         while Date() < settleDeadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         XCTAssertTrue(
             counters.label.contains("begin=2"),
-            "no POST may start after the dismissal; counters=\(counters.label)"
+            "the mock must not re-enter begin after the dismissal; counters=\(counters.label)"
         )
         XCTAssertTrue(
             counters.label.contains("cancel=1"),
