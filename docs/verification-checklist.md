@@ -37,6 +37,7 @@ Documentation-only changes can skip this.
 ## 3. Run the narrowest reliable tests
 
 - Unit: `xcodebuild test -scheme VVTermUnitTests -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" -only-testing:VVTermTests/<Suite>`
+- Teleport pump-fd lifecycle (issue #237): `SSHTLSTransportPumpFDCloserTests` (XCTest) — **11 cases** after the shutdown/release split (3 before): the closer state machine, the cancellation-aware write helper, the join-before-release ordering, the connect-failure gate, and the source pins for both `SSHTLSTransport.swift` and `SSHProxySubsystemTransport.swift`. Run it with `-only-testing:VVTermTests/SSHTLSTransportPumpFDCloserTests`; `SSHTLSTransportTests` and `SSHProxySubsystemTransportTests` exercise the same pump against the loopback fixture.
 - UI (`VVTermUITests`): required when keyboard/terminal input, focus, navigation, sheets, accessibility, or platform integration changed. Run the affected class locally; CI runs the shards.
 - Integration/E2E: when behavior crosses SSH/session/terminal boundaries, dispatch `teleport-e2e.yml` (real-Teleport tests are env-gated and skip locally).
 - Bug/regression fixes: add a deterministic failing test first when feasible; if coverage is not possible, state the blocker and the manual validation in the PR.
