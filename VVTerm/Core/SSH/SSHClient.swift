@@ -621,8 +621,12 @@ actor SSHClient {
             }
             return RemoteTerminalBootstrap.defaultTerminalType
         } catch is CancellationError {
-            // V10: the caller was cancelled (dismissal); resume early and let
-            // the caller's cancellation unwind normally.
+            // V10: the caller was cancelled (dismissal), so this non-throwing
+            // API returns the fallback rather than rethrowing — the enclosing
+            // shell start unwinds at its own next cancellation check. The
+            // abandoned worker keeps resolving (including
+            // `prepareTeleportInnerSession`) and epoch-guards its late cache
+            // fill.
             if let token {
                 startupTrace?.end(token, outcome: "cancelled", detail: "cancelled")
             }
@@ -1737,7 +1741,17 @@ actor SSHClient {
                 emitter("deadline after \(SSHClient.secondsText(deadline))s")
                 continuation.resume(throwing: StartupDeadlineExceeded())
             }
-            timer.withLock { $0 = task }
+            // Store and check atomically: if the race already settled (the
+            // operation, the caller's cancellation, or a deadline claim) while
+            // this body was between `install` and here, the caller's
+            // `defer { cancelTimer() }` has already run and seen `nil`, so the
+            // timer would escape. Cancel it here instead of leaking a task that
+            // sleeps the full deadline. `S1` (lens 1).
+            let escaped = timer.withLock { stored -> Bool in
+                stored = task
+                return state.withLock { $0.resumed }
+            }
+            if escaped { task.cancel() }
         }
 
         func cancelTimer() {
@@ -3907,9 +3921,17 @@ actor SSHSession {
         // prepare instead of starting a second body that would clobber
         // `proxySubsystemChannel` / `agentForwardingService` mid-handshake
         // (the inner session only becomes non-nil after the handshake, so
-        // the idempotence check above does not cover this window). The task
-        // clears the slot when the body completes, so a later caller after a
-        // failure starts a fresh attempt (the pre-fix retry behavior).
+        // the idempotence check above does not cover this window).
+        //
+        // The slot is cleared by the *initiator* once it has resumed from
+        // `task.value`, so a later caller after a failure starts a fresh
+        // attempt (the pre-fix retry behavior). Precisely: a caller that
+        // arrives after the body finished but before the initiator's
+        // continuation resumed joins the finished task and rethrows its
+        // result instead of retrying. That window is one actor scheduling
+        // turn and the outcome (the same error) is indistinguishable to the
+        // caller; clearing from inside the task body would need an extra
+        // actor hop to write the property, which is worse.
         //
         // The slot is per-session and the task is unstructured: a cancelled
         // caller does not cancel a body another caller may be waiting on.
