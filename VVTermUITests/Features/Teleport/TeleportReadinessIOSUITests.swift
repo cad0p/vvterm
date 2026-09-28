@@ -20,7 +20,7 @@
 //
 //  Launch-arg contract (parsed by TeleportIOSServerListUITestHarness+iOS.swift):
 //    --vvterm-ui-test-teleport-ios-serverlist          enables the harness
-//    --vvterm-ui-test-teleport-readiness=ready|needsLogin|needsRegistration|needsBootstrap|crossDevice
+//    --vvterm-ui-test-teleport-readiness=ready|needsLogin|needsRegistration|needsBootstrap|crossDevice|swipeDismiss
 //
 //  See:
 //    - VVTerm/App/iOS/TeleportIOSServerListUITestHarness+iOS.swift (the harness)
@@ -217,5 +217,124 @@ final class TeleportReadinessIOSUITests: XCTestCase {
         XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 10), "bootstrap sheet should appear after tapping a crossDevice (needsBootstrap) row")
         XCTAssertEqual(bootstrapHeader.label, "Approve in Safari")
         attachScreenshot(app, named: "readiness-ios-crossDevice-needsBootstrap")
+    }
+
+    // MARK: - #272: swipe-down dismissal mid-retry tears the flow down
+
+    /// A swipe-down dismissal of the bootstrap sheet must tear the in-flight
+    /// retry down. The harness (`readiness=swipeDismiss`) owns the `.suspended`
+    /// coordinator (30s delay) and renders its begin/cancel/retry counters
+    /// OUTSIDE the sheet; before the fix `.onDisappear` only cancelled the
+    /// retry task cooperatively, so `cancel` stayed 0 and the retry could keep
+    /// driving the flow after the sheet was gone.
+    func testBootstrap_swipeDismissDuringRetry_cancelsTheFlow() {
+        let app = launch(readiness: "swipeDismiss")
+
+        // The empty key ring must probe to needsBootstrap before the tap so
+        // the row routes to setup rather than to connect.
+        let setupPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"]
+        XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "empty keychain should show the Setup pill")
+
+        // Tap the row → the bootstrap sheet appears with the mocked
+        // `.suspended` coordinator (its first begin fails after 30s).
+        tapServerRow(in: app)
+        let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
+        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 10), "bootstrap sheet header should appear")
+
+        let retryButton = app.buttons["vvterm.teleport.bootstrap.retryButton"]
+        XCTAssertTrue(
+            retryButton.waitForExistence(timeout: 40),
+            "the suspended scenario should surface the Reopen Safari button"
+        )
+
+        let counters = app.staticTexts["vvterm.teleport.bootstrapDismissal.counters"]
+        XCTAssertTrue(counters.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            waitForCounter("begin=1", in: counters),
+            "the first begin should be counted; counters=\(counters.label)"
+        )
+
+        // Start the retry, then swipe the sheet away while the retry's begin is
+        // still inside its 30s delay.
+        tapWhenHittable(retryButton)
+        XCTAssertTrue(
+            waitForCounter("retry=1", in: counters),
+            "the retry should be counted; counters=\(counters.label)"
+        )
+        XCTAssertTrue(
+            waitForCounter("begin=2", in: counters),
+            "the retry's begin should be counted; counters=\(counters.label)"
+        )
+
+        // Dismiss the sheet interactively with a press-and-drag from its
+        // content down to the bottom of the screen. This harness's presented
+        // sheet is not exposed as a `Sheet` accessibility element on the iOS 26
+        // runner (`app.sheets.firstMatch` stays empty while the sheet is on
+        // screen), and a `swipeDown()` on a small element's frame is too short
+        // to cross the interactive-dismissal threshold. A single synthesized
+        // drag is occasionally not picked up by the presentation controller,
+        // so attempt a bounded number of real drags, gated on the sheet
+        // actually leaving; a sheet that never dismisses still fails.
+        var dismissed = false
+        for _ in 0..<3 where !dismissed {
+            let dragStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97))
+            dragStart.press(forDuration: 0.1, thenDragTo: dragEnd)
+            dismissed = bootstrapHeader.waitForNonExistence(timeout: 3)
+        }
+        if !dismissed {
+            // Dump the tree so CI logs reveal what still owns the screen.
+            let tree = app.debugDescription
+            let treeAttachment = XCTAttachment(string: tree)
+            treeAttachment.name = "element-tree-swipeDismiss"
+            treeAttachment.lifetime = .keepAlways
+            add(treeAttachment)
+            print("DEBUG_ELEMENT_TREE_swipeDismiss:\n\(tree)")
+            attachScreenshot(app, named: "swipeDismiss-after-drag")
+        }
+        XCTAssertTrue(dismissed, "swipe-down should dismiss the bootstrap sheet")
+        XCTAssertTrue(
+            waitForCounter("cancel=1", in: counters),
+            "the dismissal must tear the flow down (coordinator.cancel); counters=\(counters.label)"
+        )
+
+        // Bounded settle, then re-read the counters. This is a can't-fail
+        // guard by construction — nothing in the mock can re-enter `begin`
+        // after the swipe, and the mock's `try? await Task.sleep` swallows
+        // cancellation, so it fast-forwards to a terminal state rather than
+        // stopping. Its value is diagnostic: a counters line captured after
+        // the settle shows whether the dismissal raced anything. The
+        // discriminating assertion is `cancel=1` above, which only the
+        // production `.onDisappear` can produce.
+        let settleDeadline = Date().addingTimeInterval(2)
+        while Date() < settleDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertTrue(
+            counters.label.contains("begin=2"),
+            "the mock must not re-enter begin after the dismissal; counters=\(counters.label)"
+        )
+        XCTAssertTrue(
+            counters.label.contains("cancel=1"),
+            "the dismissal cancel count should remain stable; counters=\(counters.label)"
+        )
+
+        attachScreenshot(app, named: "readiness-ios-swipeDismiss-counters")
+    }
+
+    /// Bounded poll for a counters-label substring. The label updates on the
+    /// coordinator's `@Published` state, so this is a signal wait with a
+    /// timeout that only bounds a genuine failure.
+    private func waitForCounter(
+        _ needle: String,
+        in element: XCUIElement,
+        timeout: TimeInterval = 10
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists, element.label.contains(needle) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return element.exists && element.label.contains(needle)
     }
 }

@@ -27,6 +27,11 @@
 //    --vvterm-ui-test-teleport-ios-serverlist   enables this harness
 //    --vvterm-ui-test-teleport-readiness=bootstrap|registration|login|ready|crossDevice
 //         the readiness state to seed the mock key ring with
+//    --vvterm-ui-test-teleport-readiness=swipeDismiss (#272)
+//         presents the bootstrap sheet with a parent-owned suspended
+//         coordinator and renders its begin/cancel/retry counters outside
+//         the sheet, so the swipe-dismissal XCUITest can read them after the
+//         sheet is gone
 //
 //  See:
 //    - VVTerm/App/iOS/ServerComponents+iOS.swift (ServerListRow + readiness badge)
@@ -49,9 +54,25 @@ struct TeleportIOSServerListUITestHarness: View {
     @State private var presentingSheet: SheetKind?
     @State private var didConnect = false
 
+    /// The parent-owned coordinator for the #272 swipe-dismissal harness mode:
+    /// `.suspended` fails the first `begin` with a retryable error (so the
+    /// Reopen Safari button appears). The 30s delay keeps each of the mock's
+    /// three sleeps long, so the retry's `begin` is still non-terminal when the
+    /// test swipes the sheet down. Note the mock's `try? await Task.sleep`
+    /// swallows cancellation, so after the swipe it fast-forwards to a terminal
+    /// state; the test asserts the dismissal's `cancel` counter, not the mock's
+    /// post-dismissal state.
+    @StateObject private var dismissalCoordinator: MockTeleportBootstrapCoordinator
+
     @MainActor
     init() {
         _keyRing = StateObject(wrappedValue: MockTeleportKeyRing())
+        // The coordinator is created unconditionally (a `@StateObject` cannot be
+        // created lazily per mode), but it is only used by `.swipeDismiss`: the
+        // sheet kind and the counters label are both gated on that readiness.
+        _dismissalCoordinator = StateObject(
+            wrappedValue: MockTeleportBootstrapCoordinator(scenario: .suspended, delay: 30)
+        )
     }
 
     var body: some View {
@@ -84,6 +105,16 @@ struct TeleportIOSServerListUITestHarness: View {
                     .font(.headline)
                     .foregroundStyle(.green)
                     .accessibilityIdentifier("vvterm.teleport.serverlistHarness.connected")
+                    .padding()
+            }
+
+            // #272: the dismissal coordinator's call counters live OUTSIDE the
+            // sheet so the XCUITest can read them after the swipe-down
+            // dismissal has removed the sheet from the accessibility tree.
+            if readiness == .swipeDismiss {
+                Text(dismissalCounterSummary)
+                    .font(.caption.monospaced())
+                    .accessibilityIdentifier("vvterm.teleport.bootstrapDismissal.counters")
                     .padding()
             }
 
@@ -152,8 +183,9 @@ struct TeleportIOSServerListUITestHarness: View {
                 userHandle: Data(),
                 deviceName: ""
             ))
-        case .needsBootstrap, .crossDevice:
-            // Empty keychain — no seed needed.
+        case .needsBootstrap, .crossDevice, .swipeDismiss:
+            // Empty keychain — no seed needed (swipeDismiss probes as
+            // needsBootstrap and drives its own parent-owned coordinator).
             break
         }
     }
@@ -165,6 +197,12 @@ struct TeleportIOSServerListUITestHarness: View {
     /// keypair isn't persisted between Phase 1 and Phase 2). We replicate
     /// that exact behavior here so the test asserts what the code ACTUALLY does.
     private func sheetKind(for readiness: TeleportDeviceReadiness) -> SheetKind {
+        // The #272 dismissal mode drives the bootstrap sheet (the empty mock
+        // key ring probes as needsBootstrap) with the parent-owned suspended
+        // coordinator instead of the happyPath one.
+        if self.readiness == .swipeDismiss {
+            return .bootstrapDismissal
+        }
         switch readiness {
         case .needsBootstrap, .needsRegistration:
             return .bootstrap
@@ -178,6 +216,17 @@ struct TeleportIOSServerListUITestHarness: View {
     @ViewBuilder
     private func sheetContent(for kind: SheetKind) -> some View {
         switch kind {
+        case .bootstrapDismissal:
+            // #272: the coordinator is owned by the harness (the parent), so
+            // its counters survive the sheet's dismissal and can be rendered
+            // outside it. `onSuccess`/`onCancel` are no-ops; the test only
+            // asserts the counters and the dismissal itself.
+            TeleportBootstrapView(
+                coordinator: dismissalCoordinator,
+                cluster: makeCluster(),
+                onSuccess: { _ in },
+                onCancel: {}
+            )
         case .bootstrap:
             // Use the mock bootstrap coordinator (happyPath) so the sheet
             // renders its header without reaching a real server.
@@ -214,6 +263,14 @@ struct TeleportIOSServerListUITestHarness: View {
         didConnect = true
     }
 
+    /// The dismissal coordinator's begin/cancel/retry counters, formatted for
+    /// the test to parse from one accessibility label.
+    private var dismissalCounterSummary: String {
+        "begin=\(dismissalCoordinator.beginCallCount) "
+            + "cancel=\(dismissalCoordinator.cancelCallCount) "
+            + "retry=\(dismissalCoordinator.retryCallCount)"
+    }
+
     // MARK: - Launch-arg parsing
 
     private var readiness: Readiness {
@@ -239,13 +296,16 @@ struct TeleportIOSServerListUITestHarness: View {
 
     private enum Readiness: String {
         case ready, needsLogin, needsRegistration, needsBootstrap, crossDevice
+        /// #272 dismissal harness mode (parent-owned suspended coordinator).
+        case swipeDismiss
     }
 
     private enum SheetKind: Identifiable {
-        case bootstrap, login, none
+        case bootstrap, bootstrapDismissal, login, none
         var id: String {
             switch self {
             case .bootstrap: return "bootstrap"
+            case .bootstrapDismissal: return "bootstrapDismissal"
             case .login: return "login"
             case .none: return "none"
             }

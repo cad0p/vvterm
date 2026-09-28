@@ -60,9 +60,10 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
     /// the dismissal does NOT rest on this task: it rests on that action
     /// calling `coordinator.cancel()`, which bumps the generation, cancels the
     /// POST and dismisses the Safari session (#267 review, L1-1). A swipe-down
-    /// dismissal runs only `.onDisappear` (no `coordinator.cancel()`), so a
-    /// `retry()` already past its first suspension can still re-invoke
-    /// `begin()` after it — a pre-existing gap, recorded, not changed here.
+    /// dismissal runs only `.onDisappear`, which now calls
+    /// `coordinator.cancel()` in the same way when the flow still has live
+    /// work (#272), so a `retry()` already past its first suspension can no
+    /// longer re-invoke `begin()` after the sheet was dismissed.
     @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
@@ -105,6 +106,12 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
         }
         .onDisappear {
             retryTask?.cancel()
+            // A swipe-down dismissal runs no toolbar action; if the flow still has
+            // live work, tear it down so no POST or Safari session survives the
+            // dismissed sheet. Terminal states are left alone: `.success` is the
+            // Phase-1 → Phase-2 hand-off, and a terminal `.failed` is the user's exit.
+            guard coordinator.state.dismissalRequiresTeardown else { return }
+            Task { await coordinator.cancel() }
         }
     }
 
