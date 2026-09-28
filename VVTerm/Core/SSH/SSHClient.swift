@@ -487,15 +487,34 @@ actor SSHClient {
         // remoteEnvironment()/remoteTerminalType() safe without each one
         // needing to know about Teleport.
         let authMethod = connectedServer?.authMethod ?? .password
+        // Pre-hop fast path (#276/D2a): a usable cache skips the
+        // `isInnerSessionReady` actor hop entirely — that hop is what parked
+        // the incident connect (`SSHClient.swift:490` in the pre-fix tree).
+        // Teleport + a cached `.unknown` platform always hops: the platform
+        // was resolved before the inner session existed and must be
+        // re-resolved against the real target node once the inner session is
+        // ready.
+        if let cached = resolvedRemoteEnvironment,
+           Self.canReuseCachedEnvironmentBeforeInnerCheck(
+               forceRefresh: forceRefresh,
+               cached: cached,
+               authMethod: authMethod
+           ) {
+            return cached
+        }
         let innerReady = await (session?.isInnerSessionReady ?? false)
-        if !forceRefresh,
-           let resolvedRemoteEnvironment,
-           // For Teleport, a cached `.unknown` platform means env was resolved
-           // before the inner session existed (the prepare failed or hadn't
-           // run yet). Treat it as a miss when the inner session is now ready
-           // so we re-resolve against the real target node.
-           !(authMethod == .faceIDTeleport && innerReady && resolvedRemoteEnvironment.platform == .unknown) {
-            return resolvedRemoteEnvironment
+        // Post-hop reuse decision (the pre-fix composite, kept verbatim):
+        // reuse unless this is a Teleport connection whose cached platform is
+        // `.unknown` and the inner session is now ready — the case that must
+        // re-resolve for real.
+        if let cached = resolvedRemoteEnvironment,
+           Self.canReuseCachedEnvironmentAfterInnerCheck(
+               forceRefresh: forceRefresh,
+               cached: cached,
+               authMethod: authMethod,
+               innerReady: innerReady
+           ) {
+            return cached
         }
 
         if Self.shouldPrepareInnerSessionBeforeResolvingEnvironment(
@@ -1091,6 +1110,39 @@ actor SSHClient {
         innerSessionReady: Bool
     ) -> Bool {
         authMethod == .faceIDTeleport && !innerSessionReady
+    }
+
+    /// Pre-hop fast path for a cached remote environment (#276/D2a). No
+    /// `innerReady` input by construction: that flag is exactly what the
+    /// `isInnerSessionReady` actor hop computes and a pre-hop decision cannot
+    /// depend on it.
+    ///
+    /// Teleport + a cached `.unknown` platform always hops — the cache was
+    /// resolved before the inner session existed, so the platform must be
+    /// re-resolved against the now-ready target node. Every other cached
+    /// combination is reusable without touching the session actor.
+    nonisolated static func canReuseCachedEnvironmentBeforeInnerCheck(
+        forceRefresh: Bool,
+        cached: RemoteEnvironment?,
+        authMethod: AuthMethod
+    ) -> Bool {
+        guard !forceRefresh, let cached else { return false }
+        return !(authMethod == .faceIDTeleport && cached.platform == .unknown)
+    }
+
+    /// Post-hop reuse decision — the pre-fix `remoteEnvironment()` composite,
+    /// kept verbatim. Teleport + `.unknown` + inner-**not**-ready still
+    /// returns the cache after the hop (no `prepareTeleportInnerSession()`
+    /// side effect on that path); Teleport + `.unknown` + inner-ready falls
+    /// through so the environment is re-resolved.
+    nonisolated static func canReuseCachedEnvironmentAfterInnerCheck(
+        forceRefresh: Bool,
+        cached: RemoteEnvironment?,
+        authMethod: AuthMethod,
+        innerReady: Bool
+    ) -> Bool {
+        guard !forceRefresh, let cached else { return false }
+        return !(authMethod == .faceIDTeleport && innerReady && cached.platform == .unknown)
     }
 
     /// Rendering for the swallowed `prepareTeleportInnerSession()` failure in
