@@ -620,13 +620,14 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
         // Release the gated POST with a success: the dismissal's generation
         // bump must drop the continuation before any persistence. Absence needs
-        // a bound, so poll for the stale write itself (the failure signal): the
-        // release → `handlePostSuccess` → store path has no I/O suspension, so a
-        // stale write that survives the drop lands within the window. (The old
-        // form pumped a fixed settle and then asserted 0, which passed whether
-        // or not the continuation had been processed.)
+        // a bound, and the bound must let the MainActor run the resumed
+        // continuation: a synchronous run-loop pump (`waitUntil`/`settle`) does
+        // NOT — measured in the reverted counterfactual, where the released
+        // continuation stayed `.awaitingApproval` through the pump. Poll with
+        // real suspension instead, so a stale write that survives the drop is
+        // observable and this assertion can fail.
         await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
-        let staleWriteLanded = waitUntil(timeout: 1) { store.storedCertCount > 0 }
+        let staleWriteLanded = await waitForStaleWrite(timeout: 0.5) { store.storedCertCount > 0 }
         XCTAssertFalse(
             staleWriteLanded,
             "a stale success must not store the bootstrap cert (storedCertCount=\(store.storedCertCount))"
@@ -773,6 +774,22 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     /// signal (e.g. "this stale continuation was dropped, not committed").
     private func settle(_ seconds: TimeInterval = 0.3) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// Bounded poll that suspends (rather than pumping the run loop) so the
+    /// MainActor can run a resumed continuation. Used for the stale-write
+    /// signal: the release → `handlePostSuccess` → store path has no I/O
+    /// suspension, so a surviving stale write lands within a few turns.
+    private func waitForStaleWrite(
+        timeout: TimeInterval,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return condition()
     }
 
     /// Pump the main run loop in bounded steps until `condition` holds. Used
