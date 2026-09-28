@@ -5622,7 +5622,15 @@ actor SSHSession {
     }
 
     private func ensureExecChannelReady(_ request: ExecRequest) async -> Bool {
-        guard let session = libssh2Session else {
+        // Liveness gate (#286 deferred window): during a deferred teardown
+        // `libssh2Session` stays non-nil while its free is pending, and
+        // `invalidateTransport()` nils `ioTask` — so `startIOLoop()` can
+        // start a fresh, uncancelled loop that reaches this call and enters
+        // `libssh2_channel_open_ex` on a session whose free is pending. The
+        // inner twin re-checks `innerSocket`/`innerAtomicSocket`/`!hasBeenCleaned`
+        // as well; this outer path has no socketpair, so `isActive` is the
+        // session-free gate here.
+        guard isActive, let session = libssh2Session else {
             await finishExecRequest(request.id, error: SSHError.notConnected)
             return false
         }
@@ -6297,7 +6305,7 @@ actor SSHSession {
             throw lastTeleportPrepareFailure ?? SSHError.notConnected
         }
 
-        guard libssh2Session != nil else {
+        guard isActive, libssh2Session != nil else {
             throw SSHError.notConnected
         }
         startIOLoop()
