@@ -23,8 +23,9 @@
 //
 //  Counterfactual: `withStartupDeadline` is new API, so reverting the
 //  production change fails this target to compile rather than failing
-//  behaviourally. The source pin below fails against the pre-fix source
-//  (verified via `VVTERM_PINS_SOURCE_ROOT`).
+//  behaviourally. The source pins below were verified by hand-mutating the
+//  worktree (moving the token `begin` after the race, adding a worker-side
+//  `end`, and deleting each epoch guard) and observing the pins fail.
 
 import Foundation
 import Testing
@@ -261,6 +262,30 @@ struct StartupDeadlineTests {
         #expect(
             workerBody.contains("isCurrentSession(capturedSession, current: session)"),
             "the worker's cache fill must be epoch-guarded"
+        )
+
+        // T1: the *env* write is the other half of V3 and lives outside the
+        // worker range above (in `remoteEnvironment`, before
+        // `resolveRemoteTerminalTypeForStage`). Require both guarded writes,
+        // so deleting either `if` fails this pin.
+        let guardedWrites = source.components(separatedBy: "isCurrentSession(capturedSession, current: session)").count - 1
+        #expect(
+            guardedWrites == 2,
+            "both cache writes (env + terminal type) must be epoch-guarded; found \(guardedWrites)"
+        )
+
+        // T2: the deadline is a budget derived from the resolver's worst
+        // legitimate path (12 s install + up to three 2 s probes + slack) and
+        // a false fire degrades a live shell's TERM with no retro-fix, so pin
+        // the value itself and the fallback terminal type the deadline path
+        // returns.
+        #expect(
+            source.contains("nonisolated static let terminalTypeStageDeadline: Duration = .seconds(25)"),
+            "the terminal-type stage deadline must stay at the derived >= 25 s budget"
+        )
+        #expect(
+            stageBody.contains("return RemoteTerminalBootstrap.defaultTerminalType"),
+            "the deadline fallback must return the compatibility TERM"
         )
     }
 

@@ -86,11 +86,21 @@ struct PrepareInnerSessionDedupTests {
 
         let second = Task { try await session.prepareTeleportInnerSession() }
         // Give the second call time to reach the actor; without the dedup it
-        // enters the body again.
+        // enters the body again. This is the counterfactual: with the join
+        // removed, `entryCount` reaches 2 inside this window.
+        //
+        // A *delayed* second caller only makes this observation later than the
+        // budget, which leaves `entryCount == 1` (a false green for this
+        // assertion) rather than a false red — so the budget is safe to keep
+        // short. The number is captured here, while the body is still parked,
+        // and asserted after both tasks complete; asserting `entryCount`
+        // *after* `release()` would be racy: a caller that arrives after the
+        // body finished legally starts a fresh body (T6).
         try? await Task.sleep(for: .milliseconds(150))
+        let entriesWhileParked = hook.entryCount
         #expect(
-            hook.entryCount == 1,
-            "two concurrent prepares must share one body (found \(hook.entryCount))"
+            entriesWhileParked == 1,
+            "two concurrent prepares must share one body (found \(entriesWhileParked))"
         )
 
         hook.release()
@@ -104,7 +114,13 @@ struct PrepareInnerSessionDedupTests {
                 Issue.record("unexpected error: \(error)")
             }
         }
-        #expect(hook.entryCount == 1)
+        // The parked-window observation is the load-bearing one; the final
+        // count may legally be 1 (the second caller joined) or 2 (it arrived
+        // after the body completed and started a fresh attempt).
+        #expect(
+            hook.entryCount >= entriesWhileParked,
+            "the body count must never decrease"
+        )
     }
 
     @Test

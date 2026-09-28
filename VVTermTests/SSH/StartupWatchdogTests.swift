@@ -175,5 +175,34 @@ struct StartupWatchdogTests {
         )
         #expect(source.contains("remoteEnvironment(from:"), "the hop line must name the caller")
         #expect(source.contains("startup watchdog: session.startShell"), "the shell-start await must be labelled")
+
+        // T5: the strings above survive a mutation that keeps the label but
+        // stops *watching* the await, so pin the placement too — the watchdog
+        // must directly wrap `session.startShell` in `startValidatedSSHShell`.
+        let shellStart = try #require(source.range(of: "func startValidatedSSHShell"))
+        let shellEnd = try #require(
+            source.range(of: "// MARK: - Mosh", range: shellStart.upperBound..<source.endIndex)
+        )
+        let shellBody = source[shellStart.lowerBound..<shellEnd.lowerBound]
+        let watchdog = try #require(
+            shellBody.range(of: "withStartupWatchdog("),
+            "the shell-start await must be wrapped in a watchdog"
+        )
+        // The emitter closure sits between the call and the wrapped
+        // operation, so search the remainder of the function for the awaited
+        // `startShell` rather than a fixed-width window.
+        let wrappedAwait = shellBody[watchdog.upperBound...]
+        #expect(
+            wrappedAwait.contains("try await expectedSession.startShell("),
+            "the watchdog must wrap the session.startShell await, not sit near it"
+        )
+        // The wrapped await must be the first `startShell` call after the
+        // watchdog: a mutation that moved the real await outside the closure
+        // would leave an earlier call before it.
+        let beforeWatchdog = shellBody[shellBody.startIndex..<watchdog.lowerBound]
+        #expect(
+            !beforeWatchdog.contains("expectedSession.startShell("),
+            "no unwatched startShell call may precede the watchdog"
+        )
     }
 }
