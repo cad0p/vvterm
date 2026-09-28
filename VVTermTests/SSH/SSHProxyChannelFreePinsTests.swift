@@ -45,11 +45,13 @@ struct SSHProxyChannelFreePinsTests {
     /// (`VVTermTests/SSH/SSHProxyChannelFreePinsTests.swift`).
     private func repositoryRoot() -> URL {
         // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated tree to prove the pins fail there. Never set in CI. NOTE: a
-        // plain env var does not reach an iOS-simulator test process — the
-        // override must be injected with the `TEST_RUNNER_` prefix (e.g.
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=/tmp/mutated`), or the run must
-        // be hand-mutated in the worktree and reverted.
+        // mutated tree to prove the pins fail there. Never set in CI. NOTE:
+        // the hook only does anything if the value actually reaches the test
+        // process. A `TEST_RUNNER_`-prefixed build setting is the usual route,
+        // but it did not reach the simulator test process on this runner
+        // (measured 2026-09-28: the same invocation against a swapped /tmp root
+        // stayed green while the hand-swapped worktree went red). The verified
+        // route is to hand-mutate the worktree, run, and restore the file.
         if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
            !override.isEmpty {
             return URL(fileURLWithPath: override)
