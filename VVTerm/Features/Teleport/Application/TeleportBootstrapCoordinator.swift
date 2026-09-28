@@ -62,6 +62,29 @@ enum TeleportBootstrapState: Equatable {
     case failed(TeleportBootstrapError)
 }
 
+extension TeleportBootstrapState {
+    /// Whether dismissing the bootstrap sheet must tear the flow down.
+    ///
+    /// `.failed(.safariUnavailable)` counts: Safari failed to open but the POST
+    /// is still running (`begin` awaits `postTask.value`), so a late response can
+    /// still write `.success` + keychain state after the sheet is dismissed.
+    /// Every other `.failed` case is the terminal end of the POST.
+    var dismissalRequiresTeardown: Bool {
+        switch self {
+        case .idle, .preparing, .openingSafari, .awaitingApproval: return true
+        case .success: return false
+        case .failed(.safariUnavailable): return true
+        case .failed:
+            // `.failed(.suspended)` is produced only by
+            // `MockTeleportBootstrapCoordinator`; the real coordinator never
+            // sets it and no scenePhase/activation handler re-issues the POST,
+            // so leaving it alone is safe. Every other `.failed` case is the
+            // terminal end of the POST.
+            return false
+        }
+    }
+}
+
 /// The error matrix for Phase 1. Each case maps to a specific recovery UX
 /// in the bootstrap sheet (see the design doc's mockup C).
 enum TeleportBootstrapError: Error, Equatable {
