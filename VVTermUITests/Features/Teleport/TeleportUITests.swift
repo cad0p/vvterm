@@ -180,8 +180,9 @@ final class TeleportUITests: XCTestCase {
         XCTAssertEqual(errorTitle.label, "Reconnecting…")
         attachScreenshot(app, named: "bootstrap-suspended-reconnecting")
 
-        // Tap retry — the mock re-invokes begin() and the suspended scenario
-        // succeeds on the second call.
+        // Tap retry — the bootstrap coordinator owns the re-run (both the
+        // real coordinator and the mock re-invoke begin()), so the suspended
+        // scenario succeeds on the second call.
         let retry = app.buttons["vvterm.teleport.bootstrap.retryButton"]
         XCTAssertTrue(retry.waitForExistence(timeout: 3))
         retry.tap()

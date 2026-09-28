@@ -665,7 +665,7 @@ struct ServerFormSheet: View {
                 // #268: `Server.name` IS the Teleport node name for Teleport
                 // servers, but the form never said so — a typo or a renamed
                 // node produced the same masked connect failure.
-                Text(String(localized: "This is the Teleport node name (for example pc-host-01) — run `tsh ls` to list the cluster's nodes. It is also this server's display name."))
+                Text(String(localized: "This is the Teleport node name (for example pc-host-01) — run tsh ls to list the cluster's nodes. It is also this server's display name."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -710,6 +710,22 @@ struct ServerFormSheet: View {
                 #endif
 
             if selectedAuthMethod == .faceIDTeleport {
+                // #266: this field wants the Teleport identity, not the host
+                // login — the confusion that produced #262. Neutral examples
+                // only: never a real user's cluster identities in shipped copy.
+                Text(String(localized: "The Teleport user (e.g. alice). This is not the host login (e.g. ubuntu) — that is picked during setup."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("vvterm.teleport.form.userHint")
+            }
+
+            // #265: the gate requires the edited row itself to be a Teleport
+            // row (not just `isEditing`) — see `ServerFormTeleportReminder`.
+            if ServerFormTeleportReminder.showsReminder(
+                existingServer: server,
+                selectedAuthMethod: selectedAuthMethod
+            ) {
                 Text(String(localized: "Changing the Teleport user or host re-runs Teleport setup on this device."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -794,6 +810,7 @@ struct ServerFormSheet: View {
                             .tag(method)
                     }
                 }
+                .accessibilityIdentifier("vvterm.teleport.form.authMethodPicker")
 
                 switch selectedAuthMethod {
                 case .faceIDTeleport:

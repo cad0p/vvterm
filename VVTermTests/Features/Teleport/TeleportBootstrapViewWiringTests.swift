@@ -392,6 +392,106 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         )
     }
 
+    // MARK: - #267: retry() restarts the POST + Safari (required-check pin)
+
+    /// The bug: the bootstrap sheet's "Reopen Safari" button called
+    /// `retry()` only, and `retry()` cancelled the POST + dismissed Safari
+    /// and reset to `.idle` without re-invoking `begin` — so the sheet went
+    /// back to the waiting spinner with no Safari and no POST. This pin drives
+    /// the REAL coordinator: first attempt fails (1 POST), `retry()` must run
+    /// a fresh POST (count 2) and land back on `.failed`, not `.idle`.
+    ///
+    /// Fails pre-fix: `retry()` starts no POST, so the count stays 1.
+    func testRetry_startsFreshPostAndReopensSafari() async {
+        let cluster = makeCluster()
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessError = URLError(.notConnectedToInternet)
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)
+
+        await coordinator.begin(cluster: cluster)
+        XCTAssertEqual(coordinator.state, .failed(.networkLost))
+        XCTAssertEqual(http.headlessLoginCallCount, 1)
+        XCTAssertEqual(safari.openedURLs.count, 1)
+
+        // The script still fails, so the retry must land on `.failed` again
+        // (not stay on `.idle` with the spinner) after a fresh POST.
+        await coordinator.retry()
+
+        XCTAssertEqual(
+            http.headlessLoginCallCount, 2,
+            "retry() must start a fresh POST (#267)"
+        )
+        XCTAssertEqual(
+            safari.openedURLs.count, 2,
+            "retry() must reopen Safari (#267)"
+        )
+        XCTAssertEqual(coordinator.state, .failed(.networkLost))
+    }
+
+    /// The success half of the same contract: the retry's fresh POST can
+    /// succeed, so the sheet advances out of the failure state instead of
+    /// waiting forever. Fails pre-fix (no second POST → `.idle`, no result).
+    func testRetry_reachesSuccessOnASecondSuccessfulPost() async {
+        let cluster = makeCluster()
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessError = URLError(.notConnectedToInternet)
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)
+
+        await coordinator.begin(cluster: cluster)
+        XCTAssertEqual(coordinator.state, .failed(.networkLost))
+        XCTAssertEqual(http.headlessLoginCallCount, 1)
+
+        // The second POST returns the fixture cert (bound to the fixed
+        // keypair the coordinator is driven with).
+        http.scriptedHeadlessError = nil
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+
+        await coordinator.retry()
+
+        XCTAssertEqual(http.headlessLoginCallCount, 2)
+        XCTAssertEqual(coordinator.state, .success)
+        XCTAssertNotNil(coordinator.lastBootstrapResult)
+    }
+
+    /// #267 review (L1-2): a retry while the previous attempt is still in
+    /// flight must not leave the old Safari session live. The counting
+    /// presenter starts a session per `open` and closes it per `cancel`
+    /// (it does NOT cancel-before-replace, so a caller-side leak shows as
+    /// `liveSessionCount == 2`).
+    func testRetry_cancelsLiveSafariSessionBeforeReopening() async {
+        let cluster = makeCluster()
+        let http = MockTeleportHTTPClient()
+        // Keep attempt 1's POST in flight so its Safari session is still
+        // live when the retry starts (the rapid-double-attempt window).
+        http.scriptedDelay = 0.3
+        http.scriptedHeadlessError = URLError(.notConnectedToInternet)
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)
+
+        let first = Task { await coordinator.begin(cluster: cluster) }
+        await safari.waitUntilOpenStarted(1)
+        XCTAssertEqual(safari.liveSessionCount, 1, "attempt 1's Safari session is live")
+
+        let retry = Task { await coordinator.retry() }
+        let secondOpenStarted = await safari.waitUntilOpenStarted(2)
+        XCTAssertTrue(secondOpenStarted, "retry() must start a second Safari session (#267)")
+        XCTAssertEqual(
+            safari.liveSessionCount, 1,
+            "retry() must cancel the live Safari session before opening the new one — "
+                + "a count of 2 means the previous session leaked (L1-2)"
+        )
+
+        await first.value
+        await retry.value
+        XCTAssertEqual(http.headlessLoginCallCount, 2)
+        XCTAssertEqual(safari.liveSessionCount, 0, "each failed attempt dismisses its Safari session")
+    }
+
     // MARK: - Hosting helpers
 
     /// Install a `UIHostingController`'s view in a live window so SwiftUI's

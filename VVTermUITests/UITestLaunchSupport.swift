@@ -34,6 +34,41 @@ extension XCTestCase {
         return app
     }
 
+    /// Scrolls `container` (a `Form`/`List`/scroll view) until `element` is
+    /// visible, bounded to `maxSwipes` swipes. A `Form` row below the fold is
+    /// lazily realized, so a bare `waitForExistence` on it can never succeed —
+    /// scroll first, then assert. Promoted from the private
+    /// `ServerNavigationUITests.scrollToVisible` shape so new sheet tests share
+    /// one helper instead of copying the loop.
+    @MainActor
+    func scrollToVisible(
+        _ element: XCUIElement,
+        in container: XCUIElement,
+        maxSwipes: Int = 12,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for _ in 0..<maxSwipes where !isElementVisible(element, in: container) {
+            container.swipeUp()
+        }
+        let identifier = element.identifier.isEmpty ? "<no identifier>" : element.identifier
+        XCTAssertTrue(
+            isElementVisible(element, in: container),
+            "Element \(identifier) is not visible in \(container) after \(maxSwipes) swipe(s)",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Whether `element` exists and its frame intersects `container`'s frame.
+    /// The shape `ServerNavigationUITests` uses for its scroll assertions.
+    @MainActor
+    func isElementVisible(_ element: XCUIElement, in container: XCUIElement) -> Bool {
+        guard element.exists else { return false }
+        let frame = element.frame
+        return !frame.isEmpty && frame.intersects(container.frame)
+    }
+
     /// Taps `element` once it is hittable. The element can exist in the AX
     /// tree before it finishes mounting; a tap that lands early misses it
     /// and the follow-up assertion fails (issue #47). Waits for hittability

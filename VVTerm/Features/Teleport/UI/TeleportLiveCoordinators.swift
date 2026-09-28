@@ -359,6 +359,13 @@ final class WebAuthenticationSessionPresenter: NSObject, WebAuthenticationSessio
             }
             session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = true
+            // Replacement-safe: a previously started session must be
+            // cancelled before its reference is dropped. In the intended
+            // retry sequence the coordinator cancels first, but a rapid
+            // double-tap (or any future caller) can reach `open` with a live
+            // session; releasing a started ASWebAuthenticationSession without
+            // cancelling it is not carried by this class (#267 review, L1-2).
+            self.session?.cancel()
             self.session = session
 
             let started = session.start()
