@@ -1396,11 +1396,20 @@ actor SSHClient {
         }
     }
 
-    private nonisolated static func runWithTimeout<T: Sendable>(
+    /// Race `operation` against a sleep; whichever finishes first wins.
+    ///
+    /// #276/D1: `group.cancelAll()` is now on every exit path (`defer`)
+    /// instead of only the success path — clarity only. Cancellation is a
+    /// *request*, not a bound: the task-group scope still awaits the
+    /// operation child before it can return, so a child suspended inside a
+    /// synchronously-wedged `SSHSession` actor keeps this call parked past
+    /// the deadline (the E2 characterization test pins that).
+    nonisolated static func runWithTimeout<T: Sendable>(
         _ timeout: Duration,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
+            defer { group.cancelAll() }
             group.addTask {
                 try await operation()
             }
@@ -1412,7 +1421,6 @@ actor SSHClient {
             guard let result = try await group.next() else {
                 throw SSHError.timeout
             }
-            group.cancelAll()
             return result
         }
     }
@@ -1566,10 +1574,30 @@ actor SSHSession {
     }
     #endif
 
-    final class ExecRequest {
+    /// All lock-protected state is immutable-after-claim; the mutable
+    /// channel/output fields are only touched from this actor. The shared
+    /// holder must cross into the off-actor cancellation handler, hence
+    /// `@unchecked Sendable` (the lock is the synchronization).
+    nonisolated final class ExecRequest: @unchecked Sendable {
+        /// Cancellation/once state shared between the session actor
+        /// (registration, loop-side completion, teardown) and the
+        /// **off-actor** `withTaskCancellationHandler(onCancel:)` handler.
+        /// #276/D1: the handler used to hop back into this actor
+        /// (`Task { await self?.cancelExecRequest(…) }`); that hop never
+        /// arrives while the actor is parked, so a timed-out exec request
+        /// stayed in flight. The holder is now the single once-guard and the
+        /// handler resumes the continuation directly, off-actor.
+        ///
+        /// Claim-once under the lock; every `resume` call happens after the
+        /// lock is released.
+        struct State: Sendable {
+            var continuation: CheckedContinuation<String, Error>?
+            var cancelled = false
+            var resumed = false
+        }
+
         let id: UUID
         let command: String
-        let continuation: CheckedContinuation<String, Error>
         var channel: OpaquePointer?
         var output = Data()
         var stderr = Data()
@@ -1580,38 +1608,96 @@ actor SSHSession {
         /// inner socketpair FD (data for the inner channel arrives via the
         /// proxy-subsystem pump, not the outer session's socket). Mirrors the
         /// `ShellChannelState.isInner` flag.
-        var isInner: Bool = false
-        /// Set by the off-loop cancellation path (`cancelExecRequest` — probe
-        /// timeouts, task cancellation), which resumes the continuation with
-        /// the cancellation error but must NOT close/free the channel (the
-        /// owning I/O loop may be suspended between reads on it; issue #121).
-        /// The loop checks this flag on every pass and performs the channel
-        /// teardown itself, exactly once.
-        var isCancelled = false
-        /// Guards the single-resume invariant: a checked continuation crashes
-        /// if resumed twice, and cancellation (`cancelExecRequest`),
-        /// loop-side completion (`finishExecRequest`) and session teardown
-        /// (`failAllExecRequests`) race to complete the same request.
-        private(set) var continuationResumed = false
+        var isInner: Bool
 
-        init(id: UUID, command: String, continuation: CheckedContinuation<String, Error>) {
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        init(id: UUID, command: String, isInner: Bool) {
             self.id = id
             self.command = command
-            self.continuation = continuation
+            self.isInner = isInner
+        }
+
+        /// The off-loop cancellation path marks the request (probe timeouts,
+        /// task cancellation) but must NOT close/free the channel: the owning
+        /// I/O loop may be suspended between reads on it (issue #121). The
+        /// loop checks this on every pass — it wakes at least every 5ms via
+        /// the poll timeout in `waitForSocket` — and performs the channel
+        /// teardown exactly once. The request stays in `execRequests` until
+        /// then, which also keeps the loop alive.
+        nonisolated var isCancelled: Bool {
+            state.withLock { $0.cancelled }
+        }
+
+        /// `true` once the continuation was claimed for resume. Kept for the
+        /// single-resume tests and the teardown comments; production code
+        /// only observes it through the resume guards.
+        nonisolated var continuationResumed: Bool {
+            state.withLock { $0.resumed }
+        }
+
+        /// Install the continuation.
+        ///
+        /// Applies a cancellation that landed before install: the `onCancel`
+        /// handler can fire before this actor ever reached the continuation
+        /// body (it is invoked immediately when the task is already cancelled
+        /// at handler installation). In that case the continuation is resumed
+        /// with `CancellationError` here and `false` is returned so the caller
+        /// can drop the freshly registered `execRequests` entry (the request
+        /// never started, so it has no channel for the loop to tear down).
+        @discardableResult
+        nonisolated func install(_ continuation: CheckedContinuation<String, Error>) -> Bool {
+            let shouldCancel = state.withLock { state -> Bool in
+                guard !state.resumed else { return true }
+                guard !state.cancelled else {
+                    state.resumed = true
+                    return true
+                }
+                state.continuation = continuation
+                return false
+            }
+            if shouldCancel {
+                continuation.resume(throwing: CancellationError())
+                return false
+            }
+            return true
+        }
+
+        /// Off-actor cancellation: mark the request cancelled and resume its
+        /// continuation directly — no session-actor hop. Safe to call before
+        /// `install(_:)`; the pending cancellation is applied at install.
+        nonisolated func cancel() {
+            let continuation = state.withLock { state -> CheckedContinuation<String, Error>? in
+                state.cancelled = true
+                guard !state.resumed else { return nil }
+                guard let continuation = state.continuation else { return nil }
+                state.resumed = true
+                state.continuation = nil
+                return continuation
+            }
+            continuation?.resume(throwing: CancellationError())
         }
 
         /// Resume exactly once; later calls are no-ops.
-        func resume(returning output: String) {
-            guard !continuationResumed else { return }
-            continuationResumed = true
+        nonisolated func resume(returning output: String) {
+            guard let continuation = claimContinuation() else { return }
             continuation.resume(returning: output)
         }
 
         /// Resume exactly once; later calls are no-ops.
-        func resume(throwing error: Error) {
-            guard !continuationResumed else { return }
-            continuationResumed = true
+        nonisolated func resume(throwing error: Error) {
+            guard let continuation = claimContinuation() else { return }
             continuation.resume(throwing: error)
+        }
+
+        private nonisolated func claimContinuation() -> CheckedContinuation<String, Error>? {
+            state.withLock { state in
+                guard !state.resumed else { return nil }
+                state.resumed = true
+                let continuation = state.continuation
+                state.continuation = nil
+                return continuation
+            }
         }
     }
 
@@ -4964,23 +5050,6 @@ actor SSHSession {
         return true
     }
 
-    /// Off-loop cancellation path (probe timeouts via
-    /// `withTaskCancellationHandler`, task cancellation). Marks the request
-    /// cancelled and resumes its continuation with the error, but does NOT
-    /// touch the libssh2 channel: the owning I/O loop is the only execution
-    /// context that reads the channel, and closing/freeing it here while the
-    /// loop is suspended between reads corrupts the session (issue #121:
-    /// `Exec read failed: -43` + `channelOpenFailed` cascade + reconnect
-    /// loop). The loop detects `isCancelled` on its next pass — it wakes at
-    /// least every 5ms via the poll timeout in `waitForSocket` — and
-    /// performs the teardown exactly once. The request stays in
-    /// `execRequests` until then, which also keeps the loop alive.
-    private func cancelExecRequest(_ requestId: UUID, error: Error) {
-        guard let request = execRequests[requestId], !request.isCancelled else { return }
-        request.isCancelled = true
-        request.resume(throwing: error)
-    }
-
     /// Loop-side completion of an exec request: removes the request from
     /// `execRequests` (transferring channel ownership to this context),
     /// closes + frees the channel EAGAIN-aware, then resumes the
@@ -5602,17 +5671,25 @@ actor SSHSession {
     }
 
     private func enqueueExecRequest(_ command: String, isInner: Bool) async throws -> String {
-        let requestId = UUID()
+        let request = ExecRequest(id: UUID(), command: command, isInner: isInner)
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
-                let request = ExecRequest(id: requestId, command: command, continuation: continuation)
-                request.isInner = isInner
                 execRequests[request.id] = request
+                let installed = request.install(continuation)
+                // Cancel-before-install, both windows: `onCancel` may have
+                // fired before the continuation was installed (handled by
+                // `install`), or the task may already be cancelled while
+                // this body is being scheduled. Either way the request never
+                // started, so the freshly registered entry is removed before
+                // the loop can pick it up (it has no channel to tear down)
+                // and the holder resumes exactly once.
+                if !installed || Task.isCancelled {
+                    execRequests.removeValue(forKey: request.id)
+                    request.cancel()
+                }
             }
-        }, onCancel: { [weak self] in
-            Task {
-                await self?.cancelExecRequest(requestId, error: CancellationError())
-            }
+        }, onCancel: {
+            request.cancel()
         })
     }
 
