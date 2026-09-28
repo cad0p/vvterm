@@ -53,7 +53,9 @@ import os
 /// Created with a host/port + the cluster name + cluster CA PEMs (captured
 /// at Phase 1 bootstrap and persisted in `TeleportKeyRing`). `connect()`
 /// dials the TLS connection, starts the socketpair pump, and returns the
-/// libssh2-facing FD. `close()` tears down the pump + NWConnection + FDs.
+/// libssh2-facing FD. `close()` stops the pump and cancels the NWConnection;
+/// the pump releases its socketpair end once both of its loops have joined
+/// (issue #237), so `close()` does not free that descriptor number.
 ///
 /// Scoped to `.faceIDTeleport`: the non-Teleport SSH path keeps using
 /// `SSHAddressConnector` (raw TCP).
@@ -82,10 +84,12 @@ actor SSHTLSTransport {
     private var connection: NWConnection?
     private var socketPair: SocketPair?
     private var pumpTask: Task<Void, Never>?
-    /// Single owner of the pump end's fd. Six paths can race to close it (the
-    /// three `pumpNWToFD` exits, `runPump`'s cleanup, `close()`, and the
-    /// handshake-failure path); routing them all through one guard is what
-    /// keeps the fd from being closed twice. See `PumpFDCloser`.
+    /// Single owner of the pump end's fd. Four paths can race to wake it (the
+    /// three `pumpNWToFD` exits plus `close()`/`runPump`'s cleanup) and two
+    /// can reach the release (the handshake-failure path and `runPump`, both
+    /// after joining their loops); the guard's state machine is what keeps a
+    /// stale wake off a reused number and the release exactly once. See
+    /// `PumpFDCloser`.
     private var pumpFDCloser: PumpFDCloser?
 
     private let logger: Logger
@@ -182,7 +186,9 @@ actor SSHTLSTransport {
     /// Both ends are full-duplex `AF_UNIX` `SOCK_STREAM` sockets. The
     /// libssh2 end is handed to `libssh2_session_handshake(session, fd)`;
     /// the pump end is read/written by the pump coroutine. The caller owns
-    /// both FDs and must `close()` them.
+    /// the libssh2 end and must `close()` it; the pump end is owned by the
+    /// pump and released by it through `PumpFDCloser` once both pump loops
+    /// have joined (issue #237).
     ///
     /// - Returns: a `SocketPair` with two valid (>= 0) FDs.
     /// - Throws: `TeleportPackageError.connectionFailed` if `socketpair(2)` fails.
@@ -205,13 +211,13 @@ actor SSHTLSTransport {
                 _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
             }
         }
-        // Suppress SIGPIPE on **both** ends. `PumpFDCloser.closeOnce` does
-        // `shutdown(SHUT_RDWR)` before closing, so a `write` racing it — the
-        // pump's `writeAllToPumpFD` on the pump end, libssh2's write on the
-        // peer — gets `EPIPE` and the kernel raises `SIGPIPE`, whose default
-        // disposition terminates the process. With the option set the same
-        // write returns `-1`/`EPIPE` and the pump's error path handles it.
-        // Same idiom as the TCP path in `SSHClient`.
+        // Suppress SIGPIPE on **both** ends. `PumpFDCloser` shuts an end down
+        // (`shutdown(SHUT_RDWR)`) before it closes, so a `write` racing that
+        // release — the pump's `writeAllToPumpFD` on the pump end, libssh2's
+        // write on the peer — gets `EPIPE` and the kernel raises `SIGPIPE`,
+        // whose default disposition terminates the process. With the option
+        // set the same write returns `-1`/`EPIPE` and the pump's error path
+        // handles it. Same idiom as the TCP path in `SSHClient`.
         for fd in fds {
             var noSigPipe: Int32 = 1
             _ = setsockopt(
@@ -280,13 +286,18 @@ actor SSHTLSTransport {
         // server as soon as the TLS tunnel is up.
         let pumpFDCloser = PumpFDCloser()
         self.pumpFDCloser = pumpFDCloser
-        pumpTask = Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            await self.runPump(
+        // The detached body must not capture `self`: if the actor dies after
+        // `close()` returns (which no longer closes the fd) but before the
+        // body runs, a `guard let self` would return without ever releasing
+        // the descriptor. `logging` is a `nonisolated let`, so read the
+        // logger here and pass it by value (issue #237).
+        let pumpLog = logging.logger(category: "SSH-TLS-Pump")
+        pumpTask = Task.detached(priority: .userInitiated) {
+            await SSHTLSTransport.runPump(
                 connection: connection,
                 pair: pair,
                 pumpFDCloser: pumpFDCloser,
-                logger: self.logging.logger(category: "SSH-TLS-Pump")
+                logger: pumpLog
             )
         }
 
@@ -295,16 +306,38 @@ actor SSHTLSTransport {
             try await waitForReady(connection: connection)
         } catch {
             // TLS handshake failed — clean up the socketpair + NWConnection
-            // so no FDs leak.
+            // so no FDs leak. Capture the pump task and the guard and clear
+            // the stored state BEFORE the join: the `await` below is a
+            // reentrancy point, so a concurrent `close()` can run while this
+            // path is suspended (issue #237).
             logger.error("tls_transport_connect_failed host=\(self.host, privacy: .private(mask: .hash)) error=\(error.localizedDescription, privacy: .public)")
-            pumpTask?.cancel()
+            let pump = pumpTask
             pumpTask = nil
             connection.cancel()
             self.connection = nil
-            Darwin.close(pair.libssh2FD)
-            pumpFDCloser.closeOnce(pair.pumpFD)
+            let closer = self.pumpFDCloser   // local, still ours
             socketPair = nil
             self.pumpFDCloser = nil
+            // Release only from a path that has joined the pump. If a
+            // concurrent `close()` took the task (it nils `pumpTask` while
+            // this path was suspended in `waitForReady`), `runPump` owns the
+            // release: its detached body holds the pair/closer strongly and
+            // always runs shutdownOnce -> cancel -> waitForAll -> closeOnce.
+            // Releasing here without a captured task would free the number
+            // while the cancelled loops are still winding down — the #237
+            // window this path used to have.
+            if let pump {
+                pump.cancel()
+                // Wake before joining: a loop parked in the EAGAIN write retry
+                // does not observe cancellation on its own.
+                closer?.shutdownOnce(pair.pumpFD)
+                await pump.value
+                closer?.closeOnce(pair.pumpFD)
+            }
+            // Deliberately not joined: the pump loops only ever touch
+            // `pair.pumpFD`. This end was never handed to libssh2 or a caller
+            // on this path, so nothing can start a syscall on it.
+            Darwin.close(pair.libssh2FD)
             throw TeleportPackageError.connectionFailed("TLS transport connect failed: \(error.localizedDescription)")
         }
 
@@ -313,11 +346,20 @@ actor SSHTLSTransport {
 
     // MARK: - Close
 
-    /// Tear down the transport: stop the pump, cancel the NWConnection,
-    /// and close the pump end of the socketpair. The libssh2-facing FD is
-    /// NOT closed here — it is owned by `SSHSession`'s `AtomicSocket`
-    /// (which closes it after `libssh2_session_free`), because libssh2
-    /// reads/writes that FD directly. Closing it here would double-close.
+    /// Tear down the transport: stop the pump, cancel the NWConnection, and
+    /// wake the pump end of the socketpair. The libssh2-facing FD is NOT
+    /// closed here — it is owned by `SSHSession`'s `AtomicSocket` (which
+    /// closes it after `libssh2_session_free`), because libssh2 reads/writes
+    /// that FD directly. Closing it here would double-close.
+    ///
+    /// The pump end is closed by `runPump`, after both of its loops have
+    /// joined, so this returns without freeing the descriptor number (issue
+    /// #237: a loop that started a syscall after `close(2)` could land on a
+    /// reused descriptor). The guard and the pair are deliberately kept, not
+    /// nilled, so the release stays observable through the `…ForTesting`
+    /// seams. The retained pair is a stale record, not a live descriptor once
+    /// the closer reaches `.closed`: nothing may close or shut it down again,
+    /// and the next `connect()` replaces both.
     ///
     /// Safe to call multiple times.
     func close() {
@@ -326,15 +368,26 @@ actor SSHTLSTransport {
         connection?.cancel()
         connection = nil
         if let pair = socketPair {
-            // Close only the pump end, through the single-owner guard: the
-            // pump loops may already have closed it. The libssh2FD is left
-            // open for `AtomicSocket.close()`.
-            pumpFDCloser?.closeOnce(pair.pumpFD)
-            pumpFDCloser = nil
-            socketPair = nil
+            // Wake only: `shutdown(2)` unblocks an in-flight read/write
+            // (`0`/`EPIPE`) without freeing the number, so no loop can fall
+            // through to a reused descriptor. `runPump` closes after the join.
+            pumpFDCloser?.shutdownOnce(pair.pumpFD)
         }
         logger.info("tls_transport_close host=\(self.host, privacy: .private(mask: .hash))")
     }
+
+    // MARK: - Test seams
+
+    /// Test seam: the pump end's guard, so a teardown test can assert the
+    /// descriptor was released after `close()`. `close()` deliberately keeps
+    /// it (the next `connect()` replaces it).
+    var pumpFDCloserForTesting: PumpFDCloser? { pumpFDCloser }
+
+    /// Test seam: the pump end's descriptor number, captured before
+    /// `close()` so a test can assert the release (`fcntl(fd, F_GETFD) == -1`)
+    /// afterwards. Retained after `close()` deliberately (see `close()`); the
+    /// number is stale once the closer's state is `.closed`.
+    var pumpFdForTesting: Int32? { socketPair?.pumpFD }
 
     // MARK: - Pump internals
 
@@ -396,10 +449,15 @@ actor SSHTLSTransport {
     ///   - NWConnection -> pumpFD: receive from NWConnection, write to pumpFD.
     ///   - pumpFD -> NWConnection: read from pumpFD, send via NWConnection.
     ///
-    /// Both loops exit when either side hits EOF or errors, then close the
-    /// pump end so libssh2's reads on the libssh2FD return EOF. The
-    /// libssh2FD itself is closed by `AtomicSocket` (it owns that end);
-    /// the pump never closes libssh2FD to avoid racing FD reuse.
+    /// Both loops exit when either side hits EOF or errors. The cleanup then
+    /// (1) shuts the pump end down — waking the sibling's `read` with `0` and
+    /// its `write` with `EPIPE` **without** freeing the descriptor number,
+    /// (2) cancels the NWConnection so a parked receive/send continuation
+    /// resumes, (3) joins both loops, and only then (4) releases the pump end
+    /// so libssh2's reads on the libssh2FD return EOF. The libssh2FD itself is
+    /// closed by `AtomicSocket` (it owns that end); the pump never closes
+    /// libssh2FD. The join is what makes the release safe: no syscall on
+    /// `pumpFD` can start after `close(2)` freed the number (issue #237).
     ///
     /// Both socketpair ends are `O_NONBLOCK`, so no thread can be blocked in
     /// `read(pumpFD)` and the shared `PumpFDCloser`'s `shutdown`+`close`
@@ -408,10 +466,12 @@ actor SSHTLSTransport {
     /// `SO_NOSIGPIPE` (`makeSocketPair`): without it that `EPIPE` would raise
     /// `SIGPIPE`, whose default disposition terminates the process.
     ///
-    /// `nonisolated` so the pump's `read()`/`write()` syscalls on the pump FD
-    /// (O_NONBLOCK; EAGAIN yields) run on the detached task's thread without
-    /// hopping onto the actor (which would serialize + stall the pump).
-    nonisolated private func runPump(
+    /// `nonisolated` static, not an instance method: the detached body must
+    /// capture no `self` (a `guard let self` could otherwise skip the release
+    /// when the actor dies first), and the static shape keeps the pump's
+    /// `read()`/`write()` syscalls (O_NONBLOCK; EAGAIN yields) on the
+    /// detached task's thread without hopping onto the actor.
+    nonisolated private static func runPump(
         connection: NWConnection,
         pair: SocketPair,
         pumpFDCloser: PumpFDCloser,
@@ -421,34 +481,39 @@ actor SSHTLSTransport {
         await withTaskGroup(of: Void.self) { group in
             // NWConnection -> pumpFD
             group.addTask {
-                await self.pumpNWToFD(connection: connection, pumpFD: pair.pumpFD, pumpFDCloser: pumpFDCloser, log: pumpLog)
+                await SSHTLSTransport.pumpNWToFD(
+                    connection: connection,
+                    pumpFD: pair.pumpFD,
+                    pumpFDCloser: pumpFDCloser,
+                    log: pumpLog
+                )
             }
             // pumpFD -> NWConnection
             group.addTask {
-                await self.pumpFDToNW(pumpFD: pair.pumpFD, connection: connection, log: pumpLog)
+                await SSHTLSTransport.pumpFDToNW(
+                    pumpFD: pair.pumpFD,
+                    connection: connection,
+                    log: pumpLog
+                )
             }
-            // When either loop exits, cancel the other and close the pump end
-            // so libssh2's reads on libssh2FD return EOF. The loops close it
-            // on their own EOF/error paths too; `PumpFDCloser` makes the
-            // second close a no-op instead of an fd-reuse hazard.
+            // When either loop exits, wake the sibling's descriptor and
+            // cancel the NWConnection, then JOIN both loops before releasing
+            // the number. A `read`/`write` that starts after `close(2)` would
+            // land on whatever reused the number — read forwards unrelated
+            // bytes to the server, write corrupts an unrelated file (issue
+            // #237).
             await group.next()
             group.cancelAll()
-            // This close races the other loop's raw `read` (`pumpFDToNW`) and
-            // `write` (`writeAllToPumpFD`) on `pumpFD`. Once it has closed, the
-            // descriptor number can be reused, so such a syscall can land on an
-            // unrelated descriptor rather than merely returning `EBADF` — read
-            // delivers unrelated bytes to the server, write corrupts the
-            // unrelated file. Pre-existing and deliberately out of scope here
-            // (this fix removes the much more likely double close); tracked
-            // separately.
-            pumpFDCloser.closeOnce(pair.pumpFD)
+            pumpFDCloser.shutdownOnce(pair.pumpFD)
             connection.cancel()
+            await group.waitForAll()
+            pumpFDCloser.closeOnce(pair.pumpFD)
         }
     }
 
     /// NWConnection -> pumpFD: receive bytes, write them to the pump FD for
     /// libssh2 to read. Loops until receive returns nil (EOF/error).
-    nonisolated private func pumpNWToFD(
+    nonisolated private static func pumpNWToFD(
         connection: NWConnection,
         pumpFD: Int32,
         pumpFDCloser: PumpFDCloser,
@@ -470,16 +535,17 @@ actor SSHTLSTransport {
                     }
                 }
             } catch {
-                // NWConnection receive error — EOF or reset. Close the pump
-                // FD so libssh2 sees the broken connection.
+                // NWConnection receive error — EOF or reset. Wake the pump FD
+                // so libssh2 sees the broken connection (shutdown, not close:
+                // the release belongs to `runPump` after the join).
                 log.error("pump_nw_to_fd_error bytes=\(nwToFDBytes) error=\(String(describing: error), privacy: .public)")
-                pumpFDCloser.closeOnce(pumpFD)
+                pumpFDCloser.shutdownOnce(pumpFD)
                 return
             }
             guard let data = received, !data.isEmpty else {
                 // EOF.
                 log.info("pump_nw_to_fd_eof bytes=\(nwToFDBytes)")
-                pumpFDCloser.closeOnce(pumpFD)
+                pumpFDCloser.shutdownOnce(pumpFD)
                 return
             }
             nwToFDBytes += data.count
@@ -491,10 +557,10 @@ actor SSHTLSTransport {
             // Write all bytes to the pump FD (may need multiple writes),
             // yielding on EAGAIN so a full socketpair buffer never pins a
             // cooperative-pool thread.
-            if !(await writeAllToPumpFD(fd: pumpFD, data: data)) {
+            if !(await SSHTLSTransport.writeAllToPumpFD(fd: pumpFD, data: data)) {
                 // Write error (EPIPE / EBADF) — pump FD is broken.
                 log.error("pump_nw_to_fd_write_fail errno=\(Darwin.errno)")
-                pumpFDCloser.closeOnce(pumpFD)
+                pumpFDCloser.shutdownOnce(pumpFD)
                 return
             }
         }
@@ -506,7 +572,7 @@ actor SSHTLSTransport {
     /// EOF or the task is cancelled. Reads never hard-block: the fd is
     /// O_NONBLOCK and EAGAIN yields via `Task.sleep`, so the cooperative
     /// pool thread stays available to the other pump loop + handshake loop.
-    nonisolated private func pumpFDToNW(pumpFD: Int32, connection: NWConnection, log: Logger) async {
+    nonisolated private static func pumpFDToNW(pumpFD: Int32, connection: NWConnection, log: Logger) async {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         var fdToNWBytes: Int = 0
@@ -552,9 +618,17 @@ actor SSHTLSTransport {
     /// Write all bytes to `fd`, yielding on EAGAIN (O_NONBLOCK socketpair)
     /// so a full buffer never pins a cooperative-pool thread.
     /// Returns false on EOF/error.
-    nonisolated private func writeAllToPumpFD(fd: Int32, data: Data) async -> Bool {
+    ///
+    /// The `Task.isCancelled` check at the top of the loop is load-bearing:
+    /// with the only reader gone, the socketpair buffer stays full and the
+    /// EAGAIN retry would otherwise never observe `group.cancelAll()` (the
+    /// `Task.sleep` swallows its cancellation error). Internal (test seam):
+    /// `SSHTLSTransportPumpFDCloserTests` calls this directly to pin the
+    /// bounded exit.
+    nonisolated static func writeAllToPumpFD(fd: Int32, data: Data) async -> Bool {
         var written = 0
         while written < data.count {
+            if Task.isCancelled { return false }
             let n = data.withUnsafeBytes { rawBuffer -> Int in
                 guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return -1 }
                 return Darwin.write(fd, base.advanced(by: written), data.count - written)

@@ -3143,10 +3143,12 @@ actor SSHSession {
         // outer session. The pump reads/writes the outer proxy-subsystem
         // channel via libssh2_channel_read_ex / libssh2_channel_write_ex;
         // freeing the outer session underneath a live pump would be a
-        // use-after-free. cancelPumpSync() cancels the pump task + closes the
-        // pump FD (the loops exit on EBADF). The full actor-isolated close()
-        // is also scheduled (below) for the libssh2FD bookkeeping, but the
-        // synchronous cancel is what makes freeing the outer session safe.
+        // use-after-free. cancelPumpSync() cancels the pump task and wakes the
+        // pump FD (shutdown, not close — the loops exit on EOF/EPIPE and
+        // `runPump` releases the number after its join, issue #237). The full
+        // actor-isolated close() is also scheduled (below) for the libssh2FD
+        // bookkeeping, but the synchronous cancel is what makes freeing the
+        // outer session safe.
         if let innerTransport = innerTransport {
             innerTransport.cancelPumpSync()
         }

@@ -127,23 +127,45 @@ final class SessionMutex: @unchecked Sendable {
 /// through the package-movable `TeleportSessionMutex` seam.
 extension SessionMutex: TeleportSessionMutex {}
 
-/// Closes the pump end of the socketpair exactly once, waking blocked readers.
+/// The pump end of the socketpair, with waking it and releasing it split into
+/// one lock-serialized `open → shutDown → closed` state machine (the
+/// `AtomicSocket` shape, `SSHClient.swift`).
 ///
-/// Two close paths race on the pump FD: a pump loop that sees EOF/error closes
-/// it, and `runPump`'s task-group cleanup closes it after the first loop exits
-/// (plus `cancelPumpSync` from `SSHSession.cleanupLibssh2`). A plain double
-/// `close(2)` is an FD-reuse hazard (another thread can open a file between
-/// the two closes and get the same fd number, which the second close then
-/// kills). Worse, `close` alone does NOT wake a thread blocked in `read()` on
-/// the same fd — the in-flight syscall holds a file reference, so the socket
-/// stays half-alive and the peer never sees EOF (this deadlocked the
-/// `pumpHandlesChannelEOFByClosingPumpFD` test: `pumpFDToChannel` stayed
-/// blocked in `read(pumpFD)` and `read(libssh2FD)` never returned 0).
-/// `shutdown(SHUT_RDWR)` wakes blocked readers immediately and delivers EOF to
-/// the peer regardless of outstanding references; the once-flag serializes the
-/// close itself.
+/// Four paths can race to wake the fd — the `pumpNWToFD` exits (receive error,
+/// EOF, write failure), `close()`, and `cancelPumpSync()` — and two can reach
+/// the release (the TLS-handshake-failure path and `runPump`, both only after
+/// joining their loops). `shutdownOnce` wakes a reader/writer with `0`/`EPIPE`
+/// **without** freeing the number; `closeOnce` frees it exactly once, and
+/// `.closed` is terminal for both, so a delayed wake can never touch a
+/// descriptor the process has since reused. Two independent flags would let a
+/// stale `shutdown(2)` shut down an unrelated connection; a single once-flag
+/// would leak the descriptor on every clean teardown. `shutdown(SHUT_RDWR)` is
+/// also what actually wakes a blocked reader: `close` alone does NOT wake a
+/// thread blocked in `read()` on the same fd — the in-flight syscall holds a
+/// file reference, so the socket stays half-alive and the peer never sees EOF
+/// (this deadlocked the `pumpHandlesChannelEOFByClosingPumpFD` test:
+/// `pumpFDToChannel` stayed blocked in `read(pumpFD)` and `read(libssh2FD)`
+/// never returned 0).
+///
+/// The recorded incident behind single ownership: a repeated `close(2)` is not
+/// harmless — under the extracted package's parallel test execution it
+/// surfaced as a spurious fixture-read failure in an unrelated suite while
+/// four handshake-failure tests were tearing their pumps down (2026-09-24).
+///
+/// The `shutdown(2)`/`close(2)` return values are deliberately ignored: single
+/// ownership means `EBADF`/`EINTR` cannot leave recoverable state, `.closed`
+/// is terminal, and a retry would risk touching a number a concurrent release
+/// has already freed.
 final class PumpFDCloser: @unchecked Sendable {
-    private let didClose = OSAllocatedUnfairLock(initialState: false)
+    /// Test seam: the closer's state, so a teardown test can assert the
+    /// number was released without naming the (private) fd.
+    enum State: Sendable {
+        case open
+        case shutDown
+        case closed
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State.open)
 
     // Explicit nonisolated deinit: the compiler-synthesized deinit of a
     // MainActor-isolated class takes the back-deployed isolated-deinit path,
@@ -156,17 +178,41 @@ final class PumpFDCloser: @unchecked Sendable {
 
     nonisolated init() {}
 
-    /// `shutdown` + `close` the fd exactly once; subsequent calls are no-ops.
+    /// The closer's state (test seam).
+    nonisolated var stateForTesting: State { state.withLock { $0 } }
+
+    /// Wake any reader/writer without freeing the descriptor number. No-op
+    /// once shut down or closed, so a stale wake can never reach a reused
+    /// number.
+    nonisolated func shutdownOnce(_ fd: Int32) {
+        guard fd >= 0 else { return }
+        state.withLock { s in
+            guard case .open = s else { return }
+            s = .shutDown
+            // Inside the lock: with the check outside, a preempted wake could
+            // resume after a concurrent release freed (and the process
+            // reused) the number, and shut down an unrelated descriptor.
+            Darwin.shutdown(fd, SHUT_RDWR)
+        }
+    }
+
+    /// Release the number exactly once, and only from a path that can prove no
+    /// loop can start another syscall (after the join). `.closed` is terminal
+    /// for both methods.
     nonisolated func closeOnce(_ fd: Int32) {
         guard fd >= 0 else { return }
-        let shouldClose = didClose.withLock { done -> Bool in
-            if done { return false }
-            done = true
-            return true
-        }
-        if shouldClose {
-            Darwin.shutdown(fd, SHUT_RDWR)
-            Darwin.close(fd)
+        state.withLock { s in
+            switch s {
+            case .closed:
+                return
+            case .open, .shutDown:
+                s = .closed
+                // Both syscalls are inside the lock for the same reason as
+                // `shutdownOnce`: no window between the state decision and
+                // the release.
+                Darwin.shutdown(fd, SHUT_RDWR)
+                Darwin.close(fd)
+            }
         }
     }
 }
@@ -177,13 +223,14 @@ final class PumpFDCloser: @unchecked Sendable {
 /// Created with `channelRead` / `channelWrite` closures that wrap the outer
 /// session's SSH channel (`libssh2_channel_read_ex` / `libssh2_channel_write_ex`).
 /// `start()` creates the socketpair, starts the bidirectional pump, and returns
-/// the libssh2-facing FD. `close()` tears down the pump + the pump-end FD.
+/// the libssh2-facing FD. `close()` stops the pump and wakes the pump-end FD;
+/// the pump releases that descriptor once both of its loops have joined (issue
+/// #237), so `close()` does not free the descriptor number.
 ///
-/// The returned FD is owned by the transport — `close()` closes it. The caller
-/// must NOT `close()` the FD directly (libssh2 reads/writes it directly during
-/// the inner handshake + I/O; closing it here after the inner session is freed
-/// is the transport's responsibility — see `SSHTLSTransport.close` for the same
-/// pattern).
+/// The returned FD is owned by the inner SSHSession (its `AtomicSocket` closes
+/// it after `libssh2_session_free`). The caller must NOT `close()` it directly
+/// (libssh2 reads/writes it directly during the inner handshake + I/O) — see
+/// `SSHTLSTransport.close` for the same pattern.
 actor SSHProxySubsystemTransport {
 
     /// The result of creating the socketpair bridge.
@@ -258,7 +305,9 @@ actor SSHProxySubsystemTransport {
     /// Both ends are full-duplex `AF_UNIX` `SOCK_STREAM` sockets. The
     /// libssh2 end is handed to `libssh2_session_handshake(session, fd)`;
     /// the pump end is read/written by the pump coroutine. The caller owns
-    /// both FDs and must `close()` them.
+    /// the libssh2 end and must `close()` it; the pump end is owned by the
+    /// pump and released by it through `PumpFDCloser` once both pump loops
+    /// have joined (issue #237).
     ///
     /// - Returns: a `SocketPair` with two valid (>= 0) FDs.
     /// - Throws: `SSHError.connectionFailed` if `socketpair(2)` fails.
@@ -281,13 +330,13 @@ actor SSHProxySubsystemTransport {
                 _ = Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK)
             }
         }
-        // Suppress SIGPIPE on **both** ends. `PumpFDCloser.closeOnce` does
-        // `shutdown(SHUT_RDWR)` before closing, so a `write` racing it — the
-        // pump's write on the pump end, libssh2's write on the peer — gets
-        // `EPIPE` and the kernel raises `SIGPIPE`, whose default disposition
-        // terminates the process. With the option set the same write returns
-        // `-1`/`EPIPE` and the pump's error path handles it. Same idiom as the
-        // TCP path in `SSHClient`.
+        // Suppress SIGPIPE on **both** ends. `PumpFDCloser` shuts an end down
+        // (`shutdown(SHUT_RDWR)`) before it closes, so a `write` racing that
+        // release — the pump's write on the pump end, libssh2's write on the
+        // peer — gets `EPIPE` and the kernel raises `SIGPIPE`, whose default
+        // disposition terminates the process. With the option set the same
+        // write returns `-1`/`EPIPE` and the pump's error path handles it.
+        // Same idiom as the TCP path in `SSHClient`.
         for fd in fds {
             var noSigPipe: Int32 = 1
             _ = setsockopt(
@@ -311,7 +360,9 @@ actor SSHProxySubsystemTransport {
     /// as they arrive — the caller can immediately hand the FD to
     /// `libssh2_session_handshake` without a race.
     ///
-    /// The returned FD is owned by the transport — `close()` closes it.
+    /// The returned FD is owned by the inner SSHSession; the caller must NOT
+    /// `close()` it directly (libssh2 reads/writes it during the inner
+    /// handshake + I/O).
     func start() async throws -> Int32 {
         let pair = try Self.makeSocketPair()
         self.socketPair = pair
@@ -321,15 +372,29 @@ actor SSHProxySubsystemTransport {
         )
 
         // Start the pump before returning the FD. Both loops run concurrently
-        // in a detached task; either loop exiting cancels the other + closes
-        // the pump end (so the libssh2 session sees EOF on its reads).
-        // The closer is shared between the pump loops, `runPump`'s cleanup,
-        // and `cancelPumpSync` so the pump FD is shutdown+closed exactly once
+        // in a detached task; either loop exiting cancels the other + wakes
+        // the pump end (so the libssh2 session sees EOF on its reads), and
+        // `runPump` releases it only after both loops have joined. The closer
+        // is shared between the pump loops, `runPump`, and `cancelPumpSync`
         // (see `PumpFDCloser`).
+        //
+        // The detached body must not capture `self`: if the actor dies after
+        // `close()` returns (which no longer releases the fd) but before the
+        // body runs, a `guard let self` would return without ever releasing
+        // the descriptor. Read the closures + token here and pass them by
+        // value (issue #237).
         let closer = PumpFDCloser()
-        let task = Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            await self.runPump(pair: pair, closer: closer)
+        let channelRead = self.channelRead
+        let channelWrite = self.channelWrite
+        let cancelToken = self.cancelToken
+        let task = Task.detached(priority: .userInitiated) {
+            await SSHProxySubsystemTransport.runPump(
+                pair: pair,
+                closer: closer,
+                channelRead: channelRead,
+                channelWrite: channelWrite,
+                cancelToken: cancelToken
+            )
         }
         pumpTask = task
         pumpState.withLock { state in
@@ -343,11 +408,14 @@ actor SSHProxySubsystemTransport {
 
     // MARK: - Close
 
-    /// Tear down the transport: stop the pump and close the pump end of the
-    /// socketpair. The libssh2-facing FD is NOT closed here — it is owned by
-    /// the inner SSHSession (which closes it after `libssh2_session_free`),
-    /// because libssh2 reads/writes that FD directly. Closing it here would
-    /// double-close.
+    /// Tear down the transport: stop the pump and wake the pump end of the
+    /// socketpair. `runPump` releases that descriptor after both of its loops
+    /// have joined, so this returns without freeing the descriptor number
+    /// (issue #237: a loop that started a syscall after `close(2)` could land
+    /// on a reused descriptor). The libssh2-facing FD is NOT closed here — it
+    /// is owned by the inner SSHSession (which closes it after
+    /// `libssh2_session_free`), because libssh2 reads/writes that FD directly.
+    /// Closing it here would double-close.
     ///
     /// Safe to call multiple times.
     func close() {
@@ -357,11 +425,13 @@ actor SSHProxySubsystemTransport {
         logger.info("proxy_subsystem_transport_close")
     }
 
-    /// Synchronously cancel the pump task + close the pump end of the
-    /// socketpair, without awaiting the actor. Used by `SSHSession.cleanupLibssh2()`
-    /// which is synchronous and must stop the pump BEFORE freeing the outer
-    /// libssh2 session (the pump reads/writes a channel on the outer session;
-    /// freeing the session underneath a live pump would be a use-after-free).
+    /// Synchronously cancel the pump task and wake the pump end of the
+    /// socketpair (shutdown, not close — `runPump` releases it after its join,
+    /// issue #237), without awaiting the actor. Used by
+    /// `SSHSession.cleanupLibssh2()` which is synchronous and must stop the
+    /// pump BEFORE freeing the outer libssh2 session (the pump reads/writes a
+    /// channel on the outer session; freeing the session underneath a live
+    /// pump would be a use-after-free).
     ///
     /// Idempotent. Does NOT close the libssh2-facing FD (owned by the inner
     /// session's `AtomicSocket`).
@@ -381,9 +451,10 @@ actor SSHProxySubsystemTransport {
         // freed (avoids a use-after-free on the outer session/channel).
         cancelToken?.cancel()
         task?.cancel()
-        // shutdown+close via the shared closer (wakes blocked readers; no-op
-        // if a pump loop already closed it — avoids the fd-reuse race).
-        closer?.closeOnce(fd)
+        // Wake only: `shutdown(2)` unblocks an in-flight read/write (`0`/
+        // `EPIPE`) without freeing the number, so no loop can fall through to
+        // a reused descriptor. `runPump` closes after its join (issue #237).
+        closer?.shutdownOnce(fd)
     }
 
     // MARK: - Pump internals
@@ -392,33 +463,63 @@ actor SSHProxySubsystemTransport {
     ///   - channel -> pumpFD: read from the channel, write to pumpFD.
     ///   - pumpFD -> channel: read from pumpFD, write to the channel.
     ///
-    /// Both loops exit when either side hits EOF or errors, then close the
+    /// Both loops exit when either side hits EOF or errors. The cleanup then
+    /// (1) cancels the group and flips the channel cancellation token — the
+    /// loops park inside the synchronous `channelRead`/`channelWrite`
+    /// closures, which only observe the token, so `group.cancelAll()` alone
+    /// cannot end them — (2) shuts the pump end down, waking the sibling's
+    /// `read` with `0` and its `write` with `EPIPE` **without** freeing the
+    /// descriptor number, (3) joins both loops, and only then (4) releases the
     /// pump end so the inner libssh2 session's reads on the libssh2FD return
     /// EOF. The libssh2FD itself is closed by the inner session (it owns that
-    /// end); the pump never closes libssh2FD to avoid racing FD reuse.
+    /// end); the pump never closes libssh2FD. The join is what makes the
+    /// release safe: no syscall on `pumpFD` can start after `close(2)` freed
+    /// the number (issue #237).
     ///
-    /// `nonisolated` so the pump's `read()`/`write()` syscalls on the pump FD
-    /// (both ends are `O_NONBLOCK`; EAGAIN yields) run on the detached task's
-    /// thread without hopping onto the actor (which would serialize + stall
-    /// the pump).
-    nonisolated private func runPump(pair: SocketPair, closer: PumpFDCloser) async {
+    /// `nonisolated` static, not an instance method: the detached body must
+    /// capture no `self` (a `guard let self` could otherwise skip the release
+    /// when the actor dies first), and the static shape keeps the pump's
+    /// `read()`/`write()` syscalls on the pump FD (both ends are `O_NONBLOCK`;
+    /// EAGAIN yields) on the detached task's thread without hopping onto the
+    /// actor.
+    nonisolated private static func runPump(
+        pair: SocketPair,
+        closer: PumpFDCloser,
+        channelRead: @escaping ChannelRead,
+        channelWrite: @escaping ChannelWrite,
+        cancelToken: PumpCancelToken?
+    ) async {
         let pumpLog = Logger.forCategory("SSH-Proxy-Subsystem-Pump")
         pumpLog.info("pump_start libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD)")
         await withTaskGroup(of: Void.self) { group in
             // channel -> pumpFD
             group.addTask {
-                await self.pumpChannelToFD(pair: pair, closer: closer, log: pumpLog)
+                await SSHProxySubsystemTransport.pumpChannelToFD(
+                    pair: pair,
+                    closer: closer,
+                    channelRead: channelRead,
+                    log: pumpLog
+                )
             }
             // pumpFD -> channel
             group.addTask {
-                await self.pumpFDToChannel(pair: pair, log: pumpLog)
+                await SSHProxySubsystemTransport.pumpFDToChannel(
+                    pair: pair,
+                    channelWrite: channelWrite,
+                    log: pumpLog
+                )
             }
-            // When either loop exits, cancel the other + close the pump end.
-            // (The channel->FD loop closes pumpFD on its own EOF; the closer
-            // makes this idempotent, and ensures the pumpFD is closed even if
-            // a loop exited without reaching its close path.)
+            // When either loop exits: cancel the group, flip the token the
+            // channel closures observe, wake the sibling's descriptor, then
+            // JOIN both loops before releasing the number. A `read`/`write`
+            // that starts after `close(2)` would land on whatever reused the
+            // number — read forwards unrelated bytes, write corrupts an
+            // unrelated file (issue #237).
             await group.next()
             group.cancelAll()
+            cancelToken?.cancel()
+            closer.shutdownOnce(pair.pumpFD)
+            await group.waitForAll()
             closer.closeOnce(pair.pumpFD)
         }
     }
@@ -427,31 +528,36 @@ actor SSHProxySubsystemTransport {
     /// injected `channelRead` closure), write them to the pump FD for the
     /// inner libssh2 session to read. Loops until the channel returns 0 (EOF)
     /// or the task is cancelled.
-    nonisolated private func pumpChannelToFD(pair: SocketPair, closer: PumpFDCloser, log: Logger) async {
+    nonisolated private static func pumpChannelToFD(
+        pair: SocketPair,
+        closer: PumpFDCloser,
+        channelRead: ChannelRead,
+        log: Logger
+    ) async {
         var channelToFDBytes: Int = 0
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
         while !Task.isCancelled {
             let n = channelRead(buffer, 64 * 1024)
             if n <= 0 {
-                // Channel EOF or error — shutdown+close the pump FD so the
-                // inner libssh2 session's reads return EOF (otherwise
+                // Channel EOF or error — wake the pump FD so the inner
+                // libssh2 session's reads return EOF (otherwise
                 // `libssh2_session_handshake` would hang forever waiting for
-                // a banner that will never arrive). `shutdown` first: a plain
-                // `close` does NOT wake the FD->channel loop blocked in
-                // `read(pumpFD)` — the in-flight syscall holds a file
-                // reference, so the socket stays half-alive and the libssh2FD
-                // peer never sees EOF.
+                // a banner that will never arrive). `shutdown`, not `close`:
+                // it wakes the FD->channel loop blocked in `read(pumpFD)`
+                // without freeing the number (the release belongs to `runPump`
+                // after the join, issue #237).
                 log.diagInfo("SSH-Proxy-Subsystem-Pump", "pump_channel_to_fd_eof_or_err ret=\(n) bytes=\(channelToFDBytes)")
-                closer.closeOnce(pair.pumpFD)
+                closer.shutdownOnce(pair.pumpFD)
                 return
             }
             channelToFDBytes += n
             // Write all bytes to the pump FD (may need multiple writes),
             // yielding on EAGAIN so a full socketpair buffer never pins a
             // cooperative-pool thread.
-            if !(await writeAllToPumpFD(fd: pair.pumpFD, buffer: buffer, count: n)) {
+            if !(await SSHProxySubsystemTransport.writeAllToPumpFD(fd: pair.pumpFD, buffer: buffer, count: n)) {
                 log.error("pump_channel_to_fd_write_fail errno=\(Darwin.errno) written=\(n)")
+                closer.shutdownOnce(pair.pumpFD)
                 return
             }
         }
@@ -464,7 +570,11 @@ actor SSHProxySubsystemTransport {
     /// cancelled. Reads never hard-block: the fd is O_NONBLOCK and EAGAIN
     /// yields via `Task.sleep`, so the cooperative pool thread stays
     /// available to the other pump loop + the inner handshake loop.
-    nonisolated private func pumpFDToChannel(pair: SocketPair, log: Logger) async {
+    nonisolated private static func pumpFDToChannel(
+        pair: SocketPair,
+        channelWrite: ChannelWrite,
+        log: Logger
+    ) async {
         log.info("pump_fd_to_channel_start pumpFD=\(pair.pumpFD)")
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64 * 1024)
         defer { buffer.deallocate() }
@@ -508,13 +618,19 @@ actor SSHProxySubsystemTransport {
     /// Write all bytes to the pump FD, yielding on EAGAIN (O_NONBLOCK
     /// socketpair) so a full buffer never pins a cooperative-pool thread.
     /// Returns false on EOF/error.
-    nonisolated private func writeAllToPumpFD(
+    ///
+    /// The `Task.isCancelled` check at the top of the loop is load-bearing:
+    /// with the only reader gone, the socketpair buffer stays full and the
+    /// EAGAIN retry would otherwise never observe `group.cancelAll()` (the
+    /// `Task.sleep` swallows its cancellation error).
+    nonisolated private static func writeAllToPumpFD(
         fd: Int32,
         buffer: UnsafePointer<UInt8>,
         count: Int
     ) async -> Bool {
         var written = 0
         while written < count {
+            if Task.isCancelled { return false }
             let n = Darwin.write(fd, buffer.advanced(by: written), count - written)
             if n > 0 {
                 written += n
@@ -603,9 +719,10 @@ extension SSHProxySubsystemTransport {
                 // flips the token and then frees the outer session under this
                 // mutex, so a call that just passed the token check cannot
                 // race the free. Cancellation surfaces to the pump loop as
-                // EOF (0), which closes the pump FD and exits.
+                // EOF (0), which wakes the pump FD and exits the loop.
                 var eagainSpins = 0
                 while true {
+                    if Task.isCancelled { return 0 }
                     let n = outerSessionMutex.withLock { () -> Int in
                         guard !cancelToken.isCancelled else { return cancelledReturn }
                         return libssh2_channel_read_ex(channel, 0, buf, maxLen)
@@ -635,6 +752,7 @@ extension SSHProxySubsystemTransport {
                 // a closed channel (0), which makes it exit.
                 var eagainSpins = 0
                 while true {
+                    if Task.isCancelled { return 0 }
                     let n = outerSessionMutex.withLock { () -> Int in
                         guard !cancelToken.isCancelled else { return cancelledReturn }
                         return libssh2_channel_write_ex(channel, 0, buf, len)
