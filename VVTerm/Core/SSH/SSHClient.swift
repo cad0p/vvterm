@@ -2137,6 +2137,16 @@ actor SSHSession {
     private var sftpSessionIsInner: Bool = false
     private var shellChannels: [UUID: ShellChannelState] = [:]
     private var shellStartupsInFlight: Set<UUID> = []
+    /// In-flight `prepareTeleportInnerSession()` **initiator** bodies (#286).
+    /// `cleanupLibssh2()` defers the inner-session + proxy-subsystem-channel
+    /// free while any token is held, so a parked prepare body cannot resume
+    /// onto freed libssh2 state. Scope: a token protects the prepare **body**
+    /// only — it does not protect a caller's post-prepare use of the inner
+    /// session, which each caller must guard for itself. (The dedup joiner
+    /// registers nothing because its frame touches no libssh2 after resuming;
+    /// the known unregistered caller-side window is the SFTP EAGAIN loop,
+    /// tracked separately.)
+    private var innerPreparesInFlight: Set<UUID> = []
     private var socket: Int32 = -1
     /// The TLS+ALPN transport backing `socket` when the session connects to a
     /// Teleport proxy (`.faceIDTeleport`). Non-nil only for the TLS path;
@@ -2302,14 +2312,20 @@ actor SSHSession {
 
     /// Returns `true` when the Teleport INNER (target-node) session has been
     /// established by `prepareTeleportInnerSession()` (non-nil libssh2
-    /// session). This is a lightweight liveness check used by
-    /// `SSHClient.remoteEnvironment()` to decide whether to prepare the inner
-    /// session before running exec probes — distinct from `supportsExec`,
-    /// which additionally gates on socket usability and active state. For
-    /// non-Teleport auth methods this returns `false` (there is no inner
-    /// session, and none is needed).
+    /// session) on a live session. This is a lightweight liveness check used
+    /// by `SSHClient.remoteEnvironment()` to decide whether to prepare the
+    /// inner session before running exec probes — distinct from
+    /// `supportsExec`, which additionally gates on socket usability. The
+    /// `isActive` conjunct matters during the deferred-teardown window (#286):
+    /// while a parked prepare holds its `innerPreparesInFlight` token,
+    /// `cleanupLibssh2()` has returned early, so `innerLibssh2Session` is
+    /// still non-nil although the session is dead and must not be reported as
+    /// ready. For non-Teleport auth methods this returns `false` (there is no
+    /// inner session, and none is needed).
     var isInnerSessionReady: Bool {
-        config.authMethod == .faceIDTeleport && innerLibssh2Session != nil
+        isActive
+            && config.authMethod == .faceIDTeleport
+            && innerLibssh2Session != nil
     }
 
     /// Returns `true` when SFTP (remote file browser) can currently succeed
@@ -2356,6 +2372,10 @@ actor SSHSession {
     func discardedShellStartupChannelsForTesting() -> Int {
         discardedShellStartupChannelCount
     }
+
+    /// Test seam for #286: observes whether the synchronous teardown
+    /// (`cleanupLibssh2()`, including its no-session return) has completed.
+    var hasBeenCleanedForTesting: Bool { hasBeenCleaned }
 
     private func notifyShellStartupTestHook(
         _ stage: ShellStartupStage,
@@ -3109,9 +3129,20 @@ actor SSHSession {
     }
 
     private func cleanupLibssh2() {
-        // A startup operation may still own a channel pointer across an actor
-        // suspension. Its defer releases that ownership before final cleanup.
-        guard shellStartupsInFlight.isEmpty else { return }
+        // The in-flight sets sequence the native free after the last registered
+        // user: a shell startup or a Teleport prepare may still own a libssh2
+        // object across an actor suspension (the prepare body also owns the
+        // outer proxy-subsystem channel across the stderr-capture awaits), and
+        // its defer releases the token before re-entering here. A deferred
+        // cleanup leaves `innerLibssh2Session` / `proxySubsystemChannel`
+        // allocated while `isActive` is already `false`. The two gates this fix
+        // touched (the prepare idempotence check and `isInnerSessionReady`) test
+        // `isActive`; the exec/SFTP gates still route on
+        // `innerLibssh2Session != nil` and are carried by the `innerSocket = -1`
+        // / `innerAtomicSocket.isUsable` / `!hasBeenCleaned` invariants that
+        // `invalidateTransport()` sets before any deferral — plus the
+        // cached-SFTP fast path, which is #288's window.
+        guard shellStartupsInFlight.isEmpty, innerPreparesInFlight.isEmpty else { return }
         // Prevent double cleanup
         guard !hasBeenCleaned else { return }
         sftpSession = nil
@@ -3246,6 +3277,14 @@ actor SSHSession {
             socket = -1
         }
         connectedPeerAddress = nil
+        // Reachability of the deferred-teardown re-check (#286): `cleanup()`
+        // is connect-failure-only today — its callers run before
+        // `isActive = true`, and `SSHClient` publishes `session` only after
+        // `connect()` returns, so no prepare can be in flight. It does NOT
+        // clear `isActive` (unlike `invalidateTransport()`), so a future
+        // post-connect caller must clear `isActive` — or set a
+        // `teardownRequested` flag the shell/prepare defers re-check — for
+        // the `if !isActive` re-entry to complete the free.
         cleanupLibssh2()
     }
 
@@ -3927,8 +3966,14 @@ actor SSHSession {
         // Non-Teleport auth methods support exec directly on the outer session.
         guard config.authMethod == .faceIDTeleport else { return }
         // Idempotent: a ready inner session means a prior prepare (or shell)
-        // already established the tunnel + second handshake.
-        if innerLibssh2Session != nil { return }
+        // already established the tunnel + second handshake. The `isActive`
+        // conjunct matters during the deferred-teardown window (#286): while a
+        // parked prepare holds its `innerPreparesInFlight` token,
+        // `cleanupLibssh2()` has returned early, so `innerLibssh2Session` is
+        // still non-nil although the session is dead. Reporting "ready" here
+        // would send a new caller into a pending free; falling through reaches
+        // the body's own liveness guard and yields the real `.notConnected`.
+        if isActive, innerLibssh2Session != nil { return }
 
         // #276/V1: in-flight dedup. A concurrent caller joins the running
         // prepare instead of starting a second body that would clobber
@@ -3948,8 +3993,34 @@ actor SSHSession {
         //
         // The slot is per-session and the task is unstructured: a cancelled
         // caller does not cancel a body another caller may be waiting on.
+        //
+        // The joiner registers no `innerPreparesInFlight` token (#286): this
+        // frame awaits the initiator's body and touches no libssh2 after
+        // resuming, so the initiator's token already covers the whole body.
+        // Every prepare caller must instead hold its own token (the shell
+        // paths) or re-validate before its next libssh2 call. Within the #286
+        // audit's caller set, the one known unregistered caller-side window is
+        // the SFTP EAGAIN loop (#288); the shell write/resize post-wait window
+        // found outside that set is #290.
         if let inFlight = prepareTeleportInnerSessionTask {
             return try await inFlight.value
+        }
+
+        let prepareId = UUID()
+        innerPreparesInFlight.insert(prepareId)
+        defer {
+            // Order is load-bearing (#286): the token must be removed BEFORE
+            // the re-entry, or `cleanupLibssh2()`'s guard sees its own token
+            // and no later completer exists.
+            innerPreparesInFlight.remove(prepareId)
+            // Mirror the shell-start defers: if the teardown ran while this
+            // prepare was parked, `cleanupLibssh2()` returned early —
+            // complete it now. This relies on every deferrable trigger
+            // clearing `isActive` first; a future trigger that does not must
+            // set a `teardownRequested` flag this defer re-checks.
+            if !isActive {
+                cleanupLibssh2()
+            }
         }
 
         let task = Task { [weak self] () -> Void in
@@ -6194,7 +6265,10 @@ actor SSHSession {
     // MARK: - Keep Alive
 
     func sendKeepAlive() {
-        guard let session = libssh2Session else { return }
+        // Liveness gate (#286): during the deferred-teardown window
+        // `libssh2Session` stays non-nil while the session's free is pending;
+        // skipping the call there is behaviour-neutral for a healthy session.
+        guard isActive, let session = libssh2Session else { return }
         var secondsToNext: Int32 = 0
         // Acquire the outer-session mutex: the Teleport proxy-subsystem pump
         // may be reading/writing the outer session's proxy channel off-actor

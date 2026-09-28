@@ -123,6 +123,70 @@ struct PrepareInnerSessionDedupTests {
         )
     }
 
+    /// #286: a teardown that lands while a prepare body is parked must defer
+    /// the inner-session / proxy-subsystem-channel free until the parked body
+    /// has completed.
+    ///
+    /// First assertion (REGISTRATION + GUARD): the parked prepare holds an
+    /// `innerPreparesInFlight` token, so `disconnect()` → `cleanupLibssh2()`
+    /// returns early and `hasBeenCleaned` stays `false`. Pre-fix this fails
+    /// with `hasBeenCleanedForTesting` expected `false`, got `true` (the
+    /// no-session return completes the teardown immediately).
+    ///
+    /// Second assertion (TOKEN DEFER RE-ENTRY): releasing the hook lets the
+    /// body hit its `isActive` guard, the initiator's `defer` removes the
+    /// token and re-enters `cleanupLibssh2()`, which now completes. This
+    /// assertion is NON-DISCRIMINATING ALONE — it passes pre-fix too (the
+    /// same no-session return sets `hasBeenCleaned`). Only the pair
+    /// discriminates, in order. Do not delete as redundant: the second
+    /// assertion is the only guard against a defer-order inversion (calling
+    /// `cleanupLibssh2()` before `innerPreparesInFlight.remove(prepareId)`),
+    /// which leaves `hasBeenCleaned == false` after `prepare.value`; Pin B
+    /// checks insert-before-remove, not remove-before-re-entry.
+    ///
+    /// Not covered here, deliberately:
+    /// - the UAF itself: the DEBUG hook parks the body *before any libssh2
+    ///   state exists* and this target has no in-process SSH/libssh2 fixture;
+    /// - the `if !isActive` false branch: the fixture never connects, so
+    ///   `isActive` is `false` on every local path;
+    /// - the L1 idempotence gate (`isActive, innerLibssh2Session != nil`): the
+    ///   fixture never has an `innerLibssh2Session`, so the
+    ///   non-nil-but-dead window cannot be constructed.
+    @Test
+    func teardownIsDeferredWhileAPrepareIsParked() async {
+        // Positive control: the fixture's `disconnect()` really does reach
+        // `cleanupLibssh2()` on an unconnected session, so the first assertion
+        // below cannot pass vacuously via an inert `disconnect()`.
+        let control = makeTeleportSession()
+        await control.disconnect()
+        #expect(
+            await control.hasBeenCleanedForTesting == true,
+            "disconnect must reach cleanup on an unconnected session"
+        )
+
+        let session = makeTeleportSession()
+        let hook = PrepareBodyHook()
+        await session.setPrepareTeleportInnerSessionBodyTestHook { await hook.enter() }
+
+        let prepare = Task { try? await session.prepareTeleportInnerSession() }
+        while hook.entryCount == 0 {
+            await Task.yield()
+        }
+
+        await session.disconnect()
+        #expect(
+            await session.hasBeenCleanedForTesting == false,
+            "the teardown must be deferred while a prepare is parked"
+        )
+
+        hook.release()
+        _ = await prepare.value
+        #expect(
+            await session.hasBeenCleanedForTesting == true,
+            "the prepare's defer must complete the deferred teardown"
+        )
+    }
+
     @Test
     func aLaterPrepareStartsAFreshBodyAfterCompletion() async {
         // The dedup must not become a permanent sticky failure: after the
