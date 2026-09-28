@@ -475,7 +475,10 @@ actor SSHClient {
         }
     }
 
-    func remoteEnvironment(forceRefresh: Bool = false) async -> RemoteEnvironment {
+    func remoteEnvironment(
+        forceRefresh: Bool = false,
+        watchdogOrigin: String = "unspecified"
+    ) async -> RemoteEnvironment {
         // Teleport's outer session is the PROXY, which rejects exec with -22.
         // The resolver's exec probes must run on the INNER (target-node)
         // session, established by `prepareTeleportInnerSession()`. If the
@@ -506,7 +509,20 @@ actor SSHClient {
            ) {
             return cached
         }
-        let innerReady = await (session?.isInnerSessionReady ?? false)
+        // #276/D4: name the park if this hop is still suspended after the
+        // short watchdog deadline (startShell and the terminal-type stage
+        // label their calls; other callers use the default label).
+        let innerReady = await Self.withStartupWatchdog(
+            deadline: Self.startupHopWatchdogDeadline,
+            emitter: { detail in
+                Logger.forCategory("SSH").diagError(
+                    "SSH",
+                    "startup watchdog: remoteEnvironment(from:\(watchdogOrigin)) \(detail)"
+                )
+            }
+        ) {
+            await (self.session?.isInnerSessionReady ?? false)
+        }
         // Post-hop reuse decision (the pre-fix composite, kept verbatim):
         // reuse unless this is a Teleport connection whose cached platform is
         // `.unknown` and the inner session is now ready — the case that must
@@ -632,7 +648,10 @@ actor SSHClient {
         forceRefresh: Bool,
         capturedSession: SSHSession?
     ) async throws -> RemoteTerminalType {
-        let environment = await remoteEnvironment(forceRefresh: forceRefresh)
+        let environment = await remoteEnvironment(
+            forceRefresh: forceRefresh,
+            watchdogOrigin: "terminalTypeStage"
+        )
         let redactionServer = connectedServer
         let terminalType = await RemoteTerminalTypeResolver.resolve(
             environment: environment,
@@ -785,7 +804,7 @@ actor SSHClient {
         // exec probes route to the inner session (never the outer proxy).
         // startShellViaTeleportProxy later calls prepareTeleportInnerSession()
         // again — that's an idempotent no-op when the inner session is ready.
-        let environment = await remoteEnvironment()
+        let environment = await remoteEnvironment(watchdogOrigin: "startShell")
         // prepareTeleportInnerSession() is invoked (and its error swallowed)
         // by remoteEnvironment(); rethrow the stored prepare failure here
         // instead of letting the shell-start guard mask the proxy's real
@@ -911,14 +930,27 @@ actor SSHClient {
         terminalType: RemoteTerminalType
     ) async throws -> ShellHandle {
         try validateShellStartupSession(expectedSession)
-        let shell = try await expectedSession.startShell(
-            cols: cols,
-            rows: rows,
-            pixelSize: pixelSize,
-            startupCommand: startupCommand,
-            environment: environment,
-            terminalType: terminalType
-        )
+        // #276/D4: name the park if the shell start is still suspended after
+        // the short watchdog deadline. Non-interrupting: the shell start is
+        // awaited normally.
+        let shell = try await SSHClient.withStartupWatchdog(
+            deadline: SSHClient.startupHopWatchdogDeadline,
+            emitter: { detail in
+                Logger.forCategory("SSH").diagError(
+                    "SSH",
+                    "startup watchdog: session.startShell \(detail)"
+                )
+            }
+        ) {
+            try await expectedSession.startShell(
+                cols: cols,
+                rows: rows,
+                pixelSize: pixelSize,
+                startupCommand: startupCommand,
+                environment: environment,
+                terminalType: terminalType
+            )
+        }
         do {
             try validateShellStartupSession(expectedSession)
             return shell
@@ -1746,6 +1778,39 @@ actor SSHClient {
     /// still fill the cache while no session exists.
     nonisolated static func isCurrentSession(_ captured: SSHSession?, current: SSHSession?) -> Bool {
         captured === current
+    }
+
+    /// Short per-call deadline for the D4 naming watchdogs (#276/N8): if the
+    /// watched await is still parked after this, emit one labelled diag line.
+    /// Nothing is bounded here — `withStartupDeadline` owns bounding.
+    nonisolated static let startupHopWatchdogDeadline: Duration = .seconds(3)
+
+    /// Non-interrupting startup watchdog (#276/D4).
+    ///
+    /// Arms a detached timer; if `operation` is still parked at `deadline` the
+    /// timer emits `detail` through `emitter` **once** (the `catch { return }`
+    /// disarm pattern — a cancelled sleep must not fall through to an emit).
+    /// The operation is awaited normally and its result/error is returned: this
+    /// names a park, it does not bound one. The benign boundary race (the
+    /// operation completes exactly as the timer fires) can produce one extra
+    /// line — an extra line is not a failure signal.
+    nonisolated static func withStartupWatchdog<T: Sendable>(
+        deadline: Duration,
+        emitter: @escaping @Sendable (String) -> Void = { detail in
+            Logger.forCategory("SSH").diagError("SSH", "startup watchdog: \(detail)")
+        },
+        operation: @escaping @Sendable () async throws -> T
+    ) async rethrows -> T {
+        let timer = Task.detached {
+            do {
+                try await Task.sleep(for: deadline)
+            } catch {
+                return // cancelled — the watched operation completed in time
+            }
+            emitter("still parked after \(secondsText(deadline))s")
+        }
+        defer { timer.cancel() }
+        return try await operation()
     }
 
     private func fallbackReason(for error: Error) -> MoshFallbackReason {
