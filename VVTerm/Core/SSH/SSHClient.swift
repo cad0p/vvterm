@@ -3310,9 +3310,23 @@ actor SSHSession {
 
     func listDirectory(at path: String, maxEntries: Int? = nil) async throws -> [RemoteFileEntry] {
         let sftp = try await ensureSFTPSession()
+        // The libssh2 session that backs `sftp` (inner for Teleport, outer
+        // for direct), captured alongside the handle so the loop-top guard
+        // below can re-verify both identities.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         let handle = try await openDirectoryHandle(at: normalizedPath, sftp: sftp)
-        defer { libssh2_sftp_close_handle(handle) }
+        // Conditional close: when the loop-top guard throws because the
+        // session went away, its free already reaped the handle, so calling
+        // libssh2 on it here would be the very use-after-free this guards
+        // against.
+        defer {
+            if isActive, !hasBeenCleaned, sftp == sftpSession {
+                libssh2_sftp_close_handle(handle)
+            }
+        }
 
         let limit = maxEntries ?? .max
         var entries: [RemoteFileEntry] = []
@@ -3320,6 +3334,22 @@ actor SSHSession {
 
         while entries.count < limit {
             try Task.checkCancellation()
+            // Loop-top liveness re-check: the captured `sftp`/`session`/
+            // `handle` can be reaped by the session free while this loop is
+            // parked in the EAGAIN branch below. This placement also covers
+            // the loop's second re-entry path — the `await readlink` below
+            // resumes and the next iteration re-enters
+            // `libssh2_sftp_readdir_ex`, which a guard placed only after the
+            // wait would miss. The wait helper is same-actor and
+            // non-suspending today, so this is a structural invariant (pinned
+            // by `SSHFSFTPLoopLivenessPinsTests`), not a fix for a reachable
+            // use-after-free.
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
             var attributes = LIBSSH2_SFTP_ATTRIBUTES()
 
             let bytesRead = nameBuffer.withUnsafeMutableBufferPointer { buffer -> Int in
@@ -3393,6 +3423,10 @@ actor SSHSession {
         guard maxBytes > 0 else { return Data() }
 
         let sftp = try await ensureSFTPSession()
+        // Route-selected backing session, re-verified at the loop top.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         let handle = try await openFileHandle(
             at: normalizedPath,
@@ -3400,7 +3434,11 @@ actor SSHSession {
             flags: UInt32(LIBSSH2_FXF_READ),
             mode: 0
         )
-        defer { libssh2_sftp_close_handle(handle) }
+        defer {
+            if isActive, !hasBeenCleaned, sftp == sftpSession {
+                libssh2_sftp_close_handle(handle)
+            }
+        }
 
         if offset > 0 {
             libssh2_sftp_seek64(handle, offset)
@@ -3411,6 +3449,15 @@ actor SSHSession {
 
         while data.count < maxBytes {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`): the captured
+            // handle and session must not be re-entered after the session
+            // free reaped them.
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
             let remaining = maxBytes - data.count
             let chunkSize = min(32 * 1024, remaining)
             var buffer = [CChar](repeating: 0, count: chunkSize)
@@ -3447,6 +3494,10 @@ actor SSHSession {
 
     func downloadFile(at path: String, to localURL: URL) async throws {
         let sftp = try await ensureSFTPSession()
+        // Route-selected backing session, re-verified at the loop top.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         let handle = try await openFileHandle(
             at: normalizedPath,
@@ -3454,7 +3505,11 @@ actor SSHSession {
             flags: UInt32(LIBSSH2_FXF_READ),
             mode: 0
         )
-        defer { libssh2_sftp_close_handle(handle) }
+        defer {
+            if isActive, !hasBeenCleaned, sftp == sftpSession {
+                libssh2_sftp_close_handle(handle)
+            }
+        }
 
         let fileManager = FileManager.default
         let destinationDirectory = localURL.deletingLastPathComponent()
@@ -3470,6 +3525,15 @@ actor SSHSession {
         do {
             while true {
                 try Task.checkCancellation()
+                // Loop-top liveness re-check (see `listDirectory`): the
+                // captured handle and session must not be re-entered after
+                // the session free reaped them.
+                guard isActive,
+                      !hasBeenCleaned,
+                      sftp == sftpSession,
+                      (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                    throw RemoteFileBrowserError.disconnected
+                }
                 var buffer = [UInt8](repeating: 0, count: 64 * 1024)
 
                 let bytesRead = buffer.withUnsafeMutableBufferPointer { bufferPtr -> Int in
@@ -3512,6 +3576,10 @@ actor SSHSession {
 
     func writeFile(_ data: Data, to path: String, permissions: Int32 = 0o644) async throws {
         let sftp = try await ensureSFTPSession()
+        // Route-selected backing session, re-verified at the loop top.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         let handle = try await openFileHandle(
             at: normalizedPath,
@@ -3520,11 +3588,24 @@ actor SSHSession {
             mode: permissions,
             operation: "write file"
         )
-        defer { libssh2_sftp_close_handle(handle) }
+        defer {
+            if isActive, !hasBeenCleaned, sftp == sftpSession {
+                libssh2_sftp_close_handle(handle)
+            }
+        }
 
         var totalBytesWritten = 0
         while totalBytesWritten < data.count {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`): the captured
+            // handle and session must not be re-entered after the session
+            // free reaped them.
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             let bytesWritten = data.withUnsafeBytes { rawBuffer -> Int in
                 guard let baseAddress = rawBuffer.baseAddress else { return 0 }
@@ -3557,11 +3638,22 @@ actor SSHSession {
 
     func fileSystemStatus(at path: String) async throws -> RemoteFileFilesystemStatus {
         let sftp = try await ensureSFTPSession()
+        // Route-selected backing session, re-verified at the loop top.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         var status = LIBSSH2_SFTP_STATVFS()
 
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`).
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             let result = normalizedPath.withCString { pathPtr in
                 libssh2_sftp_statvfs(
@@ -3613,6 +3705,10 @@ actor SSHSession {
 
     func setPermissions(at path: String, permissions: UInt32) async throws {
         let sftp = try await ensureSFTPSession()
+        // Route-selected backing session, re-verified at the loop top.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         var attributes = LIBSSH2_SFTP_ATTRIBUTES()
         attributes.flags = UInt(LIBSSH2_SFTP_ATTR_PERMISSIONS)
@@ -3620,6 +3716,13 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`).
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             let result = normalizedPath.withCString { pathPtr in
                 libssh2_sftp_stat_ex(
@@ -6321,6 +6424,18 @@ actor SSHSession {
 
     private func ensureSFTPSession() async throws -> OpaquePointer {
         if let sftpSession {
+            // BEHAVIOUR CHANGE (documented in the PR body): this cached fast
+            // path is now gated on session liveness. In the deferred-teardown
+            // window (#286) the session may still be allocated with its free
+            // pending, so a call that could previously hand back the cached
+            // handle now fails fast with `.disconnected`. The transport is
+            // going down in that window, so failing fast is intended; this is
+            // not a memory-safety fix on its own.
+            guard isActive,
+                  !hasBeenCleaned,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) != nil else {
+                throw RemoteFileBrowserError.disconnected
+            }
             return sftpSession
         }
 
@@ -6348,6 +6463,16 @@ actor SSHSession {
 
             while true {
                 try Task.checkCancellation()
+                // Loop-top liveness re-check (see `listDirectory`): the
+                // `inner` captured before the loop must still be the live
+                // inner session before `libssh2_sftp_init` is re-entered.
+                guard isActive,
+                      !hasBeenCleaned,
+                      innerLibssh2Session == inner,
+                      innerSocket >= 0,
+                      innerAtomicSocket.isUsable else {
+                    throw RemoteFileBrowserError.disconnected
+                }
 
                 if let sftpSession = libssh2_sftp_init(inner) {
                     self.sftpSession = sftpSession
@@ -6386,6 +6511,14 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`): the `session`
+            // captured before the loop must still be the live outer session
+            // before `libssh2_sftp_init` is re-entered.
+            guard isActive,
+                  !hasBeenCleaned,
+                  libssh2Session == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             if let sftpSession = libssh2_sftp_init(session) {
                 self.sftpSession = sftpSession
@@ -6452,6 +6585,15 @@ actor SSHSession {
         let pathLength = UInt32(path.utf8.count)
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`): the SFTP
+            // handle (and the session it belongs to) must not be re-entered
+            // after the session free reaped them.
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             if let handle = path.withCString({ pathPtr in
                 libssh2_sftp_open_ex(
@@ -6484,16 +6626,23 @@ actor SSHSession {
     ) async throws {
         // The libssh2 session backing `sftp` (inner for Teleport, outer for
         // direct). `performSFTPMutation` does not itself read the errno, but
-        // the nil-check gates the EAGAIN wait path: if the backing session
-        // is gone there is nothing to wait on.
-        let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session
-        guard session != nil else {
+        // the capture gates the EAGAIN wait path: if the backing session is
+        // gone there is nothing to wait on, and the loop top re-verifies the
+        // identity before every mutation re-entry.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
             throw RemoteFileBrowserError.disconnected
         }
 
         let pathLength = UInt32(path.utf8.count)
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`).
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             let result = path.withCString { pathPtr in
                 mutation(sftp, pathPtr, pathLength)
@@ -6514,11 +6663,22 @@ actor SSHSession {
 
     private func stat(at path: String, statType: Int32) async throws -> RemoteFileEntry {
         let sftp = try await ensureSFTPSession()
+        // Route-selected backing session, re-verified at the loop top.
+        guard let session = sftpSessionIsInner ? innerLibssh2Session : libssh2Session else {
+            throw RemoteFileBrowserError.disconnected
+        }
         let normalizedPath = RemoteFilePath.normalize(path)
         var attributes = LIBSSH2_SFTP_ATTRIBUTES()
 
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`).
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             let result = normalizedPath.withCString { pathPtr in
                 libssh2_sftp_stat_ex(
@@ -6577,6 +6737,13 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            // Loop-top liveness re-check (see `listDirectory`).
+            guard isActive,
+                  !hasBeenCleaned,
+                  sftp == sftpSession,
+                  (sftpSessionIsInner ? innerLibssh2Session : libssh2Session) == session else {
+                throw RemoteFileBrowserError.disconnected
+            }
 
             let result = buffer.withUnsafeMutableBufferPointer { bufferPtr -> Int in
                 guard let baseAddress = bufferPtr.baseAddress else {
