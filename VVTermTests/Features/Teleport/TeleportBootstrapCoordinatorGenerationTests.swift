@@ -29,8 +29,10 @@ import XCTest
 
 /// A per-call gate: `wait()` suspends until `release()` is called (or returns
 /// immediately if it was already released). An actor so it is safe to hold a
-/// `CheckedContinuation` across the HTTP client's isolation boundary.
-private actor BootstrapGate {
+/// `CheckedContinuation` across the HTTP client's isolation boundary. Internal
+/// (not private) so the dismissal tests in `TeleportBootstrapViewWiringTests`
+/// share it.
+actor BootstrapGate {
     private var isReleased = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
@@ -47,9 +49,10 @@ private actor BootstrapGate {
 }
 
 /// A `TeleportHTTPClienting` stub whose `headlessLogin` blocks on a per-call
-/// gate until the test releases it with a scripted result.
+/// gate until the test releases it with a scripted result. Shared with the
+/// dismissal tests in `TeleportBootstrapViewWiringTests`.
 @MainActor
-private final class GatedTeleportHTTPClient: TeleportHTTPClienting {
+final class GatedTeleportHTTPClient: TeleportHTTPClienting {
     /// The number of `headlessLogin` calls that have started.
     private(set) var startedCount = 0
     private var gates: [BootstrapGate] = []
@@ -125,9 +128,10 @@ private final class GatedTeleportHTTPClient: TeleportHTTPClienting {
 /// optionally, the final cluster-TLS store) on a continuation, so a test can
 /// interleave `cancel()` while the coordinator is suspended *inside* the
 /// persistence sequence. Reads and the ungated writes delegate to the
-/// underlying mock; writes are counted.
+/// underlying mock; writes are counted. Shared with the dismissal tests in
+/// `TeleportBootstrapViewWiringTests`.
 @MainActor
-private final class GatedTeleportCredentialStore: TeleportCredentialStore {
+final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let underlying: MockTeleportKeyRing
     private let certGate = BootstrapGate()
     private let keyGate = BootstrapGate()
@@ -291,9 +295,10 @@ private final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
 /// A `WebAuthenticationSessionPresenting` stub whose `open(url:)` blocks on a
 /// per-call gate, so a test can interleave a `cancel()`/newer `begin()` while
-/// the coordinator is suspended in the presenter await (S1).
+/// the coordinator is suspended in the presenter await (S1). Shared with the
+/// dismissal tests in `TeleportBootstrapViewWiringTests`.
 @MainActor
-private final class GatedWebAuthenticationSessionPresenter: WebAuthenticationSessionPresenting {
+final class GatedWebAuthenticationSessionPresenter: WebAuthenticationSessionPresenting {
     private(set) var openCount = 0
     private var openGates: [BootstrapGate] = []
     private var openResults: [Int: Bool] = [:]

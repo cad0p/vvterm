@@ -83,6 +83,26 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         )
     }
 
+    /// Build the real coordinator with protocol-typed seams so the gated
+    /// stubs (promoted from `TeleportBootstrapCoordinatorGenerationTests`)
+    /// can hold the POST open while the hosted view is removed for #272.
+    private func makeGatedCoordinator(
+        http: any TeleportHTTPClienting,
+        keyRing: any TeleportCredentialStore,
+        safari: any WebAuthenticationSessionPresenting
+    ) -> TeleportBootstrapCoordinator {
+        TeleportBootstrapCoordinator(
+            httpClient: http,
+            keyRing: keyRing,
+            safariPresenter: safari,
+            logging: DefaultTeleportLogging(),
+            signer: MockSEPKeySigner(outcome: .success),
+            sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),
+            now: { TeleportFixtureSupport.fixtureClock }
+        )
+    }
+
     // MARK: - The bug: inline coordinator construction orphans success
 
     /// A parent view that mirrors the PRODUCTION wiring: the coordinator is
@@ -226,6 +246,47 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         init() {}
     }
     private typealias ResultBox = TeleportBootstrapCoordinator.BootstrapResult
+
+    /// Drives the conditional inclusion of the production bootstrap view so a
+    /// test can remove it from the hierarchy deterministically. This is the
+    /// `.onDisappear` a real swipe-down dismissal runs, without relying on
+    /// `installInWindow`'s process-lifetime retention.
+    @MainActor
+    private final class DismissalModel: ObservableObject {
+        @Published var showsBootstrap = true
+    }
+
+    /// A MainActor reference flag so a SwiftUI lifecycle closure can record
+    /// that it ran without capture-by-value surprises.
+    @MainActor
+    private final class Flag {
+        var value = false
+    }
+
+    /// Hosts the production view behind a `showsBootstrap` switch; toggling the
+    /// model off removes the view (the dismissal path) while an outer
+    /// `.onDisappear` records that the removal happened.
+    private struct RemovableBootstrapHost<Coordinator: TeleportBootstrapCoordinating>: View {
+        @ObservedObject var model: DismissalModel
+        let coordinator: Coordinator
+        let cluster: TeleportCluster
+        let onSuccess: (TeleportBootstrapCoordinator.BootstrapResult) -> Void
+        let onDisappear: () -> Void
+
+        var body: some View {
+            if model.showsBootstrap {
+                TeleportBootstrapView(
+                    coordinator: coordinator,
+                    cluster: cluster,
+                    onSuccess: onSuccess,
+                    onCancel: {}
+                )
+                .onDisappear(perform: onDisappear)
+            } else {
+                Color.clear
+            }
+        }
+    }
 
     // MARK: - Failing test (proves the bug with the inline pattern)
 
@@ -492,7 +553,237 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         XCTAssertEqual(safari.liveSessionCount, 0, "each failed attempt dismisses its Safari session")
     }
 
+    // MARK: - #272: dismissal tears the flow down (swipe-down path)
+
+    /// `.onDisappear` teardown is state-guarded. The exhaustive switch makes a
+    /// future `TeleportBootstrapState` case a compile error; this test pins the
+    /// decisions the guard makes, including the two non-obvious ones.
+    func testDismissalRequiresTeardownIsExhaustive() {
+        XCTAssertTrue(TeleportBootstrapState.idle.dismissalRequiresTeardown)
+        XCTAssertTrue(TeleportBootstrapState.preparing.dismissalRequiresTeardown)
+        XCTAssertTrue(TeleportBootstrapState.openingSafari.dismissalRequiresTeardown)
+        XCTAssertTrue(TeleportBootstrapState.awaitingApproval.dismissalRequiresTeardown)
+        XCTAssertFalse(TeleportBootstrapState.success.dismissalRequiresTeardown)
+        XCTAssertTrue(
+            TeleportBootstrapState.failed(.safariUnavailable).dismissalRequiresTeardown,
+            ".failed(.safariUnavailable) keeps the POST running in begin(), so a late success must still be torn down"
+        )
+        XCTAssertFalse(TeleportBootstrapState.failed(.userCancelled).dismissalRequiresTeardown)
+        XCTAssertFalse(TeleportBootstrapState.failed(.timeout).dismissalRequiresTeardown)
+        XCTAssertFalse(TeleportBootstrapState.failed(.networkLost).dismissalRequiresTeardown)
+        XCTAssertFalse(
+            TeleportBootstrapState.failed(.suspended).dismissalRequiresTeardown,
+            ".failed(.suspended) is mock-only; the real coordinator never sets it"
+        )
+        XCTAssertFalse(TeleportBootstrapState.failed(.server("HTTP 500: boom")).dismissalRequiresTeardown)
+        XCTAssertFalse(TeleportBootstrapState.failed(.unknown("boom")).dismissalRequiresTeardown)
+    }
+
+    /// #272: dismissing while the POST is in flight must tear the flow down
+    /// (generation bump + POST cancel + Safari cancel) and must drop the stale
+    /// success the released POST then delivers: no keyring write, no `.success`.
+    func testDismissalWhileInFlightTearsDownAndDropsStaleWork() async {
+        let cluster = makeCluster()
+        let http = GatedTeleportHTTPClient()
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        // Gate nothing on the store: any write is visible as a committed count.
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let coordinator = makeGatedCoordinator(http: http, keyRing: store, safari: safari)
+
+        let model = DismissalModel()
+        let disappeared = Flag()
+        let host = UIHostingController(rootView: RemovableBootstrapHost(
+            model: model,
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: { _ in },
+            onDisappear: { disappeared.value = true }
+        ))
+        installInWindow(host)
+
+        // The hosted view's `.task` starts the bootstrap; the gate holds the
+        // POST so the test can dismiss while it is in flight.
+        await http.waitUntilStarted(1)
+        await awaitState(.awaitingApproval, on: coordinator)
+        XCTAssertEqual(safari.liveSessionCount, 1)
+
+        // Remove the production view: the deterministic `.onDisappear` a
+        // sheet dismissal runs.
+        model.showsBootstrap = false
+        XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
+        await awaitState(.failed(.userCancelled), on: coordinator)
+
+        XCTAssertGreaterThanOrEqual(safari.cancelCallCount, 1)
+        XCTAssertEqual(safari.liveSessionCount, 0, "dismissal must close the live Safari session")
+        XCTAssertEqual(http.startedCount, 1, "dismissal must not start another POST")
+
+        // Release the gated POST with a success: the dismissal's generation
+        // bump must drop the continuation before any persistence.
+        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        // There is no handle to the view's `.task`, so give the resumed stale
+        // continuation a bounded settle to be processed (and dropped) before
+        // asserting that it persisted nothing.
+        settle()
+
+        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertEqual(store.storedCertCount, 0, "a stale success must not store the bootstrap cert")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+    }
+
+    /// #272 (the issue's exact scenario): a retry already inside `retry()` when
+    /// the sheet is dismissed must not restart the flow. The dismissal's
+    /// generation bump drops the retry's POST continuation, so the flow cannot
+    /// reach `.success` after the sheet is gone.
+    func testDismissalDuringRetryDoesNotRestartTheFlow() async {
+        let cluster = makeCluster()
+        let http = GatedTeleportHTTPClient()
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let coordinator = makeGatedCoordinator(http: http, keyRing: store, safari: safari)
+
+        let model = DismissalModel()
+        let disappeared = Flag()
+        let host = UIHostingController(rootView: RemovableBootstrapHost(
+            model: model,
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: { _ in },
+            onDisappear: { disappeared.value = true }
+        ))
+        installInWindow(host)
+
+        // Attempt 1 (started by the hosted view's `.task`) fails at the gate.
+        await http.waitUntilStarted(1)
+        await http.release(index: 0, with: .failure(URLError(.notConnectedToInternet)))
+        await awaitState(.failed(.networkLost), on: coordinator)
+
+        // Start the retry exactly as the Reopen Safari button does: a tracked
+        // task around `retry()`. The view's `.onDisappear` can only cancel this
+        // task cooperatively, which is why the coordinator teardown matters.
+        let retryTask = Task {
+            guard !Task.isCancelled else { return }
+            await coordinator.retry()
+        }
+        await http.waitUntilStarted(2)
+
+        // The failed attempt already called `safari.cancel()` once; the
+        // dismissal must add another cancel on top of that baseline.
+        let cancelsBeforeDismissal = safari.cancelCallCount
+
+        // Dismiss mid-retry.
+        model.showsBootstrap = false
+        XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
+        await awaitState(.failed(.userCancelled), on: coordinator)
+        retryTask.cancel()
+
+        // Release the retry's POST with a success. The dismissal's generation
+        // bump must drop it: the flow is over.
+        await http.release(index: 1, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await retryTask.value
+
+        XCTAssertEqual(http.startedCount, 2, "a dismissed retry must never start a third POST")
+        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertEqual(store.storedCertCount, 0)
+        XCTAssertGreaterThan(
+            safari.cancelCallCount,
+            cancelsBeforeDismissal,
+            "the dismissal must cancel the coordinator's Safari session on top of the failure-path cancel"
+        )
+    }
+
+    /// #272: `.success` is the Phase-1 → Phase-2 hand-off. Dismissing then must
+    /// NOT cancel the coordinator: the result stays available to the parent and
+    /// `onSuccess` has already fired.
+    func testDismissalAfterSuccessKeepsTheHandoff() async {
+        let cluster = makeCluster()
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)
+
+        let model = DismissalModel()
+        let disappeared = Flag()
+        let success = Box<ResultBox>()
+        let host = UIHostingController(rootView: RemovableBootstrapHost(
+            model: model,
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: { success.value = $0 },
+            onDisappear: { disappeared.value = true }
+        ))
+        installInWindow(host)
+
+        // The hosted view's `.task` starts the bootstrap and drives `.success`.
+        await awaitState(.success, on: coordinator)
+        XCTAssertTrue(waitUntil { success.value != nil }, "onSuccess should fire with the bootstrap result")
+
+        // The success path already dismissed Safari once; capture that
+        // baseline so the post-dismissal assertion is about the dismissal.
+        let cancelsBeforeDismissal = safari.cancelCallCount
+
+        model.showsBootstrap = false
+        XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
+        settle()
+
+        XCTAssertEqual(coordinator.state, .success, ".success is the hand-off state and must survive dismissal")
+        XCTAssertEqual(
+            safari.cancelCallCount,
+            cancelsBeforeDismissal,
+            "dismissing after .success must not cancel the bootstrap"
+        )
+        XCTAssertNotNil(coordinator.lastBootstrapResult)
+        XCTAssertNotNil(success.value)
+    }
+
     // MARK: - Hosting helpers
+
+    /// Bounded state wait: suspends until `coordinator.state == expected`, and
+    /// fails the test (rather than hanging to the suite's execution allowance)
+    /// if it never arrives. Signal-driven via the `@Published` state, so it is
+    /// deterministic; the timeout exists only to keep the counterfactual
+    /// (teardown removed) fast.
+    private func awaitState(
+        _ expected: TeleportBootstrapState,
+        on coordinator: TeleportBootstrapCoordinator,
+        timeout: TimeInterval = 5
+    ) async {
+        if coordinator.state == expected { return }
+        let reached = expectation(description: "coordinator state reaches \(expected)")
+        var cancellable: AnyCancellable?
+        cancellable = coordinator.$state.sink { state in
+            guard state == expected else { return }
+            reached.fulfill()
+            cancellable?.cancel()
+        }
+        await fulfillment(of: [reached], timeout: timeout)
+    }
+
+    /// Bounded run-loop pump for post-gate assertions that have no completion
+    /// signal (e.g. "this stale continuation was dropped, not committed").
+    private func settle(_ seconds: TimeInterval = 0.3) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// Pump the main run loop in bounded steps until `condition` holds. Used
+    /// only for SwiftUI lifecycle signals (`.onDisappear`); the network gates
+    /// stay continuation-based, so nothing here waits on I/O or sleeps.
+    /// Returns the final condition value so the caller asserts (bounded).
+    private func waitUntil(
+        timeout: TimeInterval = 5,
+        _ condition: () -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
+    }
 
     /// Install a `UIHostingController`'s view in a live window so SwiftUI's
     /// `.task` modifiers actually run (a hosted view with no window never
