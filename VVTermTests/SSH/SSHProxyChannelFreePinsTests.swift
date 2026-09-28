@@ -28,6 +28,8 @@
 //  discipline; the mutex/token reasoning in the fix commit is the proof.
 //  Comments are stripped before every scan, so a commented-out call cannot
 //  satisfy (or trip) an assertion; a call inside a string literal still can.
+//  The file-wide `count == 1` asserts deliberately make a *new* close/free
+//  site red: a second owner of this channel must update the pin on purpose.
 //
 
 import Foundation
@@ -43,7 +45,11 @@ struct SSHProxyChannelFreePinsTests {
     /// (`VVTermTests/SSH/SSHProxyChannelFreePinsTests.swift`).
     private func repositoryRoot() -> URL {
         // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated tree to prove the pins fail there. Never set in CI.
+        // mutated tree to prove the pins fail there. Never set in CI. NOTE: a
+        // plain env var does not reach an iOS-simulator test process — the
+        // override must be injected with the `TEST_RUNNER_` prefix (e.g.
+        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=/tmp/mutated`), or the run must
+        // be hand-mutated in the worktree and reverted.
         if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
            !override.isEmpty {
             return URL(fileURLWithPath: override)
@@ -315,6 +321,14 @@ struct SSHProxyChannelFreePinsTests {
             "exactly one libssh2_channel_free(proxyChannel) inside the lock span"
         )
 
+        // Ordering inside the lock: `close` before `free`. Freeing first makes
+        // the subsequent close a deterministic use-after-free, and no other
+        // assert here distinguishes the two orders.
+        #expect(
+            close.upperBound <= free.lowerBound,
+            "libssh2_channel_close(proxyChannel) must precede libssh2_channel_free(proxyChannel)"
+        )
+
         // Ordering: without the token flip first, a pump closure that acquires
         // the mutex after the free passes its token guard and calls libssh2 on
         // the freed channel — a prompt reorder is a UAF.
@@ -384,6 +398,10 @@ struct SSHProxyChannelFreePinsTests {
         #expect(
             Self.isInside(lockBlock, free.lowerBound),
             "the agent channel free must run inside its mutex.withLock span"
+        )
+        #expect(
+            close.upperBound <= free.lowerBound,
+            "the agent channel close must precede its free"
         )
     }
 
