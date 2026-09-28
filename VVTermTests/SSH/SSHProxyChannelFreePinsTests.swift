@@ -46,12 +46,15 @@ struct SSHProxyChannelFreePinsTests {
     private func repositoryRoot() -> URL {
         // Counterfactual hook: the guard-sensitivity runs point this at a
         // mutated tree to prove the pins fail there. Never set in CI. NOTE:
-        // the variable must actually reach the test process. Exporting it into
-        // `xcodebuild`'s environment does (measured 2026-09-28: a nonexistent
-        // root fails the reads; a swapped root goes red at the order assert).
-        // A `TEST_RUNNER_`-prefixed *build setting* does not reach the
-        // simulator test process here (same swapped root stayed green), so use
-        // the environment form, or hand-mutate the worktree and restore it.
+        // the variable must actually reach the test process. Measured on this
+        // runner (2026-09-28, iOS Simulator destination): a plain env var is
+        // inert (a mutated root → all pins green), while exporting
+        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` into
+        // xcodebuild's own environment reaches the test process (the mutated
+        // pin goes red at its assert); the same token passed as a command-line
+        // build setting did not reach it here. So use the `TEST_RUNNER_` env
+        // form, or hand-mutate the worktree and restore it; the recorded #283
+        // counterfactuals hand-mutated and recompiled.
         if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
            !override.isEmpty {
             return URL(fileURLWithPath: override)
@@ -533,6 +536,9 @@ struct SSHProxyChannelFreePinsTests {
     /// `shellStartupsInFlight.isEmpty` and `innerPreparesInFlight.isEmpty`,
     /// conjunctively. Dropping either conjunct reopens the premature free for
     /// that class of parked work; an `||` would keep both tokens meaningless.
+    /// The single conjunctive guard is required: a split `guard … else
+    /// { return }` pair is semantically equivalent but slices differently, so
+    /// it is an expected pin update, not a mystery red.
     @Test
     func testCleanupGuardChecksBothInFlightSets() throws {
         let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
@@ -661,6 +667,52 @@ struct SSHProxyChannelFreePinsTests {
         #expect(
             calls.count == 5,
             "exactly five cleanupLibssh2() call sites must exist: disconnect, cleanup, the two shell defers, and the prepare defer (found \(calls.count))"
+        )
+    }
+
+    /// Pin E (#286): the prepare idempotence gate inside the Pin B span must
+    /// keep its `isActive` conjunct. Without it, a caller arriving during the
+    /// deferred-teardown window sees the dead-but-non-nil
+    /// `innerLibssh2Session` and returns as if ready, then proceeds into a
+    /// pending free. The literal is asserted for containment inside the
+    /// prepare body, not as file-wide presence.
+    @Test
+    func testPrepareIdempotenceGateChecksIsActive() throws {
+        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let prepareBody = try Self.sshSessionPrepareBody(in: text)
+        #expect(
+            text[prepareBody].contains("if isActive, innerLibssh2Session != nil { return }"),
+            "the prepare idempotence gate must test `isActive`, not only the raw pointer"
+        )
+    }
+
+    /// Pin F (#286): `isInnerSessionReady` must keep `isActive` as its first
+    /// conjunct. Without it, `SSHClient.remoteEnvironment()`'s pre-exec probe
+    /// sees a dead-but-non-nil inner session in the deferred-teardown window
+    /// and routes exec/SFTP onto a session whose free is pending. Both tokens
+    /// are asserted for containment inside the property, with `isActive`
+    /// first; this is not a file-wide presence check.
+    @Test
+    func testIsInnerSessionReadyChecksIsActiveFirst() throws {
+        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+
+        let anchor = try #require(
+            text.range(of: "var isInnerSessionReady: Bool"),
+            "SSHClient.swift must keep isInnerSessionReady"
+        )
+        let block = try Self.bracedBlock(after: anchor, in: text)
+
+        let active = try #require(
+            text.range(of: "isActive", range: block),
+            "isInnerSessionReady must test `isActive`, not only the raw pointer"
+        )
+        let inner = try #require(
+            text.range(of: "innerLibssh2Session != nil", range: block),
+            "isInnerSessionReady must keep the inner-session check"
+        )
+        #expect(
+            active.lowerBound < inner.lowerBound,
+            "`isActive` must be the first conjunct of isInnerSessionReady"
         )
     }
 }

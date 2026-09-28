@@ -138,7 +138,11 @@ struct PrepareInnerSessionDedupTests {
     /// token and re-enters `cleanupLibssh2()`, which now completes. This
     /// assertion is NON-DISCRIMINATING ALONE — it passes pre-fix too (the
     /// same no-session return sets `hasBeenCleaned`). Only the pair
-    /// discriminates, in order.
+    /// discriminates, in order. Do not delete as redundant: the second
+    /// assertion is the only guard against a defer-order inversion (calling
+    /// `cleanupLibssh2()` before `innerPreparesInFlight.remove(prepareId)`),
+    /// which leaves `hasBeenCleaned == false` after `prepare.value`; Pin B
+    /// checks insert-before-remove, not remove-before-re-entry.
     ///
     /// Not covered here, deliberately:
     /// - the UAF itself: the DEBUG hook parks the body *before any libssh2
@@ -150,6 +154,16 @@ struct PrepareInnerSessionDedupTests {
     ///   non-nil-but-dead window cannot be constructed.
     @Test
     func teardownIsDeferredWhileAPrepareIsParked() async {
+        // Positive control: the fixture's `disconnect()` really does reach
+        // `cleanupLibssh2()` on an unconnected session, so the first assertion
+        // below cannot pass vacuously via an inert `disconnect()`.
+        let control = makeTeleportSession()
+        await control.disconnect()
+        #expect(
+            await control.hasBeenCleanedForTesting == true,
+            "disconnect must reach cleanup on an unconnected session"
+        )
+
         let session = makeTeleportSession()
         let hook = PrepareBodyHook()
         await session.setPrepareTeleportInnerSessionBodyTestHook { await hook.enter() }
