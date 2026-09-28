@@ -366,4 +366,30 @@ struct TeleportAgentForwardingPinsTests {
             "SSHClient.startShell must call the stored-failure rethrow"
         )
     }
+
+    @Test
+    func teleportPrepareFailureSnapshotIsPerSessionAndHopFree() throws {
+        // #276/D3: the stored prepare failure used to be an actor-isolated
+        // property, so `rethrowStoredTeleportPrepareFailure` hopped into
+        // SSHSession — a startup park candidate. It must now be a
+        // per-session lock-protected box read without a hop. A client-owned
+        // shared box is forbidden: it would be stale across sessions and
+        // miss SSHSession.connect()'s clear.
+        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+
+        #expect(
+            source.contains(
+                "private let lastTeleportPrepareFailureBox = OSAllocatedUnfairLock<SSHError?>(initialState: nil)"
+            ),
+            "the stored prepare failure must be a lock-protected box owned by SSHSession"
+        )
+        #expect(
+            source.contains("let failure = session.lastTeleportPrepareFailure"),
+            "the helper must read the per-session snapshot directly"
+        )
+        #expect(
+            !source.contains("await session.lastTeleportPrepareFailure"),
+            "the helper must not hop into the session actor for the stored failure"
+        )
+    }
 }

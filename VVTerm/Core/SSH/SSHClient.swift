@@ -1167,7 +1167,7 @@ actor SSHClient {
     /// case-only `diagError` so the device ring records the failure stage.
     private func rethrowStoredTeleportPrepareFailure(from session: SSHSession) async throws {
         guard connectedServer?.authMethod == .faceIDTeleport,
-              let failure = await session.lastTeleportPrepareFailure else {
+              let failure = session.lastTeleportPrepareFailure else {
             return
         }
         let rendered = SSHError.diagnosticsMessage(for: failure, redacting: connectedServer)
@@ -1821,7 +1821,22 @@ actor SSHSession {
     /// so the shell/exec paths rethrow this stored failure instead of masking
     /// it as `.notConnected`. Cleared on a successful prepare and on connect;
     /// `CancellationError` is never stored.
-    private(set) var lastTeleportPrepareFailure: SSHError?
+    ///
+    /// #276/D3: a **per-session** lock-protected box instead of an
+    /// actor-isolated property, so
+    /// `SSHClient.rethrowStoredTeleportPrepareFailure(from:)` reads it without
+    /// hopping into this actor (that hop is a startup park candidate). The box
+    /// is owned by this session — a client-owned shared snapshot would be
+    /// stale across sessions and would miss the `connect()` clear. Same value,
+    /// same lifetime, same throw type as the pre-fix field.
+    private let lastTeleportPrepareFailureBox = OSAllocatedUnfairLock<SSHError?>(initialState: nil)
+
+    /// Off-actor read of the stored prepare failure; same value and lifetime
+    /// as the pre-fix actor-isolated property.
+    private(set) nonisolated var lastTeleportPrepareFailure: SSHError? {
+        get { lastTeleportPrepareFailureBox.withLock { $0 } }
+        set { lastTeleportPrepareFailureBox.withLock { $0 = newValue } }
+    }
     /// The inner socketpair's libssh2-facing FD. Mirrors `socket` for the
     /// outer session; closed via `innerAtomicSocket` after the inner libssh2
     /// session is freed.
