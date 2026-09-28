@@ -3187,11 +3187,12 @@ actor SSHSession {
             return
         }
 
-        // Both native frees in this window are serialized through
-        // `outerSessionMutex` against the agent service's and the bridge
-        // pump's libssh2 closures: those re-check their cancel token inside
-        // the same mutex, so a call that just passed the token check cannot
-        // touch a freed channel or session.
+        // Both frees on the outer session and its bridge channel are
+        // serialized through `outerSessionMutex` against the agent service's
+        // and the bridge pump's libssh2 closures: the read/write closures
+        // re-check their cancel token inside the same mutex, so a call that
+        // just passed the token check cannot touch a freed channel or session.
+        // (The inner-session free above is a separate window — #286.)
         var freeResult = Int32(LIBSSH2_ERROR_EAGAIN)
         outerSessionMutex.withLock {
             for _ in 0..<1_024 {
