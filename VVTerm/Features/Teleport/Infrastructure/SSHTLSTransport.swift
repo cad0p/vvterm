@@ -256,7 +256,7 @@ actor SSHTLSTransport {
         self.socketPair = pair
 
         logger.info(
-            "tls_transport_connect host=\(self.host, privacy: .public) port=\(self.port) alpn=\(Self.alpnProtocol, privacy: .public) libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD) ca_certs=\(self.clusterCAPEMs.count)"
+            "tls_transport_connect host=\(self.host, privacy: .private(mask: .hash)) port=\(self.port) alpn=\(Self.alpnProtocol, privacy: .public) libssh2FD=\(pair.libssh2FD) pumpFD=\(pair.pumpFD) ca_certs=\(self.clusterCAPEMs.count)"
         )
 
         // Start the NWConnection (state machine + queue).
@@ -296,7 +296,7 @@ actor SSHTLSTransport {
         } catch {
             // TLS handshake failed — clean up the socketpair + NWConnection
             // so no FDs leak.
-            logger.error("tls_transport_connect_failed host=\(self.host, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            logger.error("tls_transport_connect_failed host=\(self.host, privacy: .private(mask: .hash)) error=\(error.localizedDescription, privacy: .public)")
             pumpTask?.cancel()
             pumpTask = nil
             connection.cancel()
@@ -333,7 +333,7 @@ actor SSHTLSTransport {
             pumpFDCloser = nil
             socketPair = nil
         }
-        logger.info("tls_transport_close host=\(self.host, privacy: .public)")
+        logger.info("tls_transport_close host=\(self.host, privacy: .private(mask: .hash))")
     }
 
     // MARK: - Pump internals

@@ -682,7 +682,7 @@ enum TeleportTLSTrust {
                 let alpnList = allowedALPNs.joined(separator: ",")
                 let errorDescription = result.error.map { String(describing: $0) } ?? "unknown"
                 logger.error(
-                    "teleport_tls_verify_failed server_names=\(nameList, privacy: .private(mask: .hash)) alpn=\(negotiatedALPN ?? "nil", privacy: .public) allowed_alpn=\(alpnList, privacy: .public) error=\(errorDescription, privacy: .private(mask: .hash))"
+                    "teleport_tls_verify_failed server_names=\(nameList, privacy: .private(mask: .hash)) alpn=\(negotiatedALPN ?? "nil", privacy: .private(mask: .hash)) allowed_alpn=\(alpnList, privacy: .private(mask: .hash)) error=\(errorDescription, privacy: .private(mask: .hash))"
                 )
             }
             complete(result.ok)

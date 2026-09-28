@@ -377,7 +377,7 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
         clusterTLSState[clusterId] = state
         saveClusterTLSState()
         logger.info(
-            "stored cluster TLS state for cluster \(clusterId.uuidString, privacy: .public) name=\(state.clusterName, privacy: .public) ca_certs=\(state.clusterCAPEMs.count) checking_keys=\(state.hostCACheckingKeys.count)"
+            "stored cluster TLS state for cluster \(clusterId.uuidString, privacy: .public) name=\(state.clusterName, privacy: .private(mask: .hash)) ca_certs=\(state.clusterCAPEMs.count) checking_keys=\(state.hostCACheckingKeys.count)"
         )
     }
 
