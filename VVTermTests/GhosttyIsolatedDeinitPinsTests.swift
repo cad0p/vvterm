@@ -172,47 +172,215 @@ struct GhosttyIsolatedDeinitPinsTests {
         }
     }
 
-    /// iOS `GhosttyTerminalView` is the one recorded exception: its deinit is
-    /// deliberately `isolated` (MainActor cleanup). The sweep must not mark it,
-    /// so this pin asserts the *exception shape* at relative depth 1 (the body
-    /// contains nested types, so an absolute-depth assertion would red on a
-    /// correct tree): exactly one `isolated deinit {` and no
-    /// `nonisolated deinit {}`. The iOS-only `…CfZ` it emits is expected and is
-    /// allowlisted in the CI census step.
-    ///
-    /// The isolation keeps the back-deploy hazard until the #299 convergence
-    /// lands (a swept holder — `TerminalTabManager.terminalViews` — can still
-    /// release this view outside a task context); that is a recorded residual,
-    /// not a regression this pin can see.
-    @Test
-    func testGhosttyTerminalViewKeepsItsDeliberateIsolatedDeinit() {
-        let file = "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift"
-        let text: String
+    // MARK: - #299 convergence pins (iOS GhosttyTerminalView)
+
+    /// iOS `GhosttyTerminalView` is the class #299 converged: it used to keep a
+    /// deliberate `isolated deinit` because its body called two MainActor
+    /// instance methods. It now carries a `nonisolated deinit` with a real body
+    /// (the observer removals and the deferred unregister); the two MainActor
+    /// calls live in `cleanup()`. The four tests below pin the converged shape
+    /// from independent angles: a reversion reds 1, 2 and 3; a stray
+    /// re-introduction elsewhere reds 3; a body collapse reds 1 and 4; and the
+    /// file census test above keeps the exact-marker count load-bearing.
+    private static let terminalViewFile = "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift"
+
+    /// The comment-stripped `GhosttyTerminalView+iOS.swift` source, or `nil`
+    /// after recording why it could not be read.
+    private static func terminalViewSource() -> String? {
         do {
-            text = try Self.strippingComments(Self.source(file))
+            return try strippingComments(source(terminalViewFile))
         } catch {
-            Issue.record("\(file): cannot read the pinned source file: \(error)")
+            Issue.record("\(terminalViewFile): cannot read the pinned source file: \(error)")
+            return nil
+        }
+    }
+
+    /// The resolved body of `class GhosttyTerminalView`, or `nil` after
+    /// recording why it did not resolve. The body contains nested types, so
+    /// callers must use `relativeDepth` for member-level assertions.
+    private static func terminalViewBody(in text: String) -> Range<String.Index>? {
+        let anchors = occurrences(of: "class GhosttyTerminalView", in: text)
+        guard anchors.count == 1 else {
+            Issue.record("\(terminalViewFile): the `class GhosttyTerminalView` anchor must be unique (found \(anchors.count)); the declaration was renamed, duplicated or moved")
+            return nil
+        }
+        do {
+            return try bracedBlock(after: anchors[0], in: text)
+        } catch {
+            Issue.record("\(terminalViewFile): the `class GhosttyTerminalView` anchor does not open a braced body: \(error)")
+            return nil
+        }
+    }
+
+    /// 1 of 4 — exactly one `nonisolated deinit` at class-member depth, behind a
+    /// positive control that proves the resolved span is the intended body.
+    @Test
+    func testGhosttyTerminalViewCarriesExactlyOneNonisolatedDeinit() {
+        guard let text = Self.terminalViewSource() else { return }
+        guard let body = Self.terminalViewBody(in: text) else { return }
+
+        // Positive control first: a mis-resolved span (wrong class, wrong
+        // platform twin, nested type) must fail here, not pass by accident.
+        let controls = Self.occurrences(of: "internal var surface: Ghostty.Surface?", in: text, range: body)
+        #expect(
+            controls.count == 1,
+            "\(Self.terminalViewFile): the positive control `internal var surface: Ghostty.Surface?` must occur exactly once in the resolved class body (found \(controls.count))"
+        )
+
+        let tokens = Self.occurrences(of: "nonisolated deinit", in: text, range: body)
+            .filter { Self.relativeDepth(of: $0, to: body, in: text) == 1 }
+        #expect(
+            tokens.count == 1,
+            "\(Self.terminalViewFile): GhosttyTerminalView must carry exactly one `nonisolated deinit` at class-member depth (found \(tokens.count)); #299 converged it off the deliberate isolated deinit"
+        )
+    }
+
+    /// 2 of 4 — zero `isolated deinit` anywhere in the file, no depth filter:
+    /// any occurrence in this file is a #299 regression (GQ-9). Matching is
+    /// boundary-aware and comment-stripped, so `nonisolated deinit` (a longer
+    /// token) and the deinit's own comment ("must NOT carry an isolated
+    /// deinit") do not count.
+    @Test
+    func testGhosttyTerminalViewFileHasNoIsolatedDeinit() {
+        guard let text = Self.terminalViewSource() else { return }
+        let isolated = Self.occurrences(of: "isolated deinit", in: text)
+        #expect(
+            isolated.count == 0,
+            "\(Self.terminalViewFile): no `isolated deinit` may appear anywhere in this file (found \(isolated.count)); see #299"
+        )
+    }
+
+    /// 3 of 4 — zero `isolated deinit` anywhere under `VVTerm/`. This is the
+    /// repo-wide containment for the hazard: a new deliberately-isolated deinit
+    /// in any shipped app source reds here, not only in the Ghostty file. The
+    /// scan reads `repositoryRoot()` — the real repository in CI, which never
+    /// sets the `VVTERM_PINS_SOURCE_ROOT` override; the mutated-tree copy is
+    /// read only by the explicit counterfactual runs.
+    @Test
+    func testNoIsolatedDeinitUnderVVTerm() {
+        let root = Self.repositoryRoot()
+        let vvterm = root.appendingPathComponent("VVTerm", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: vvterm,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            Issue.record("VVTerm/: the source-root enumerator returned nil for \(vvterm.path); a wrong or missing scan root must not pass green")
             return
         }
-        let anchors = Self.occurrences(of: "class GhosttyTerminalView", in: text)
-        #expect(
-            anchors.count == 1,
-            "\(file): the `class GhosttyTerminalView` anchor must be unique (found \(anchors.count))"
-        )
-        guard anchors.count == 1, let body = try? Self.bracedBlock(after: anchors[0], in: text) else { return }
 
-        let isolatedDeinits = Self.occurrences(of: "isolated deinit {", in: text, range: body)
-            .filter { Self.relativeDepth(of: $0, to: body, in: text) == 1 }
+        // `resolvingSymlinksInPath()` on both ends keeps the relative-path
+        // computation correct when the scan root passes through a symlink (the
+        // counterfactual copies live under /tmp → /private/tmp).
+        let resolvedRoot = vvterm.resolvingSymlinksInPath().path
+        var swiftFiles: [(relativePath: String, url: URL)] = []
+        while let url = enumerator.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let resolvedURL = url.resolvingSymlinksInPath()
+            guard resolvedURL.path.hasPrefix(resolvedRoot + "/") else {
+                Issue.record("\(resolvedURL.path): the enumerator yielded a file outside \(resolvedRoot)")
+                continue
+            }
+            let relativePath = "VVTerm/" + String(resolvedURL.path.dropFirst(resolvedRoot.count + 1))
+            swiftFiles.append((relativePath, resolvedURL))
+        }
+
+        // Vacuity floor + positive control (GQ-1): 429 Swift files today, so a
+        // typo'd or empty scan root must fail, not pass green.
         #expect(
-            isolatedDeinits.count == 1,
-            "\(file): GhosttyTerminalView must keep exactly one deliberate `isolated deinit {` at class-member depth (found \(isolatedDeinits.count))"
+            swiftFiles.count >= 400,
+            "VVTerm/: the repo-wide scan must cover at least 400 Swift files (found \(swiftFiles.count))"
+        )
+        let control = Self.terminalViewFile
+        #expect(
+            swiftFiles.contains { $0.relativePath == control },
+            "VVTerm/: the scan must include `\(control)` as a positive control"
+        )
+        guard swiftFiles.count >= 400, swiftFiles.contains(where: { $0.relativePath == control }) else { return }
+
+        var offenders: [String] = []
+        for (relativePath, url) in swiftFiles {
+            let source: String
+            do {
+                source = try String(contentsOf: url, encoding: .utf8)
+            } catch {
+                Issue.record("\(relativePath): cannot read the scanned source file: \(error)")
+                continue
+            }
+            let hits = Self.occurrences(of: "isolated deinit", in: Self.strippingComments(source))
+            if !hits.isEmpty {
+                offenders.append("\(relativePath) (\(hits.count))")
+            }
+        }
+        #expect(
+            offenders.isEmpty,
+            "VVTerm/: no shipped source file may carry an `isolated deinit`; offenders: \(offenders.sorted())"
+        )
+    }
+
+    /// 4 of 4 — the converged deinit body survives (GQ-2). The exact-token
+    /// marker count deliberately does not see the with-body spelling, so a
+    /// future #294-style sweep collapsing it to `nonisolated deinit {}` reds
+    /// here. It also pins that `cleanup()` keeps the two MainActor calls the
+    /// deinit no longer performs — the body pin's blind spot: the
+    /// behaviour-neutrality premise for deleting those calls from the deinit is
+    /// that the single effective MainActor teardown site still owns them.
+    @Test
+    func testGhosttyTerminalViewDeinitBodySurvives() {
+        guard let text = Self.terminalViewSource() else { return }
+        guard let body = Self.terminalViewBody(in: text) else { return }
+        let tokens = Self.occurrences(of: "nonisolated deinit", in: text, range: body)
+            .filter { Self.relativeDepth(of: $0, to: body, in: text) == 1 }
+        guard tokens.count == 1 else {
+            Issue.record("\(Self.terminalViewFile): the class-member `nonisolated deinit` token must be unique to pin its body (found \(tokens.count))")
+            return
+        }
+        let token = tokens[0]
+        let afterToken = text[token.upperBound...].drop { $0 == " " || $0 == "\t" || $0 == "\n" }
+        #expect(
+            afterToken.first == "{",
+            "\(Self.terminalViewFile): `nonisolated deinit` must be followed by a body, not by `;` or another declaration"
+        )
+        guard afterToken.first == "{", let deinitBody = try? Self.bracedBlock(after: token, in: text) else { return }
+
+        let bodyText = text[deinitBody]
+        #expect(
+            !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "\(Self.terminalViewFile): the converged `nonisolated deinit` body must not be empty; #299 keeps nonisolated teardown here"
+        )
+        let observerRemovals = Self.occurrences(of: "NotificationCenter.default.removeObserver", in: text, range: deinitBody)
+        #expect(
+            observerRemovals.count >= 3,
+            "\(Self.terminalViewFile): the deinit body must keep the three observer removals (found \(observerRemovals.count))"
+        )
+        let unregisters = Self.occurrences(of: "unregisterSurface", in: text, range: deinitBody)
+        #expect(
+            unregisters.count >= 1,
+            "\(Self.terminalViewFile): the deinit body must keep the deferred `unregisterSurface` (found \(unregisters.count))"
         )
 
-        let markers = Self.occurrences(of: "nonisolated deinit {}", in: text, range: body)
-            .filter { Self.relativeDepth(of: $0, to: body, in: text) == 1 }
+        // The behaviour-neutrality premise for the two calls deleted from the
+        // deinit is that `cleanup()` retains them. The body assertions above
+        // only see the deinit, so a future edit dropping either call from
+        // `cleanup()` would otherwise pass every pin.
+        let cleanupAnchors = Self.occurrences(of: "func cleanup()", in: text, range: body)
+        guard cleanupAnchors.count == 1 else {
+            Issue.record("\(Self.terminalViewFile): the `func cleanup()` anchor must be unique in the resolved class body (found \(cleanupAnchors.count))")
+            return
+        }
+        guard let cleanupBody = try? Self.bracedBlock(after: cleanupAnchors[0], in: text) else {
+            Issue.record("\(Self.terminalViewFile): the `func cleanup()` anchor does not open a braced body")
+            return
+        }
+        let cancelCalls = Self.occurrences(of: "cancelTrackedHardwareInput()", in: text, range: cleanupBody)
         #expect(
-            markers.count == 0,
-            "\(file): GhosttyTerminalView must NOT be marked `nonisolated deinit {}` (the isolation is deliberate; see #299)"
+            cancelCalls.count >= 1,
+            "\(Self.terminalViewFile): `cleanup()` must keep the `cancelTrackedHardwareInput()` call — it is the behaviour-neutrality premise for deleting that call from the deinit (found \(cancelCalls.count))"
+        )
+        let autoscrollCalls = Self.occurrences(of: "stopSelectionAutoscroll()", in: text, range: cleanupBody)
+        #expect(
+            autoscrollCalls.count >= 1,
+            "\(Self.terminalViewFile): `cleanup()` must keep the `stopSelectionAutoscroll()` call — it is the behaviour-neutrality premise for deleting that call from the deinit (found \(autoscrollCalls.count))"
         )
     }
 
