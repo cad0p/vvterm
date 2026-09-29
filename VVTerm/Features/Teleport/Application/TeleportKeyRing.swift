@@ -78,14 +78,35 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
 
     private let logger: Logger
 
+    /// The injectable keychain-write seam for the per-cluster ed25519 private
+    /// key. Defaults to the real update-first body
+    /// (`writeEd25519PrivateKeyToKeychain`); tests inject a scripted writer to
+    /// prove the failure direction (a failed update/add must not commit the
+    /// record and must not destroy the prior key).
+    typealias Ed25519KeychainWriter = @MainActor (Data, UUID) throws -> Void
+
+    private let keychainWriter: Ed25519KeychainWriter
+
     init(
         signer: any TeleportSEPSigning = SecureEnclaveSigner(),
         logging: any TeleportLogging,
-        config: TeleportKeychainConfig
+        config: TeleportKeychainConfig,
+        keychainWriter: Ed25519KeychainWriter? = nil
     ) {
         self.signer = signer
         self.logger = logging.logger(category: "teleport-keyring")
         self.config = config
+        let logger = self.logger
+        let service = config.keychainService
+        self.keychainWriter = keychainWriter ?? { pemData, clusterId in
+            try Self.writeEd25519PrivateKeyToKeychain(
+                pemData,
+                service: service,
+                account: Self.sshKeyAccount(for: clusterId),
+                logger: logger,
+                clusterId: clusterId
+            )
+        }
         load()
     }
 
@@ -209,11 +230,11 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
     }
 
     /// One consistent read of the live cert + its paired private key. Both
-    /// reads happen in this synchronous MainActor body, so a concurrent
-    /// re-login cannot interleave between them. (The *writes* still store the
-    /// cert and the key in two calls, so a reader could observe a new cert
-    /// with the old key if it ran between them — fail-closed at the server and
-    /// the connect-time keyID binding gate the username.)
+    /// reads happen in this synchronous MainActor body, and the pair write
+    /// (`storeCredentialPair`) commits the key and the record in one
+    /// non-suspending MainActor body, so no concurrent re-login can interleave
+    /// between the halves of a credential. (The single writes remain the
+    /// non-atomic seed/test primitives; no coordinator calls them.)
     func liveCredentialSnapshot(for clusterId: UUID) -> (certPEM: String, privateKeyPEM: Data)? {
         guard let certPEM = liveCertPEM(for: clusterId),
               let privateKeyPEM = liveEd25519PrivateKey(for: clusterId) else {
@@ -276,21 +297,107 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
     }
 
     func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
-        let account = Self.sshKeyAccount(for: clusterId)
+        try keychainWriter(pemData, clusterId)
+    }
+
+    /// Write a cert and its paired ed25519 private key as one indivisible unit
+    /// (the `TeleportCredentialStore` contract). The body is synchronous — it
+    /// suspends nowhere — so no supersession can interleave between the key
+    /// write and the record commit. Key-first plus the non-destructive keychain
+    /// write means a failed write leaves the previous complete pair intact (or,
+    /// on a first bootstrap, commits nothing): the body lands a complete new
+    /// pair, the previous complete pair, or nothing — never a mixed pair.
+    ///
+    /// This is interleaving atomicity, not crash durability: the record is in
+    /// `UserDefaults` and the key in the Keychain (no shared transaction), so a
+    /// crash between the writes can still leave a genuinely mixed pair that
+    /// only the server's signature check rejects.
+    func storeCredentialPair(
+        _ certPEM: String,
+        validBefore: Date,
+        privateKeyPEM: Data,
+        policy: TeleportCredentialWritePolicy,
+        for clusterId: UUID
+    ) throws {
+        // Policy check first: a `.login` pair for a cluster with no record must
+        // not write the orphan key below (the reachable concurrent-`clear` case).
+        switch policy {
+        case .login:
+            guard credentials[clusterId] != nil else {
+                throw TeleportCredentialStoreError.noRegisteredCredential(clusterId: clusterId)
+            }
+        case .bootstrap:
+            break
+        }
+
+        // Key first: a failed key write leaves the previous complete pair intact
+        // (or commits nothing on a first bootstrap), so the record below can only
+        // ever point at a cert whose key is present.
+        try keychainWriter(privateKeyPEM, clusterId)
+
+        // Record commit: cert fields only, so a re-bootstrap preserves the
+        // registered SEP metadata. The `??` create path runs only for a
+        // `.bootstrap` pair with no existing record (a `.login` pair threw
+        // above); `save()` cannot throw, so no in-process error can suspend
+        // the body between the key write and the commit. It can still
+        // silently fail to persist (an encode error is logged and the
+        // UserDefaults blob keeps the old record): a durability tear of the
+        // same class as the crash window, not an interleaving one. The
+        // interleaving guarantee is unaffected.
+        var cred = credentials[clusterId]
+            ?? TeleportCredential(clusterId: clusterId, credentialID: "", userHandle: "", publicKeyRaw: "", deviceName: "")
+        cred.sshCertPEM = certPEM
+        cred.hasLiveCert = true
+        cred.certValidBefore = validBefore
+        credentials[clusterId] = cred
+        save()
+        logger.info("stored credential pair for cluster \(clusterId.uuidString, privacy: .public), valid until \(validBefore.debugDescription, privacy: .public)")
+    }
+
+    /// The real keychain write: `SecItemUpdate(kSecValueData)`-first,
+    /// `SecItemAdd` only on `errSecItemNotFound`; every other status is a
+    /// fail-closed throw that deletes nothing. On failure the previous key (if
+    /// any) survives, so the pair write's failure direction leaves the previous
+    /// complete pair intact. `kSecAttrAccessible` is left untouched on an
+    /// existing item (update `kSecValueData` only); a new item gets the
+    /// after-first-unlock, this-device-only accessibility.
+    private static func writeEd25519PrivateKeyToKeychain(
+        _ pemData: Data,
+        service: String,
+        account: String,
+        logger: Logger,
+        clusterId: UUID
+    ) throws {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: sshKeyService,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        // Delete any prior key first (idempotent).
-        SecItemDelete(baseQuery as CFDictionary)
-        var attributes = baseQuery
-        attributes[kSecValueData as String] = pemData
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(attributes as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            logger.error("storeEd25519PrivateKey SecItemAdd: OSStatus \(status)")
-            throw TeleportPackageError.keychain(status)
+        let updateStatus = SecItemUpdate(baseQuery as CFDictionary, [
+            kSecValueData as String: pemData
+        ] as CFDictionary)
+        switch updateStatus {
+        case errSecSuccess:
+            break
+        case errSecItemNotFound:
+            // The add is only reached when the update reported not-found, so a
+            // concurrent writer's `errSecDuplicateItem` here means the item
+            // appeared between the two calls: fail closed, never
+            // delete-and-retry (that would destroy a key this writer did not
+            // create).
+            var attributes = baseQuery
+            attributes[kSecValueData as String] = pemData
+            attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let addStatus = SecItemAdd(attributes as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                logger.error("storeEd25519PrivateKey SecItemAdd: OSStatus \(addStatus)")
+                throw TeleportPackageError.keychain(addStatus)
+            }
+        default:
+            // An update-path status (auth failure, storage pressure, …): fail
+            // closed. Never delete-and-retry.
+            logger.error("storeEd25519PrivateKey SecItemUpdate: OSStatus \(updateStatus)")
+            throw TeleportPackageError.keychain(updateStatus)
         }
         logger.info("stored ed25519 private key for cluster \(clusterId.uuidString, privacy: .public)")
     }

@@ -12,14 +12,17 @@
 //  the coordinator state is changed out from under it, and the gate is then
 //  released.
 //
-//  Four further tests gate the *keyring writes* instead, so `cancel()`/the
+//  Further tests gate the *keyring writes* instead, so `cancel()`/the
 //  dismissal latch can interleave between the POST release and the terminal
 //  state write — the window the post-`await` re-take guards exist for
 //  (B1/S2). Without that interleaving the re-take guards would be
 //  unreachable: a generation bump before the handler is entered is caught by
-//  the entry guard. They gate the first store (cert), the middle store
-//  (ed25519 private key), the last store (cluster TLS state) and the
-//  foreign-cert fail-closed `clear`, one per re-take guard.
+//  the entry guard. They gate the first credential write (the atomic pair
+//  write), the last store (cluster TLS state), the foreign-cert fail-closed
+//  `clear`, and the D4 helper's `liveCredentialSnapshot` read. The D4
+//  section covers the helper's stored-cert user-binding gate (F1), the
+//  `privKeyData == nil` branch (unreachable in production; driven through the
+//  injected encoder), and the helper's post-read supersession re-take.
 //
 
 #if DEBUG
@@ -301,38 +304,56 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
     }
 }
 
-/// A `TeleportCredentialStore` that gates the bootstrap-cert store (and,
-/// optionally, the final cluster-TLS store) on a continuation, so a test can
-/// interleave `cancel()` while the coordinator is suspended *inside* the
-/// persistence sequence. Reads and the ungated writes delegate to the
-/// underlying mock; writes are counted. Shared with the dismissal tests in
-/// `TeleportBootstrapViewWiringTests`.
+/// A `TeleportCredentialStore` that gates credential writes (the atomic pair
+/// write, the single:
+/// writes in the reverted two-call shape, and/or the final cluster-TLS store)
+/// on a continuation, so a test can interleave a supersession while the
+/// coordinator is suspended *inside* the persistence sequence. Reads and the
+/// ungated writes delegate to the underlying mock; writes are counted.
+/// `liveCredentialSnapshot` can also be gated, so a test can supersede the
+/// coordinator during a D4 helper's snapshot read. Shared with the dismissal
+/// tests in `TeleportBootstrapViewWiringTests`.
+///
+/// The first credential write — the atomic pair write in the new shape, or the
+/// first single in the reverted two-call shape — also parks on a shared
+/// hold-first gate (before any mutation) so a test can interleave a
+/// supersession at the top of the write. Later writes pass through, so a second
+/// attempt can complete while the first attempt's write is parked.
 @MainActor
 final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let underlying: MockTeleportKeyRing
     private let certGate = BootstrapGate()
-    private let keyGate = BootstrapGate()
     private let tlsGate = BootstrapGate()
     private let loginCertGate = BootstrapGate()
     private let clearGate = BootstrapGate()
+    private let snapshotGate = BootstrapGate()
+    /// The shared hold-first gate: parks only the *first* credential write
+    /// across both shapes, before any mutation. Later credential writes pass
+    /// through.
+    private let firstWriteGate = BootstrapGate()
+    private var firstWriteClaimed = false
     private let gateTheFirstStore: Bool
-    private let gateTheMiddleStore: Bool
     private let gateTheLastStore: Bool
     private let gateTheLoginCertStore: Bool
     private let gateTheClear: Bool
+    private let gateTheSnapshotRead: Bool
 
     private var certStoreStarted = false
     private var certStoreWaiters: [CheckedContinuation<Void, Never>] = []
-    private var keyStoreStarted = false
-    private var keyStoreWaiters: [CheckedContinuation<Void, Never>] = []
     private var tlsStoreStarted = false
     private var tlsStoreWaiters: [CheckedContinuation<Void, Never>] = []
     private var loginCertStoreStarted = false
     private var loginCertStoreWaiters: [CheckedContinuation<Void, Never>] = []
     private var clearStarted = false
     private var clearWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstWriteStarted = false
+    private var firstWriteWaiters: [CheckedContinuation<Void, Never>] = []
+    private var snapshotReadStarted = false
+    private var snapshotReadWaiters: [CheckedContinuation<Void, Never>] = []
 
-    /// Committed write counts (incremented only after the gate is released).
+    /// Committed write counts: incremented only after the underlying store
+    /// accepted the write, so a throwing write (the `.login` no-record case,
+    /// or a keychain-status throw) is never counted as stored.
     private(set) var storedCertCount = 0
     private(set) var storedPrivateKeyCount = 0
     private(set) var storedTLSStateCount = 0
@@ -346,21 +367,36 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     /// allowed to land (§1.4), so the discriminating assertion for the
     /// post-`clear` re-take is the withheld terminal state.
     private(set) var clearedCount = 0
+    /// The atomic pair-write count (T2's positive side).
+    private(set) var storedPairCount = 0
+    /// Direct single-write invocation counts. The pair write also bumps the
+    /// legacy per-half counters above (so every existing probe stays
+    /// discriminating), so these are what T2's "0 singles" assertion reads.
+    private(set) var singleStoreBootstrapCertCount = 0
+    private(set) var singleStoreLoginCertCount = 0
+    private(set) var singleStoreEd25519PrivateKeyCount = 0
+    /// The write-invocation ordinal of the last *committed* cert / key half.
+    /// The pair write installs both halves in one invocation, so a torn pair
+    /// (halves from two invocations) is detectable without value comparison;
+    /// the two-call counterfactual always leaves these different.
+    private(set) var committedCertWriteOrdinal = 0
+    private(set) var committedKeyWriteOrdinal = 0
+    private var writeOrdinal = 0
 
     init(
         underlying: MockTeleportKeyRing,
         gateTheFirstStore: Bool = true,
-        gateTheMiddleStore: Bool = false,
         gateTheLastStore: Bool = false,
         gateTheLoginCertStore: Bool = false,
-        gateTheClear: Bool = false
+        gateTheClear: Bool = false,
+        gateTheSnapshotRead: Bool = false
     ) {
         self.underlying = underlying
         self.gateTheFirstStore = gateTheFirstStore
-        self.gateTheMiddleStore = gateTheMiddleStore
         self.gateTheLastStore = gateTheLastStore
         self.gateTheLoginCertStore = gateTheLoginCertStore
         self.gateTheClear = gateTheClear
+        self.gateTheSnapshotRead = gateTheSnapshotRead
     }
 
     /// Suspends until the gated `storeBootstrapCert` has been entered.
@@ -368,14 +404,6 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         guard !certStoreStarted else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             certStoreWaiters.append(continuation)
-        }
-    }
-
-    /// Suspends until the gated `storeEd25519PrivateKey` has been entered.
-    func waitUntilPrivKeyStoreStarted() async {
-        guard !keyStoreStarted else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            keyStoreWaiters.append(continuation)
         }
     }
 
@@ -395,6 +423,18 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         }
     }
 
+    /// Suspends until the gated `liveCredentialSnapshot` has been entered.
+    func waitUntilSnapshotReadStarted() async {
+        guard !snapshotReadStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            snapshotReadWaiters.append(continuation)
+        }
+    }
+
+    func releaseSnapshotRead() async {
+        await snapshotGate.release()
+    }
+
     /// Suspends until the gated `clear` has been entered.
     func waitUntilClearStarted() async {
         guard !clearStarted else { return }
@@ -403,12 +443,27 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         }
     }
 
-    func releaseCertStore() async {
-        await certGate.release()
+    private func signalClearStarted() {
+        clearStarted = true
+        let waiters = clearWaiters
+        clearWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
-    func releasePrivKeyStore() async {
-        await keyGate.release()
+    /// Suspends until the first credential write (the atomic pair write, or
+    /// the first single in the reverted two-call shape) is entered.
+    func waitUntilFirstCredentialWriteStarted() async {
+        guard !firstWriteStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            firstWriteWaiters.append(continuation)
+        }
+    }
+
+    func releaseCertStore() async {
+        await certGate.release()
+        // The atomic pair write parks on the shared gate instead of the
+        // per-single cert gate; releasing either name must unpark it.
+        await firstWriteGate.release()
     }
 
     func releaseTLSStore() async {
@@ -417,10 +472,18 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func releaseLoginCertStore() async {
         await loginCertGate.release()
+        await firstWriteGate.release()
     }
 
     func releaseClear() async {
         await clearGate.release()
+    }
+
+    /// Releases the parked first credential write in either shape.
+    func releaseFirstCredentialWrite() async {
+        await firstWriteGate.release()
+        await certGate.release()
+        await loginCertGate.release()
     }
 
     // MARK: - Reads (delegate)
@@ -438,7 +501,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func liveCredentialSnapshot(for clusterId: UUID) async -> (certPEM: String, privateKeyPEM: Data)? {
-        await underlying.liveCredentialSnapshot(for: clusterId)
+        if gateTheSnapshotRead {
+            snapshotReadStarted = true
+            let waiters = snapshotReadWaiters
+            snapshotReadWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await snapshotGate.wait()
+        }
+        return await underlying.liveCredentialSnapshot(for: clusterId)
     }
 
     func registeredCredentialID(for clusterId: UUID) async -> Data? {
@@ -451,16 +521,45 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     // MARK: - Writes
 
+    /// Parks the first credential write across both shapes: the pair write
+    /// parks on the shared `firstWriteGate`, the first single (the two-call
+    /// counterfactual) on its per-single gate. Later writes pass through. The
+    /// wait sits before any mutation, never between a write's own mutations.
+    private func holdFirstCredentialWriteIfNeeded(gate: BootstrapGate) async {
+        guard !firstWriteClaimed else { return }
+        firstWriteClaimed = true
+        firstWriteStarted = true
+        let waiters = firstWriteWaiters
+        firstWriteWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        await gate.wait()
+    }
+
+    private func signalCertStoreStarted() {
+        certStoreStarted = true
+        let waiters = certStoreWaiters
+        certStoreWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func signalLoginCertStoreStarted() {
+        loginCertStoreStarted = true
+        let waiters = loginCertStoreWaiters
+        loginCertStoreWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
     func storeBootstrapCert(_ certPEM: String, validBefore: Date, for clusterId: UUID) async {
         if gateTheFirstStore {
-            certStoreStarted = true
-            let waiters = certStoreWaiters
-            certStoreWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
-            await certGate.wait()
+            signalCertStoreStarted()
+            await holdFirstCredentialWriteIfNeeded(gate: certGate)
         }
+        writeOrdinal += 1
+        let ordinal = writeOrdinal
+        singleStoreBootstrapCertCount += 1
         storedCertCount += 1
         underlying.storeBootstrapCert(certPEM, validBefore: validBefore, for: clusterId)
+        committedCertWriteOrdinal = ordinal
     }
 
     func storeRegisteredSEPKey(
@@ -481,26 +580,64 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func storeLoginCert(_ certPEM: String, validBefore: Date, for clusterId: UUID) async {
         if gateTheLoginCertStore {
-            loginCertStoreStarted = true
-            let waiters = loginCertStoreWaiters
-            loginCertStoreWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
-            await loginCertGate.wait()
+            signalLoginCertStoreStarted()
+            await holdFirstCredentialWriteIfNeeded(gate: loginCertGate)
         }
+        writeOrdinal += 1
+        let ordinal = writeOrdinal
+        singleStoreLoginCertCount += 1
         storedLoginCertCount += 1
         underlying.storeLoginCert(certPEM, validBefore: validBefore, for: clusterId)
+        committedCertWriteOrdinal = ordinal
+    }
+
+    func storeCredentialPair(
+        _ certPEM: String,
+        validBefore: Date,
+        privateKeyPEM: Data,
+        policy: TeleportCredentialWritePolicy,
+        for clusterId: UUID
+    ) async throws {
+        switch policy {
+        case .bootstrap:
+            if gateTheFirstStore {
+                signalCertStoreStarted()
+                await holdFirstCredentialWriteIfNeeded(gate: firstWriteGate)
+            }
+        case .login:
+            if gateTheLoginCertStore {
+                signalLoginCertStoreStarted()
+                await holdFirstCredentialWriteIfNeeded(gate: firstWriteGate)
+            }
+        }
+        // The counting block runs only after the underlying store accepted the
+        // write, so a throw (the `.login` no-record case, or a keychain-status
+        // throw) counts as attempted-but-not-committed. Both halves of the
+        // committed pair share this invocation's ordinal.
+        try underlying.storeCredentialPair(
+            certPEM,
+            validBefore: validBefore,
+            privateKeyPEM: privateKeyPEM,
+            policy: policy,
+            for: clusterId
+        )
+        writeOrdinal += 1
+        let ordinal = writeOrdinal
+        storedPairCount += 1
+        storedCertCount += 1
+        storedLoginCertCount += 1
+        storedPrivateKeyCount += 1
+        committedCertWriteOrdinal = ordinal
+        committedKeyWriteOrdinal = ordinal
     }
 
     func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) async throws {
-        if gateTheMiddleStore {
-            keyStoreStarted = true
-            let waiters = keyStoreWaiters
-            keyStoreWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
-            await keyGate.wait()
-        }
-        storedPrivateKeyCount += 1
         try underlying.storeEd25519PrivateKey(pemData, for: clusterId)
+        writeOrdinal += 1
+        let ordinal = writeOrdinal
+        singleStoreEd25519PrivateKeyCount += 1
+        storedPrivateKeyCount += 1
+        committedKeyWriteOrdinal = ordinal
     }
 
     func storeClusterTLSState(_ state: TeleportClusterTLSState, for clusterId: UUID) async {
@@ -521,10 +658,7 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func clear(for clusterId: UUID) async {
         if gateTheClear {
-            clearStarted = true
-            let waiters = clearWaiters
-            clearWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
+            signalClearStarted()
             await clearGate.wait()
         }
         clearedCount += 1
@@ -588,7 +722,9 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
     private func makeCoordinator(
         http: any TeleportHTTPClienting,
         keyRing: any TeleportCredentialStore,
-        presenter: (any WebAuthenticationSessionPresenting)? = nil
+        presenter: (any WebAuthenticationSessionPresenting)? = nil,
+        sshKeyPairGenerator: (any TeleportSSHKeyPairGenerating)? = nil,
+        privateKeyDataEncoder: ((String) -> Data?)? = nil
     ) -> TeleportBootstrapCoordinator {
         TeleportBootstrapCoordinator(
             httpClient: http,
@@ -596,9 +732,10 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
             safariPresenter: presenter ?? MockWebAuthenticationSessionPresenter(),
             logging: DefaultTeleportLogging(),
             signer: MockSEPKeySigner(outcome: .success),
-            sshKeyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
+            sshKeyPairGenerator: sshKeyPairGenerator ?? TeleportFixtureSupport.makeFixedSSHGenerator(),
             tlsKeyPairGenerator: try! TeleportFixtureSupport.makeFixedTLSGenerator(),
-            now: { TeleportFixtureSupport.fixtureClock }
+            now: { TeleportFixtureSupport.fixtureClock },
+            privateKeyDataEncoder: privateKeyDataEncoder ?? { $0.data(using: .utf8) }
         )
     }
 
@@ -839,11 +976,11 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
     }
 
     /// Interleave `cancel()` while the coordinator is suspended *inside* the
-    /// first keyring store. The re-take after that store must stop the later
-    /// credential writes (the ed25519 private key and the pinned cluster TLS
-    /// state) so a superseded success persists no secret material, and the
-    /// terminal state/result must not be committed.
-    func testCancelledRequestDuringFirstKeyringStoreStopsLaterCredentialWrites() async {
+    /// atomic pair write. The pair write was already in flight when the cancel
+    /// landed, so it is allowed to land **complete** (§1.4) — the credential
+    /// can never be torn. The later cluster-TLS write, the in-memory result
+    /// and the terminal state must all be withheld.
+    func testCancelledRequestDuringFirstKeyringStoreLetsTheInFlightPairLand() async {
         let keyRing = MockTeleportKeyRing()
         let store = GatedTeleportCredentialStore(underlying: keyRing)
         let http = GatedTeleportHTTPClient()
@@ -857,68 +994,19 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
             index: 0,
             with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse())
         )
-        await store.waitUntilCertStoreStarted()
+        await store.waitUntilFirstCredentialWriteStarted()
 
         await coordinator.cancel()
         XCTAssertEqual(coordinator.state, .failed(.userCancelled))
 
-        await store.releaseCertStore()
+        await store.releaseFirstCredentialWrite()
         await beginTask.value
 
         XCTAssertEqual(coordinator.state, .failed(.userCancelled))
         XCTAssertNil(coordinator.lastBootstrapResult)
-        XCTAssertEqual(store.storedPrivateKeyCount, 0)
-        XCTAssertEqual(store.storedTLSStateCount, 0)
-        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
-        XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
-    }
-
-    /// Interleave `cancel()` while the coordinator is suspended *inside* the
-    /// middle keyring store (the ed25519 private key). This is the one re-take
-    /// guard the first/last store tests cannot reach: the cert store has
-    /// already committed, and the re-take after the key store (the `:515`
-    /// guard) is the only thing that stops the later cluster-TLS write. The
-    /// cert and the key are authentic and already in flight when the cancel
-    /// lands, so they are allowed to commit; the TLS state, the terminal state
-    /// and the in-memory result must all be withheld.
-    ///
-    /// Counterfactual (measured): deleting the re-take immediately after
-    /// `storeEd25519PrivateKey` makes this test fail with
-    /// `storedTLSStateCount == 1` and a non-nil `clusterTLSState`.
-    func testCancelledRequestDuringPrivateKeyStoreStopsLaterCredentialWrites() async {
-        let keyRing = MockTeleportKeyRing()
-        let store = GatedTeleportCredentialStore(
-            underlying: keyRing,
-            gateTheFirstStore: false,
-            gateTheMiddleStore: true
-        )
-        let http = GatedTeleportHTTPClient()
-        let coordinator = makeCoordinator(http: http, keyRing: store)
-        let cluster = makeCluster()
-
-        let beginTask = Task { await coordinator.begin(cluster: cluster) }
-        await http.waitUntilStarted(1)
-
-        await http.release(
-            index: 0,
-            with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse())
-        )
-        await store.waitUntilPrivKeyStoreStarted()
-
-        // The cert store has already committed by the time the key store is
-        // entered; the coordinator is now suspended inside the key store.
-        XCTAssertEqual(store.storedCertCount, 1)
-        XCTAssertNotNil(keyRing.liveCertPEM(for: cluster.id))
-        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
-
-        await coordinator.cancel()
-        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
-
-        await store.releasePrivKeyStore()
-        await beginTask.value
-
-        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
-        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertEqual(store.storedPairCount, 1, "the in-flight pair write is allowed to land complete")
+        XCTAssertEqual(store.storedPrivateKeyCount, 1)
+        XCTAssertNotNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
         XCTAssertEqual(store.storedTLSStateCount, 0)
         XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
     }
@@ -983,6 +1071,352 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
         XCTAssertEqual(
             coordinator.state, .awaitingApproval,
             "the stale mismatch rejection must not overwrite the newer state"
+        )
+    }
+
+    // MARK: - T1: a superseded atomic pair write cannot tear the credential
+
+    /// T1 (bootstrap half): a supersession landing while attempt 1's atomic pair
+    /// write is parked cannot tear the credential. Attempt 2 runs to `.success`
+    /// (pair 2 + TLS state) while attempt 1 is parked; releasing attempt 1 then
+    /// lands **pair 1 complete** over pair 2. The final snapshot is one
+    /// attempt's complete pair, and the committed cert and key halves come from
+    /// the same write invocation.
+    ///
+    /// This is a coordinator-shape test with a suspension-capable conformer;
+    /// the production atomicity is pinned structurally by
+    /// `TeleportCredentialPairPinsTests` (the keyring pair body suspends
+    /// nowhere).
+    ///
+    /// The measured counterfactual (coordinator-only revert to the two singles)
+    /// fails this test with `(cert_1, key_2)` — see the PR report.
+    func testSupersededPairWriteCannotTearTheBootstrapCredential() async {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing)
+        let http = GatedTeleportHTTPClient()
+        let generator = AttemptTaggedSSHKeyPairGenerator(attemptCount: 2)
+        let coordinator = makeCoordinator(http: http, keyRing: store, sshKeyPairGenerator: generator)
+
+        // Distinct per-attempt validity so a stale attempt-1 terminal write is
+        // distinguishable from attempt 2's (G1: with identical payloads the
+        // final-state assertion below would be vacuous).
+        let attempt1ValidBefore = TeleportFixtureSupport.attemptCertValidBefore.addingTimeInterval(60)
+        let attempt2ValidBefore = TeleportFixtureSupport.attemptCertValidBefore.addingTimeInterval(120)
+
+        let attempt1Cert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: generator.attempts[0].rawKey,
+            keyID: cluster.username,
+            validBefore: attempt1ValidBefore
+        )
+        let attempt2Cert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: generator.attempts[1].rawKey,
+            keyID: cluster.username,
+            validBefore: attempt2ValidBefore
+        )
+
+        // Attempt 1: release its POST so it reaches the pair write and parks.
+        let first = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+        await http.release(
+            index: 0,
+            with: .success(TeleportFixtureSupport.makeAttemptHeadlessResponse(
+                attempt: 0,
+                generator: generator,
+                cluster: cluster,
+                validBefore: attempt1ValidBefore
+            ))
+        )
+        await store.waitUntilFirstCredentialWriteStarted()
+        XCTAssertEqual(store.storedPairCount, 0, "attempt 1's pair write is parked, not committed")
+
+        // Attempt 2: supersedes attempt 1 and runs to `.success`, landing its
+        // complete pair + TLS state while attempt 1 is still parked.
+        let second = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(2)
+        await http.release(
+            index: 1,
+            with: .success(TeleportFixtureSupport.makeAttemptHeadlessResponse(
+                attempt: 1,
+                generator: generator,
+                cluster: cluster,
+                validBefore: attempt2ValidBefore
+            ))
+        )
+        await second.value
+
+        XCTAssertEqual(coordinator.state, .success)
+        XCTAssertEqual(
+            coordinator.lastBootstrapResult?.certValidBefore,
+            attempt2ValidBefore,
+            "attempt 2's result is the current hand-off"
+        )
+        let afterSecond = await keyRing.liveCredentialSnapshot(for: cluster.id)
+        XCTAssertEqual(afterSecond?.certPEM, attempt2Cert)
+        XCTAssertEqual(afterSecond?.privateKeyPEM, Data(generator.attempts[1].privateKeyPEM.utf8))
+
+        // Release attempt 1's parked pair write: it must land attempt 1's
+        // complete pair (cert_1 + key_1), never mixing halves.
+        await store.releaseFirstCredentialWrite()
+        await first.value
+
+        XCTAssertEqual(store.storedPairCount, 2)
+        let final = await keyRing.liveCredentialSnapshot(for: cluster.id)
+        XCTAssertEqual(final?.certPEM, attempt1Cert, "the released pair write lands attempt 1's cert last")
+        let finalKeyText = (final?.privateKeyPEM).flatMap { String(data: $0, encoding: .utf8) } ?? "<no key committed>"
+        XCTAssertEqual(
+            finalKeyText,
+            generator.attempts[0].privateKeyPEM,
+            "the final key must be attempt 1's — a mismatch means the pair tore (cert_1 + key_2); actual=\(finalKeyText)"
+        )
+        XCTAssertEqual(
+            store.committedCertWriteOrdinal, store.committedKeyWriteOrdinal,
+            "the final cert and key halves must come from the same (atomic pair) write invocation"
+        )
+        XCTAssertEqual(coordinator.state, .success, "attempt 1's stale pair write must not write the terminal state")
+        XCTAssertEqual(
+            coordinator.lastBootstrapResult?.certValidBefore,
+            attempt2ValidBefore,
+            "attempt 1's stale pair write must not overwrite attempt 2's hand-off result"
+        )
+    }
+
+    /// T1 sub-case (C): the dismissal latch while the pair write is parked has
+    /// the same in-flight-lands rule as `cancel()`: the released pair lands
+    /// complete, and the terminal state is withheld (the latch itself writes
+    /// nothing; the view's scheduled teardown owns it).
+    func testLatchDuringParkedPairWriteLandsACompletePair() async {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing)
+        let http = GatedTeleportHTTPClient()
+        let generator = AttemptTaggedSSHKeyPairGenerator(attemptCount: 1)
+        let coordinator = makeCoordinator(http: http, keyRing: store, sshKeyPairGenerator: generator)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+        await http.release(
+            index: 0,
+            with: .success(TeleportFixtureSupport.makeAttemptHeadlessResponse(attempt: 0, generator: generator, cluster: cluster))
+        )
+        await store.waitUntilFirstCredentialWriteStarted()
+
+        coordinator.latchDismissal()
+        XCTAssertTrue(coordinator.isDismissalLatched)
+
+        await store.releaseFirstCredentialWrite()
+        await beginTask.value
+
+        XCTAssertEqual(store.storedPairCount, 1)
+        let final = await keyRing.liveCredentialSnapshot(for: cluster.id)
+        XCTAssertEqual(
+            final?.certPEM,
+            TeleportFixtureSupport.makeSynthUserCert(rawKey: generator.attempts[0].rawKey, keyID: cluster.username)
+        )
+        XCTAssertEqual(final?.privateKeyPEM, Data(generator.attempts[0].privateKeyPEM.utf8))
+        XCTAssertEqual(store.committedCertWriteOrdinal, store.committedKeyWriteOrdinal)
+        XCTAssertEqual(coordinator.state, .awaitingApproval, "the latch withholds the terminal state")
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertEqual(store.storedTLSStateCount, 0)
+    }
+
+    // MARK: - T2: exactly one pair write, zero single writes
+
+    /// T2 (bootstrap): exactly one atomic pair write and zero single writes,
+    /// with the terminal `.success` as the positive control (a flow that bails
+    /// before the store cannot satisfy it).
+    func testBootstrapStoresTheCredentialAsExactlyOnePairWrite() async {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(coordinator.state, .success)
+        XCTAssertEqual(store.storedPairCount, 1)
+        XCTAssertEqual(store.singleStoreBootstrapCertCount, 0)
+        XCTAssertEqual(store.singleStoreEd25519PrivateKeyCount, 0)
+    }
+
+    // MARK: - T6 / D4: the post-throw states
+
+    /// T6 (bootstrap): `cancel()` while the pair write is parked, then a
+    /// throwing key seam on release — nothing is committed, no TLS state is
+    /// written, and the cancel's `.failed(.userCancelled)` wins over the D4
+    /// store-failure outcome (the generation re-take withholds it).
+    func testCancelledRequestDuringPairStoreFailureCommitsNothing() async {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+        let store = GatedTeleportCredentialStore(underlying: keyRing)
+        let http = GatedTeleportHTTPClient()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+        await http.release(
+            index: 0,
+            with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse())
+        )
+        await store.waitUntilFirstCredentialWriteStarted()
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
+
+        await store.releaseFirstCredentialWrite()
+        await beginTask.value
+
+        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
+        XCTAssertEqual(store.storedPairCount, 0, "the throwing write was attempted but committed nothing")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
+    }
+
+    /// D4 (bootstrap) non-nil branch: a failed pair write with a usable prior
+    /// stored pair keeps the hand-off working — `.success` with the STORED
+    /// cert's fields, and no TLS state written on this path.
+    func testBootstrapPairStoreFailureWithAPriorPairSucceedsWithTheStoredPair() async throws {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let priorCert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: Data(repeating: 0x77, count: 32),
+            keyID: cluster.username
+        )
+        let priorKey = Data("prior-ed25519-private-key".utf8)
+        keyRing.seed(
+            clusterId: cluster.id,
+            fixture: MockTeleportKeyRing.Fixture(
+                hasBootstrapCert: false,
+                hasSEPKey: true,
+                certValidBefore: nil,
+                credentialID: Data([1, 2, 3]),
+                userHandle: Data("handle".utf8),
+                deviceName: "test-device"
+            )
+        )
+        keyRing.storeBootstrapCert(priorCert, validBefore: TeleportFixtureSupport.attemptCertValidBefore, for: cluster.id)
+        try keyRing.storeEd25519PrivateKey(priorKey, for: cluster.id)
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(coordinator.state, .success)
+        XCTAssertEqual(coordinator.lastBootstrapResult?.sshCertPEM, priorCert)
+        XCTAssertEqual(coordinator.lastBootstrapResult?.certValidBefore, TeleportFixtureSupport.attemptCertValidBefore)
+        XCTAssertEqual(keyRing.liveCredentialSnapshot(for: cluster.id)?.certPEM, priorCert)
+        XCTAssertEqual(keyRing.liveCredentialSnapshot(for: cluster.id)?.privateKeyPEM, priorKey)
+        XCTAssertNil(keyRing.clusterTLSState(for: cluster.id), "the throw path does not write TLS state")
+    }
+
+    /// F1 (bootstrap): the D4 helper must re-apply the stored cert's
+    /// user-binding gate. A prior stored pair whose cert belongs to a foreign
+    /// Teleport user (the row's username was edited after storage) must not be
+    /// handed off as `.success` when this attempt's pair write throws: the
+    /// helper clears the credential and fails closed, exactly like the main
+    /// path (:537).
+    func testBootstrapPairStoreFailureWithAForeignStoredCertClearsAndFails() async throws {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let priorCert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: Data(repeating: 0x88, count: 32),
+            keyID: "someone-else"  // not cluster.username — the stored cert is foreign
+        )
+        let priorKey = Data("foreign-prior-ed25519-key".utf8)
+        keyRing.seed(
+            clusterId: cluster.id,
+            fixture: MockTeleportKeyRing.Fixture(
+                hasBootstrapCert: false,
+                hasSEPKey: true,
+                certValidBefore: nil,
+                credentialID: Data([1, 2, 3]),
+                userHandle: Data("handle".utf8),
+                deviceName: "test-device"
+            )
+        )
+        keyRing.storeBootstrapCert(priorCert, validBefore: TeleportFixtureSupport.attemptCertValidBefore, for: cluster.id)
+        try keyRing.storeEd25519PrivateKey(priorKey, for: cluster.id)
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.unknown("Certificate user binding check failed: the certificate does not belong to this Teleport user")),
+            "the stored foreign cert must not be handed off as .success"
+        )
+        XCTAssertNil(keyRing.credentials[cluster.id], "the foreign stored credential was cleared")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
+    }
+
+    /// G5 (bootstrap): the `privKeyData == nil` branch is unreachable in
+    /// production (a Swift `String` always UTF-8-encodes), so it is driven
+    /// through the injected encoder. It must fail closed through the D4
+    /// outcome instead of committing half a credential.
+    func testBootstrapNilPrivateKeyDataFailsClosedWithoutAWrite() async {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        let coordinator = makeCoordinator(http: http, keyRing: store, privateKeyDataEncoder: { _ in nil })
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(coordinator.state, .failed(.unknown("credentials could not be stored")))
+        XCTAssertEqual(store.storedPairCount, 0, "the nil branch must not attempt a pair write")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
+    }
+
+    /// G5 (bootstrap): the D4 helper's post-read re-take. A `cancel()` landing
+    /// while the helper is suspended in `liveCredentialSnapshot` must keep the
+    /// helper from writing the store-failure state over `.failed(.userCancelled)`.
+    func testSupersessionDuringTheD4SnapshotReadWithholdsTheStoreFailure() async {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheSnapshotRead: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilSnapshotReadStarted()
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.userCancelled))
+
+        await store.releaseSnapshotRead()
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.userCancelled),
+            "the stale store-failure must not overwrite the cancel's terminal state"
         )
     }
 }

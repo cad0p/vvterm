@@ -251,16 +251,61 @@ final class MockTeleportKeyRing: ObservableObject, TeleportKeyRingStoring, Telep
         return true
     }
 
-    /// When set, `storeEd25519PrivateKey` throws this instead of storing.
-    /// Lets tests script the non-fatal keychain-failure path (the cert +
-    /// TLS state must still persist).
+    /// When set, the ed25519 private-key write throws this instead of storing.
+    /// The seam is consulted **before any mutation** (both the single write and
+    /// the atomic pair body share `commitEd25519PrivateKey`), so a scripted
+    /// failure leaves the prior key and the record intact — mirroring the
+    /// production update-first, non-destructive direction.
     var storeEd25519PrivateKeyError: Error?
 
-    func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
+    /// The shared ed25519 key write: checks the failure seam before any
+    /// mutation. Deliberately not a call to the protocol singles, so the pair
+    /// body does not inflate the single-write counters.
+    private func commitEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
         if let storeEd25519PrivateKeyError {
             throw storeEd25519PrivateKeyError
         }
         ed25519PrivateKeys[clusterId] = pemData
+    }
+
+    func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) throws {
+        try commitEd25519PrivateKey(pemData, for: clusterId)
+    }
+
+    /// The atomic pair write: key-first via the shared non-destructive helper
+    /// (the failure seam throws before any mutation), then a cert-fields-only
+    /// record commit that preserves the SEP metadata. `.login` requires an
+    /// existing record and throws without writing either half when it is
+    /// missing; `.bootstrap` creates the record only when absent.
+    func storeCredentialPair(
+        _ certPEM: String,
+        validBefore: Date,
+        privateKeyPEM: Data,
+        policy: TeleportCredentialWritePolicy,
+        for clusterId: UUID
+    ) throws {
+        switch policy {
+        case .login:
+            guard credentials[clusterId] != nil else {
+                throw TeleportCredentialStoreError.noRegisteredCredential(clusterId: clusterId)
+            }
+        case .bootstrap:
+            break
+        }
+        try commitEd25519PrivateKey(privateKeyPEM, for: clusterId)
+        var cred = credentials[clusterId]
+            ?? TeleportCredential(clusterId: clusterId, credentialID: "", userHandle: "", publicKeyRaw: "", deviceName: "")
+        cred.sshCertPEM = certPEM
+        cred.hasLiveCert = true
+        cred.certValidBefore = validBefore
+        credentials[clusterId] = cred
+        // Keep the fixture coherent so `readiness` reflects the new state
+        // (same shape as `storeBootstrapCert` / `storeLoginCert`).
+        if var f = fixtures[clusterId] {
+            f.hasBootstrapCert = true
+            f.certValidBefore = validBefore
+            fixtures[clusterId] = f
+        }
     }
 
     func clusterTLSState(for clusterId: UUID) -> TeleportClusterTLSState? {
