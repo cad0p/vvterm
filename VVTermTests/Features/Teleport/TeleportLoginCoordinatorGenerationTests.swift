@@ -81,7 +81,8 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
     private func makeLoginCoordinator(
         http: any TeleportHTTPClienting,
         keyRing: any TeleportCredentialStore,
-        credentialID: Data = TeleportLoginCoordinatorGenerationTests.credentialID
+        credentialID: Data = TeleportLoginCoordinatorGenerationTests.credentialID,
+        keyPairGenerator: (any TeleportSSHKeyPairGenerating)? = nil
     ) throws -> TeleportLoginCoordinator {
         let signer = MockSEPKeySigner(outcome: .success)
         _ = try signer.createKey(credentialID: credentialID)
@@ -90,7 +91,7 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
             keyRing: keyRing,
             logging: DefaultTeleportLogging(),
             signer: signer,
-            keyPairGenerator: FixedTeleportSSHKeyPairGenerator(publicKey: TeleportFixtureSupport.fixedSSHPublicKey),
+            keyPairGenerator: keyPairGenerator ?? FixedTeleportSSHKeyPairGenerator(publicKey: TeleportFixtureSupport.fixedSSHPublicKey),
             now: { TeleportFixtureSupport.fixtureClock }
         )
     }
@@ -396,6 +397,169 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         XCTAssertEqual(store.storedPairCount, 1, "the write was attempted")
         XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
         XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+    }
+
+    // MARK: - T1: a superseded atomic pair write cannot tear the credential
+
+    /// T1 (login half): a supersession landing while attempt 1's atomic pair
+    /// write is parked cannot tear the credential. Attempt 2 runs to `.success`
+    /// (pair 2) while attempt 1 is parked; releasing attempt 1 then lands
+    /// **pair 1 complete** over pair 2. The final snapshot is one attempt's
+    /// complete pair, and the committed cert and key halves come from the same
+    /// write invocation.
+    ///
+    /// This is a coordinator-shape test with a suspension-capable conformer;
+    /// the production atomicity is pinned structurally by
+    /// `TeleportCredentialPairPinsTests` (the keyring pair body suspends
+    /// nowhere).
+    ///
+    /// The measured counterfactual (coordinator-only revert to the two singles)
+    /// fails this test with `(cert_1, key_2)` — see the PR report.
+    func testSupersededPairWriteCannotTearTheLoginCredential() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheLoginCertStore: true
+        )
+        let http = GatedTeleportHTTPClient()
+        let generator = AttemptTaggedSSHKeyPairGenerator(attemptCount: 2)
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store, keyPairGenerator: generator)
+
+        let attempt1Cert = TeleportFixtureSupport.makeSynthUserCert(rawKey: generator.attempts[0].rawKey, keyID: cluster.username)
+        let attempt2Cert = TeleportFixtureSupport.makeSynthUserCert(rawKey: generator.attempts[1].rawKey, keyID: cluster.username)
+
+        // Attempt 1: run to the parked pair write.
+        let first = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilLoginBeginStarted(1)
+        await http.releaseLoginBegin(index: 0)
+        await http.waitUntilLoginFinishStarted(1)
+        await http.releaseLoginFinish(
+            index: 0,
+            with: .success(TeleportFixtureSupport.makeAttemptLoginFinishResponse(attempt: 0, generator: generator, cluster: cluster))
+        )
+        await store.waitUntilFirstCredentialWriteStarted()
+        XCTAssertEqual(store.storedPairCount, 0, "attempt 1's pair write is parked, not committed")
+
+        // Attempt 2: supersedes attempt 1 and completes while attempt 1 is
+        // still parked.
+        let second = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilLoginBeginStarted(2)
+        await http.releaseLoginBegin(index: 1)
+        await http.waitUntilLoginFinishStarted(2)
+        await http.releaseLoginFinish(
+            index: 1,
+            with: .success(TeleportFixtureSupport.makeAttemptLoginFinishResponse(attempt: 1, generator: generator, cluster: cluster))
+        )
+        await second.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .success(certValidUntil: TeleportFixtureSupport.attemptCertValidBefore, logins: ["alice"])
+        )
+        let afterSecond = await keyRing.liveCredentialSnapshot(for: cluster.id)
+        XCTAssertEqual(afterSecond?.certPEM, attempt2Cert)
+        XCTAssertEqual(afterSecond?.privateKeyPEM, Data(generator.attempts[1].privateKeyPEM.utf8))
+
+        // Release attempt 1's parked pair write: it must land attempt 1's
+        // complete pair (cert_1 + key_1), never mixing halves.
+        await store.releaseFirstCredentialWrite()
+        await first.value
+
+        XCTAssertEqual(store.storedPairCount, 2)
+        let final = await keyRing.liveCredentialSnapshot(for: cluster.id)
+        XCTAssertEqual(final?.certPEM, attempt1Cert, "the released pair write lands attempt 1's cert last")
+        let finalKeyText = (final?.privateKeyPEM).flatMap { String(data: $0, encoding: .utf8) } ?? "<no key committed>"
+        XCTAssertEqual(
+            finalKeyText,
+            generator.attempts[0].privateKeyPEM,
+            "the final key must be attempt 1's — a mismatch means the pair tore (cert_1 + key_2); actual=\(finalKeyText)"
+        )
+        XCTAssertEqual(
+            store.committedCertWriteOrdinal, store.committedKeyWriteOrdinal,
+            "the final cert and key halves must come from the same (atomic pair) write invocation"
+        )
+        XCTAssertEqual(
+            coordinator.state,
+            .success(certValidUntil: TeleportFixtureSupport.attemptCertValidBefore, logins: ["alice"]),
+            "attempt 1's stale pair write must not write the terminal state"
+        )
+    }
+
+    // MARK: - T2: exactly one pair write, zero single writes
+
+    /// T2 (login): exactly one atomic pair write and zero single writes, with
+    /// the terminal `.success` as the positive control (a flow that bails
+    /// before the store cannot satisfy it).
+    func testLoginStoresTheCredentialAsExactlyOnePairWrite() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(coordinator.state, fixtureSuccessState())
+        XCTAssertEqual(store.storedPairCount, 1)
+        XCTAssertEqual(store.singleStoreLoginCertCount, 0)
+        XCTAssertEqual(store.singleStoreEd25519PrivateKeyCount, 0)
+    }
+
+    // MARK: - T6 / D4: the post-throw states
+
+    /// T6 (login): a pair-write throw without a supersession and with no prior
+    /// usable pair routes through the D4 nil branch: the flow fails and the
+    /// user can retry, and neither half is committed.
+    func testLoginPairStoreFailureWithoutAPriorCredentialFailsTheFlow() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(coordinator.state, .failed(.unknown("credentials could not be stored")))
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+    }
+
+    /// D4 (login) non-nil branch: a failed pair write with a usable prior
+    /// stored pair reports `.success` with the STORED cert's validity and
+    /// principals, not the response's.
+    func testLoginPairStoreFailureWithAPriorPairSucceedsWithTheStoredCert() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let priorCert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: Data(repeating: 0x66, count: 32),
+            keyID: cluster.username
+        )
+        let priorKey = Data("prior-login-ed25519-key".utf8)
+        keyRing.storeLoginCert(priorCert, validBefore: TeleportFixtureSupport.attemptCertValidBefore, for: cluster.id)
+        try keyRing.storeEd25519PrivateKey(priorKey, for: cluster.id)
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(
+            coordinator.state,
+            .success(certValidUntil: TeleportFixtureSupport.attemptCertValidBefore, logins: ["alice"])
+        )
+        XCTAssertEqual(keyRing.liveCredentialSnapshot(for: cluster.id)?.certPEM, priorCert)
+        XCTAssertEqual(keyRing.liveCredentialSnapshot(for: cluster.id)?.privateKeyPEM, priorKey)
     }
 }
 
