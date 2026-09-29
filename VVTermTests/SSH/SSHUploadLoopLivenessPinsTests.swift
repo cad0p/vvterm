@@ -45,7 +45,9 @@
 //  They get the same loop-top guard for uniformity and defence-in-depth; the
 //  guard is only a net win because the callers' catches are
 //  liveness-conditional (commit 1), so an aborted drain cannot relocate the
-//  use-after-free into the catch.
+//  use-after-free into the catch. Pin 14 enforces the no-park classification
+//  (zero `waitForSocket` in each drain loop body); pin 13 pins the call-site
+//  `session:` threading and each caller's capture-before-first-wait.
 //
 //  LOOP 7's SECOND GUARD: `finishUploadChannel`'s wait-eof loop drains
 //  output (`await drainChannelOutput`) before `libssh2_channel_wait_eof`, so
@@ -752,5 +754,102 @@ struct SSHUploadLoopLivenessPinsTests {
             in: text,
             actorSpan: actorSpan
         )
+    }
+
+    // MARK: - Pin 13: the call sites thread the captured session (lens 2)
+
+    /// Pin 13 (lens 2 MINOR a): the guards' `currentSession == session`
+    /// identity term is only meaningful if each caller (a) captures `session`
+    /// from `libssh2Session` at its top, before its first wait, and (b) passes
+    /// that same capture into every helper call. A re-derived
+    /// `session: libssh2Session!` argument keeps the loop pins green while
+    /// defeating the identity check, so it is pinned explicitly.
+    @Test
+    func testUploadFamilyCallSitesThreadTheCapturedSession() throws {
+        let (text, actorSpan) = try Self.slicedSource()
+
+        // (a) Each caller captures `session` before its first wait.
+        for anchor in ["private func uploadViaSCP(", "private func uploadViaExec("] {
+            let body = try Self.functionBody(anchor, in: text, actorSpan: actorSpan)
+            let capture = try #require(
+                text.range(of: "guard let session = libssh2Session", range: body),
+                "`\(anchor)` must capture `session` from `libssh2Session` at its top"
+            )
+            let firstWait = try #require(
+                text.range(of: "await waitForSocket()", range: body),
+                "`\(anchor)` must keep its EAGAIN wait"
+            )
+            #expect(
+                capture.lowerBound < firstWait.lowerBound,
+                "`\(anchor)` must capture `session` before its first wait"
+            )
+        }
+
+        // (b) Every helper call in the family passes the captured
+        //     `session: session`. The counts make a new call site red on
+        //     purpose so it must be threaded and pinned explicitly.
+        let callSites: [(token: String, expectedCount: Int)] = [
+            ("finishUploadChannel(openedChannel", 2),
+            ("drainChannelOutput(channel", 1)
+        ]
+        for (token, expectedCount) in callSites {
+            let calls = Self.occurrences(of: token, in: text, range: actorSpan)
+            #expect(
+                calls.count == expectedCount,
+                "the upload family must keep \(expectedCount) `\(token)` call sites; found \(calls.count) — a new call site must be pinned on purpose"
+            )
+            for call in calls {
+                let close = try #require(
+                    text.range(of: ")", range: call.upperBound..<actorSpan.upperBound),
+                    "the `\(token)` call must close its argument list"
+                )
+                let arguments = call.upperBound..<close.lowerBound
+                #expect(
+                    Self.rangeOfWhitespaceFlexible("session: session", in: text, range: arguments) != nil,
+                    "every `\(token)` call must pass the captured `session: session`, not a re-derived identity"
+                )
+            }
+        }
+    }
+
+    // MARK: - Pin 14: the drain loops never park (lens 2 NIT a)
+
+    /// Pin 14 (lens 2 NIT a): the `drainChannelOutput` classification — its
+    /// loops `break` on `EAGAIN`/0 and therefore never park in
+    /// `waitForSocket` — was prose-only in the headers and the commit body.
+    /// Enforce it: each of the two drain loop bodies must contain zero
+    /// `waitForSocket` occurrences. Adding a wait (which would make the read a
+    /// re-entry-after-wait site that the loop-top guard alone might not
+    /// dominate) reddens this pin.
+    @Test
+    func testDrainChannelOutputLoopsNeverPark() throws {
+        let (text, actorSpan) = try Self.slicedSource()
+        let body = try Self.functionBody(
+            "private func drainChannelOutput(",
+            in: text,
+            actorSpan: actorSpan
+        )
+        let loopAnchors = Self.occurrences(of: "while true {", in: text, range: body)
+        #expect(
+            loopAnchors.count == 2,
+            "drainChannelOutput must keep its two drain loops; found \(loopAnchors.count)"
+        )
+        for (index, loopAnchor) in loopAnchors.enumerated() {
+            let loopOpen = try #require(
+                text.range(of: "{", range: loopAnchor)?.lowerBound,
+                "the drain loop at index \(index) must end at its opening brace"
+            )
+            let loopBody = try Self.bracedBlock(openingAt: loopOpen, in: text)
+            // Positive control: the slice is a drain loop, not an empty span.
+            #expect(
+                !Self.occurrences(of: "libssh2_channel_read_ex(", in: text, range: loopBody).isEmpty,
+                "the drain loop at index \(index) slice must contain its read"
+            )
+            let waits = Self.occurrences(of: "waitForSocket", in: text, range: loopBody)
+            #expect(
+                waits.isEmpty,
+                "the drain loop at index \(index) must never park (`waitForSocket`); found \(waits.count) — a wait would turn the read into a re-entry-after-wait site"
+            )
+        }
     }
 }

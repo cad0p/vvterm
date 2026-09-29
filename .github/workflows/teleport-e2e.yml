@@ -430,6 +430,7 @@ jobs:
               -configuration Debug \
               -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
               -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              -resultBundlePath "$RUNNER_TEMP/upload-main.xcresult" \
               -only-testing:VVTermTests/TeleportServerIntegrationTests \
               -only-testing:VVTermTests/SSHUploadIntegrationTests \
               -test-timeouts-enabled YES \
@@ -460,12 +461,50 @@ jobs:
           set -e
           kill "$WPID" 2>/dev/null || true
           kill "$SPID" 2>/dev/null || true
-          # B1 guard: a false `.enabled(if:)` gate (fixture env missing) skips
-          # the upload suite and leaves xcodebuild at 0 with the job green and
-          # no information. Fail the step instead of reporting a vacuous pass.
-          if [ "$RC" -eq 0 ] && ! grep -q "Suite SSHUploadIntegrationTests" "$RUNNER_TEMP/test.log"; then
-            echo "::error::SSHUploadIntegrationTests did not execute — fixture env missing or gate false?"
-            exit 1
+          # B1 guard (fail-closed): a false `.enabled(if:)` gate (fixture env
+          # missing) prints `➜ Suite SSHUploadIntegrationTests skipped.` and
+          # leaves xcodebuild at 0, so a bare suite-name grep reports a
+          # vacuous green. Require positive executed evidence instead —
+          # authoritative from this run's .xcresult bundle, log-shape as the
+          # measured fallback — and fail the step otherwise.
+          verify_upload_suite_executed() {
+            local LOG="$1"
+            local BUNDLE="$2"
+            local UPLOAD_SUITE="SSHUploadIntegrationTests"
+            # 1. The skip marker is exactly the vacuous-green shape.
+            if grep -q "Suite ${UPLOAD_SUITE} skipped" "$LOG"; then
+              echo "::error::${UPLOAD_SUITE} was skipped — fixture env missing or the .enabled(if:) gate false?"
+              exit 1
+            fi
+            # 2. Positive executed evidence: prefer this run's .xcresult
+            #    bundle (authoritative, version-independent) — count the
+            #    suite's passed test-case nodes.
+            local PASSED=0
+            if [ -d "$BUNDLE" ]; then
+              PASSED="$(xcrun xcresulttool get test-results tests --path "$BUNDLE" --format json 2>/dev/null \
+                | python3 -c 'import json,sys; d=json.load(sys.stdin); w=lambda ns:[x for n in (ns or []) for x in [n]+w(n.get("children"))]; print(sum(1 for n in w(d.get("testNodes")) if n.get("name")=="SSHUploadIntegrationTests" for c in (n.get("children") or []) if c.get("result")=="Passed"))' \
+                  2>/dev/null || true)"
+              case "${PASSED:-}" in ''|*[!0-9]*) PASSED=0 ;; esac
+            fi
+            if [ "$PASSED" -ge 3 ]; then
+              echo "${UPLOAD_SUITE} executed: ${PASSED} passed test cases (xcresult: ${BUNDLE})"
+              return 0
+            fi
+            # 3. Measured log-shape fallback: require every leg's per-test
+            #    pass line — a skipped, crashed, or zero-test run cannot
+            #    produce those three lines.
+            for LEG in "testExecPreferredUploadRoundTrips()" \
+                       "testAutomaticUploadRoundTrips()" \
+                       "testExecPreferredUploadToAMissingParentFailsCleanlyAndLeavesTheClientUsable()"; do
+              if ! grep -q "✔ Test ${LEG} passed" "$LOG"; then
+                echo "::error::${UPLOAD_SUITE} did not execute: no pass line for ${LEG} in ${LOG} (fixture env missing or gate false?)"
+                exit 1
+              fi
+            done
+            echo "${UPLOAD_SUITE} executed (log-shape fallback): all 3 legs passed"
+          }
+          if [ "$RC" -eq 0 ]; then
+            verify_upload_suite_executed "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/upload-main.xcresult"
           fi
           exit "$RC"
 
@@ -495,16 +534,53 @@ jobs:
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/upload-hardening.xcresult" \
             -only-testing:VVTermTests/SSHUploadIntegrationTests \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             IgnoreFileSystemDeviceInodeChanges=YES \
             | tee "$RUNNER_TEMP/upload-hardening.log"
-          grep -q "Suite SSHUploadIntegrationTests" "$RUNNER_TEMP/upload-hardening.log" || {
-            echo "::error::SSHUploadIntegrationTests did not execute under hardening"
-            exit 1
+          # Same fail-closed B1 guard as the main test step (identical text):
+          # a skipped suite prints the skip marker, and a zero-test/crashed
+          # run cannot produce the three per-leg pass lines.
+          verify_upload_suite_executed() {
+            local LOG="$1"
+            local BUNDLE="$2"
+            local UPLOAD_SUITE="SSHUploadIntegrationTests"
+            # 1. The skip marker is exactly the vacuous-green shape.
+            if grep -q "Suite ${UPLOAD_SUITE} skipped" "$LOG"; then
+              echo "::error::${UPLOAD_SUITE} was skipped — fixture env missing or the .enabled(if:) gate false?"
+              exit 1
+            fi
+            # 2. Positive executed evidence: prefer this run's .xcresult
+            #    bundle (authoritative, version-independent) — count the
+            #    suite's passed test-case nodes.
+            local PASSED=0
+            if [ -d "$BUNDLE" ]; then
+              PASSED="$(xcrun xcresulttool get test-results tests --path "$BUNDLE" --format json 2>/dev/null \
+                | python3 -c 'import json,sys; d=json.load(sys.stdin); w=lambda ns:[x for n in (ns or []) for x in [n]+w(n.get("children"))]; print(sum(1 for n in w(d.get("testNodes")) if n.get("name")=="SSHUploadIntegrationTests" for c in (n.get("children") or []) if c.get("result")=="Passed"))' \
+                  2>/dev/null || true)"
+              case "${PASSED:-}" in ''|*[!0-9]*) PASSED=0 ;; esac
+            fi
+            if [ "$PASSED" -ge 3 ]; then
+              echo "${UPLOAD_SUITE} executed: ${PASSED} passed test cases (xcresult: ${BUNDLE})"
+              return 0
+            fi
+            # 3. Measured log-shape fallback: require every leg's per-test
+            #    pass line — a skipped, crashed, or zero-test run cannot
+            #    produce those three lines.
+            for LEG in "testExecPreferredUploadRoundTrips()" \
+                       "testAutomaticUploadRoundTrips()" \
+                       "testExecPreferredUploadToAMissingParentFailsCleanlyAndLeavesTheClientUsable()"; do
+              if ! grep -q "✔ Test ${LEG} passed" "$LOG"; then
+                echo "::error::${UPLOAD_SUITE} did not execute: no pass line for ${LEG} in ${LOG} (fixture env missing or gate false?)"
+                exit 1
+              fi
+            done
+            echo "${UPLOAD_SUITE} executed (log-shape fallback): all 3 legs passed"
           }
+          verify_upload_suite_executed "$RUNNER_TEMP/upload-hardening.log" "$RUNNER_TEMP/upload-hardening.xcresult"
 
       - name: Save e2e DerivedData cache (even on failure)
         if: always()

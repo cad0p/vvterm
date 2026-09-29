@@ -6067,7 +6067,17 @@ actor SSHSession {
             // return (channel.c:2510-2513) and the close loop breaks only on
             // 0, so this free takes the already-closed branch (channel.c:2698)
             // and cannot return EAGAIN (channel.c:2619-2628).
-            libssh2_channel_free(openedChannel)
+            //
+            // Re-check session liveness before the free, with the same three
+            // terms the catch below uses. The helper's last guard is adjacent
+            // today — no `await` runs between it and this statement — but any
+            // suspension added to the helper after that guard would let a
+            // disconnect reap the channel first. When the session is gone the
+            // free is skipped: `libssh2_session_free` reaps the channel, the
+            // same bounded, deliberate leak the catch accepts.
+            if isActive, !hasBeenCleaned, libssh2Session == session {
+                libssh2_channel_free(openedChannel)
+            }
             scpChannel = nil  // the catch below must not free again
             logger.info("SCP upload finished [path: \(remotePath, privacy: .public)]")
         } catch {
@@ -6200,7 +6210,17 @@ actor SSHSession {
             // return (channel.c:2510-2513) and the close loop breaks only on
             // 0, so this free takes the already-closed branch (channel.c:2698)
             // and cannot return EAGAIN (channel.c:2619-2628).
-            libssh2_channel_free(openedChannel)
+            //
+            // Re-check session liveness before the free, with the same three
+            // terms the catch below uses. The helper's last guard is adjacent
+            // today — no `await` runs between it and this statement — but any
+            // suspension added to the helper after that guard would let a
+            // disconnect reap the channel first. When the session is gone the
+            // free is skipped: `libssh2_session_free` reaps the channel, the
+            // same bounded, deliberate leak the catch accepts.
+            if isActive, !hasBeenCleaned, libssh2Session == session {
+                libssh2_channel_free(openedChannel)
+            }
             execChannel = nil  // the catch below must not free again
             guard exitStatus == 0 else {
                 throw SSHError.socketError("Exec upload failed with exit status \(exitStatus)")

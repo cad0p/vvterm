@@ -723,4 +723,56 @@ struct SSHUploadChannelFreePinsTests {
             )
         }
     }
+
+    // MARK: - Pin A7: the success-path frees are liveness-conditional
+
+    /// Pin A7 (#291, lens 1 F2): the success-path
+    /// `libssh2_channel_free(openedChannel)` in each caller must sit inside
+    /// `if isActive, !hasBeenCleaned, libssh2Session == session { … }` — the
+    /// same three-term liveness condition the catches use. The helper's last
+    /// guard is adjacent today (no `await` between it and the free), but an
+    /// `await` inserted into `finishUploadChannel` after that guard would make
+    /// the unguarded free free a channel the session free already reaped.
+    /// Dropping the condition reddens this pin.
+    @Test
+    func testSuccessPathFreesAreLivenessConditional() throws {
+        let (text, actorSpan) = try Self.slicedSource()
+        let callers: [(anchor: String, varAnchor: String)] = [
+            ("private func uploadViaSCP(", "var scpChannel: OpaquePointer?"),
+            ("private func uploadViaExec(", "var execChannel: OpaquePointer?")
+        ]
+        for (anchor, varAnchor) in callers {
+            let body = try Self.functionBody(anchor, in: text, actorSpan: actorSpan)
+            let doBody = try Self.doBlock(afterVarAnchor: varAnchor, in: text, functionBody: body)
+
+            let frees = Self.occurrences(
+                of: "libssh2_channel_free(openedChannel)",
+                in: text,
+                range: doBody
+            )
+            #expect(
+                frees.count == 1,
+                "\(anchor) must keep exactly one success-path `openedChannel` free; found \(frees.count)"
+            )
+            let free = try #require(frees.first, "\(anchor) must keep its success-path free")
+
+            let condition = try #require(
+                Self.rangeOfWhitespaceFlexible(
+                    "if isActive, !hasBeenCleaned, libssh2Session == session",
+                    in: text,
+                    range: doBody
+                ),
+                "\(anchor)'s success-path free must be gated on `if isActive, !hasBeenCleaned, libssh2Session == session` (lens 1 F2)"
+            )
+            let ifBody = try Self.bracedBlock(after: condition, in: text)
+            #expect(
+                Self.isInside(ifBody, free.lowerBound),
+                "\(anchor)'s success-path free must run inside the liveness-conditional `if`"
+            )
+            #expect(
+                condition.lowerBound < free.lowerBound,
+                "\(anchor)'s liveness condition must precede the success-path free"
+            )
+        }
+    }
 }
