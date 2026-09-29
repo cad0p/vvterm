@@ -321,7 +321,10 @@ struct GhosttyIsolatedDeinitPinsTests {
     /// 4 of 4 — the converged deinit body survives (GQ-2). The exact-token
     /// marker count deliberately does not see the with-body spelling, so a
     /// future #294-style sweep collapsing it to `nonisolated deinit {}` reds
-    /// here.
+    /// here. It also pins that `cleanup()` keeps the two MainActor calls the
+    /// deinit no longer performs — the body pin's blind spot: the
+    /// behaviour-neutrality premise for deleting those calls from the deinit is
+    /// that the single effective MainActor teardown site still owns them.
     @Test
     func testGhosttyTerminalViewDeinitBodySurvives() {
         guard let text = Self.terminalViewSource() else { return }
@@ -354,6 +357,30 @@ struct GhosttyIsolatedDeinitPinsTests {
         #expect(
             unregisters.count >= 1,
             "\(Self.terminalViewFile): the deinit body must keep the deferred `unregisterSurface` (found \(unregisters.count))"
+        )
+
+        // The behaviour-neutrality premise for the two calls deleted from the
+        // deinit is that `cleanup()` retains them. The body assertions above
+        // only see the deinit, so a future edit dropping either call from
+        // `cleanup()` would otherwise pass every pin.
+        let cleanupAnchors = Self.occurrences(of: "func cleanup()", in: text, range: body)
+        guard cleanupAnchors.count == 1 else {
+            Issue.record("\(Self.terminalViewFile): the `func cleanup()` anchor must be unique in the resolved class body (found \(cleanupAnchors.count))")
+            return
+        }
+        guard let cleanupBody = try? Self.bracedBlock(after: cleanupAnchors[0], in: text) else {
+            Issue.record("\(Self.terminalViewFile): the `func cleanup()` anchor does not open a braced body")
+            return
+        }
+        let cancelCalls = Self.occurrences(of: "cancelTrackedHardwareInput()", in: text, range: cleanupBody)
+        #expect(
+            cancelCalls.count >= 1,
+            "\(Self.terminalViewFile): `cleanup()` must keep the `cancelTrackedHardwareInput()` call — it is the behaviour-neutrality premise for deleting that call from the deinit (found \(cancelCalls.count))"
+        )
+        let autoscrollCalls = Self.occurrences(of: "stopSelectionAutoscroll()", in: text, range: cleanupBody)
+        #expect(
+            autoscrollCalls.count >= 1,
+            "\(Self.terminalViewFile): `cleanup()` must keep the `stopSelectionAutoscroll()` call — it is the behaviour-neutrality premise for deleting that call from the deinit (found \(autoscrollCalls.count))"
         )
     }
 
