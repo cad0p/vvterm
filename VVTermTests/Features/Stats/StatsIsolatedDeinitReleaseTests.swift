@@ -3,9 +3,10 @@
 //  StatsIsolatedDeinitReleaseTests.swift
 //  VVTermTests
 //
-//  Regression + pins for issue #280: `StatsCollectionContext` and
-//  `ServerStatsCollector` are MainActor-isolated classes whose
-//  compiler-synthesized deinits were *isolated* deinits
+//  Regression + pins for issue #280: `StatsCollectionContext`,
+//  `ServerStatsCollector` and `ViewTabConfigurationManager` are
+//  MainActor-isolated classes whose compiler-synthesized deinits were
+//  *isolated* deinits
 //  (`__isolated_deallocating_deinit`). Releasing either object outside a
 //  Swift task context — as a synchronous XCTest method does — takes the
 //  MainActor executor deinit path
@@ -72,11 +73,28 @@ final class StatsIsolatedDeinitReleaseTests: XCTestCase {
         let store = ServerVolumeVisibilityStore(defaults: defaults)
         withExtendedLifetime(store) {}
     }
+
+    /// `ViewTabConfigurationManager` is explicitly `@MainActor` with a
+    /// synthesized deinit. It is not in `Features/Stats`: the full local
+    /// unit-target run for this issue aborted in
+    /// `ViewTabConfigurationManagerTests` (two tests, one per launch), and
+    /// the marker was applied under the issue's scope rule. Suite-scoped
+    /// defaults so the shared instance's `.standard` store is untouched.
+    func testViewTabConfigurationManagerReleasesSynchronouslyWithoutTrapping() throws {
+        let suiteName = "StatsIsolatedDeinitReleaseTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let manager = ViewTabConfigurationManager(defaults: defaults)
+        withExtendedLifetime(manager) {}
+    }
 }
 
 // MARK: - CI-visible source pin
 
-/// Pins the two `nonisolated deinit {}` markers by reading the source tree.
+/// Pins the `nonisolated deinit {}` markers added by this PR by reading
+/// the source tree.
 ///
 /// This exists because the runtime test above cannot protect CI: the CI
 /// xcode-27 runner does not take the aborting path, so it stayed green
@@ -344,6 +362,39 @@ struct StatsIsolatedDeinitPinsTests {
         #expect(
             markers.count == 1,
             "ServerStatsCollector must carry exactly one `nonisolated deinit {}`"
+        )
+    }
+
+    /// `ViewTabConfigurationManager` must keep exactly one
+    /// `nonisolated deinit {}` in its body. It is the third marker this PR
+    /// adds (the full-unit acceptance run surfaced it); keeping it pinned
+    /// here means all three are guarded by the same CI-visible gate.
+    @Test
+    func testViewTabConfigurationManagerCarriesExactlyOneNonisolatedDeinit() throws {
+        let text = Self.strippingComments(
+            try source("VVTerm/Features/ConnectionViews/Application/ViewTabConfigurationManager.swift")
+        )
+        let anchor = try #require(
+            text.range(of: "final class ViewTabConfigurationManager: ObservableObject"),
+            "ViewTabConfigurationManager.swift must keep the `ViewTabConfigurationManager` class declaration"
+        )
+        let body = try Self.bracedBlock(after: anchor, in: text)
+
+        // Positive control: the resolved span is the real class body.
+        let controls = Self.occurrences(
+            of: "private func loadConfiguration()",
+            in: text,
+            range: body
+        )
+        #expect(
+            controls.count == 1,
+            "ViewTabConfigurationManager's body must contain exactly one `loadConfiguration()` (positive control)"
+        )
+
+        let markers = Self.occurrences(of: "nonisolated deinit {}", in: text, range: body)
+        #expect(
+            markers.count == 1,
+            "ViewTabConfigurationManager must carry exactly one `nonisolated deinit {}`"
         )
     }
 }
