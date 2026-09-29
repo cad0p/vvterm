@@ -5981,6 +5981,11 @@ actor SSHSession {
         }
     }
 
+    // Both upload strategies below always use the OUTER `libssh2Session` —
+    // even on a Teleport connection whose inner prepare failed and therefore
+    // did not route to `writeFile` — so the liveness guards below only need
+    // the outer-session identity. Do not "simplify" them into an inner/outer
+    // route selection: that would change behaviour on the fallback path.
     private func uploadViaSCP(_ data: Data, to remotePath: String, permissions: Int32) async throws {
         guard let session = libssh2Session else {
             throw SSHError.notConnected
@@ -5994,6 +5999,14 @@ actor SSHSession {
         do {
             while scpChannel == nil {
                 try Task.checkCancellation()
+                guard isActive,
+                      !hasBeenCleaned,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    throw SSHError.notConnected
+                }
                 scpChannel = remotePath.withCString { pathPtr in
                     libssh2_scp_send64(
                         session,
@@ -6025,6 +6038,14 @@ actor SSHSession {
             var offset = 0
             while offset < bytes.count {
                 try Task.checkCancellation()
+                guard isActive,
+                      !hasBeenCleaned,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    throw SSHError.notConnected
+                }
                 let written = bytes.withUnsafeBufferPointer { buffer -> Int in
                     guard let baseAddress = buffer.baseAddress else { return -1 }
                     let pointer = UnsafeRawPointer(baseAddress.advanced(by: offset)).assumingMemoryBound(to: CChar.self)
@@ -6040,7 +6061,7 @@ actor SSHSession {
                 }
             }
 
-            _ = try await finishUploadChannel(openedChannel)
+            _ = try await finishUploadChannel(openedChannel, session: session)
             // The helper returns only after a confirmed close:
             // `ssh2_channel_close` sets `local.close` on every non-EAGAIN
             // return (channel.c:2510-2513) and the close loop breaks only on
@@ -6080,6 +6101,14 @@ actor SSHSession {
         do {
             while execChannel == nil {
                 try Task.checkCancellation()
+                guard isActive,
+                      !hasBeenCleaned,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    throw SSHError.notConnected
+                }
                 execChannel = libssh2_channel_open_ex(
                     session,
                     "session",
@@ -6113,6 +6142,14 @@ actor SSHSession {
 
             while true {
                 try Task.checkCancellation()
+                guard isActive,
+                      !hasBeenCleaned,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    throw SSHError.notConnected
+                }
                 let execResult = libssh2_channel_process_startup(
                     openedChannel,
                     "exec",
@@ -6134,6 +6171,14 @@ actor SSHSession {
             var offset = 0
             while offset < bytes.count {
                 try Task.checkCancellation()
+                guard isActive,
+                      !hasBeenCleaned,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    throw SSHError.notConnected
+                }
                 let written = bytes.withUnsafeBufferPointer { buffer -> Int in
                     guard let baseAddress = buffer.baseAddress else { return -1 }
                     let pointer = UnsafeRawPointer(baseAddress.advanced(by: offset)).assumingMemoryBound(to: CChar.self)
@@ -6149,7 +6194,7 @@ actor SSHSession {
                 }
             }
 
-            let exitStatus = try await finishUploadChannel(openedChannel, drainOutput: true)
+            let exitStatus = try await finishUploadChannel(openedChannel, session: session, drainOutput: true)
             // The helper returns only after a confirmed close:
             // `ssh2_channel_close` sets `local.close` on every non-EAGAIN
             // return (channel.c:2510-2513) and the close loop breaks only on
@@ -6179,10 +6224,19 @@ actor SSHSession {
 
     private func finishUploadChannel(
         _ channel: OpaquePointer,
+        session: OpaquePointer,
         drainOutput: Bool = false
     ) async throws -> Int32 {
         while true {
             try Task.checkCancellation()
+            guard isActive,
+                  !hasBeenCleaned,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                throw SSHError.notConnected
+            }
             let sendEOFResult = libssh2_channel_send_eof(channel)
             if sendEOFResult == 0 {
                 break
@@ -6196,8 +6250,27 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            guard isActive,
+                  !hasBeenCleaned,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                throw SSHError.notConnected
+            }
             if drainOutput {
-                try await drainChannelOutput(channel)
+                try await drainChannelOutput(channel, session: session)
+                // The loop-top guard does not dominate this re-entry: if
+                // `drainChannelOutput` ever suspends, its resume lands on the
+                // next statement without re-running the guard above.
+                guard isActive,
+                      !hasBeenCleaned,
+                      let currentSession = libssh2Session,
+                      currentSession == session,
+                      socket >= 0,
+                      atomicSocket.isUsable else {
+                    throw SSHError.notConnected
+                }
             }
             let waitEOFResult = libssh2_channel_wait_eof(channel)
             if waitEOFResult == 0 {
@@ -6212,6 +6285,14 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            guard isActive,
+                  !hasBeenCleaned,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                throw SSHError.notConnected
+            }
             let closeResult = libssh2_channel_close(channel)
             if closeResult == 0 {
                 break
@@ -6225,6 +6306,14 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            guard isActive,
+                  !hasBeenCleaned,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                throw SSHError.notConnected
+            }
             let waitClosedResult = libssh2_channel_wait_closed(channel)
             if waitClosedResult == 0 {
                 break
@@ -6244,11 +6333,19 @@ actor SSHSession {
         return exitStatus
     }
 
-    private func drainChannelOutput(_ channel: OpaquePointer) async throws {
+    private func drainChannelOutput(_ channel: OpaquePointer, session: OpaquePointer) async throws {
         var buffer = [CChar](repeating: 0, count: 4096)
 
         while true {
             try Task.checkCancellation()
+            guard isActive,
+                  !hasBeenCleaned,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                throw SSHError.notConnected
+            }
             let stdoutRead = libssh2_channel_read_ex(channel, 0, &buffer, buffer.count)
             if stdoutRead > 0 {
                 continue
@@ -6261,6 +6358,14 @@ actor SSHSession {
 
         while true {
             try Task.checkCancellation()
+            guard isActive,
+                  !hasBeenCleaned,
+                  let currentSession = libssh2Session,
+                  currentSession == session,
+                  socket >= 0,
+                  atomicSocket.isUsable else {
+                throw SSHError.notConnected
+            }
             let stderrRead = libssh2_channel_read_ex(channel, 1, &buffer, buffer.count)
             if stderrRead > 0 {
                 continue
