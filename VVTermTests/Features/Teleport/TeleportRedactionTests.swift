@@ -1107,7 +1107,9 @@ final class TeleportRedactionTests: XCTestCase {
     // MARK: - TeleportLoginCoordinator
 
     /// `login/begin` is a headless HTTP call: a non-2xx carries the raw server
-    /// body, so the log must carry the status only.
+    /// body, so the log must carry the status only. The live client throws
+    /// `HeadlessError.http` for it (#236), so this scripts the production
+    /// shape and pins the full log line: status present, body absent.
     func testTeleportLoginCoordinator_loginBeginLogsTheStatusNotTheServerBody() async throws {
         let logging = SpySubsystemLogging()
         let marker = "login-begin-server-body-marker"
@@ -1146,8 +1148,9 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
-    /// `login/finish` is the second unlisted site of the same class: its
-    /// `HeadlessError.http` body must not reach the log either.
+    /// `login/finish` is the second site of the same class: its
+    /// `HeadlessError.http` body must not reach the log either. Like the
+    /// `login/begin` test above, this scripts the production shape (#236).
     func testTeleportLoginCoordinator_loginFinishLogsTheStatusNotTheServerBody() async throws {
         let logging = SpySubsystemLogging()
         let marker = "login-finish-server-body-marker"
@@ -1186,15 +1189,14 @@ final class TeleportRedactionTests: XCTestCase {
         }
     }
 
-    // The login path's *production* error type is `GRPCError.http2`, not
-    // `HeadlessError.http`: `LiveTeleportHTTPClient.loginBegin` throws
-    // `GRPCError.http2("login/begin HTTP <status>: <body>")` on a non-200, so
-    // the raw body travels inside the error's message. These two tests pin the
-    // production type — the `HeadlessError` cases above exercise the mock's
-    // type and would have passed even while this path leaked.
-    func testTeleportLoginCoordinator_loginBeginRedactsTheProductionGRPCErrorType() async throws {
+    // A `GRPCError` still reaches the login catch from the gRPC/HTTP-2 layer
+    // (the #236 fix removed the login clients' literal status+body packing;
+    // `GRPCClient`'s `.http2` carries an `NWError` message). This pins that
+    // such an error logs its case only — never `localizedDescription`, which
+    // is why `wireFailure` matches `GRPCError` explicitly.
+    func testTeleportLoginCoordinator_loginBeginRedactsAGRPCErrorFamilyFailure() async throws {
         let logging = SpySubsystemLogging()
-        let marker = "login-begin-production-body-marker"
+        let marker = "login-begin-grpc-family-marker"
         let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
         let credentialID = Data([1, 2, 3, 4])
         let keyRing = Self.makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
@@ -1220,45 +1222,6 @@ final class TeleportRedactionTests: XCTestCase {
         )
         XCTAssertTrue(
             messages.contains(where: { $0.contains("login/begin failed: http2") }),
-            "the failure log must carry the gRPC case only; saw: \(messages)"
-        )
-        for message in messages {
-            XCTAssertFalse(
-                message.contains(marker),
-                "the HTTP response body leaked into a log payload: \(message)"
-            )
-        }
-    }
-
-    /// `login/finish` throws the same production type.
-    func testTeleportLoginCoordinator_loginFinishRedactsTheProductionGRPCErrorType() async throws {
-        let logging = SpySubsystemLogging()
-        let marker = "login-finish-production-body-marker"
-        let cluster = TeleportCluster(host: "teleport.pcad.it", username: "pier")
-        let credentialID = Data([1, 2, 3, 4])
-        let keyRing = Self.makeRegisteredKeyRing(clusterId: cluster.id, credentialID: credentialID)
-        let signer = MockSEPKeySigner(outcome: .success)
-        _ = try signer.createKey(credentialID: credentialID)
-        let http = MockTeleportHTTPClient()
-        http.scriptedLoginFinishError = GRPCError.http2("login/finish HTTP 500: \(marker)")
-
-        let coordinator = TeleportLoginCoordinator(
-            httpClient: http,
-            keyRing: keyRing,
-            logging: logging,
-            signer: signer,
-            webAuthnBuilder: ScriptedWebAuthnBuilderStub(),
-            keyPairGenerator: TeleportFixtureSupport.makeFixedSSHGenerator(),
-            now: { TeleportFixtureSupport.fixtureClock }
-        )
-        await coordinator.begin(cluster: cluster)
-
-        let messages = try await waitForLog(
-            subsystem: logging.subsystem,
-            containing: "login/finish failed"
-        )
-        XCTAssertTrue(
-            messages.contains(where: { $0.contains("login/finish failed: http2") }),
             "the failure log must carry the gRPC case only; saw: \(messages)"
         )
         for message in messages {
@@ -1311,6 +1274,25 @@ final class TeleportRedactionTests: XCTestCase {
                 "the server-provided rpID leaked into a log payload: \(message)"
             )
         }
+    }
+
+    // MARK: - TeleportErrorRedaction
+
+    /// The gRPC family's honest home: `.http2`'s producer is the gRPC/HTTP-2
+    /// layer (a variable-arg `NWError` message), not the login HTTP path any
+    /// more. Whatever the payload, the renderers keep the case only.
+    func testWireFailure_rendersTheGRPCErrorFamiliesAsTheirCaseOnly() {
+        let marker = "grpc-payload-marker"
+        let http2 = GRPCError.http2("login/begin HTTP 403: \(marker)")
+        XCTAssertEqual(TeleportErrorRedaction.wireFailure(http2), "http2")
+        XCTAssertEqual(TeleportErrorRedaction.grpcFailure(http2), "http2")
+        XCTAssertFalse(TeleportErrorRedaction.wireFailure(http2).contains(marker))
+        XCTAssertFalse(TeleportErrorRedaction.grpcFailure(http2).contains(marker))
+
+        let grpc = GRPCError.grpc(status: 7, message: marker)
+        XCTAssertEqual(TeleportErrorRedaction.wireFailure(grpc), "grpc(status: 7)")
+        XCTAssertEqual(TeleportErrorRedaction.grpcFailure(grpc), "grpc(status: 7)")
+        XCTAssertFalse(TeleportErrorRedaction.wireFailure(grpc).contains(marker))
     }
 
     // MARK: - Helpers

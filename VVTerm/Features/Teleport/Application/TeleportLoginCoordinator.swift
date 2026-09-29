@@ -267,10 +267,11 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             // be its first statement: a stale continuation must not write
             // `.failed` over the newer attempt's state.
             guard generation == requestGeneration else { return }
-            // A wire-derived failure can carry the raw server body in either
-            // error family — `HeadlessError.http` or the live client's
-            // `GRPCError.http2("<op> HTTP <status>: <body>")`. Log the
-            // case/status only. The descriptive text stays in the UI state via
+            // A wire-derived failure can carry the raw server body —
+            // `HeadlessError.http(status:body:)` is what the live client now
+            // throws for a non-200 login call (#236); a `GRPCError` from the
+            // gRPC/HTTP-2 layer still reaches this catch. Log the case/status
+            // only. The descriptive text stays in the UI state via
             // `mapHTTPError`.
             logger.error("login/begin failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
@@ -363,7 +364,8 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             // be its first statement: a stale continuation must not write
             // `.failed` over the newer attempt's state.
             guard generation == requestGeneration else { return }
-            // Same class as `login/begin` above.
+            // Same class as `login/begin` above: a wire-derived failure whose
+            // log payload carries the case/status only, never the raw body.
             logger.error("login/finish failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
             return

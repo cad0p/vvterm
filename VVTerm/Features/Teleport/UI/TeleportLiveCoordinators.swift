@@ -89,7 +89,11 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? "<binary>"
-            throw GRPCError.http2("login/begin HTTP \(status): \(body)")
+            // Structured: `wireFailure` renders the status ("HTTP <status>")
+            // and `mapHTTPError` maps the body to `.server` (#236). Packing
+            // both into one `GRPCError.http2` string lost the status in the
+            // log and routed the UI to `.unknown`.
+            throw HeadlessError.http(status: status, body: body)
         }
         do {
             return try JSONDecoder().decode(LoginBeginResponse.self, from: data)
@@ -123,7 +127,8 @@ final class LiveTeleportHTTPClient: TeleportHTTPClienting {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? "<binary>"
-            throw GRPCError.http2("login/finish HTTP \(status): \(body)")
+            // Structured, same as `login/begin` above (#236).
+            throw HeadlessError.http(status: status, body: body)
         }
         do {
             return try JSONDecoder().decode(LoginFinishResponse.self, from: data)
