@@ -48,8 +48,19 @@ final class StatsIsolatedDeinitReleaseTests: XCTestCase {
     /// MainActor-isolated, so its release from this synchronous method is
     /// the exact reproduction shape.
     func testStatsCollectionContextReleasesSynchronouslyWithoutTrapping() {
-        let context = StatsCollectionContext()
-        withExtendedLifetime(context) {}
+        weak var weakContext: StatsCollectionContext?
+        do {
+            let context = StatsCollectionContext()
+            weakContext = context
+        }
+        // The `weak` assertion proves the object was deallocated at the scope
+        // exit *inside* this synchronous method — that release is the one that
+        // aborts when the marker is absent. (Pre-fix this method never reaches
+        // the assertion: the process aborts at the scope exit.)
+        XCTAssertNil(
+            weakContext,
+            "the context must be deallocated at the scope exit, not deferred to the end of the method"
+        )
     }
 
     /// `ServerStatsCollector` is explicitly `@MainActor` and internally
@@ -57,8 +68,15 @@ final class StatsIsolatedDeinitReleaseTests: XCTestCase {
     /// this release aborts pre-fix through either class's synthesized
     /// deinit.
     func testServerStatsCollectorReleasesSynchronouslyWithoutTrapping() {
-        let collector = ServerStatsCollector()
-        withExtendedLifetime(collector) {}
+        weak var weakCollector: ServerStatsCollector?
+        do {
+            let collector = ServerStatsCollector()
+            weakCollector = collector
+        }
+        XCTAssertNil(
+            weakCollector,
+            "the collector must be deallocated at the scope exit, not deferred to the end of the method"
+        )
     }
 
     /// Control: `ServerVolumeVisibilityStore` already carries the marker
@@ -70,8 +88,15 @@ final class StatsIsolatedDeinitReleaseTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = ServerVolumeVisibilityStore(defaults: defaults)
-        withExtendedLifetime(store) {}
+        weak var weakStore: ServerVolumeVisibilityStore?
+        do {
+            let store = ServerVolumeVisibilityStore(defaults: defaults)
+            weakStore = store
+        }
+        XCTAssertNil(
+            weakStore,
+            "the already-marked control must deallocate at the scope exit"
+        )
     }
 
     /// `ViewTabConfigurationManager` is explicitly `@MainActor` with a
@@ -86,8 +111,15 @@ final class StatsIsolatedDeinitReleaseTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let manager = ViewTabConfigurationManager(defaults: defaults)
-        withExtendedLifetime(manager) {}
+        weak var weakManager: ViewTabConfigurationManager?
+        do {
+            let manager = ViewTabConfigurationManager(defaults: defaults)
+            weakManager = manager
+        }
+        XCTAssertNil(
+            weakManager,
+            "the manager must be deallocated at the scope exit, not deferred to the end of the method"
+        )
     }
 }
 
@@ -104,14 +136,22 @@ final class StatsIsolatedDeinitReleaseTests: XCTestCase {
 /// source, resolves the class body with `bracedBlock(after:)`, checks a
 /// known member first (positive control, so a mis-resolved span cannot
 /// satisfy the assertion), then asserts the body contains exactly one
-/// `nonisolated deinit {}`. Reported defeats: a marker moved to another
-/// class (the moved-from body count drops to 0 and the pin goes red), a
-/// rename (the anchor no longer resolves and the pin goes red), and a
-/// multi-line `nonisolated deinit {` + `}` spelling (the exact-token count
-/// drops to 0 and the pin goes red). It is still a tripwire, not a proof —
-/// the runtime test is the local proof — because a body that keeps the
-/// token but drops the actual isolation would pass the pin and fail the
-/// runtime test only on a runtime that takes the aborting path.
+/// `nonisolated deinit {}` **at brace depth 1** — the class's own member
+/// level — so a marker moved into a nested declaration inside the same body
+/// is red too.
+///
+/// Reported defeats (each measured against the real sources): a marker moved
+/// to another class (the moved-from body count drops to 0), a rename (the
+/// anchor no longer resolves), a multi-line `nonisolated deinit {` + `}`
+/// spelling (the exact-token count drops to 0), and a marker moved into a
+/// nested type (the depth assertion goes red).
+///
+/// VERIFIED FALSE GREENS, deliberately not claimed as caught: a marker inside
+/// `#if false` and a marker inside a string literal (`let x = "nonisolated
+/// deinit {}"`) both keep the token at depth 1, so the pin stays green. It is
+/// a tripwire, not a proof — the runtime test is the local proof — and a body
+/// that keeps the token but drops the actual isolation passes the pin and
+/// fails the runtime test only on a runtime that takes the aborting path.
 struct StatsIsolatedDeinitPinsTests {
 
     // MARK: - Fixtures
@@ -300,6 +340,31 @@ struct StatsIsolatedDeinitPinsTests {
         return result
     }
 
+    /// The brace depth at `index`, counted from the start of `text`.
+    ///
+    /// A top-level member of a class body sits at depth 1 (the class's own
+    /// `{` opened it); a member of a nested declaration sits at depth ≥ 2.
+    /// Used to keep the marker assertions from being satisfied by a marker
+    /// that was moved into a nested type inside the same class body.
+    ///
+    /// Braces inside string literals are counted (the comment stripper copies
+    /// string contents verbatim), so a literal containing an unbalanced `{`
+    /// before the marker would skew this. None of the three pinned bodies has
+    /// one, and a skewed depth fails the assertion rather than passing it.
+    private static func braceDepth(at index: String.Index, in text: String) -> Int {
+        var depth = 0
+        var cursor = text.startIndex
+        while cursor < index {
+            if text[cursor] == "{" {
+                depth += 1
+            } else if text[cursor] == "}" {
+                depth -= 1
+            }
+            cursor = text.index(after: cursor)
+        }
+        return depth
+    }
+
     // MARK: - Pins
 
     /// `StatsCollectionContext` (the reproducer's class) must keep exactly
@@ -332,6 +397,12 @@ struct StatsIsolatedDeinitPinsTests {
             markers.count == 1,
             "StatsCollectionContext must carry exactly one `nonisolated deinit {}`"
         )
+        if let marker = markers.first {
+            #expect(
+                Self.braceDepth(at: marker.lowerBound, in: text) == 1,
+                "the StatsCollectionContext marker must be a top-level member, not nested in another declaration"
+            )
+        }
     }
 
     /// `ServerStatsCollector` must keep exactly one
@@ -363,6 +434,12 @@ struct StatsIsolatedDeinitPinsTests {
             markers.count == 1,
             "ServerStatsCollector must carry exactly one `nonisolated deinit {}`"
         )
+        if let marker = markers.first {
+            #expect(
+                Self.braceDepth(at: marker.lowerBound, in: text) == 1,
+                "the ServerStatsCollector marker must be a top-level member, not nested in another declaration"
+            )
+        }
     }
 
     /// `ViewTabConfigurationManager` must keep exactly one
@@ -396,5 +473,11 @@ struct StatsIsolatedDeinitPinsTests {
             markers.count == 1,
             "ViewTabConfigurationManager must carry exactly one `nonisolated deinit {}`"
         )
+        if let marker = markers.first {
+            #expect(
+                Self.braceDepth(at: marker.lowerBound, in: text) == 1,
+                "the ViewTabConfigurationManager marker must be a top-level member, not nested in another declaration"
+            )
+        }
     }
 }
