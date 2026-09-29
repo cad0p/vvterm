@@ -6017,7 +6017,7 @@ actor SSHSession {
                 throw SSHError.socketError("SCP channel open failed: \(lastError)")
             }
 
-            guard let scpChannel else {
+            guard let openedChannel = scpChannel else {
                 throw SSHError.socketError("SCP channel open failed")
             }
 
@@ -6028,7 +6028,7 @@ actor SSHSession {
                 let written = bytes.withUnsafeBufferPointer { buffer -> Int in
                     guard let baseAddress = buffer.baseAddress else { return -1 }
                     let pointer = UnsafeRawPointer(baseAddress.advanced(by: offset)).assumingMemoryBound(to: CChar.self)
-                    return Int(libssh2_channel_write_ex(scpChannel, 0, pointer, bytes.count - offset))
+                    return Int(libssh2_channel_write_ex(openedChannel, 0, pointer, bytes.count - offset))
                 }
 
                 if written > 0 {
@@ -6040,10 +6040,24 @@ actor SSHSession {
                 }
             }
 
-            _ = try await finishUploadChannel(scpChannel)
+            _ = try await finishUploadChannel(openedChannel)
+            // The helper returns only after a confirmed close:
+            // `ssh2_channel_close` sets `local.close` on every non-EAGAIN
+            // return (channel.c:2510-2513) and the close loop breaks only on
+            // 0, so this free takes the already-closed branch (channel.c:2698)
+            // and cannot return EAGAIN (channel.c:2619-2628).
+            libssh2_channel_free(openedChannel)
+            scpChannel = nil  // the catch below must not free again
             logger.info("SCP upload finished [path: \(remotePath, privacy: .public)]")
         } catch {
-            if let scpChannel {
+            // A throw from the helper means the channel may still be unfreed
+            // and is the catch's single free. But if a loop-top guard threw
+            // after the session was torn down, `libssh2_session_free` already
+            // reaped this channel; touching it here would be the same
+            // use-after-free the guards exist to prevent. The channel is then
+            // left to the session free (bounded, deliberate — the same trade
+            // the SFTP conditional defers make at :3330-3334).
+            if let scpChannel, isActive, !hasBeenCleaned, libssh2Session == session {
                 libssh2_channel_close(scpChannel)
                 libssh2_channel_free(scpChannel)
             }
@@ -6088,19 +6102,19 @@ actor SSHSession {
                 throw SSHError.socketError("Exec upload channel open failed: \(lastError)")
             }
 
-            guard let execChannel else {
+            guard let openedChannel = execChannel else {
                 throw SSHError.socketError("Exec upload channel open failed")
             }
 
             _ = libssh2_channel_handle_extended_data2(
-                execChannel,
+                openedChannel,
                 LIBSSH2_CHANNEL_EXTENDED_DATA_IGNORE
             )
 
             while true {
                 try Task.checkCancellation()
                 let execResult = libssh2_channel_process_startup(
-                    execChannel,
+                    openedChannel,
                     "exec",
                     4,
                     command,
@@ -6123,7 +6137,7 @@ actor SSHSession {
                 let written = bytes.withUnsafeBufferPointer { buffer -> Int in
                     guard let baseAddress = buffer.baseAddress else { return -1 }
                     let pointer = UnsafeRawPointer(baseAddress.advanced(by: offset)).assumingMemoryBound(to: CChar.self)
-                    return Int(libssh2_channel_write_ex(execChannel, 0, pointer, bytes.count - offset))
+                    return Int(libssh2_channel_write_ex(openedChannel, 0, pointer, bytes.count - offset))
                 }
 
                 if written > 0 {
@@ -6135,13 +6149,27 @@ actor SSHSession {
                 }
             }
 
-            let exitStatus = try await finishUploadChannel(execChannel, drainOutput: true)
+            let exitStatus = try await finishUploadChannel(openedChannel, drainOutput: true)
+            // The helper returns only after a confirmed close:
+            // `ssh2_channel_close` sets `local.close` on every non-EAGAIN
+            // return (channel.c:2510-2513) and the close loop breaks only on
+            // 0, so this free takes the already-closed branch (channel.c:2698)
+            // and cannot return EAGAIN (channel.c:2619-2628).
+            libssh2_channel_free(openedChannel)
+            execChannel = nil  // the catch below must not free again
             guard exitStatus == 0 else {
                 throw SSHError.socketError("Exec upload failed with exit status \(exitStatus)")
             }
             logger.info("Exec upload finished [path: \(remotePath, privacy: .public)]")
         } catch {
-            if let execChannel {
+            // A throw from the helper means the channel may still be unfreed
+            // and is the catch's single free. But if a loop-top guard threw
+            // after the session was torn down, `libssh2_session_free` already
+            // reaped this channel; touching it here would be the same
+            // use-after-free the guards exist to prevent. The channel is then
+            // left to the session free (bounded, deliberate — the same trade
+            // the SFTP conditional defers make at :3330-3334).
+            if let execChannel, isActive, !hasBeenCleaned, libssh2Session == session {
                 libssh2_channel_close(execChannel)
                 libssh2_channel_free(execChannel)
             }
@@ -6208,8 +6236,11 @@ actor SSHSession {
             throw SSHError.socketError("SCP wait close failed: \(waitClosedResult)")
         }
 
+        // The helper does NOT free the channel: each caller is the single
+        // free owner on every exit path (success free after this returns,
+        // throw free in its catch). Freeing here made the exec caller's
+        // `guard exitStatus == 0` throw double-free the channel.
         let exitStatus = libssh2_channel_get_exit_status(channel)
-        libssh2_channel_free(channel)
         return exitStatus
     }
 
