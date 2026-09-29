@@ -78,6 +78,13 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         )
     }
 
+    /// The committed fixture cert's `validBefore` (2036-01-01T00:00:00Z) and
+    /// principals; the state the login coordinator reaches on the valid
+    /// fixture success.
+    private func fixtureSuccessState() -> TeleportLoginState {
+        .success(certValidUntil: Date(timeIntervalSince1970: 2_082_758_400), logins: ["alice"])
+    }
+
     // MARK: - The dismissal gate is exhaustive
 
     /// The login `.onDisappear` gate is an exhaustive switch (no `default`), so
@@ -157,6 +164,52 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         // The scheduled teardown still runs.
         await awaitLoginState(.failed(.faceIDCancelled), on: coordinator)
         await beginTask.value
+    }
+
+    // MARK: - The .success dismissal keeps the hand-off
+
+    /// #272 parity for the login sheet: `.success` is the host-login hand-off,
+    /// so dismissing then must NOT latch or schedule a `cancel()` — the issued
+    /// cert stays stored and the terminal state survives. Mirrors the
+    /// bootstrap's `testDismissalAfterSuccessKeepsTheHandoff`.
+    ///
+    /// The real coordinator has no cancel counter; its `cancel()`
+    /// unconditionally writes `.failed(.faceIDCancelled)`, so the state is the
+    /// observable for "no cancel ran".
+    func testDismissalAfterLoginSuccessKeepsTheHandoff() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = MockTeleportHTTPClient.makeFixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: keyRing)
+
+        let model = LoginDismissalModel()
+        let disappeared = LoginDisappearFlag()
+        let host = UIHostingController(rootView: RemovableLoginHost(
+            model: model,
+            coordinator: coordinator,
+            cluster: cluster,
+            onDisappear: { disappeared.value = true }
+        ))
+        installLoginHostInWindow(host)
+
+        // `TeleportLoginView` has no `.task`/`.onAppear`, so the harness (like
+        // the sign-in button) starts the flow itself.
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await awaitLoginState(fixtureSuccessState(), on: coordinator)
+        await beginTask.value
+
+        model.showsLogin = false
+        XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
+        settle()
+
+        XCTAssertFalse(coordinator.isDismissalLatched, "a .success dismissal must not latch")
+        XCTAssertEqual(
+            coordinator.state, fixtureSuccessState(),
+            ".success is the hand-off state and must survive dismissal"
+        )
+        XCTAssertEqual(keyRing.liveCertPEM(for: cluster.id), TeleportFixtureSupport.fixedIssuedUserCert)
     }
 
     // MARK: - Source pins (the call sites a behavioural test cannot see)
@@ -271,6 +324,13 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
         return condition()
+    }
+
+    /// Bounded run-loop pump for post-gate assertions with no completion
+    /// signal (e.g. "the scheduled cancel() never ran"). Mirrors
+    /// `TeleportBootstrapViewWiringTests.settle`.
+    private func settle(_ seconds: TimeInterval = 0.3) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
     /// Install a `UIHostingController`'s view in a live window so SwiftUI's

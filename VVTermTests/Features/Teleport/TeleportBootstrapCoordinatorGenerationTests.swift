@@ -12,13 +12,14 @@
 //  the coordinator state is changed out from under it, and the gate is then
 //  released.
 //
-//  Three further tests gate the *keyring stores* instead, so `cancel()` can
-//  interleave between the POST release and the terminal state write — the
-//  window the post-`await` re-take guards exist for (B1/S2). Without that
-//  interleaving the re-take guards would be unreachable: a generation bump
-//  before the handler is entered is caught by the entry guard. The three gate
-//  the first store (cert), the middle store (ed25519 private key) and the last
-//  store (cluster TLS state) respectively, one per re-take guard.
+//  Four further tests gate the *keyring writes* instead, so `cancel()`/the
+//  dismissal latch can interleave between the POST release and the terminal
+//  state write — the window the post-`await` re-take guards exist for
+//  (B1/S2). Without that interleaving the re-take guards would be
+//  unreachable: a generation bump before the handler is entered is caught by
+//  the entry guard. They gate the first store (cert), the middle store
+//  (ed25519 private key), the last store (cluster TLS state) and the
+//  foreign-cert fail-closed `clear`, one per re-take guard.
 //
 
 #if DEBUG
@@ -244,10 +245,12 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let keyGate = BootstrapGate()
     private let tlsGate = BootstrapGate()
     private let loginCertGate = BootstrapGate()
+    private let clearGate = BootstrapGate()
     private let gateTheFirstStore: Bool
     private let gateTheMiddleStore: Bool
     private let gateTheLastStore: Bool
     private let gateTheLoginCertStore: Bool
+    private let gateTheClear: Bool
 
     private var certStoreStarted = false
     private var certStoreWaiters: [CheckedContinuation<Void, Never>] = []
@@ -257,6 +260,8 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private var tlsStoreWaiters: [CheckedContinuation<Void, Never>] = []
     private var loginCertStoreStarted = false
     private var loginCertStoreWaiters: [CheckedContinuation<Void, Never>] = []
+    private var clearStarted = false
+    private var clearWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Committed write counts (incremented only after the gate is released).
     private(set) var storedCertCount = 0
@@ -267,19 +272,26 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     /// allowed to land (§1.4), so tests assert on the *later* writes for the
     /// supersession evidence.
     private(set) var storedLoginCertCount = 0
+    /// The fail-closed `clear` count (the login/bootstrap foreign-cert
+    /// branch). A clear already in flight when the generation changes is
+    /// allowed to land (§1.4), so the discriminating assertion for the
+    /// post-`clear` re-take is the withheld terminal state.
+    private(set) var clearedCount = 0
 
     init(
         underlying: MockTeleportKeyRing,
         gateTheFirstStore: Bool = true,
         gateTheMiddleStore: Bool = false,
         gateTheLastStore: Bool = false,
-        gateTheLoginCertStore: Bool = false
+        gateTheLoginCertStore: Bool = false,
+        gateTheClear: Bool = false
     ) {
         self.underlying = underlying
         self.gateTheFirstStore = gateTheFirstStore
         self.gateTheMiddleStore = gateTheMiddleStore
         self.gateTheLastStore = gateTheLastStore
         self.gateTheLoginCertStore = gateTheLoginCertStore
+        self.gateTheClear = gateTheClear
     }
 
     /// Suspends until the gated `storeBootstrapCert` has been entered.
@@ -314,6 +326,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         }
     }
 
+    /// Suspends until the gated `clear` has been entered.
+    func waitUntilClearStarted() async {
+        guard !clearStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            clearWaiters.append(continuation)
+        }
+    }
+
     func releaseCertStore() async {
         await certGate.release()
     }
@@ -328,6 +348,10 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func releaseLoginCertStore() async {
         await loginCertGate.release()
+    }
+
+    func releaseClear() async {
+        await clearGate.release()
     }
 
     // MARK: - Reads (delegate)
@@ -427,6 +451,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func clear(for clusterId: UUID) async {
+        if gateTheClear {
+            clearStarted = true
+            let waiters = clearWaiters
+            clearWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await clearGate.wait()
+        }
+        clearedCount += 1
         underlying.clear(for: clusterId)
     }
 }
@@ -553,8 +585,18 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(coordinator.lastBootstrapResult)
         XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
 
-        // Terminal: a stray retry/begin after the latch is a no-op.
+        // Terminal: a stray retry/begin after the latch is a no-op. Assert the
+        // counter/flag invariants before the stray calls, so a latch-semantics
+        // regression fails on an assertion instead of parking inside a stray
+        // call on an unreleased gate (an allowance kill).
+        XCTAssertTrue(coordinator.isDismissalLatched)
+        XCTAssertEqual(http.startedCount, 1)
+
         await coordinator.retry()
+        XCTAssertEqual(
+            coordinator.state, .awaitingApproval,
+            "an unguarded retry resets to .idle before begin()'s guard early-returns"
+        )
         await coordinator.begin(cluster: cluster)
         XCTAssertEqual(http.startedCount, 1)
         XCTAssertEqual(store.storedCertCount, 0)
@@ -790,6 +832,69 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(coordinator.lastBootstrapResult)
         XCTAssertEqual(store.storedTLSStateCount, 0)
         XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
+    }
+
+    /// Interleave the dismissal latch while the coordinator is suspended
+    /// *inside* the foreign-cert fail-closed `clear` (the mismatched-keyID
+    /// branch). The clear started while the generation was current, so it is
+    /// allowed to land (§1.4); the post-`clear` re-take must withhold the
+    /// terminal `.failed(.unknown("Certificate user binding check failed: …"))`
+    /// so the stale rejection does not overwrite the newer state.
+    ///
+    /// Counterfactual (measured): deleting the re-take after `keyRing.clear`
+    /// makes this test fail on the state assertion (the terminal `.failed`
+    /// overwrites `.awaitingApproval`).
+    func testDismissalLatchDuringMismatchClearDoesNotOverwriteTheNewerState() async {
+        // Any user other than the fixture cert's keyID (`user-cert-ed25519`)
+        // drives `handlePostSuccess` into the foreign-cert fail-closed branch.
+        let cluster = TeleportCluster(host: "teleport.pcad.it", username: "not-the-fixture-user")
+        let keyRing = MockTeleportKeyRing()
+        // Seed the credential the fail-closed branch clears, so the
+        // post-clear `liveCertPEM` assertion is non-vacuous.
+        keyRing.seed(
+            clusterId: cluster.id,
+            fixture: MockTeleportKeyRing.Fixture(
+                hasBootstrapCert: true,
+                hasSEPKey: false,
+                certValidBefore: TeleportFixtureSupport.fixtureClock,
+                credentialID: Data(),
+                userHandle: Data(),
+                deviceName: "test-device"
+            )
+        )
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheClear: true
+        )
+        let http = GatedTeleportHTTPClient()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+        await awaitState(.awaitingApproval, on: coordinator)
+        XCTAssertNotNil(keyRing.liveCertPEM(for: cluster.id))
+
+        // The POST returns a cert that validates against the fixture keypair
+        // but carries the fixture keyID, not this cluster's user — the
+        // coordinator parks in the fail-closed `clear`.
+        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await store.waitUntilClearStarted()
+        XCTAssertEqual(store.clearedCount, 0, "the clear is parked, not committed")
+
+        // Supersede while the clear is in flight.
+        coordinator.latchDismissal()
+        XCTAssertTrue(coordinator.isDismissalLatched)
+
+        await store.releaseClear()
+        await beginTask.value
+
+        XCTAssertEqual(store.clearedCount, 1, "the in-flight clear is allowed to land (§1.4)")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id), "the clear removed the row's credential")
+        XCTAssertEqual(
+            coordinator.state, .awaitingApproval,
+            "the stale mismatch rejection must not overwrite the newer state"
+        )
     }
 }
 

@@ -541,6 +541,10 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
                     "issued bootstrap certificate keyID does not match the configured Teleport user for cluster \(cluster.id.uuidString, privacy: .public) — rejecting and clearing the credential"
                 )
                 await keyRing.clear(for: cluster.id)
+                // The clear is already in flight when a supersession lands, so
+                // it is allowed to commit (§1.4); only the terminal state is
+                // withheld. Mirrors the login twin's post-clear re-take.
+                guard generation == requestGeneration else { return }
                 state = .failed(.unknown("Certificate user binding check failed: the certificate does not belong to this Teleport user"))
                 return
             }

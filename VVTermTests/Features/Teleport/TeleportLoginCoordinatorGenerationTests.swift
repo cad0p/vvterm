@@ -111,9 +111,11 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
     /// A stale success from the first attempt must not land after a newer
     /// `begin()` took over; the newer attempt's own success still lands.
     ///
-    /// Counterfactual (measured): deleting the re-take after `loginFinish`
-    /// makes this test fail with `.success` on the first release and
-    /// `storedLoginCertCount == 1` before the second attempt finishes.
+    /// Counterfactual (measured): deleting only the re-take after `loginFinish`
+    /// leaves the state at `.fetchingCert` (the later re-takes still return)
+    /// and reddens this test on the write assertions: `storedLoginCertCount ==
+    /// 1`, `liveCertPEM != nil` and the final count mismatch (`2 != 1`). The
+    /// `.success`-state failure text belongs to the all-guards-removed run.
     func testStaleSuccessCannotOverwriteANewerBegin() async throws {
         let cluster = makeCluster()
         let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
@@ -287,8 +289,16 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
 
         // Terminal: a stray begin after the latch is a no-op (no re-arm, no
-        // generation bump, no new request).
+        // new request). Assert the counters/flags first, so a missing latch
+        // guard fails as an assertion instead of parking the stray call on an
+        // unreleased gate (an allowance kill).
+        XCTAssertTrue(coordinator.isDismissalLatched)
+        XCTAssertEqual(http.loginBeginStartedCount, 1)
+        XCTAssertEqual(http.loginFinishStartedCount, 1)
+        XCTAssertEqual(store.storedLoginCertCount, 0)
+
         await coordinator.begin(cluster: cluster)
+
         XCTAssertEqual(http.loginBeginStartedCount, 1)
         XCTAssertEqual(http.loginFinishStartedCount, 1)
         XCTAssertEqual(store.storedLoginCertCount, 0)

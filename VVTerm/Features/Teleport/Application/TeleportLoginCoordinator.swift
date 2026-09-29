@@ -89,8 +89,12 @@ protocol TeleportLoginCoordinating: AnyObject, ObservableObject {
     /// - Parameter cluster: the Teleport cluster config.
     func begin(cluster: TeleportCluster) async
 
-    /// Cancel an in-flight login. Cancels the Face ID prompt (if showing)
-    /// + the HTTP call (if in flight).
+    /// Cancel an in-flight login: bump the request generation and write the
+    /// terminal `.failed(.faceIDCancelled)` state. It does NOT cancel the
+    /// in-flight `login/begin`/`login/finish` request and cannot dismiss a live
+    /// Face ID prompt (`SecKeyCreateSignature` is uninterruptible); the bump
+    /// bounds the *writes*, not the flow. The scheduled teardown the view runs
+    /// after `latchDismissal()` closes the dismissal window.
     func cancel() async
 
     /// Latch a dismissal synchronously, before the async teardown is scheduled.
@@ -113,12 +117,16 @@ extension TeleportLoginState {
     ///
     /// `.success` is the Phase-3 hand-off (the sheet shows the host-login step
     /// and Continue persists the row), so a dismissal then must not cancel the
-    /// issued cert. A `.failed` state is the terminal end of the `begin` task,
-    /// and the Face-ID-cancel path has already run `cancel()`; neither
-    /// schedules a teardown. Every in-flight state does: the `begin` task is
-    /// still running and (across the HTTP awaits) can still write after the
-    /// sheet is gone. Exhaustive switch with no `default`, so a future state
-    /// cannot silently mis-map.
+    /// issued cert. A `.failed` state is gate-false: the paths that produce it
+    /// have already latched/run `cancel()` (the toolbar Cancel, a Face ID
+    /// cancel surfacing as a `SignerError`), and every other `.failed`
+    /// producer returns from `begin` immediately afterwards. That holds even
+    /// though the cancel-written `.failed` is reached while
+    /// `login/begin`/`login/finish` may still be in flight — the latch, not
+    /// this gate, is what drops those continuations. Every in-flight state
+    /// does: the `begin` task is still running and (across the HTTP awaits)
+    /// can still write after the sheet is gone. Exhaustive switch with no
+    /// `default`, so a future state cannot silently mis-map.
     var dismissalRequiresTeardown: Bool {
         switch self {
         case .idle, .awaitingFaceID, .fetchingCert: return true
