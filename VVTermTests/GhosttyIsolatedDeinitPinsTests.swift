@@ -92,10 +92,17 @@ struct GhosttyIsolatedDeinitPinsTests {
         Pin(file: "VVTerm/GhosttyTerminal/TerminalNativeTextSelection.swift", anchor: "final class TerminalNativeFindOverlayView", control: "var highlights"),
     ]
 
-    /// Multi-class swept files: a redundant file-level cross-check that also
-    /// catches a marker deleted from a class whose own row was dropped from the
-    /// table above. Counts every `nonisolated deinit {}` token in the file.
+    /// The sweep's file census: one entry per swept file, `count` = the number
+    /// of pinned classes in that file. The completeness test below asserts the
+    /// pins table and this census agree — and that each file actually carries
+    /// exactly that many `nonisolated deinit {}` tokens — so a dropped row plus
+    /// the matching dropped marker is red even in a single-pin file.
     private static let markerCountsPerFile: [(file: String, count: Int)] = [
+        (file: "VVTerm/GhosttyTerminal/Ghostty.App.swift", count: 1),
+        (file: "VVTerm/GhosttyTerminal/GhosttyIMEHandler.swift", count: 1),
+        (file: "VVTerm/GhosttyTerminal/GhosttyInputHandler.swift", count: 1),
+        (file: "VVTerm/GhosttyTerminal/GhosttyNativeFindSession.swift", count: 1),
+        (file: "VVTerm/GhosttyTerminal/GhosttyRenderingSetup.swift", count: 1),
         (file: "VVTerm/GhosttyTerminal/GhosttyTerminalTouchSelection.swift", count: 3),
         (file: "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift", count: 4),
         (file: "VVTerm/GhosttyTerminal/GhosttyTerminalView+macOS.swift", count: 2),
@@ -103,6 +110,17 @@ struct GhosttyIsolatedDeinitPinsTests {
     ]
 
     // MARK: - Tests
+
+    /// Table completeness: every other test in this suite iterates `Self.pins`,
+    /// so an emptied or shortened table would be silently vacuous. 18
+    /// is the sweep's recorded class count for this area (one marker per class).
+    @Test
+    func testGhosttyPinTableIsComplete() {
+        #expect(
+            Self.pins.count == 18,
+            "the Ghostty pin table must stay complete: expected 18 rows, found \(Self.pins.count)"
+        )
+    }
 
     @Test
     func testGhosttyClassesCarryExactlyOneNonisolatedDeinit() {
@@ -120,7 +138,25 @@ struct GhosttyIsolatedDeinitPinsTests {
 
     @Test
     func testGhosttySweptFilesCarryTheExpectedMarkerCount() {
+        // The census must cover every pinned file exactly once, and each entry
+        // must equal the number of pinned classes in that file (markers-in-file
+        // == pins-for-file), so dropping a row together with its marker cannot
+        // pass even in a single-pin file.
+        var pinsPerFile: [String: Int] = [:]
+        for pin in Self.pins {
+            pinsPerFile[pin.file, default: 0] += 1
+        }
+        let pinnedFiles = Set(pinsPerFile.keys)
+        let countedFiles = Set(Self.markerCountsPerFile.map(\.file))
+        #expect(
+            pinnedFiles == countedFiles,
+            "the file census must cover every pinned file exactly once: pins-only \(pinnedFiles.subtracting(countedFiles).sorted()), counts-only \(countedFiles.subtracting(pinnedFiles).sorted())"
+        )
         for entry in Self.markerCountsPerFile {
+            #expect(
+                pinsPerFile[entry.file] == entry.count,
+                "\(entry.file): the census entry (\(entry.count)) must equal the pinned class count in the file (\(pinsPerFile[entry.file] ?? 0))"
+            )
             let text: String
             do {
                 text = try Self.strippingComments(Self.source(entry.file))
