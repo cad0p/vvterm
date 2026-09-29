@@ -1700,16 +1700,23 @@ class GhosttyTerminalView: UIView {
         fatalError("init(coder:) not supported")
     }
 
-    // Deliberate `isolated` deinit — do NOT add the #294 sweep's
-    // `nonisolated deinit {}` marker here: this cleanup must run on the
-    // MainActor. The isolation keeps the back-deploy hazard for this view until
-    // the #299 convergence lands: `TerminalTabManager.terminalViews` is a swept
-    // holder that can still release this view outside a Swift task context. The
-    // iOS-only `…CfZ` symbol it produces is expected and allowlisted in
-    // `scripts/ci/check-isolated-deinit-census.sh`.
-    isolated deinit {
-        cancelTrackedHardwareInput()
-        stopSelectionAutoscroll()
+    // nonisolated deinit: this class must NOT carry an isolated deinit. The
+    // back-deployed MainActor deinit path (swiftlang/swift#85663, #88036) aborts in
+    // libmalloc when the view is released outside a Swift task context that owns a
+    // MainActor executor (#280, #299). The releases that matter are synchronous
+    // main-run-loop releases — e.g. closing a tab that is not the selected one,
+    // where `dismantleUIView` early-returns on `paneStillExists` and the later
+    // `cleanupPane` drops the registry's last reference — and those never call
+    // `cleanup()`.
+    //
+    // Only plain/weak stored properties and nonisolated APIs are legal here (not
+    // lazy/@Published/computed). The two MainActor side effects that need isolation
+    // — `cancelTrackedHardwareInput()` and `stopSelectionAutoscroll()` — live in
+    // `cleanup()`. Dropping them here is behaviour-neutral on every release path:
+    // `didMoveToWindow(nil)` already cancels tracked input when the view leaves its
+    // window, and a live selection-autoscroll CADisplayLink retains this view, so
+    // the deinit is unreachable while one exists.
+    nonisolated deinit {
         for observer in hardwareKeyboardObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -1730,6 +1737,12 @@ class GhosttyTerminalView: UIView {
 
     /// Explicitly cleanup the terminal before removal from view hierarchy.
     /// Call this in dismantleUIView to ensure proper cleanup.
+    ///
+    /// This is the single effective MainActor teardown site for the view. The
+    /// two MainActor side effects it owns — `cancelTrackedHardwareInput()` and
+    /// `stopSelectionAutoscroll()` — cannot live in the view's `nonisolated
+    /// deinit`, which may only touch plain/weak stored properties and
+    /// nonisolated APIs.
     func cleanup() {
         cancelTrackedHardwareInput()
         isShuttingDown = true
