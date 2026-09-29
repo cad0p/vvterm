@@ -17,6 +17,11 @@ import Foundation
 /// Only record non-sensitive narrative events (stage names, UUIDs, counts,
 /// outcomes). Never record credentials, raw hosts, or terminal content.
 final class DiagnosticsRecorder: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     static let shared = DiagnosticsRecorder()
 
     private let queue = DispatchQueue(label: "vvterm.diagnostics-recorder")

@@ -53,6 +53,11 @@ private struct MacZenControlHost: View {
 }
 
 final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuDelegate {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     static let shared = MacConnectionToolbarController()
 
     let toolbar: NSToolbar
@@ -391,6 +396,11 @@ final class MacConnectionToolbarController: NSObject, NSToolbarDelegate, NSMenuD
 
 /// Boxes a menu action closure for storage in NSMenuItem.representedObject.
 private final class MenuActionBox {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     let action: () -> Void
     init(_ action: @escaping () -> Void) { self.action = action }
 }
