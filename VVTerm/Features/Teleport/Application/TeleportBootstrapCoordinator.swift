@@ -584,27 +584,42 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
             clusterCAPEMs: clusterCAPEMs,
             certValidBefore: certValidBefore
         )
-        // Store the bootstrap cert in the key ring so readiness flips to
-        // `needsRegistration` (cert present, no SEP key yet). Also store
-        // the ed25519 private key — the SSHClient cert seam fetches it via
-        // `liveEd25519PrivateKey` to feed libssh2 at connect time.
-        //
-        // Each store is an async hop that can suspend on the MainActor,
-        // during which `cancel()` or a newer `begin()` can take over; a
-        // superseded success must not leave later writes behind. Re-take the
-        // generation after every store for that reason.
-        await keyRing.storeBootstrapCert(certPEM, validBefore: certValidBefore, for: cluster.id)
-        guard generation == requestGeneration else { return }
-        if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
-            do {
-                try await keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
-            } catch {
-                logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
-                // Non-fatal — the cert is stored, so readiness is correct.
-                // The SSH connect will fail with teleportCertMissing, which
-                // surfaces the right UX (re-bootstrap).
-            }
+        // Store the cert and its paired ed25519 private key as one atomic
+        // pair: the key write and the record commit land in one non-suspending
+        // body, so a supersession can land a complete pair, the previous
+        // complete pair, or nothing — never a mixed pair. The single writes
+        // remain seed/test primitives; no coordinator calls them.
+        let privKeyData: Data
+        if let data = sshPrivateKeyPEM.data(using: .utf8) {
+            privKeyData = data
+        } else {
+            // Unreachable today (`String.data(using: .utf8)` is total), but a
+            // nil here cannot write a pair: route it through the same
+            // store-failure outcome rather than committing half a credential.
+            await finishWithStoreFailure(generation: generation, cluster: cluster, result: result)
+            return
         }
+        do {
+            try await keyRing.storeCredentialPair(
+                certPEM,
+                validBefore: certValidBefore,
+                privateKeyPEM: privKeyData,
+                policy: .bootstrap,
+                for: cluster.id
+            )
+        } catch {
+            // Deliberate behaviour change: after a pair-write throw nothing
+            // from this attempt is guaranteed stored (the write is key-first,
+            // and a failure leaves the previous complete pair intact or
+            // nothing), so the terminal state is derived from the store's real
+            // state instead of the old false "the cert is stored, so readiness
+            // is correct".
+            logger.error("failed to store the bootstrap credential pair: \(error.localizedDescription, privacy: .public)")
+            await finishWithStoreFailure(generation: generation, cluster: cluster, result: result)
+            return
+        }
+        // Re-take after the pair store: a superseded attempt must not reach the
+        // TLS tail or the terminal state.
         guard generation == requestGeneration else { return }
 
         // Persist the cluster name + TLS CA certs for the SSH TLS+ALPN
@@ -627,6 +642,45 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
 
         lastBootstrapResult = result
         logger.info("bootstrap succeeded — cert \(certPEM.count) chars, tls_cert \(tlsCertPEM.count) chars")
+        state = .success
+
+        // Dismiss the Safari sheet (the POST returned, the user is done).
+        #if canImport(AuthenticationServices)
+        await safariPresenter?.cancel()
+        #endif
+    }
+
+    /// The pair write threw (or could not be attempted). Nothing from this
+    /// attempt is guaranteed stored, so the terminal state is derived from the
+    /// store's real state: a usable prior pair keeps the hand-off working with
+    /// the **stored** cert's fields (the TLS / cluster material comes from this
+    /// attempt; no TLS state is persisted on this path), otherwise the flow
+    /// fails and the user can retry.
+    private func finishWithStoreFailure(
+        generation: Int,
+        cluster: TeleportCluster,
+        result: BootstrapResult
+    ) async {
+        guard generation == requestGeneration else { return }
+        guard let snapshot = await keyRing.liveCredentialSnapshot(for: cluster.id),
+              let storedCert = OpenSSHCertificate.parse(authorizedKeysOrPEM: snapshot.certPEM) else {
+            // The snapshot read is an await too; a supersession during it must
+            // not write a stale failure over the newer state.
+            guard generation == requestGeneration else { return }
+            state = .failed(.unknown("credentials could not be stored"))
+            return
+        }
+        guard generation == requestGeneration else { return }   // the read is an await too
+        let storedResult = BootstrapResult(
+            sshCertPEM: snapshot.certPEM,
+            tlsCertPEM: result.tlsCertPEM,
+            tlsKeyPairPrivateKey: result.tlsKeyPairPrivateKey,
+            clusterName: result.clusterName,
+            clusterCAPEMs: result.clusterCAPEMs,
+            certValidBefore: storedCert.validBeforeDate
+        )
+        lastBootstrapResult = storedResult
+        logger.info("bootstrap credential store threw; handing off the stored pair")
         state = .success
 
         // Dismiss the Safari sheet (the POST returned, the user is done).

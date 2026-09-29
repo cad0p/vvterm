@@ -16,16 +16,13 @@
 //
 //  Guard coverage (so a mutation run is not misread): tests 1/2/3 cover the
 //  re-take after `loginFinish` (test 2 additionally covers that site's
-//  catch-path guard), test 4 covers the re-take after `storeLoginCert`, test 6
-//  covers `loginBegin`'s catch-path guard, and test 7 covers the re-take after
-//  the whole `storeEd25519PrivateKey` `do/catch` (its catch only logs, so it has
-//  no guard of its own — the fall-through re-take covers both the success and
-//  the throw). The guards after `registeredCredentialID`,
-//  `registeredUserHandle`, `keyRing.clear`, `clusterTLSState` and
-//  `updateClusterHostKeys` are untested-by-design: the production
-//  `TeleportKeyRing` witness cannot suspend, and the fixture login response
-//  sets `hostSigners: nil` so the refresh block is skipped. They stay as
-//  future-proofing against a suspension-capable store.
+//  catch-path guard), test 4 covers the re-take after the atomic pair store,
+//  and test 6 covers `loginBegin`'s catch-path guard. The guards after
+//  `registeredCredentialID`, `registeredUserHandle`, `keyRing.clear`,
+//  `clusterTLSState` and `updateClusterHostKeys` are untested-by-design: the
+//  production `TeleportKeyRing` witness cannot suspend, and the fixture login
+//  response sets `hostSigners: nil` so the refresh block is skipped. They stay
+//  as future-proofing against a suspension-capable store.
 //
 
 #if DEBUG
@@ -218,13 +215,12 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
     }
 
     /// Interleave `cancel()` while the coordinator is suspended *inside* the
-    /// login-cert store. The re-take after that store must stop the later
-    /// ed25519 private-key write and the terminal `.success`. The cert write
-    /// itself was already in flight, so it is allowed to land (§1.4).
+    /// atomic pair write. The pair write was already in flight when the cancel
+    /// landed, so it is allowed to land **complete** (§1.4) — the credential
+    /// can never be torn. Only the terminal `.success` is withheld.
     ///
-    /// Counterfactual (measured): deleting the re-take after `storeLoginCert`
-    /// makes this test fail with `storedPrivateKeyCount == 1`.
-    func testCancelledRequestDuringLoginCertStoreStopsLaterWrites() async throws {
+    /// This is the in-flight-lands acceptance evidence for the login path.
+    func testCancelledRequestDuringLoginCertStoreLetsTheInFlightPairLand() async throws {
         let cluster = makeCluster()
         let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
         let store = GatedTeleportCredentialStore(
@@ -238,18 +234,18 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
 
         let beginTask = Task { await coordinator.begin(cluster: cluster) }
-        await store.waitUntilLoginCertStoreStarted()
+        await store.waitUntilFirstCredentialWriteStarted()
 
         await coordinator.cancel()
         XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
 
-        await store.releaseLoginCertStore()
+        await store.releaseFirstCredentialWrite()
         await beginTask.value
 
         XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
-        XCTAssertEqual(store.storedLoginCertCount, 1, "the in-flight cert write is allowed to land")
-        XCTAssertEqual(store.storedPrivateKeyCount, 0, "the re-take must stop the later private-key write")
-        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+        XCTAssertEqual(store.storedPairCount, 1, "the in-flight pair write is allowed to land complete")
+        XCTAssertEqual(store.storedPrivateKeyCount, 1)
+        XCTAssertNotNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
     }
 
     /// The dismissal latch drops a parked continuation and is terminal: after
@@ -362,20 +358,19 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         XCTAssertEqual(store.storedLoginCertCount, 1)
     }
 
-    /// A throwing `storeEd25519PrivateKey` after a cancel must not fall through
-    /// to `.success`: the showstopper is the re-take after the whole
-    /// `do/catch` (the catch itself only logs).
-    ///
-    /// Counterfactual (measured): deleting that re-take makes this test fail
-    /// with `.success(...)`.
-    func testThrowingKeyStoreAfterCancelDoesNotWriteSuccess() async throws {
+    /// A throwing atomic pair write after a cancel must not fall through to
+    /// `.success`, and nothing may be committed. The pair write parks on the
+    /// shared hold-first gate (before any mutation); releasing it makes the
+    /// mock's key seam throw, and the cancel's generation bump withholds the
+    /// terminal state.
+    func testThrowingPairStoreAfterCancelDoesNotWriteSuccess() async throws {
         let cluster = makeCluster()
         let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
         keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
         let store = GatedTeleportCredentialStore(
             underlying: keyRing,
             gateTheFirstStore: false,
-            gateTheMiddleStore: true
+            gateTheLoginCertStore: true
         )
         let http = MockTeleportHTTPClient()
         http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
@@ -383,20 +378,24 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
 
         let beginTask = Task { await coordinator.begin(cluster: cluster) }
-        await store.waitUntilPrivKeyStoreStarted()
-        XCTAssertEqual(store.storedLoginCertCount, 1)
+        await store.waitUntilFirstCredentialWriteStarted()
+        XCTAssertEqual(store.storedPairCount, 0, "the pair write is parked, not committed")
 
         await coordinator.cancel()
         XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
 
-        // Release the parked key store; the underlying mock throws.
-        await store.releasePrivKeyStore()
+        // Release the parked pair write; the underlying mock's key seam throws
+        // before any mutation, so neither half is committed.
+        await store.releaseFirstCredentialWrite()
         await beginTask.value
 
         XCTAssertEqual(
             coordinator.state, .failed(.faceIDCancelled),
-            "a superseded throwing key store must not fall through to .success"
+            "a superseded throwing pair store must not fall through to .success"
         )
+        XCTAssertEqual(store.storedPairCount, 1, "the write was attempted")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
     }
 }
 

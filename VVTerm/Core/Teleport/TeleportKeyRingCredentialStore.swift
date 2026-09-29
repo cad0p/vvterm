@@ -10,7 +10,8 @@
 //  adapter is `nonisolated` + `@unchecked Sendable` and performs exactly one
 //  MainActor hop per operation, with a single synchronous MainActor body and
 //  no internal suspension — so each keyring operation keeps today's
-//  atomicity.
+//  atomicity. That holds for the atomic pair write too
+//  (`storeCredentialPair`): one hop, one synchronous body.
 //
 //  The keyring is resolved lazily on the main actor so the adapter can be
 //  constructed from any isolation domain (it is the defaulted
@@ -112,6 +113,27 @@ final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked 
     func storeEd25519PrivateKey(_ pemData: Data, for clusterId: UUID) async throws {
         try await MainActor.run {
             try keyRingProvider().storeEd25519PrivateKey(pemData, for: clusterId)
+        }
+    }
+
+    func storeCredentialPair(
+        _ certPEM: String,
+        validBefore: Date,
+        privateKeyPEM: Data,
+        policy: TeleportCredentialWritePolicy,
+        for clusterId: UUID
+    ) async throws {
+        // One hop, one synchronous MainActor body: the keyring's pair body
+        // suspends nowhere, so the key write and the record commit cannot be
+        // interleaved by another actor's code.
+        try await MainActor.run {
+            try keyRingProvider().storeCredentialPair(
+                certPEM,
+                validBefore: validBefore,
+                privateKeyPEM: privateKeyPEM,
+                policy: policy,
+                for: clusterId
+            )
         }
     }
 

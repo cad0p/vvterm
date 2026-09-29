@@ -467,27 +467,41 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
             }
         }
 
-        // Store the fresh cert in the key ring. Readiness flips to `ready`.
-        // Also store the ed25519 private key — the SSHClient cert seam
-        // fetches it via `liveEd25519PrivateKey` to feed libssh2.
-        await keyRing.storeLoginCert(certPEM, validBefore: certValidBefore, for: cluster.id)
-        // The login cert is already in flight when a supersession lands, so it
-        // is allowed to commit (§1.4); only the later writes are withheld.
-        guard generation == requestGeneration else { return }
-        if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
-            do {
-                try await keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
-            } catch {
-                // Logs only (no state write), so the re-take lives after the
-                // whole `do/catch` below — it covers a superseded throw too.
-                logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
-                // Non-fatal — the cert is stored, so readiness is correct.
-                // The SSH connect will fail with teleportCertMissing, which
-                // surfaces the right UX (re-login).
-            }
+        // Store the fresh cert and its paired ed25519 private key as one
+        // atomic pair: the key write and the record commit land in one
+        // non-suspending body, so a supersession can land a complete pair, the
+        // previous complete pair, or nothing — never a mixed pair. The single
+        // writes remain seed/test primitives; no coordinator calls them.
+        let privKeyData: Data
+        if let data = sshPrivateKeyPEM.data(using: .utf8) {
+            privKeyData = data
+        } else {
+            // Unreachable today (`String.data(using: .utf8)` is total), but a
+            // nil here cannot write a pair: route it through the same
+            // store-failure outcome rather than committing half a credential.
+            await finishWithStoreFailure(generation: generation, cluster: cluster)
+            return
         }
-        // Re-take after the whole `do/catch`: a superseded attempt that
-        // succeeded *or* threw at the key store must not fall through to the
+        do {
+            try await keyRing.storeCredentialPair(
+                certPEM,
+                validBefore: certValidBefore,
+                privateKeyPEM: privKeyData,
+                policy: .login,
+                for: cluster.id
+            )
+        } catch {
+            // Deliberate behaviour change: after a pair-write throw nothing
+            // from this attempt is guaranteed stored (the write is key-first,
+            // and a failure leaves the previous complete pair intact or
+            // nothing), so the terminal state is derived from the store's real
+            // state instead of the old false "the cert is stored, so readiness
+            // is correct".
+            logger.error("failed to store the login credential pair: \(error.localizedDescription, privacy: .public)")
+            await finishWithStoreFailure(generation: generation, cluster: cluster)
+            return
+        }
+        // Re-take after the pair store: a superseded attempt must not reach the
         // terminal state.
         guard generation == requestGeneration else { return }
         logger.info("login succeeded — cert \(certPEM.count) chars, valid until \(certValidBefore.debugDescription, privacy: .public)")
@@ -495,6 +509,28 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         state = .success(
             certValidUntil: certValidBefore,
             logins: TeleportHostLogin.nonInternalPrincipals(of: issuedCertificate)
+        )
+    }
+
+    /// The pair write threw (or could not be attempted). Nothing from this
+    /// attempt is guaranteed stored, so the terminal state is derived from the
+    /// store's real state: a usable prior pair keeps the user signed in with
+    /// the **stored** cert's validity; otherwise the flow fails and the user
+    /// can retry.
+    private func finishWithStoreFailure(generation: Int, cluster: TeleportCluster) async {
+        guard generation == requestGeneration else { return }
+        guard let snapshot = await keyRing.liveCredentialSnapshot(for: cluster.id),
+              let storedCert = OpenSSHCertificate.parse(authorizedKeysOrPEM: snapshot.certPEM) else {
+            // The snapshot read is an await too; a supersession during it must
+            // not write a stale failure over the newer state.
+            guard generation == requestGeneration else { return }
+            state = .failed(.unknown("credentials could not be stored"))
+            return
+        }
+        guard generation == requestGeneration else { return }   // the read is an await too
+        state = .success(
+            certValidUntil: storedCert.validBeforeDate,
+            logins: TeleportHostLogin.nonInternalPrincipals(of: storedCert)
         )
     }
 

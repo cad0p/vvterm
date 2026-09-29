@@ -341,11 +341,12 @@ struct TeleportCertBindingCoordinatorTests {
     }
 
     @Test
-    func bootstrapKeychainFailureStillPersistsCertAndTLSStateAndSucceeds() async throws {
-        // A failing `storeEd25519PrivateKey` (keychain) must be non-fatal:
-        // the cert + cluster TLS state still persist and the coordinator
-        // still reaches `.success`. The SSH connect will fail with
-        // teleportCertMissing and surface the re-bootstrap UX.
+    func bootstrapKeychainFailureCommitsNothingAndFailsTheFlow() async throws {
+        // Deliberate behaviour change: after a failed pair write nothing from
+        // the attempt is guaranteed stored, so the coordinator derives the
+        // terminal state from the store's real state. A fresh keyring has no
+        // prior pair, so the flow fails (previously a failing key store was
+        // non-fatal and reported `.success` with a cert whose key was gone).
         let cluster = makeCluster()
         let keyRing = MockTeleportKeyRing()
         keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
@@ -359,10 +360,12 @@ struct TeleportCertBindingCoordinatorTests {
         )
         await coordinator.begin(cluster: cluster)
 
-        #expect(coordinator.state == .success)
-        #expect(keyRing.liveCertPEM(for: cluster.id) == TeleportFixtureSupport.fixedIssuedUserCert)
-        #expect(keyRing.clusterTLSState(for: cluster.id) != nil)
+        #expect(coordinator.state == .failed(.unknown("credentials could not be stored")))
+        #expect(keyRing.liveCertPEM(for: cluster.id) == nil)
         #expect(keyRing.liveEd25519PrivateKey(for: cluster.id) == nil)
+        #expect(coordinator.lastBootstrapResult == nil)
+        #expect(keyRing.clusterTLSState(for: cluster.id) == nil)
+        #expect(keyRing.readiness(for: cluster.id) == .needsBootstrap)
     }
 
     @Test
