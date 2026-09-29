@@ -83,6 +83,11 @@ struct RemoteFileShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 
     final class Coordinator {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let onComplete: () -> Void
         private var didFinish = false
 
@@ -118,6 +123,11 @@ struct RemoteFileImportPicker: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let onComplete: (Result<[URL], Error>) -> Void
         private var didFinish = false
 

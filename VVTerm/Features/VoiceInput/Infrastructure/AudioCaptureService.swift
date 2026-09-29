@@ -61,6 +61,11 @@ protocol AudioCaptureHardware: AnyObject {
 
 @MainActor
 final class AudioCaptureResources {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private var cleanupActions: [() -> Void] = []
 
     func own(cleanup: @escaping () -> Void) {
@@ -78,6 +83,11 @@ final class AudioCaptureResources {
 
 @MainActor
 private final class SystemAudioCaptureHardware: AudioCaptureHardware {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let engine = AVAudioEngine()
 
     var inputFormat: AVAudioFormat {
@@ -147,6 +157,11 @@ private final class SystemAudioCaptureHardware: AudioCaptureHardware {
 
 @MainActor
 final class AudioCaptureService: ObservableObject {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private enum CaptureState {
         case idle
         case starting(UUID)
