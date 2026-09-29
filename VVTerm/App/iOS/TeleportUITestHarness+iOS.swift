@@ -193,6 +193,10 @@ struct TeleportUITestHarness: View {
             return .faceIDUnavailable("Face ID isn't available. Set up Face ID in iOS Settings.")
         case .serverUnreachable:
             return .serverUnreachable
+        case .serverError:
+            // The 403-shaped server rejection the login sheet renders
+            // verbatim (issue #236's user-visible half).
+            return .serverError("access denied: MFA device not registered")
         case .hostLoginMultiple:
             return .happyPath(certTTL: 12 * 3600, logins: ["deploy", "root"])
         case .hostLoginSingle:
@@ -242,6 +246,7 @@ struct TeleportUITestHarness: View {
     private enum LoginScenario: String {
         case happyPath12h, happyPath1h, certExpiredOnTap
         case faceIDCancelled, faceIDUnavailable, serverUnreachable
+        case serverError
         case hostLoginMultiple, hostLoginSingle, hostLoginEmpty
     }
 }

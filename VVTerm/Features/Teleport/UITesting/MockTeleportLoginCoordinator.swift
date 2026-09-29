@@ -56,6 +56,11 @@ final class MockTeleportLoginCoordinator: ObservableObject, TeleportLoginCoordin
         /// The Teleport server was unreachable on /begin.
         /// → .failed(.networkLost) → "Couldn't reach Teleport. Tap to retry."
         case serverUnreachable
+        /// The server answered with an HTTP error on /begin or /finish (e.g. a
+        /// 403 from a device that must be re-registered).
+        /// → .failed(.server(message)) → "Teleport Server Error" with the
+        /// server's message verbatim.
+        case serverError(String)
     }
 
     /// The number of times `begin` was called.
@@ -108,6 +113,10 @@ final class MockTeleportLoginCoordinator: ObservableObject, TeleportLoginCoordin
             state = .fetchingCert
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             state = .failed(.networkLost)
+        case .serverError(let message):
+            state = .fetchingCert
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            state = .failed(.server(message))
         }
     }
 

@@ -469,6 +469,26 @@ final class TeleportUITests: XCTestCase {
         attachScreenshot(app, named: "login-serverUnreachable-error")
     }
 
+    /// A login HTTP failure (the harness scripts a 403-shaped server
+    /// rejection) renders the server's message verbatim under the
+    /// "Teleport Server Error" title — the user-visible half of #236. The
+    /// mock coordinator bypasses `mapHTTPError`, so this is presentation-only
+    /// coverage; the error-shape and mapping are pinned in
+    /// `TeleportLoginClientErrorShapeTests`.
+    func testLogin_serverError_showsTheServerMessageVerbatim() {
+        let app = launch(phase: "login", scenario: "serverError")
+        tapSignInButton(app)
+        let errorTitle = app.staticTexts["vvterm.teleport.login.errorTitle"]
+        XCTAssertTrue(errorTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(errorTitle.label, "Teleport Server Error")
+        let errorMessage = app.staticTexts["vvterm.teleport.login.errorMessage"]
+        XCTAssertTrue(errorMessage.exists)
+        XCTAssertEqual(errorMessage.label, "access denied: MFA device not registered")
+        let retry = app.buttons["vvterm.teleport.login.retryButton"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        attachScreenshot(app, named: "login-serverError-error")
+    }
+
     // MARK: - Phase 3: host login step (#262)
 
     /// Several non-internal principals: no login is selected by default, so
