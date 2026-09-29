@@ -208,6 +208,110 @@ struct TeleportServerIntegrationTests {
         }
     }
 
+    /// Normal-path coverage for the #288/#290 loop guards: a live SFTP
+    /// round-trip (write -> read -> stat/list -> delete) plus a shell
+    /// `resize` through the real TLS-routing path, on the inner
+    /// (target-node) session.
+    ///
+    /// `teleport-e2e.yml` runs only this suite and every other gated leg here
+    /// calls only `execute`/`disconnect`, so without this leg the dispatched
+    /// run would gate none of the changed EAGAIN loops. This is NOT a
+    /// reproduction of the parked teardown window the guards close — that
+    /// window is latent (the wait helpers are same-actor and non-suspending,
+    /// so no test can park it). It proves the guards and the conditional SFTP
+    /// handle closes leave the normal path intact.
+    @Test(.enabled(if: teleportEnvPresent), .timeLimit(.minutes(3))) @MainActor
+    func teleportSFTPRoundTripAndShellResize() async throws {
+        let storedLogin = ProcessInfo.processInfo.environment["VVTERM_TELEPORT_LOGIN"] ?? "ci-login"
+        let (client, clusterId) = try await Self.makeTeleportClient(hostLogin: storedLogin)
+        defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
+        do {
+            // SFTP round-trip: `upload` routes to `writeFile` for Teleport
+            // (the outer PROXY session rejects SCP/exec), so this exercises
+            // `ensureSFTPSession`, `openSFTPHandle`, `writeFile`, `readFile`,
+            // `stat`, `listDirectory` and `deleteFile` on the inner session.
+            // (`uploadViaSCP`/`uploadViaExec` are the deferred #291 family and
+            // are deliberately not exercised here.)
+            let remotePath = "/tmp/vvterm-e2e-\(UUID().uuidString).txt"
+            let payload = Data("VVTERM_TELEPORT_SFTP_E2E_OK\n".utf8)
+            try await client.upload(payload, to: remotePath)
+            let readBack = try await client.readFile(at: remotePath, maxBytes: 64 * 1024)
+            #expect(readBack == payload, "the SFTP round-trip must read back the uploaded bytes")
+            let entry = try await client.stat(at: remotePath)
+            #expect(
+                entry.name == (remotePath as NSString).lastPathComponent,
+                "stat must report the uploaded file's name; got: \(entry.name)"
+            )
+            _ = try await client.listDirectory(at: "/tmp", maxEntries: 256)
+            try await client.deleteFile(at: remotePath)
+
+            // Shell path: start a PTY through the proxy (outer + inner
+            // handshakes), resize it, and assert the new geometry reached the
+            // remote PTY — `resize`'s EAGAIN loop is one of the two #290
+            // loops.
+            let shell = try await client.startShell(cols: 80, rows: 24)
+            do {
+                try await client.resize(cols: 100, rows: 30, for: shell.id)
+                try await client.write(Data("stty size\n".utf8), to: shell.id)
+                let output = await Self.shellOutput(from: shell, until: "30 100", timeoutSeconds: 45)
+                #expect(
+                    output.contains("30 100"),
+                    "the PTY resize must reach the remote shell (`stty size` should print `30 100`); got: \(output)"
+                )
+                await client.closeShell(shell.id)
+            } catch {
+                await client.closeShell(shell.id)
+                throw error
+            }
+
+            await client.disconnect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+    }
+
+    /// Collects shell output off the test's actor so the deadline path can
+    /// still surface whatever arrived before the timeout fired.
+    private actor ShellOutputBuffer {
+        private(set) var text = ""
+
+        func append(_ chunk: Data) -> String {
+            text += String(decoding: chunk, as: UTF8.self)
+            return text
+        }
+    }
+
+    /// Drain a shell's output stream until `marker` appears, the stream ends,
+    /// or the deadline passes; returns everything received so the assertion
+    /// message can show the real output. The drain and a sleep-until-deadline
+    /// task race, so a silent stream returns at the deadline (45 s) instead of
+    /// parking on `next()` until the suite's 3-minute limit; `cancelAll()` then
+    /// ends the stream iteration (`AsyncStream.next()` returns nil on task
+    /// cancellation). The shell's stream also ends when the channel closes, so
+    /// a failed `startShell` cannot spin here.
+    private static func shellOutput(
+        from shell: ShellHandle,
+        until marker: String,
+        timeoutSeconds: Int
+    ) async -> String {
+        let buffer = ShellOutputBuffer()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for await chunk in shell.stream {
+                    let text = await buffer.append(chunk)
+                    if text.contains(marker) { break }
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+            }
+            _ = await group.next()
+            group.cancelAll()
+        }
+        return await buffer.text
+    }
+
     /// OSC 8 transport reproduction (issue #93 link-click debug): the full
     /// real-SSH path (Teleport proxy + node, app's own SSHClient) must carry
     /// an OSC 8 hyperlink sequence from the remote shell to the client
