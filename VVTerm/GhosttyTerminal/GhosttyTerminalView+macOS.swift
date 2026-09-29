@@ -1121,6 +1121,11 @@ extension GhosttyTerminalView: NSTextInputClient {
 
 /// Thread-safe weak reference wrapper for use in C callbacks
 private final class DisplayLinkCallbackContext: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let lock = NSLock()
     private let weakViewTable = NSHashTable<GhosttyTerminalView>.weakObjects()
 
@@ -1138,6 +1143,11 @@ private final class DisplayLinkCallbackContext: @unchecked Sendable {
 }
 
 private final class TerminalZoomIndicatorView: NSVisualEffectView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let valueLabel = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: TerminalZoomPresentation.indicatorTitle)
     private let stackView = NSStackView()

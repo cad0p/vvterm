@@ -186,6 +186,18 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             | tee "$RUNNER_TEMP/build.log"
 
+      - name: Isolated-deinit census (#294 standing gate)
+        # A new MainActor-isolated class with a compiler-synthesized isolated
+        # deinit (`…CfZ`, `__isolated_deallocating_deinit`) fails this step. The
+        # #294 sweep marked every existing instance; this converts that one-time
+        # acceptance into a standing gate. iOS-Simulator-only: no CI job builds
+        # the app for macOS, so the macOS slice relies on the source pins
+        # (VVTermTests/*IsolatedDeinitPinsTests.swift) plus the local
+        # two-platform oracle run in the #294 PR.
+        run: |
+          set -euo pipefail
+          ./scripts/ci/check-isolated-deinit-census.sh "$RUNNER_TEMP/DerivedData"
+
       - name: Archive build products
         # Tar Build/Products + Build/Intermediates.noindex. actions/upload-
         # artifact does NOT preserve symlinks inside .app bundles (Frameworks

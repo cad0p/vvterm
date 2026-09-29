@@ -41,6 +41,11 @@ extension GhosttyTerminalView: TerminalKeyboardInputSession {
 /// user never gets a long-lived bar without a keyboard.
 @MainActor
 final class TerminalKeyboardCoordinator: ObservableObject {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     /// UIKit responder ownership is separate from durable typing intent. Every
     /// transition creates a new generation so delayed verification or rebuild
     /// work can never revive a responder session that another app now owns.

@@ -23,6 +23,11 @@ struct RemoteFileSharePicker: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let onComplete: () -> Void
         private var activeItemID: UUID?
         private var activePicker: NSSharingServicePicker?
@@ -80,6 +85,11 @@ struct RemoteFileSharePicker: NSViewRepresentable {
 
 @MainActor
 final class MacOSMenuActionTarget: NSObject {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let actionHandler: () -> Void
 
     init(actionHandler: @escaping () -> Void) {
@@ -182,6 +192,11 @@ struct MacOSWindowTopInsetBridge: NSViewRepresentable {
 
 @MainActor
 final class MacOSRemoteFileDragSessionStore {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     static let shared = MacOSRemoteFileDragSessionStore()
 
     var payload: RemoteFileDragPayload?
@@ -228,6 +243,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         enum RowKind {
             case inlineCreatePlaceholder
             case entry(index: Int)
@@ -824,6 +844,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
     }
 
     final class RemoteFileTableView: NSTableView {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         var menuProvider: ((Int?) -> NSMenu?)?
         var onSelectAll: (() -> Void)?
 
@@ -840,6 +865,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
     }
 
     final class NameCellView: NSTableCellView, NSTextFieldDelegate {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let iconView = NSImageView()
         private let titleField = NSTextField(labelWithString: "")
         private let subtitleField = NSTextField(labelWithString: "")
@@ -1024,6 +1054,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
     }
 
     final class TextCellView: NSTableCellView {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let label = NSTextField(labelWithString: "")
 
         override init(frame frameRect: NSRect) {
@@ -1051,6 +1086,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
     }
 
     final class InlineEditingTextField: NSTextField {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         override class var cellClass: AnyClass? {
             get { InlineEditingTextFieldCell.self }
             set {}
@@ -1115,6 +1155,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
     }
 
     final class InlineEditingTextFieldCell: NSTextFieldCell {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let horizontalInset: CGFloat = 8
         private let verticalInset: CGFloat = 3
 
@@ -1162,6 +1207,11 @@ struct MacOSRemoteFileTableView: NSViewRepresentable {
     }
 
     final class FilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         let id = UUID()
         private let entry: RemoteFileEntry
         private let fileTypeIdentifier: String

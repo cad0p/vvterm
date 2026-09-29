@@ -7,6 +7,11 @@ import ActivityKit
 
 @MainActor
 final class LiveActivityManager {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     static let shared = LiveActivityManager()
 
     private let logger = Logger.forCategory("LiveActivity")

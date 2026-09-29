@@ -324,6 +324,11 @@ struct PendingCloudKitMutation: Codable, Identifiable {
 }
 
 final class PendingCloudKitSyncQueue {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let storageKey: String
     private var items: [PendingCloudKitMutation]
 

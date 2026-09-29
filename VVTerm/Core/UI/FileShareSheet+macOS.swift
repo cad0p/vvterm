@@ -22,6 +22,11 @@ struct FileSharePicker: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         private let onComplete: () -> Void
         private var activeItemID: UUID?
         private var activePicker: NSSharingServicePicker?

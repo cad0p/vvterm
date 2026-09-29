@@ -83,6 +83,11 @@ struct MacShellSplitHost<Sidebar: View, Detail: View>: NSViewControllerRepresent
 }
 
 final class MacShellSplitHostCoordinator {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     var splitViewController: NSSplitViewController?
     var sidebarHostingController: NSHostingController<AnyView>?
     var detailHostingController: NSHostingController<AnyView>?
@@ -92,6 +97,11 @@ final class MacShellSplitHostCoordinator {
 /// NSSplitViewController that applies an initial sidebar width once, since
 /// NSSplitViewItem has no "ideal" thickness.
 final class ShellSplitViewController: NSSplitViewController {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     var initialSidebarWidth: CGFloat = 250
     var onToggleSidebar: (() -> Void)?
     var isToolbarHidden = false

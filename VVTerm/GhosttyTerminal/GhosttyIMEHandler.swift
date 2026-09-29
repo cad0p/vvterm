@@ -13,6 +13,11 @@ import OSLog
 /// Manages IME (Input Method Editor) state and text input handling for Ghostty terminal
 @MainActor
 class GhosttyIMEHandler {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     // MARK: - Properties
 
     private weak var view: NSView?

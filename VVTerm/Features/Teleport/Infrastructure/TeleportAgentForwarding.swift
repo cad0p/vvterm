@@ -117,6 +117,11 @@ enum TeleportAgentIdentity {
 /// in `SSHClient.swift`). This registry is the lookup instead. Every method is
 /// synchronous and lock-protected; the callback path performs no I/O.
 final class TeleportAgentCallbackRegistry: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     static let shared = TeleportAgentCallbackRegistry()
 
     private let lock = OSAllocatedUnfairLock(
@@ -179,6 +184,11 @@ nonisolated(unsafe) private let teleportAuthAgentCallback: @convention(c) (
 /// `libssh2_session_free` reaped it; a retired channel is reaped by that
 /// session free.
 final class TeleportAgentChannelStore: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private struct State {
         var pending: [OpaquePointer] = []
         var inFlight: [OpaquePointer] = []
@@ -267,6 +277,11 @@ final class TeleportAgentChannelStore: @unchecked Sendable {
 /// transport gate keeps the serving task from calling into the outer session
 /// while `prepareTeleportInnerSession` still uses it without the mutex.
 final class TeleportAgentServingDecision: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private struct State {
         var requestSucceeded: Bool?
         var transportStarted = false
@@ -334,6 +349,11 @@ final class TeleportAgentServingDecision: @unchecked Sendable {
 /// proxy's requests off them, answers, and stops on EOF/cancel without
 /// touching the bridge tunnel.
 final class TeleportAgentForwardingService: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     typealias ChannelRead = @Sendable (_ channel: OpaquePointer, _ buffer: UnsafeMutablePointer<UInt8>, _ maxLen: Int) -> Int
     typealias ChannelWrite = @Sendable (_ channel: OpaquePointer, _ buffer: UnsafePointer<UInt8>, _ len: Int) -> Int
     typealias ChannelClose = @Sendable (_ channel: OpaquePointer) -> Void

@@ -122,6 +122,11 @@ actor CloudflareWebAuthenticationSessionActor: OAuthWebSession {
 
 @MainActor
 private final class CloudflarePresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if os(iOS)
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }

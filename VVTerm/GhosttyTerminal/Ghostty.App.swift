@@ -27,6 +27,11 @@ enum Ghostty {
     /// Note: ghostty_surface_t is an opaque pointer, so we store it directly
     /// The surface is freed when the GhosttyTerminalView is deallocated
     class SurfaceReference {
+        // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+        // MainActor-isolated class takes the back-deployed isolated-deinit path,
+        // which aborts (invalid free) when released outside a task context —
+        // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+        nonisolated deinit {}
         let surface: ghostty_surface_t
         weak var terminalView: GhosttyTerminalView?
         var isValid: Bool = true
