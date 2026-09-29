@@ -14,6 +14,14 @@ extension Notification.Name {
 
 @MainActor
 final class ViewTabConfigurationManager: ObservableObject {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    // Surfaced by the full local unit-target run for #280
+    // (`ViewTabConfigurationManagerTests` aborted on release).
+    nonisolated deinit {}
+
     static let shared = ViewTabConfigurationManager()
 
     private let defaults: UserDefaults

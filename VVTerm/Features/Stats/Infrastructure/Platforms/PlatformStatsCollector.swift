@@ -101,6 +101,12 @@ extension PlatformStatsCollector {
 
 /// Shared context for stats collection (previous values for rate calculations)
 final class StatsCollectionContext: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
+
     var prevNetRx: UInt64 = 0
     var prevNetTx: UInt64 = 0
     var prevTimestamp: Date?
