@@ -71,12 +71,35 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         }
     }
 
+    /// A bounded variant of `waitUntilStarted`: `true` when at least `count`
+    /// `headlessLogin` calls started within `timeout`, `false` otherwise. The
+    /// latch tests use it so a missing latch guard fails as an assertion
+    /// instead of parking the stray `begin` on a gate no test releases (the
+    /// closure lens measured that mutation as an execution-allowance kill).
+    func waitForStarted(_ count: Int, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if startedCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return startedCount >= count
+    }
+
     /// Release the gate for the `index`-th `headlessLogin` call with `result`.
     func release(index: Int, with result: Result<HeadlessLoginResponse, Error>) async {
         guard gates.indices.contains(index) else {
             XCTFail("release(index: \(index)) but only \(gates.count) headlessLogin call(s) started")
             return
         }
+        scriptedResults[index] = result
+        await gates[index].release()
+    }
+
+    /// Release the `index`-th `headlessLogin` gate only when that call has
+    /// started. Unlike `release(index:with:)` this never `XCTFail`s, so a drain
+    /// path can call it unconditionally.
+    func releaseIfStarted(index: Int, with result: Result<HeadlessLoginResponse, Error>) async {
+        guard gates.indices.contains(index) else { return }
         scriptedResults[index] = result
         await gates[index].release()
     }
@@ -146,6 +169,18 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         }
     }
 
+    /// A bounded variant of `waitUntilLoginBeginStarted`: `true` when at least
+    /// `count` `loginBegin` calls started within `timeout` (see
+    /// `waitForStarted` for why the latch tests need the bound).
+    func waitForLoginBeginStarted(_ count: Int, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if loginBeginStartedCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return loginBeginStartedCount >= count
+    }
+
     /// Release the gate for the `index`-th `loginBegin` call with `result`.
     func releaseLoginBegin(index: Int, with result: Result<LoginBeginResponse, Error>) async {
         guard loginBeginGates.indices.contains(index) else {
@@ -182,6 +217,40 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
             index: index,
             with: .success(scriptedLoginFinishResponse ?? MockTeleportHTTPClient.makeFixtureLoginFinishResponse())
         )
+    }
+
+    /// Release the `index`-th `loginBegin` gate only when that call has
+    /// started, with the scripted response (or the committed fixture). Unlike
+    /// `releaseLoginBegin(index:)` this never `XCTFail`s, so a drain path can
+    /// call it unconditionally.
+    func releaseLoginBeginIfStarted(index: Int) async {
+        await releaseLoginBeginIfStarted(
+            index: index,
+            with: .success(scriptedLoginBeginResponse ?? MockTeleportHTTPClient.makeFixtureLoginBeginResponse())
+        )
+    }
+
+    /// Release the `index`-th `loginBegin` gate only when that call has started.
+    func releaseLoginBeginIfStarted(index: Int, with result: Result<LoginBeginResponse, Error>) async {
+        guard loginBeginGates.indices.contains(index) else { return }
+        loginBeginResults[index] = result
+        await loginBeginGates[index].release()
+    }
+
+    /// Release the `index`-th `loginFinish` gate only when that call has
+    /// started, with the scripted response (or the committed fixture).
+    func releaseLoginFinishIfStarted(index: Int) async {
+        await releaseLoginFinishIfStarted(
+            index: index,
+            with: .success(scriptedLoginFinishResponse ?? MockTeleportHTTPClient.makeFixtureLoginFinishResponse())
+        )
+    }
+
+    /// Release the `index`-th `loginFinish` gate only when that call has started.
+    func releaseLoginFinishIfStarted(index: Int, with result: Result<LoginFinishResponse, Error>) async {
+        guard loginFinishGates.indices.contains(index) else { return }
+        loginFinishResults[index] = result
+        await loginFinishGates[index].release()
     }
 
     func loginBegin(baseURL: URL) async throws -> LoginBeginResponse {
@@ -585,10 +654,16 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(coordinator.lastBootstrapResult)
         XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
 
-        // Terminal: a stray retry/begin after the latch is a no-op. Assert the
-        // counter/flag invariants before the stray calls, so a latch-semantics
-        // regression fails on an assertion instead of parking inside a stray
-        // call on an unreleased gate (an allowance kill).
+        // Terminal: a stray retry/begin after the latch is a no-op.
+        //
+        // `retry()` is awaited directly: it has no gate to park on, so a
+        // missing latch guard there fails as the assertion below (measured).
+        // `begin()` does have one, so it runs as a bounded task and the request
+        // count is asserted before it is awaited — a missing latch guard must
+        // fail as an assertion rather than park on a gate no test releases
+        // (the closure lens measured that mutation as an execution-allowance
+        // kill). The stray's own request is drained when it starts, so the
+        // re-armed flow is still caught by the assertions after the await.
         XCTAssertTrue(coordinator.isDismissalLatched)
         XCTAssertEqual(http.startedCount, 1)
 
@@ -597,7 +672,21 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
             coordinator.state, .awaitingApproval,
             "an unguarded retry resets to .idle before begin()'s guard early-returns"
         )
-        await coordinator.begin(cluster: cluster)
+
+        let strayBegin = Task { await coordinator.begin(cluster: cluster) }
+        let strayStartedARequest = await http.waitForStarted(2, timeout: 0.5)
+        XCTAssertFalse(
+            strayStartedARequest,
+            "a latched coordinator must not start another POST"
+        )
+        if strayStartedARequest {
+            await http.releaseIfStarted(
+                index: 1,
+                with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse())
+            )
+        }
+        await strayBegin.value
+
         XCTAssertEqual(http.startedCount, 1)
         XCTAssertEqual(store.storedCertCount, 0)
     }

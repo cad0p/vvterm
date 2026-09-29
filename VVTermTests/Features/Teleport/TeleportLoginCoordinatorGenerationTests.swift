@@ -289,15 +289,32 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
 
         // Terminal: a stray begin after the latch is a no-op (no re-arm, no
-        // new request). Assert the counters/flags first, so a missing latch
-        // guard fails as an assertion instead of parking the stray call on an
-        // unreleased gate (an allowance kill).
+        // new request). The stray runs as a bounded task and the request count
+        // is asserted before it is awaited, so a missing latch guard fails as
+        // an assertion instead of parking the call on a gate no test releases
+        // (the closure lens measured that mutation as an execution-allowance
+        // kill). The post-call assertions are kept: if the guard is missing and
+        // the stray is drained below, the re-armed flow is still caught.
         XCTAssertTrue(coordinator.isDismissalLatched)
         XCTAssertEqual(http.loginBeginStartedCount, 1)
         XCTAssertEqual(http.loginFinishStartedCount, 1)
         XCTAssertEqual(store.storedLoginCertCount, 0)
 
-        await coordinator.begin(cluster: cluster)
+        let strayBegin = Task { await coordinator.begin(cluster: cluster) }
+        let strayStartedARequest = await http.waitForLoginBeginStarted(2, timeout: 0.5)
+        XCTAssertFalse(
+            strayStartedARequest,
+            "a latched coordinator must not start another login/begin"
+        )
+        if strayStartedARequest {
+            // Guard missing: drain the stray's two requests so it cannot park —
+            // release its begin, wait for its finish to start, release that,
+            // then let it run to its terminal write (caught below).
+            await http.releaseLoginBeginIfStarted(index: 1)
+            await http.waitUntilLoginFinishStarted(2)
+            await http.releaseLoginFinishIfStarted(index: 1)
+        }
+        await strayBegin.value
 
         XCTAssertEqual(http.loginBeginStartedCount, 1)
         XCTAssertEqual(http.loginFinishStartedCount, 1)
