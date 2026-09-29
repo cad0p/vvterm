@@ -702,6 +702,60 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         )
     }
 
+    /// #279 (the issue's exact scenario, latched): the harness removes the
+    /// production view while the POST is parked, awaits the *latch*
+    /// (`isDismissalLatched` is set synchronously inside the production
+    /// `.onDisappear` closure, so it is the correct ordering point), and then
+    /// releases the POST with a success **without** awaiting
+    /// `.failed(.userCancelled)`. The latch's generation bump must drop the
+    /// continuation: no cert store, no result, no `.success`. The scheduled
+    /// teardown then still runs.
+    func testDismissalWhileInFlightLatchesAndDropsTheStaleSuccess() async {
+        let cluster = makeCluster()
+        let http = GatedTeleportHTTPClient()
+        let safari = MockWebAuthenticationSessionPresenter()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let coordinator = makeGatedCoordinator(http: http, keyRing: store, safari: safari)
+
+        let model = DismissalModel()
+        let disappeared = Flag()
+        let host = UIHostingController(rootView: RemovableBootstrapHost(
+            model: model,
+            coordinator: coordinator,
+            cluster: cluster,
+            onSuccess: { _ in },
+            onDisappear: { disappeared.value = true }
+        ))
+        installInWindow(host)
+
+        await http.waitUntilStarted(1)
+        await awaitState(.awaitingApproval, on: coordinator)
+
+        model.showsBootstrap = false
+        XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
+        XCTAssertTrue(
+            waitUntil { coordinator.isDismissalLatched },
+            "the production .onDisappear must latch the dismissal synchronously"
+        )
+
+        // Release the parked POST *without* awaiting the scheduled cancel: the
+        // latch's synchronous bump is what must drop this continuation.
+        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        let staleWriteLanded = await waitForStaleWrite(timeout: 0.5) { store.storedCertCount > 0 }
+        XCTAssertFalse(
+            staleWriteLanded,
+            "a latched dismissal must not store the bootstrap cert (storedCertCount=\(store.storedCertCount))"
+        )
+        XCTAssertEqual(store.storedCertCount, 0)
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNotEqual(coordinator.state, .success)
+
+        // The scheduled teardown still runs.
+        await awaitState(.failed(.userCancelled), on: coordinator)
+    }
+
     /// #272: `.success` is the Phase-1 → Phase-2 hand-off. Dismissing then must
     /// NOT cancel the coordinator: the result stays available to the parent and
     /// `onSuccess` has already fired.
@@ -745,6 +799,69 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         )
         XCTAssertNotNil(coordinator.lastBootstrapResult)
         XCTAssertNotNil(success.value)
+    }
+
+    // MARK: - Source pins (the call sites a behavioural test cannot see)
+
+    /// The repository root, derived from this file's location
+    /// (`VVTermTests/Features/Teleport/TeleportBootstrapViewWiringTests.swift`).
+    /// The `VVTERM_PINS_SOURCE_ROOT` override points the scan at a mutated tree
+    /// to prove the pin fails there (`TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`
+    /// reaches the test process; never set in CI).
+    private func repositoryRoot() -> URL {
+        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // TeleportBootstrapViewWiringTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
+    }
+
+    private func bootstrapViewSource() throws -> String {
+        try String(
+            contentsOf: repositoryRoot().appendingPathComponent(
+                "VVTerm/Features/Teleport/UI/TeleportBootstrapView.swift"
+            ),
+            encoding: .utf8
+        )
+    }
+
+    /// Collapse all whitespace runs to a single space so the pin matches across
+    /// line breaks and indentation.
+    private static func whitespaceNormalized(_ source: String) -> String {
+        source.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The bootstrap Cancel button must latch *before* scheduling `cancel()`;
+    /// the `onCancel()` tail makes the sequence unique to that call site (the
+    /// `.onDisappear` site ends with the scheduled task, with no `onCancel()`).
+    func testBootstrapViewCancelButtonLatchesBeforeTheScheduledTeardown() throws {
+        let source = Self.whitespaceNormalized(try bootstrapViewSource())
+        XCTAssertTrue(
+            source.contains("coordinator.latchDismissal() Task { await coordinator.cancel() } onCancel()"),
+            "the bootstrap Cancel button must latch synchronously before scheduling cancel()"
+        )
+    }
+
+    /// The bootstrap `.onDisappear` must keep the `dismissalRequiresTeardown`
+    /// gate, latch, and then schedule `cancel()` — in that order — and the
+    /// view must latch at exactly those two call sites.
+    func testBootstrapViewOnDisappearLatchesBeforeTheScheduledTeardown() throws {
+        let source = Self.whitespaceNormalized(try bootstrapViewSource())
+        XCTAssertTrue(
+            source.contains(
+                "guard coordinator.state.dismissalRequiresTeardown else { return } coordinator.latchDismissal() Task { await coordinator.cancel() }"
+            ),
+            "the bootstrap .onDisappear must gate on dismissalRequiresTeardown, latch, then schedule cancel()"
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "coordinator.latchDismissal()").count - 1,
+            2,
+            "the bootstrap view must latch at exactly the toolbar Cancel and .onDisappear"
+        )
     }
 
     // MARK: - Hosting helpers

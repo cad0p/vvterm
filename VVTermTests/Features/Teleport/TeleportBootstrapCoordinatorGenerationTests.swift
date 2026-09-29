@@ -520,6 +520,46 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
         }
     }
 
+    /// The coordinator-level twin of the #279 view test (TQ-4): latch the
+    /// dismissal directly while the POST is parked, release it with a success,
+    /// and assert the absence set without the view's scheduled `cancel()`
+    /// having run. The view test proves the call site fires; this proves the
+    /// latch semantics.
+    ///
+    /// Counterfactual (measured): a `latchDismissal()` that sets
+    /// `isDismissalLatched` without bumping the generation makes this test fail
+    /// on the write assertion (`storedCertCount == 1`, `state == .success`).
+    func testDismissalLatchDropsAStalePostSuccess() async {
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = GatedTeleportHTTPClient()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+        let cluster = makeCluster()
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+
+        coordinator.latchDismissal()
+        XCTAssertTrue(coordinator.isDismissalLatched)
+        coordinator.latchDismissal()  // idempotent
+
+        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await beginTask.value
+
+        XCTAssertEqual(coordinator.state, .awaitingApproval, "the latch withholds the terminal state; cancel() owns it")
+        XCTAssertEqual(store.storedCertCount, 0, "a latched dismissal must drop the stale success before any store")
+        XCTAssertEqual(store.storedPrivateKeyCount, 0)
+        XCTAssertEqual(store.storedTLSStateCount, 0)
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+
+        // Terminal: a stray retry/begin after the latch is a no-op.
+        await coordinator.retry()
+        await coordinator.begin(cluster: cluster)
+        XCTAssertEqual(http.startedCount, 1)
+        XCTAssertEqual(store.storedCertCount, 0)
+    }
+
     /// A superseded `begin()` that resumes from the presenter await with a
     /// failed open must not write `.failed(.safariUnavailable)` over the newer
     /// attempt's `.awaitingApproval` (S1). The post-`open` re-take is the only
