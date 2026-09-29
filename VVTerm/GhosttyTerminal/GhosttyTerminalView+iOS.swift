@@ -74,6 +74,11 @@ struct TerminalKeyboardCoordinatorDiagnosticSnapshot: Equatable {
 /// zero-height constraint that conflicts with InputUI's own inputHeight
 /// constraint during iPad responder handoffs.
 final class TerminalSuppressedKeyboardInputView: UIInputView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     init() {
         super.init(frame: .zero, inputViewStyle: .keyboard)
         allowsSelfSizing = true
@@ -262,6 +267,11 @@ private extension TerminalAccessoryShortcutKey {
 
 @MainActor
 private final class TerminalIMEProxyTextView: UIView, UITextInput {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     weak var terminalOwner: GhosttyTerminalView?
     /// Local mirror of recently typed input. Committed text stays in the document after
     /// being sent to the terminal (until the session is invalidated by Enter, control
@@ -1690,6 +1700,13 @@ class GhosttyTerminalView: UIView {
         fatalError("init(coder:) not supported")
     }
 
+    // Deliberate `isolated` deinit — do NOT add the #294 sweep's
+    // `nonisolated deinit {}` marker here: this cleanup must run on the
+    // MainActor. The isolation keeps the back-deploy hazard for this view until
+    // the #299 convergence lands: `TerminalTabManager.terminalViews` is a swept
+    // holder that can still release this view outside a Swift task context. The
+    // iOS-only `…CfZ` symbol it produces is expected and allowlisted in
+    // `scripts/ci/check-isolated-deinit-census.sh`.
     isolated deinit {
         cancelTrackedHardwareInput()
         stopSelectionAutoscroll()
@@ -8016,6 +8033,11 @@ private class TerminalInputAccessoryView: UIInputView {
 }
 
 private final class RepeatableKeyButton: UIButton {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     var key: TerminalKey = .backspace
 }
 
@@ -8489,6 +8511,11 @@ extension GhosttyTerminalView: UITextInput {
 }
 
 private final class TerminalZoomIndicatorView: UIVisualEffectView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let valueLabel = UILabel()
     private let titleLabel = UILabel()
     private let stackView = UIStackView()

@@ -12,6 +12,11 @@ enum TerminalTouchSelectionHandleKind {
 }
 
 final class TerminalTouchSelectionHandleView: UIView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     let kind: TerminalTouchSelectionHandleKind
 
     private let stemView = UIView()
@@ -97,6 +102,11 @@ final class TerminalTouchSelectionHandleView: UIView {
 }
 
 final class TerminalTouchSelectionOverlayView: UIView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let highlightLayer = CAShapeLayer()
     let startHandle = TerminalTouchSelectionHandleView(kind: .start)
     let endHandle = TerminalTouchSelectionHandleView(kind: .end)
@@ -171,6 +181,11 @@ final class TerminalTouchSelectionOverlayView: UIView {
 }
 
 final class TerminalTouchSelectionLoupeView: UIView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let chromeView = UIView()
     private let contentContainer = UIView()
     private let shadowView = UIView()

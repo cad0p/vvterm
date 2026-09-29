@@ -2,6 +2,11 @@
 import UIKit
 
 final class TerminalNativeTextPosition: UITextPosition {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     let offset: Int
 
     init(offset: Int) {
@@ -11,6 +16,11 @@ final class TerminalNativeTextPosition: UITextPosition {
 }
 
 final class TerminalNativeTextRange: UITextRange {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     let startPosition: TerminalNativeTextPosition
     let endPosition: TerminalNativeTextPosition
 
@@ -32,6 +42,11 @@ final class TerminalNativeTextRange: UITextRange {
 }
 
 final class TerminalNativeSelectionRect: UITextSelectionRect {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     private let storedRect: CGRect
     private let storedContainsStart: Bool
     private let storedContainsEnd: Bool
@@ -59,6 +74,11 @@ struct TerminalNativeFindDecoration {
 }
 
 final class TerminalNativeFindOverlayView: UIView {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
     struct Highlight {
         let rect: CGRect
         let style: UITextSearchFoundTextStyle
