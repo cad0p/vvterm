@@ -12,13 +12,14 @@
 //  the coordinator state is changed out from under it, and the gate is then
 //  released.
 //
-//  Three further tests gate the *keyring stores* instead, so `cancel()` can
-//  interleave between the POST release and the terminal state write — the
-//  window the post-`await` re-take guards exist for (B1/S2). Without that
-//  interleaving the re-take guards would be unreachable: a generation bump
-//  before the handler is entered is caught by the entry guard. The three gate
-//  the first store (cert), the middle store (ed25519 private key) and the last
-//  store (cluster TLS state) respectively, one per re-take guard.
+//  Four further tests gate the *keyring writes* instead, so `cancel()`/the
+//  dismissal latch can interleave between the POST release and the terminal
+//  state write — the window the post-`await` re-take guards exist for
+//  (B1/S2). Without that interleaving the re-take guards would be
+//  unreachable: a generation bump before the handler is entered is caught by
+//  the entry guard. They gate the first store (cert), the middle store
+//  (ed25519 private key), the last store (cluster TLS state) and the
+//  foreign-cert fail-closed `clear`, one per re-take guard.
 //
 
 #if DEBUG
@@ -70,12 +71,35 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         }
     }
 
+    /// A bounded variant of `waitUntilStarted`: `true` when at least `count`
+    /// `headlessLogin` calls started within `timeout`, `false` otherwise. The
+    /// latch tests use it so a missing latch guard fails as an assertion
+    /// instead of parking the stray `begin` on a gate no test releases (the
+    /// closure lens measured that mutation as an execution-allowance kill).
+    func waitForStarted(_ count: Int, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if startedCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return startedCount >= count
+    }
+
     /// Release the gate for the `index`-th `headlessLogin` call with `result`.
     func release(index: Int, with result: Result<HeadlessLoginResponse, Error>) async {
         guard gates.indices.contains(index) else {
             XCTFail("release(index: \(index)) but only \(gates.count) headlessLogin call(s) started")
             return
         }
+        scriptedResults[index] = result
+        await gates[index].release()
+    }
+
+    /// Release the `index`-th `headlessLogin` gate only when that call has
+    /// started. Unlike `release(index:with:)` this never `XCTFail`s, so a drain
+    /// path can call it unconditionally.
+    func releaseIfStarted(index: Int, with result: Result<HeadlessLoginResponse, Error>) async {
+        guard gates.indices.contains(index) else { return }
         scriptedResults[index] = result
         await gates[index].release()
     }
@@ -108,10 +132,139 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         for waiter in ready { waiter.continuation.resume() }
     }
 
-    // Not exercised by the bootstrap coordinator.
+    // MARK: - Phase-3 login (the login coordinator's per-method gates)
+
+    /// The number of `loginBegin` calls that have started.
+    private(set) var loginBeginStartedCount = 0
+    /// The number of `loginFinish` calls that have started.
+    private(set) var loginFinishStartedCount = 0
+
+    /// Scripted Phase-3 responses, used by the no-result release forms
+    /// (`releaseLoginBegin(index:)` / `releaseLoginFinish(index:)`). Seeded
+    /// from the committed fixtures so a released call returns a cert the login
+    /// coordinator can actually validate.
+    var scriptedLoginBeginResponse: LoginBeginResponse? = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+    var scriptedLoginFinishResponse: LoginFinishResponse? = MockTeleportHTTPClient.makeFixtureLoginFinishResponse()
+
+    private var loginBeginGates: [BootstrapGate] = []
+    private var loginBeginResults: [Int: Result<LoginBeginResponse, Error>] = [:]
+    private var loginBeginStartWaiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var loginFinishGates: [BootstrapGate] = []
+    private var loginFinishResults: [Int: Result<LoginFinishResponse, Error>] = [:]
+    private var loginFinishStartWaiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    /// Suspends until at least `count` `loginBegin` calls have started.
+    func waitUntilLoginBeginStarted(_ count: Int) async {
+        guard loginBeginStartedCount < count else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            loginBeginStartWaiters.append((count, continuation))
+        }
+    }
+
+    /// Suspends until at least `count` `loginFinish` calls have started.
+    func waitUntilLoginFinishStarted(_ count: Int) async {
+        guard loginFinishStartedCount < count else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            loginFinishStartWaiters.append((count, continuation))
+        }
+    }
+
+    /// A bounded variant of `waitUntilLoginBeginStarted`: `true` when at least
+    /// `count` `loginBegin` calls started within `timeout` (see
+    /// `waitForStarted` for why the latch tests need the bound).
+    func waitForLoginBeginStarted(_ count: Int, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if loginBeginStartedCount >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return loginBeginStartedCount >= count
+    }
+
+    /// Release the gate for the `index`-th `loginBegin` call with `result`.
+    func releaseLoginBegin(index: Int, with result: Result<LoginBeginResponse, Error>) async {
+        guard loginBeginGates.indices.contains(index) else {
+            XCTFail("releaseLoginBegin(index: \(index)) but only \(loginBeginGates.count) loginBegin call(s) started")
+            return
+        }
+        loginBeginResults[index] = result
+        await loginBeginGates[index].release()
+    }
+
+    /// Release the gate for the `index`-th `loginBegin` call with the scripted
+    /// response (or the committed fixture when none is scripted).
+    func releaseLoginBegin(index: Int) async {
+        await releaseLoginBegin(
+            index: index,
+            with: .success(scriptedLoginBeginResponse ?? MockTeleportHTTPClient.makeFixtureLoginBeginResponse())
+        )
+    }
+
+    /// Release the gate for the `index`-th `loginFinish` call with `result`.
+    func releaseLoginFinish(index: Int, with result: Result<LoginFinishResponse, Error>) async {
+        guard loginFinishGates.indices.contains(index) else {
+            XCTFail("releaseLoginFinish(index: \(index)) but only \(loginFinishGates.count) loginFinish call(s) started")
+            return
+        }
+        loginFinishResults[index] = result
+        await loginFinishGates[index].release()
+    }
+
+    /// Release the gate for the `index`-th `loginFinish` call with the scripted
+    /// response (or the committed fixture when none is scripted).
+    func releaseLoginFinish(index: Int) async {
+        await releaseLoginFinish(
+            index: index,
+            with: .success(scriptedLoginFinishResponse ?? MockTeleportHTTPClient.makeFixtureLoginFinishResponse())
+        )
+    }
+
+    /// Release the `index`-th `loginBegin` gate only when that call has
+    /// started, with the scripted response (or the committed fixture). Unlike
+    /// `releaseLoginBegin(index:)` this never `XCTFail`s, so a drain path can
+    /// call it unconditionally.
+    func releaseLoginBeginIfStarted(index: Int) async {
+        await releaseLoginBeginIfStarted(
+            index: index,
+            with: .success(scriptedLoginBeginResponse ?? MockTeleportHTTPClient.makeFixtureLoginBeginResponse())
+        )
+    }
+
+    /// Release the `index`-th `loginBegin` gate only when that call has started.
+    func releaseLoginBeginIfStarted(index: Int, with result: Result<LoginBeginResponse, Error>) async {
+        guard loginBeginGates.indices.contains(index) else { return }
+        loginBeginResults[index] = result
+        await loginBeginGates[index].release()
+    }
+
+    /// Release the `index`-th `loginFinish` gate only when that call has
+    /// started, with the scripted response (or the committed fixture).
+    func releaseLoginFinishIfStarted(index: Int) async {
+        await releaseLoginFinishIfStarted(
+            index: index,
+            with: .success(scriptedLoginFinishResponse ?? MockTeleportHTTPClient.makeFixtureLoginFinishResponse())
+        )
+    }
+
+    /// Release the `index`-th `loginFinish` gate only when that call has started.
+    func releaseLoginFinishIfStarted(index: Int, with result: Result<LoginFinishResponse, Error>) async {
+        guard loginFinishGates.indices.contains(index) else { return }
+        loginFinishResults[index] = result
+        await loginFinishGates[index].release()
+    }
 
     func loginBegin(baseURL: URL) async throws -> LoginBeginResponse {
-        throw HeadlessError.transport("loginBegin not scripted", code: nil)
+        let index = loginBeginStartedCount
+        let gate = BootstrapGate()
+        loginBeginGates.append(gate)
+        loginBeginStartedCount += 1
+        resumeLoginBeginStartWaiters()
+
+        await gate.wait()
+        guard let result = loginBeginResults.removeValue(forKey: index) else {
+            throw HeadlessError.transport("loginBegin not scripted", code: nil)
+        }
+        return try result.get()
     }
 
     func loginFinish(
@@ -120,7 +273,31 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         sshPubKey: Data,
         ttl: Int64
     ) async throws -> LoginFinishResponse {
-        throw HeadlessError.transport("loginFinish not scripted", code: nil)
+        let index = loginFinishStartedCount
+        let gate = BootstrapGate()
+        loginFinishGates.append(gate)
+        loginFinishStartedCount += 1
+        resumeLoginFinishStartWaiters()
+
+        await gate.wait()
+        guard let result = loginFinishResults.removeValue(forKey: index) else {
+            throw HeadlessError.transport("loginFinish not scripted", code: nil)
+        }
+        return try result.get()
+    }
+
+    private func resumeLoginBeginStartWaiters() {
+        guard !loginBeginStartWaiters.isEmpty else { return }
+        let ready = loginBeginStartWaiters.filter { $0.target <= loginBeginStartedCount }
+        loginBeginStartWaiters.removeAll { $0.target <= loginBeginStartedCount }
+        for waiter in ready { waiter.continuation.resume() }
+    }
+
+    private func resumeLoginFinishStartWaiters() {
+        guard !loginFinishStartWaiters.isEmpty else { return }
+        let ready = loginFinishStartWaiters.filter { $0.target <= loginFinishStartedCount }
+        loginFinishStartWaiters.removeAll { $0.target <= loginFinishStartedCount }
+        for waiter in ready { waiter.continuation.resume() }
     }
 }
 
@@ -136,9 +313,13 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let certGate = BootstrapGate()
     private let keyGate = BootstrapGate()
     private let tlsGate = BootstrapGate()
+    private let loginCertGate = BootstrapGate()
+    private let clearGate = BootstrapGate()
     private let gateTheFirstStore: Bool
     private let gateTheMiddleStore: Bool
     private let gateTheLastStore: Bool
+    private let gateTheLoginCertStore: Bool
+    private let gateTheClear: Bool
 
     private var certStoreStarted = false
     private var certStoreWaiters: [CheckedContinuation<Void, Never>] = []
@@ -146,22 +327,40 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private var keyStoreWaiters: [CheckedContinuation<Void, Never>] = []
     private var tlsStoreStarted = false
     private var tlsStoreWaiters: [CheckedContinuation<Void, Never>] = []
+    private var loginCertStoreStarted = false
+    private var loginCertStoreWaiters: [CheckedContinuation<Void, Never>] = []
+    private var clearStarted = false
+    private var clearWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Committed write counts (incremented only after the gate is released).
     private(set) var storedCertCount = 0
     private(set) var storedPrivateKeyCount = 0
     private(set) var storedTLSStateCount = 0
+    /// The Phase-3 login-cert write count (the login coordinator's first
+    /// store). A write already in flight when the generation changes is
+    /// allowed to land (§1.4), so tests assert on the *later* writes for the
+    /// supersession evidence.
+    private(set) var storedLoginCertCount = 0
+    /// The fail-closed `clear` count (the login/bootstrap foreign-cert
+    /// branch). A clear already in flight when the generation changes is
+    /// allowed to land (§1.4), so the discriminating assertion for the
+    /// post-`clear` re-take is the withheld terminal state.
+    private(set) var clearedCount = 0
 
     init(
         underlying: MockTeleportKeyRing,
         gateTheFirstStore: Bool = true,
         gateTheMiddleStore: Bool = false,
-        gateTheLastStore: Bool = false
+        gateTheLastStore: Bool = false,
+        gateTheLoginCertStore: Bool = false,
+        gateTheClear: Bool = false
     ) {
         self.underlying = underlying
         self.gateTheFirstStore = gateTheFirstStore
         self.gateTheMiddleStore = gateTheMiddleStore
         self.gateTheLastStore = gateTheLastStore
+        self.gateTheLoginCertStore = gateTheLoginCertStore
+        self.gateTheClear = gateTheClear
     }
 
     /// Suspends until the gated `storeBootstrapCert` has been entered.
@@ -188,6 +387,22 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         }
     }
 
+    /// Suspends until the gated `storeLoginCert` has been entered.
+    func waitUntilLoginCertStoreStarted() async {
+        guard !loginCertStoreStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            loginCertStoreWaiters.append(continuation)
+        }
+    }
+
+    /// Suspends until the gated `clear` has been entered.
+    func waitUntilClearStarted() async {
+        guard !clearStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            clearWaiters.append(continuation)
+        }
+    }
+
     func releaseCertStore() async {
         await certGate.release()
     }
@@ -198,6 +413,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func releaseTLSStore() async {
         await tlsGate.release()
+    }
+
+    func releaseLoginCertStore() async {
+        await loginCertGate.release()
+    }
+
+    func releaseClear() async {
+        await clearGate.release()
     }
 
     // MARK: - Reads (delegate)
@@ -257,6 +480,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func storeLoginCert(_ certPEM: String, validBefore: Date, for clusterId: UUID) async {
+        if gateTheLoginCertStore {
+            loginCertStoreStarted = true
+            let waiters = loginCertStoreWaiters
+            loginCertStoreWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await loginCertGate.wait()
+        }
+        storedLoginCertCount += 1
         underlying.storeLoginCert(certPEM, validBefore: validBefore, for: clusterId)
     }
 
@@ -289,6 +520,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func clear(for clusterId: UUID) async {
+        if gateTheClear {
+            clearStarted = true
+            let waiters = clearWaiters
+            clearWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await clearGate.wait()
+        }
+        clearedCount += 1
         underlying.clear(for: clusterId)
     }
 }
@@ -380,6 +619,76 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
                 cancellable?.cancel()
             }
         }
+    }
+
+    /// The coordinator-level twin of the #279 view test (TQ-4): latch the
+    /// dismissal directly while the POST is parked, release it with a success,
+    /// and assert the absence set without the view's scheduled `cancel()`
+    /// having run. The view test proves the call site fires; this proves the
+    /// latch semantics.
+    ///
+    /// Counterfactual (measured): a `latchDismissal()` that sets
+    /// `isDismissalLatched` without bumping the generation makes this test fail
+    /// on the write assertion (`storedCertCount == 1`, `state == .success`).
+    func testDismissalLatchDropsAStalePostSuccess() async {
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = GatedTeleportHTTPClient()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+        let cluster = makeCluster()
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+
+        coordinator.latchDismissal()
+        XCTAssertTrue(coordinator.isDismissalLatched)
+        coordinator.latchDismissal()  // idempotent
+
+        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await beginTask.value
+
+        XCTAssertEqual(coordinator.state, .awaitingApproval, "the latch withholds the terminal state; cancel() owns it")
+        XCTAssertEqual(store.storedCertCount, 0, "a latched dismissal must drop the stale success before any store")
+        XCTAssertEqual(store.storedPrivateKeyCount, 0)
+        XCTAssertEqual(store.storedTLSStateCount, 0)
+        XCTAssertNil(coordinator.lastBootstrapResult)
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+
+        // Terminal: a stray retry/begin after the latch is a no-op.
+        //
+        // `retry()` is awaited directly: it has no gate to park on, so a
+        // missing latch guard there fails as the assertion below (measured).
+        // `begin()` does have one, so it runs as a bounded task and the request
+        // count is asserted before it is awaited — a missing latch guard must
+        // fail as an assertion rather than park on a gate no test releases
+        // (the closure lens measured that mutation as an execution-allowance
+        // kill). The stray's own request is drained when it starts, so the
+        // re-armed flow is still caught by the assertions after the await.
+        XCTAssertTrue(coordinator.isDismissalLatched)
+        XCTAssertEqual(http.startedCount, 1)
+
+        await coordinator.retry()
+        XCTAssertEqual(
+            coordinator.state, .awaitingApproval,
+            "an unguarded retry resets to .idle before begin()'s guard early-returns"
+        )
+
+        let strayBegin = Task { await coordinator.begin(cluster: cluster) }
+        let strayStartedARequest = await http.waitForStarted(2, timeout: 0.5)
+        XCTAssertFalse(
+            strayStartedARequest,
+            "a latched coordinator must not start another POST"
+        )
+        if strayStartedARequest {
+            await http.releaseIfStarted(
+                index: 1,
+                with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse())
+            )
+        }
+        await strayBegin.value
+
+        XCTAssertEqual(http.startedCount, 1)
+        XCTAssertEqual(store.storedCertCount, 0)
     }
 
     /// A superseded `begin()` that resumes from the presenter await with a
@@ -612,6 +921,69 @@ final class TeleportBootstrapCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(coordinator.lastBootstrapResult)
         XCTAssertEqual(store.storedTLSStateCount, 0)
         XCTAssertNil(keyRing.clusterTLSState(for: cluster.id))
+    }
+
+    /// Interleave the dismissal latch while the coordinator is suspended
+    /// *inside* the foreign-cert fail-closed `clear` (the mismatched-keyID
+    /// branch). The clear started while the generation was current, so it is
+    /// allowed to land (§1.4); the post-`clear` re-take must withhold the
+    /// terminal `.failed(.unknown("Certificate user binding check failed: …"))`
+    /// so the stale rejection does not overwrite the newer state.
+    ///
+    /// Counterfactual (measured): deleting the re-take after `keyRing.clear`
+    /// makes this test fail on the state assertion (the terminal `.failed`
+    /// overwrites `.awaitingApproval`).
+    func testDismissalLatchDuringMismatchClearDoesNotOverwriteTheNewerState() async {
+        // Any user other than the fixture cert's keyID (`user-cert-ed25519`)
+        // drives `handlePostSuccess` into the foreign-cert fail-closed branch.
+        let cluster = TeleportCluster(host: "teleport.pcad.it", username: "not-the-fixture-user")
+        let keyRing = MockTeleportKeyRing()
+        // Seed the credential the fail-closed branch clears, so the
+        // post-clear `liveCertPEM` assertion is non-vacuous.
+        keyRing.seed(
+            clusterId: cluster.id,
+            fixture: MockTeleportKeyRing.Fixture(
+                hasBootstrapCert: true,
+                hasSEPKey: false,
+                certValidBefore: TeleportFixtureSupport.fixtureClock,
+                credentialID: Data(),
+                userHandle: Data(),
+                deviceName: "test-device"
+            )
+        )
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheClear: true
+        )
+        let http = GatedTeleportHTTPClient()
+        let coordinator = makeCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilStarted(1)
+        await awaitState(.awaitingApproval, on: coordinator)
+        XCTAssertNotNil(keyRing.liveCertPEM(for: cluster.id))
+
+        // The POST returns a cert that validates against the fixture keypair
+        // but carries the fixture keyID, not this cluster's user — the
+        // coordinator parks in the fail-closed `clear`.
+        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await store.waitUntilClearStarted()
+        XCTAssertEqual(store.clearedCount, 0, "the clear is parked, not committed")
+
+        // Supersede while the clear is in flight.
+        coordinator.latchDismissal()
+        XCTAssertTrue(coordinator.isDismissalLatched)
+
+        await store.releaseClear()
+        await beginTask.value
+
+        XCTAssertEqual(store.clearedCount, 1, "the in-flight clear is allowed to land (§1.4)")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id), "the clear removed the row's credential")
+        XCTAssertEqual(
+            coordinator.state, .awaitingApproval,
+            "the stale mismatch rejection must not overwrite the newer state"
+        )
     }
 }
 

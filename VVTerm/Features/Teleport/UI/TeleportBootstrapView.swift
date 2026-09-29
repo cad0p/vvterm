@@ -89,6 +89,13 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(String(localized: "Cancel")) {
                         retryTask?.cancel()
+                        // Latch before the scheduled teardown: the generation
+                        // bump lands in this MainActor turn, so an in-flight
+                        // POST continuation that has not yet passed its next
+                        // re-take cannot commit keyring state or `.success`
+                        // after the user cancelled. `cancel()` still performs
+                        // the teardown.
+                        coordinator.latchDismissal()
                         Task { await coordinator.cancel() }
                         onCancel()
                     }
@@ -107,10 +114,14 @@ struct TeleportBootstrapView<Coordinator: TeleportBootstrapCoordinating>: View {
         .onDisappear {
             retryTask?.cancel()
             // A swipe-down dismissal runs no toolbar action; if the flow still has
-            // live work, tear it down so no POST or Safari session survives the
-            // dismissed sheet. Terminal states are left alone: `.success` is the
-            // Phase-1 → Phase-2 hand-off, and a terminal `.failed` is the user's exit.
+            // live work, latch the dismissal synchronously (so a POST continuation
+            // that has not yet passed its next re-take cannot start a keyring
+            // write or commit `.success`) *before* the scheduled teardown, then
+            // tear it down so no POST or Safari session survives the dismissed
+            // sheet. Terminal states are left alone: `.success` is the Phase-1 →
+            // Phase-2 hand-off, and a terminal `.failed` is the user's exit.
             guard coordinator.state.dismissalRequiresTeardown else { return }
+            coordinator.latchDismissal()
             Task { await coordinator.cancel() }
         }
     }
@@ -400,4 +411,5 @@ private final class PreviewBootstrapCoordinator: ObservableObject, TeleportBoots
     func begin(cluster: TeleportCluster) async {}
     func cancel() async {}
     func retry() async {}
+    func latchDismissal() {}
 }

@@ -161,6 +161,10 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
         await begin(cluster: cluster)
     }
 
+    /// The mock scripts no real continuation races; the latch is the real
+    /// coordinator's concern.
+    func latchDismissal() {}
+
     /// Build a minimal `BootstrapResult` for the success scenarios. The
     /// registration mock ignores the contents (it only asserts state
     /// transitions), but the type is required by the protocol + the view's

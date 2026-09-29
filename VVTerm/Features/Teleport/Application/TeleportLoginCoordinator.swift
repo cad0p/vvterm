@@ -89,9 +89,50 @@ protocol TeleportLoginCoordinating: AnyObject, ObservableObject {
     /// - Parameter cluster: the Teleport cluster config.
     func begin(cluster: TeleportCluster) async
 
-    /// Cancel an in-flight login. Cancels the Face ID prompt (if showing)
-    /// + the HTTP call (if in flight).
+    /// Cancel an in-flight login: bump the request generation and write the
+    /// terminal `.failed(.faceIDCancelled)` state. It does NOT cancel the
+    /// in-flight `login/begin`/`login/finish` request and cannot dismiss a live
+    /// Face ID prompt (`SecKeyCreateSignature` is uninterruptible); the bump
+    /// bounds the *writes*, not the flow. The scheduled teardown the view runs
+    /// after `latchDismissal()` closes the dismissal window.
     func cancel() async
+
+    /// Latch a dismissal synchronously, before the async teardown is scheduled.
+    ///
+    /// The generation bump lands in the same MainActor turn as the view's
+    /// `.onDisappear`/Cancel action, so a continuation that has not yet passed
+    /// its next re-take cannot start a keyring write or a terminal `.success`
+    /// after the user dismissed the flow. A write already in flight is not
+    /// stopped, and `cancel()` still performs the teardown; this only closes
+    /// the window between the dismissal and the teardown task starting.
+    ///
+    /// Declared without a protocol-extension default so every conformer must
+    /// decide explicitly (a default no-op would let a future conformer silently
+    /// not latch).
+    func latchDismissal()
+}
+
+extension TeleportLoginState {
+    /// Whether dismissing the login sheet must tear the flow down.
+    ///
+    /// `.success` is the Phase-3 hand-off (the sheet shows the host-login step
+    /// and Continue persists the row), so a dismissal then must not cancel the
+    /// issued cert. A `.failed` state is gate-false: the paths that produce it
+    /// have already latched/run `cancel()` (the toolbar Cancel, a Face ID
+    /// cancel surfacing as a `SignerError`), and every other `.failed`
+    /// producer returns from `begin` immediately afterwards. That holds even
+    /// though the cancel-written `.failed` is reached while
+    /// `login/begin`/`login/finish` may still be in flight — the latch, not
+    /// this gate, is what drops those continuations. Every in-flight state
+    /// does: the `begin` task is still running and (across the HTTP awaits)
+    /// can still write after the sheet is gone. Exhaustive switch with no
+    /// `default`, so a future state cannot silently mis-map.
+    var dismissalRequiresTeardown: Bool {
+        switch self {
+        case .idle, .awaitingFaceID, .fetchingCert: return true
+        case .success, .failed: return false
+        }
+    }
 }
 
 @MainActor
@@ -126,6 +167,20 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// The clock used for the issued-certificate validity checks.
     private let now: () -> Date
 
+    /// Monotonic token identifying the current login attempt. Bumped by
+    /// `begin` and `cancel` (and by the dismissal latch), so a continuation
+    /// from an older attempt cannot write state or keyring state after a newer
+    /// attempt — or a cancel — took over. The #222/#239 shape, applied to the
+    /// login coordinator.
+    private var requestGeneration = 0
+
+    /// Whether a dismissal has been latched for this flow. Semantic first (it
+    /// makes `begin` terminal) and the ordering point the wiring tests await.
+    /// Concrete-only (`private(set)`, no protocol getter): only
+    /// `latchDismissal()` is called through the existential, and the tests hold
+    /// the concrete type.
+    private(set) var isDismissalLatched = false
+
     private let logger: Logger
 
     init(
@@ -147,18 +202,32 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     }
 
     func begin(cluster: TeleportCluster) async {
+        // Terminal after a dismissal latch: a stray retry after the sheet was
+        // dismissed must not re-arm the flow (the latch is per-flow and never
+        // reset, because a coordinator is one sheet and a fresh presentation
+        // gets a fresh coordinator).
+        guard !isDismissalLatched else { return }
+        // Bump the generation so a continuation from a previous attempt cannot
+        // write state this attempt owns.
+        requestGeneration &+= 1
+        let generation = requestGeneration
         state = .idle
         logger.info("beginning login for cluster \(cluster.host, privacy: .private(mask: .hash))")
 
         // ── Load the registered SEP key + userHandle ────────────────────
         // The credentialID + userHandle were persisted at Phase 2. The SEP
         // key itself is in the Secure Enclave (loaded via loadKey).
-        guard let credentialID = await keyRing.registeredCredentialID(for: cluster.id) else {
+        let registeredCredentialID = await keyRing.registeredCredentialID(for: cluster.id)
+        // A `cancel()`/newer `begin()` during the read owns the state now; this
+        // continuation must not use the result.
+        guard generation == requestGeneration else { return }
+        guard let credentialID = registeredCredentialID else {
             logger.error("no registered SEP key for cluster \(cluster.id.uuidString, privacy: .public)")
             state = .failed(.noRegisteredKey)
             return
         }
         let userHandle = await keyRing.registeredUserHandle(for: cluster.id)
+        guard generation == requestGeneration else { return }
         if userHandle == nil {
             logger.error("no registered userHandle for cluster \(cluster.id.uuidString, privacy: .public)")
             state = .failed(.noRegisteredKey)
@@ -190,7 +259,14 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         let beginResp: LoginBeginResponse
         do {
             beginResp = try await httpClient.loginBegin(baseURL: baseURL)
+            // A `cancel()`/newer `begin()` during the request owns the state
+            // now; this continuation must not use the response.
+            guard generation == requestGeneration else { return }
         } catch {
+            // The catch runs before any post-await guard, so the re-take must
+            // be its first statement: a stale continuation must not write
+            // `.failed` over the newer attempt's state.
+            guard generation == requestGeneration else { return }
             // A wire-derived failure can carry the raw server body in either
             // error family — `HeadlessError.http` or the live client's
             // `GRPCError.http2("<op> HTTP <status>: <body>")`. Log the
@@ -279,7 +355,14 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
                 sshPubKey: sshPubKeyBytes,
                 ttl: ttl
             )
+            // A `cancel()`/newer `begin()` during the request owns the state
+            // now; this continuation must not use the response.
+            guard generation == requestGeneration else { return }
         } catch {
+            // The catch runs before any post-await guard, so the re-take must
+            // be its first statement: a stale continuation must not write
+            // `.failed` over the newer attempt's state.
+            guard generation == requestGeneration else { return }
             // Same class as `login/begin` above.
             logger.error("login/finish failed: \(TeleportErrorRedaction.wireFailure(error), privacy: .public)")
             state = .failed(mapHTTPError(error))
@@ -335,6 +418,10 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
                     "issued certificate keyID does not match the configured Teleport user for cluster \(cluster.id.uuidString, privacy: .public) — rejecting and clearing the credential"
                 )
                 await keyRing.clear(for: cluster.id)
+                // The clear is already in flight when a supersession lands, so
+                // it is allowed to commit (§1.4); only the terminal state is
+                // withheld.
+                guard generation == requestGeneration else { return }
                 state = .failed(.server("Certificate user binding check failed: the certificate does not belong to this Teleport user"))
                 return
             }
@@ -359,11 +446,13 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // capture remains TOFU, an accepted risk.
         if let hostSigners = finishResp.hostSigners, let first = hostSigners.first {
             let pinnedClusterName = await keyRing.clusterTLSState(for: cluster.id)?.clusterName
+            guard generation == requestGeneration else { return }
             if TeleportHostKeyUpdatePolicy.matchesPinnedCluster(
                 domainName: first.domainName,
                 pinnedClusterName: pinnedClusterName
             ) {
                 let update = await keyRing.updateClusterHostKeys(first.checkingKeys, for: cluster.id)
+                guard generation == requestGeneration else { return }
                 if update == .rejectedWouldDropPinnedKeys {
                     logger.error(
                         "Host CA key refresh rejected for cluster \(cluster.id.uuidString, privacy: .public) — pinned anchors kept; re-bootstrap required"
@@ -380,16 +469,25 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // Also store the ed25519 private key — the SSHClient cert seam
         // fetches it via `liveEd25519PrivateKey` to feed libssh2.
         await keyRing.storeLoginCert(certPEM, validBefore: certValidBefore, for: cluster.id)
+        // The login cert is already in flight when a supersession lands, so it
+        // is allowed to commit (§1.4); only the later writes are withheld.
+        guard generation == requestGeneration else { return }
         if let privKeyData = sshPrivateKeyPEM.data(using: .utf8) {
             do {
                 try await keyRing.storeEd25519PrivateKey(privKeyData, for: cluster.id)
             } catch {
+                // Logs only (no state write), so the re-take lives after the
+                // whole `do/catch` below — it covers a superseded throw too.
                 logger.error("failed to store ed25519 private key: \(error.localizedDescription, privacy: .public)")
                 // Non-fatal — the cert is stored, so readiness is correct.
                 // The SSH connect will fail with teleportCertMissing, which
                 // surfaces the right UX (re-login).
             }
         }
+        // Re-take after the whole `do/catch`: a superseded attempt that
+        // succeeded *or* threw at the key store must not fall through to the
+        // terminal state.
+        guard generation == requestGeneration else { return }
         logger.info("login succeeded — cert \(certPEM.count) chars, valid until \(certValidBefore.debugDescription, privacy: .public)")
 
         state = .success(
@@ -400,11 +498,27 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
 
     func cancel() async {
         logger.info("cancelling login")
+        // Bump before the state write so a stale continuation cannot overwrite
+        // `.faceIDCancelled`.
+        requestGeneration &+= 1
         // There's no way to cancel a blocking SecKeyCreateSignature from
         // outside (the LAContext is internal to the signer). The user
         // cancels via the Face ID prompt's Cancel button, which surfaces
         // as a SignerError → .faceIDCancelled. We just reset the state.
+        //
+        // This does NOT cancel the in-flight `login/begin`/`login/finish`
+        // request and cannot dismiss a live Face ID prompt; the generation
+        // bump bounds the *writes*, not the flow.
         state = .failed(.faceIDCancelled)
+    }
+
+    /// Latch a dismissal synchronously, before the async teardown is
+    /// scheduled. Idempotent (the toolbar Cancel followed by `.onDisappear`
+    /// double-latches harmlessly) and per-flow (never reset).
+    func latchDismissal() {
+        guard !isDismissalLatched else { return }
+        requestGeneration &+= 1
+        isDismissalLatched = true
     }
 
     // MARK: - Error mapping
