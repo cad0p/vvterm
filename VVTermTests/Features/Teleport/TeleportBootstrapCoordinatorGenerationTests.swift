@@ -108,10 +108,93 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         for waiter in ready { waiter.continuation.resume() }
     }
 
-    // Not exercised by the bootstrap coordinator.
+    // MARK: - Phase-3 login (the login coordinator's per-method gates)
+
+    /// The number of `loginBegin` calls that have started.
+    private(set) var loginBeginStartedCount = 0
+    /// The number of `loginFinish` calls that have started.
+    private(set) var loginFinishStartedCount = 0
+
+    /// Scripted Phase-3 responses, used by the no-result release forms
+    /// (`releaseLoginBegin(index:)` / `releaseLoginFinish(index:)`). Seeded
+    /// from the committed fixtures so a released call returns a cert the login
+    /// coordinator can actually validate.
+    var scriptedLoginBeginResponse: LoginBeginResponse? = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+    var scriptedLoginFinishResponse: LoginFinishResponse? = MockTeleportHTTPClient.makeFixtureLoginFinishResponse()
+
+    private var loginBeginGates: [BootstrapGate] = []
+    private var loginBeginResults: [Int: Result<LoginBeginResponse, Error>] = [:]
+    private var loginBeginStartWaiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var loginFinishGates: [BootstrapGate] = []
+    private var loginFinishResults: [Int: Result<LoginFinishResponse, Error>] = [:]
+    private var loginFinishStartWaiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    /// Suspends until at least `count` `loginBegin` calls have started.
+    func waitUntilLoginBeginStarted(_ count: Int) async {
+        guard loginBeginStartedCount < count else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            loginBeginStartWaiters.append((count, continuation))
+        }
+    }
+
+    /// Suspends until at least `count` `loginFinish` calls have started.
+    func waitUntilLoginFinishStarted(_ count: Int) async {
+        guard loginFinishStartedCount < count else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            loginFinishStartWaiters.append((count, continuation))
+        }
+    }
+
+    /// Release the gate for the `index`-th `loginBegin` call with `result`.
+    func releaseLoginBegin(index: Int, with result: Result<LoginBeginResponse, Error>) async {
+        guard loginBeginGates.indices.contains(index) else {
+            XCTFail("releaseLoginBegin(index: \(index)) but only \(loginBeginGates.count) loginBegin call(s) started")
+            return
+        }
+        loginBeginResults[index] = result
+        await loginBeginGates[index].release()
+    }
+
+    /// Release the gate for the `index`-th `loginBegin` call with the scripted
+    /// response (or the committed fixture when none is scripted).
+    func releaseLoginBegin(index: Int) async {
+        await releaseLoginBegin(
+            index: index,
+            with: .success(scriptedLoginBeginResponse ?? MockTeleportHTTPClient.makeFixtureLoginBeginResponse())
+        )
+    }
+
+    /// Release the gate for the `index`-th `loginFinish` call with `result`.
+    func releaseLoginFinish(index: Int, with result: Result<LoginFinishResponse, Error>) async {
+        guard loginFinishGates.indices.contains(index) else {
+            XCTFail("releaseLoginFinish(index: \(index)) but only \(loginFinishGates.count) loginFinish call(s) started")
+            return
+        }
+        loginFinishResults[index] = result
+        await loginFinishGates[index].release()
+    }
+
+    /// Release the gate for the `index`-th `loginFinish` call with the scripted
+    /// response (or the committed fixture when none is scripted).
+    func releaseLoginFinish(index: Int) async {
+        await releaseLoginFinish(
+            index: index,
+            with: .success(scriptedLoginFinishResponse ?? MockTeleportHTTPClient.makeFixtureLoginFinishResponse())
+        )
+    }
 
     func loginBegin(baseURL: URL) async throws -> LoginBeginResponse {
-        throw HeadlessError.transport("loginBegin not scripted", code: nil)
+        let index = loginBeginStartedCount
+        let gate = BootstrapGate()
+        loginBeginGates.append(gate)
+        loginBeginStartedCount += 1
+        resumeLoginBeginStartWaiters()
+
+        await gate.wait()
+        guard let result = loginBeginResults.removeValue(forKey: index) else {
+            throw HeadlessError.transport("loginBegin not scripted", code: nil)
+        }
+        return try result.get()
     }
 
     func loginFinish(
@@ -120,7 +203,31 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
         sshPubKey: Data,
         ttl: Int64
     ) async throws -> LoginFinishResponse {
-        throw HeadlessError.transport("loginFinish not scripted", code: nil)
+        let index = loginFinishStartedCount
+        let gate = BootstrapGate()
+        loginFinishGates.append(gate)
+        loginFinishStartedCount += 1
+        resumeLoginFinishStartWaiters()
+
+        await gate.wait()
+        guard let result = loginFinishResults.removeValue(forKey: index) else {
+            throw HeadlessError.transport("loginFinish not scripted", code: nil)
+        }
+        return try result.get()
+    }
+
+    private func resumeLoginBeginStartWaiters() {
+        guard !loginBeginStartWaiters.isEmpty else { return }
+        let ready = loginBeginStartWaiters.filter { $0.target <= loginBeginStartedCount }
+        loginBeginStartWaiters.removeAll { $0.target <= loginBeginStartedCount }
+        for waiter in ready { waiter.continuation.resume() }
+    }
+
+    private func resumeLoginFinishStartWaiters() {
+        guard !loginFinishStartWaiters.isEmpty else { return }
+        let ready = loginFinishStartWaiters.filter { $0.target <= loginFinishStartedCount }
+        loginFinishStartWaiters.removeAll { $0.target <= loginFinishStartedCount }
+        for waiter in ready { waiter.continuation.resume() }
     }
 }
 
@@ -136,9 +243,11 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let certGate = BootstrapGate()
     private let keyGate = BootstrapGate()
     private let tlsGate = BootstrapGate()
+    private let loginCertGate = BootstrapGate()
     private let gateTheFirstStore: Bool
     private let gateTheMiddleStore: Bool
     private let gateTheLastStore: Bool
+    private let gateTheLoginCertStore: Bool
 
     private var certStoreStarted = false
     private var certStoreWaiters: [CheckedContinuation<Void, Never>] = []
@@ -146,22 +255,31 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private var keyStoreWaiters: [CheckedContinuation<Void, Never>] = []
     private var tlsStoreStarted = false
     private var tlsStoreWaiters: [CheckedContinuation<Void, Never>] = []
+    private var loginCertStoreStarted = false
+    private var loginCertStoreWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Committed write counts (incremented only after the gate is released).
     private(set) var storedCertCount = 0
     private(set) var storedPrivateKeyCount = 0
     private(set) var storedTLSStateCount = 0
+    /// The Phase-3 login-cert write count (the login coordinator's first
+    /// store). A write already in flight when the generation changes is
+    /// allowed to land (§1.4), so tests assert on the *later* writes for the
+    /// supersession evidence.
+    private(set) var storedLoginCertCount = 0
 
     init(
         underlying: MockTeleportKeyRing,
         gateTheFirstStore: Bool = true,
         gateTheMiddleStore: Bool = false,
-        gateTheLastStore: Bool = false
+        gateTheLastStore: Bool = false,
+        gateTheLoginCertStore: Bool = false
     ) {
         self.underlying = underlying
         self.gateTheFirstStore = gateTheFirstStore
         self.gateTheMiddleStore = gateTheMiddleStore
         self.gateTheLastStore = gateTheLastStore
+        self.gateTheLoginCertStore = gateTheLoginCertStore
     }
 
     /// Suspends until the gated `storeBootstrapCert` has been entered.
@@ -188,6 +306,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         }
     }
 
+    /// Suspends until the gated `storeLoginCert` has been entered.
+    func waitUntilLoginCertStoreStarted() async {
+        guard !loginCertStoreStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            loginCertStoreWaiters.append(continuation)
+        }
+    }
+
     func releaseCertStore() async {
         await certGate.release()
     }
@@ -198,6 +324,10 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func releaseTLSStore() async {
         await tlsGate.release()
+    }
+
+    func releaseLoginCertStore() async {
+        await loginCertGate.release()
     }
 
     // MARK: - Reads (delegate)
@@ -257,6 +387,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func storeLoginCert(_ certPEM: String, validBefore: Date, for clusterId: UUID) async {
+        if gateTheLoginCertStore {
+            loginCertStoreStarted = true
+            let waiters = loginCertStoreWaiters
+            loginCertStoreWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await loginCertGate.wait()
+        }
+        storedLoginCertCount += 1
         underlying.storeLoginCert(certPEM, validBefore: validBefore, for: clusterId)
     }
 
