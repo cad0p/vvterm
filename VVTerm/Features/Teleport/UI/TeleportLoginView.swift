@@ -98,6 +98,13 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(String(localized: "Cancel")) {
+                        // Latch before the scheduled teardown: the latch's
+                        // generation bump lands in this MainActor turn, so a
+                        // continuation that has not yet passed its next re-take
+                        // cannot start a keyring write or a terminal .success
+                        // after the user cancelled. `cancel()` still runs the
+                        // teardown.
+                        coordinator.latchDismissal()
                         Task { await coordinator.cancel() }
                         onCancel()
                     }
@@ -119,6 +126,18 @@ struct TeleportLoginView<Coordinator: TeleportLoginCoordinating>: View {
                     stored: storedHostLogin
                 )
             }
+        }
+        .onDisappear {
+            // A swipe-down dismissal (iOS) / close (macOS) runs no toolbar
+            // action; if the flow still has live work, latch the dismissal
+            // synchronously (so a continuation that has not yet passed its
+            // next re-take cannot start a keyring write or a terminal
+            // .success) before the scheduled teardown. Terminal states are
+            // left alone: `.success` is the host-login hand-off, and a
+            // terminal `.failed` is the user's exit.
+            guard coordinator.state.dismissalRequiresTeardown else { return }
+            coordinator.latchDismissal()
+            Task { await coordinator.cancel() }
         }
     }
 
@@ -480,6 +499,7 @@ private final class PreviewLoginCoordinator: ObservableObject, TeleportLoginCoor
 
     func begin(cluster: TeleportCluster) async {}
     func cancel() async {}
+    func latchDismissal() {}
 }
 
 // MARK: - Certificate validity copy formatting

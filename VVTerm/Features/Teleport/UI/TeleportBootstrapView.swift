@@ -400,4 +400,5 @@ private final class PreviewBootstrapCoordinator: ObservableObject, TeleportBoots
     func begin(cluster: TeleportCluster) async {}
     func cancel() async {}
     func retry() async {}
+    func latchDismissal() {}
 }

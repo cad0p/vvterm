@@ -250,6 +250,50 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
     }
 
+    /// The dismissal latch drops a parked continuation and is terminal: after
+    /// `latchDismissal()` a stray `begin()` must not re-arm the flow.
+    ///
+    /// This is a coordinator-level test: the view call sites are pinned
+    /// separately (`TeleportLoginDismissalWiringTests`).
+    ///
+    /// Counterfactual (measured): a `latchDismissal()` that sets
+    /// `isDismissalLatched` without bumping the generation makes this test
+    /// fail with `storedLoginCertCount == 1` / `.success`.
+    func testLatchDismissalDropsAParkedSuccessAndIsTerminal() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = GatedTeleportHTTPClient()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await http.waitUntilLoginBeginStarted(1)
+        await http.releaseLoginBegin(index: 0)
+        await http.waitUntilLoginFinishStarted(1)
+
+        coordinator.latchDismissal()
+        XCTAssertTrue(coordinator.isDismissalLatched)
+        coordinator.latchDismissal()  // idempotent
+
+        await http.releaseLoginFinish(index: 0, with: .success(fixtureLoginFinishResponse()))
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state, .fetchingCert,
+            "the latch withholds the terminal state; cancel() (the call site's second half) owns it"
+        )
+        XCTAssertEqual(store.storedLoginCertCount, 0)
+        XCTAssertEqual(store.storedPrivateKeyCount, 0)
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+
+        // Terminal: a stray begin after the latch is a no-op (no re-arm, no
+        // generation bump, no new request).
+        await coordinator.begin(cluster: cluster)
+        XCTAssertEqual(http.loginBeginStartedCount, 1)
+        XCTAssertEqual(http.loginFinishStartedCount, 1)
+        XCTAssertEqual(store.storedLoginCertCount, 0)
+    }
+
     /// A stale `loginBegin` *failure* must not overwrite the newer attempt's
     /// state: the `catch` writes `.failed(...)` before any post-await guard, so
     /// the guard must be the catch's first statement.

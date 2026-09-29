@@ -133,6 +133,20 @@ protocol TeleportBootstrapCoordinating: AnyObject, ObservableObject {
     /// resets state to `.idle`, then re-runs `begin(cluster:)` with the
     /// cluster of the last `begin` call.
     func retry() async
+
+    /// Latch a dismissal synchronously, before the async teardown is scheduled.
+    ///
+    /// The generation bump lands in the same MainActor turn as the view's
+    /// `.onDisappear`/Cancel action, so a continuation that has not yet passed
+    /// its next re-take cannot start a keyring write or a terminal `.success`
+    /// after the user dismissed the flow. A write already in flight is not
+    /// stopped, and `cancel()` still performs the teardown; this only closes
+    /// the window between the dismissal and the teardown task starting.
+    ///
+    /// Declared without a protocol-extension default so every conformer must
+    /// decide explicitly (a default no-op would let a future conformer silently
+    /// not latch).
+    func latchDismissal()
 }
 
 @MainActor
@@ -180,6 +194,13 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     /// `begin`, `cancel` and `retry`, so a continuation from an older POST
     /// cannot write state after a newer attempt (or a cancel) took over.
     private var requestGeneration = 0
+
+    /// Whether a dismissal has been latched for this flow. Semantic first (it
+    /// makes `begin`/`retry` terminal) and the ordering point the wiring tests
+    /// await. Concrete-only (`private(set)`, no protocol getter): only
+    /// `latchDismissal()` is called through the existential, and the tests hold
+    /// the concrete type.
+    private(set) var isDismissalLatched = false
 
     /// The ephemeral TLS keypair generated for this bootstrap. Kept alive
     /// for Phase 2 (the gRPC client needs the SecKey + PEM cert for mTLS).
@@ -241,6 +262,11 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
     }
 
     func begin(cluster: TeleportCluster) async {
+        // Terminal after a dismissal latch: a stray `begin`/`retry` after the
+        // sheet was dismissed must not re-arm the flow (the latch is per-flow
+        // and never reset, because a coordinator is one sheet and a fresh
+        // presentation gets a fresh coordinator).
+        guard !isDismissalLatched else { return }
         // Reset any prior state, and bump the generation so a continuation
         // from a previous attempt cannot write state this attempt owns.
         requestGeneration &+= 1
@@ -390,7 +416,22 @@ final class TeleportBootstrapCoordinator: ObservableObject, TeleportBootstrapCoo
         state = .failed(.userCancelled)
     }
 
+    /// Latch a dismissal synchronously, before the async teardown is
+    /// scheduled. Idempotent (the toolbar Cancel followed by `.onDisappear`
+    /// double-latches harmlessly) and per-flow (never reset). The bump is what
+    /// makes the dismissal window fail closed: a POST continuation that has not
+    /// yet passed its next re-take cannot start a keyring write or commit
+    /// `.success`. A store already in flight is allowed to land (§1.4).
+    func latchDismissal() {
+        guard !isDismissalLatched else { return }
+        requestGeneration &+= 1
+        isDismissalLatched = true
+    }
+
     func retry() async {
+        // Terminal after a dismissal latch: the sheet is gone, so a retry must
+        // not restart the flow.
+        guard !isDismissalLatched else { return }
         logger.info("retrying bootstrap")
         requestGeneration &+= 1
         let generation = requestGeneration

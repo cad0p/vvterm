@@ -92,6 +92,39 @@ protocol TeleportLoginCoordinating: AnyObject, ObservableObject {
     /// Cancel an in-flight login. Cancels the Face ID prompt (if showing)
     /// + the HTTP call (if in flight).
     func cancel() async
+
+    /// Latch a dismissal synchronously, before the async teardown is scheduled.
+    ///
+    /// The generation bump lands in the same MainActor turn as the view's
+    /// `.onDisappear`/Cancel action, so a continuation that has not yet passed
+    /// its next re-take cannot start a keyring write or a terminal `.success`
+    /// after the user dismissed the flow. A write already in flight is not
+    /// stopped, and `cancel()` still performs the teardown; this only closes
+    /// the window between the dismissal and the teardown task starting.
+    ///
+    /// Declared without a protocol-extension default so every conformer must
+    /// decide explicitly (a default no-op would let a future conformer silently
+    /// not latch).
+    func latchDismissal()
+}
+
+extension TeleportLoginState {
+    /// Whether dismissing the login sheet must tear the flow down.
+    ///
+    /// `.success` is the Phase-3 hand-off (the sheet shows the host-login step
+    /// and Continue persists the row), so a dismissal then must not cancel the
+    /// issued cert. A `.failed` state is the terminal end of the `begin` task,
+    /// and the Face-ID-cancel path has already run `cancel()`; neither
+    /// schedules a teardown. Every in-flight state does: the `begin` task is
+    /// still running and (across the HTTP awaits) can still write after the
+    /// sheet is gone. Exhaustive switch with no `default`, so a future state
+    /// cannot silently mis-map.
+    var dismissalRequiresTeardown: Bool {
+        switch self {
+        case .idle, .awaitingFaceID, .fetchingCert: return true
+        case .success, .failed: return false
+        }
+    }
 }
 
 @MainActor
@@ -133,6 +166,13 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     /// login coordinator.
     private var requestGeneration = 0
 
+    /// Whether a dismissal has been latched for this flow. Semantic first (it
+    /// makes `begin` terminal) and the ordering point the wiring tests await.
+    /// Concrete-only (`private(set)`, no protocol getter): only
+    /// `latchDismissal()` is called through the existential, and the tests hold
+    /// the concrete type.
+    private(set) var isDismissalLatched = false
+
     private let logger: Logger
 
     init(
@@ -154,6 +194,11 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
     }
 
     func begin(cluster: TeleportCluster) async {
+        // Terminal after a dismissal latch: a stray retry after the sheet was
+        // dismissed must not re-arm the flow (the latch is per-flow and never
+        // reset, because a coordinator is one sheet and a fresh presentation
+        // gets a fresh coordinator).
+        guard !isDismissalLatched else { return }
         // Bump the generation so a continuation from a previous attempt cannot
         // write state this attempt owns.
         requestGeneration &+= 1
@@ -452,7 +497,20 @@ final class TeleportLoginCoordinator: ObservableObject, TeleportLoginCoordinatin
         // outside (the LAContext is internal to the signer). The user
         // cancels via the Face ID prompt's Cancel button, which surfaces
         // as a SignerError → .faceIDCancelled. We just reset the state.
+        //
+        // This does NOT cancel the in-flight `login/begin`/`login/finish`
+        // request and cannot dismiss a live Face ID prompt; the generation
+        // bump bounds the *writes*, not the flow.
         state = .failed(.faceIDCancelled)
+    }
+
+    /// Latch a dismissal synchronously, before the async teardown is
+    /// scheduled. Idempotent (the toolbar Cancel followed by `.onDisappear`
+    /// double-latches harmlessly) and per-flow (never reset).
+    func latchDismissal() {
+        guard !isDismissalLatched else { return }
+        requestGeneration &+= 1
+        isDismissalLatched = true
     }
 
     // MARK: - Error mapping
