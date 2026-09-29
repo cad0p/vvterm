@@ -6,13 +6,15 @@
 //  Source pins for issue #296: the cert and its paired ed25519 private key
 //  must be written as one atomic pair.
 //
-//  Why source pins: the production `TeleportKeyRing` keychain calls have no
-//  failure-injection seam that reaches the `SecItem*` path, and the pair's
-//  atomicity is a *shape* property (one non-suspending body, key-first) rather
-//  than a value — the coordinator-level T1 tests use a suspension-capable
-//  conformer, and T4's injectable keychain-write seam covers the failure
-//  direction. These pins are the structural tripwires over the three
-//  production files.
+//  Why source pins: the pair's atomicity is a *shape* property (one
+//  non-suspending body, key-first) rather than a value — the coordinator-level
+//  T1 tests use a suspension-capable conformer. T4's injectable
+//  keychain-write seam covers the pair body's failure propagation, but it
+//  *replaces* the real `SecItem*` body: pin 4 guards the production writer
+//  (update-first, non-destructive), and the behavioural test in
+//  `TeleportCredentialStoreTests` (`realPairWriteUpdatesTheSeededKeychainItemInPlace`)
+//  measures it against a seeded keychain item. These pins are the structural
+//  tripwires over the production files.
 //
 //  FORMATTING HEURISTIC, NOT A PROOF: a pin is defeated by a rename, an alias,
 //  a hoisted helper, a multi-line call, or a call inside a string literal.
@@ -283,7 +285,24 @@ struct TeleportCredentialPairPinsTests {
 
         // Key-first ordering: the keychain write precedes the record commit,
         // so a failed key write cannot leave the record pointing at a cert
-        // whose key is gone.
+        // whose key is gone. G2: exact-occurrence counts first, so a
+        // duplicated write/commit inside the body reddens the pin instead of
+        // silently satisfying the first-match range below.
+        #expect(
+            Self.occurrences(of: "keychainWriter(privateKeyPEM", in: text, range: body).count == 1,
+            "the pair body must write the key exactly once"
+        )
+        #expect(
+            Self.occurrences(of: "credentials[clusterId] = cred", in: text, range: body).count == 1,
+            "the pair body must commit the record exactly once"
+        )
+        // G7: the commit's certValidBefore assignment is part of the pair
+        // shape — a record committed without it points at a cert whose
+        // validity is unknown.
+        #expect(
+            text[body].contains("cred.certValidBefore = validBefore"),
+            "the record commit must write the cert's validBefore"
+        )
         let keyWrite = try #require(
             text.range(of: "keychainWriter(privateKeyPEM", range: body),
             "the pair body must write the key through the keychain seam"
@@ -321,6 +340,58 @@ struct TeleportCredentialPairPinsTests {
         #expect(Self.occurrences(of: "storeLoginCert(", in: text, range: body).isEmpty)
         #expect(Self.occurrences(of: "storeBootstrapCert(", in: text, range: body).isEmpty)
         #expect(Self.occurrences(of: "storeEd25519PrivateKey(", in: text, range: body).isEmpty)
+    }
+
+    /// Pin 4 (F2): the real ed25519 keychain write is `SecItemUpdate`-first and
+    /// never deletes the prior item. Body-scoped because `clear()` (same file)
+    /// also contains `SecItemDelete(`, and every writer failure must be
+    /// fail-closed (throw) rather than destructive.
+    ///
+    /// Defeat list (same as the other pins): a rename, an alias, a hoisted
+    /// helper, a multi-line call, or a call inside a string literal defeats the
+    /// token scan. Counterfactual hook: `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`
+    /// (see the file header).
+    @Test
+    func testKeyRingRealKeychainWriteIsUpdateFirstAndNonDestructive() throws {
+        let text = Self.strippingComments(try source("VVTerm/Features/Teleport/Application/TeleportKeyRing.swift"))
+
+        let declaration = try #require(
+            text.range(of: "private static func writeEd25519PrivateKeyToKeychain("),
+            "TeleportKeyRing must keep the real ed25519 keychain writer"
+        )
+        let body = try Self.bracedBlock(after: declaration, in: text)
+
+        // Positive controls: the resolved span is the writer body, not a
+        // nested block or the wrong declaration.
+        #expect(text[body].contains("kSecClassGenericPassword"), "the resolved span must be the keychain writer body")
+        #expect(text[body].contains("TeleportPackageError.keychain("), "the resolved span must be the writer's throw path")
+
+        #expect(
+            !text[body].contains("SecItemDelete("),
+            "the ed25519 write must never delete the prior item (clear()'s delete is outside this body)"
+        )
+        #expect(text[body].contains("SecItemUpdate("), "the update-first shape is the non-destructive property")
+
+        let notFound = try #require(
+            text.range(of: "case errSecItemNotFound", range: body),
+            "the add must be gated on the update's not-found status"
+        )
+        let add = try #require(
+            text.range(of: "SecItemAdd(", range: body),
+            "the writer must add only when no item exists"
+        )
+        #expect(
+            notFound.lowerBound < add.lowerBound,
+            "the SecItemAdd( must come after the case errSecItemNotFound gate"
+        )
+        #expect(
+            Self.occurrences(of: "SecItemAdd(", in: text, range: body).count == 1,
+            "the writer must add the item exactly once"
+        )
+        #expect(
+            Self.occurrences(of: "SecItemUpdate(", in: text, range: body).count == 1,
+            "the writer must update the item exactly once (no delete/retry loop)"
+        )
     }
 }
 

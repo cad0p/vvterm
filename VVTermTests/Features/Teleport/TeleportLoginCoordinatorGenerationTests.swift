@@ -17,12 +17,16 @@
 //  Guard coverage (so a mutation run is not misread): tests 1/2/3 cover the
 //  re-take after `loginFinish` (test 2 additionally covers that site's
 //  catch-path guard), test 4 covers the re-take after the atomic pair store,
-//  and test 6 covers `loginBegin`'s catch-path guard. The guards after
-//  `registeredCredentialID`, `registeredUserHandle`, `keyRing.clear`,
-//  `clusterTLSState` and `updateClusterHostKeys` are untested-by-design: the
-//  production `TeleportKeyRing` witness cannot suspend, and the fixture login
-//  response sets `hostSigners: nil` so the refresh block is skipped. They stay
-//  as future-proofing against a suspension-capable store.
+//  and test 6 covers `loginBegin`'s catch-path guard. The D4 section covers
+//  the helper's stored-cert user-binding gate (F1), the typed no-record
+//  mapping (D3) and its post-read re-take, plus the `privKeyData == nil`
+//  branch (unreachable in production; driven through the injected encoder).
+//  The guards after `registeredCredentialID`, `registeredUserHandle`,
+//  `keyRing.clear`, `clusterTLSState` and `updateClusterHostKeys` are
+//  untested-by-design: the production `TeleportKeyRing` witness cannot
+//  suspend, and the fixture login response sets `hostSigners: nil` so the
+//  refresh block is skipped. They stay as future-proofing against a
+//  suspension-capable store.
 //
 
 #if DEBUG
@@ -82,7 +86,8 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         http: any TeleportHTTPClienting,
         keyRing: any TeleportCredentialStore,
         credentialID: Data = TeleportLoginCoordinatorGenerationTests.credentialID,
-        keyPairGenerator: (any TeleportSSHKeyPairGenerating)? = nil
+        keyPairGenerator: (any TeleportSSHKeyPairGenerating)? = nil,
+        privateKeyDataEncoder: ((String) -> Data?)? = nil
     ) throws -> TeleportLoginCoordinator {
         let signer = MockSEPKeySigner(outcome: .success)
         _ = try signer.createKey(credentialID: credentialID)
@@ -92,7 +97,8 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
             logging: DefaultTeleportLogging(),
             signer: signer,
             keyPairGenerator: keyPairGenerator ?? FixedTeleportSSHKeyPairGenerator(publicKey: TeleportFixtureSupport.fixedSSHPublicKey),
-            now: { TeleportFixtureSupport.fixtureClock }
+            now: { TeleportFixtureSupport.fixtureClock },
+            privateKeyDataEncoder: privateKeyDataEncoder ?? { $0.data(using: .utf8) }
         )
     }
 
@@ -394,7 +400,7 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
             coordinator.state, .failed(.faceIDCancelled),
             "a superseded throwing pair store must not fall through to .success"
         )
-        XCTAssertEqual(store.storedPairCount, 1, "the write was attempted")
+        XCTAssertEqual(store.storedPairCount, 0, "the throwing write was attempted but committed nothing")
         XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
         XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
     }
@@ -427,8 +433,27 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         let generator = AttemptTaggedSSHKeyPairGenerator(attemptCount: 2)
         let coordinator = try makeLoginCoordinator(http: http, keyRing: store, keyPairGenerator: generator)
 
-        let attempt1Cert = TeleportFixtureSupport.makeSynthUserCert(rawKey: generator.attempts[0].rawKey, keyID: cluster.username)
-        let attempt2Cert = TeleportFixtureSupport.makeSynthUserCert(rawKey: generator.attempts[1].rawKey, keyID: cluster.username)
+        // Distinct per-attempt validity/principal payloads so a stale
+        // attempt-1 terminal write is distinguishable from attempt 2's (G1:
+        // with identical payloads the final-state assertion below would be
+        // vacuous).
+        let attempt1ValidBefore = TeleportFixtureSupport.attemptCertValidBefore.addingTimeInterval(60)
+        let attempt1Principals = ["alice-attempt-1"]
+        let attempt2ValidBefore = TeleportFixtureSupport.attemptCertValidBefore.addingTimeInterval(120)
+        let attempt2Principals = ["alice-attempt-2"]
+
+        let attempt1Cert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: generator.attempts[0].rawKey,
+            keyID: cluster.username,
+            principals: attempt1Principals,
+            validBefore: attempt1ValidBefore
+        )
+        let attempt2Cert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: generator.attempts[1].rawKey,
+            keyID: cluster.username,
+            principals: attempt2Principals,
+            validBefore: attempt2ValidBefore
+        )
 
         // Attempt 1: run to the parked pair write.
         let first = Task { await coordinator.begin(cluster: cluster) }
@@ -437,7 +462,13 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         await http.waitUntilLoginFinishStarted(1)
         await http.releaseLoginFinish(
             index: 0,
-            with: .success(TeleportFixtureSupport.makeAttemptLoginFinishResponse(attempt: 0, generator: generator, cluster: cluster))
+            with: .success(TeleportFixtureSupport.makeAttemptLoginFinishResponse(
+                attempt: 0,
+                generator: generator,
+                cluster: cluster,
+                validBefore: attempt1ValidBefore,
+                principals: attempt1Principals
+            ))
         )
         await store.waitUntilFirstCredentialWriteStarted()
         XCTAssertEqual(store.storedPairCount, 0, "attempt 1's pair write is parked, not committed")
@@ -450,13 +481,20 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         await http.waitUntilLoginFinishStarted(2)
         await http.releaseLoginFinish(
             index: 1,
-            with: .success(TeleportFixtureSupport.makeAttemptLoginFinishResponse(attempt: 1, generator: generator, cluster: cluster))
+            with: .success(TeleportFixtureSupport.makeAttemptLoginFinishResponse(
+                attempt: 1,
+                generator: generator,
+                cluster: cluster,
+                validBefore: attempt2ValidBefore,
+                principals: attempt2Principals
+            ))
         )
         await second.value
 
         XCTAssertEqual(
             coordinator.state,
-            .success(certValidUntil: TeleportFixtureSupport.attemptCertValidBefore, logins: ["alice"])
+            .success(certValidUntil: attempt2ValidBefore, logins: attempt2Principals),
+            "attempt 2's terminal state names its own payload"
         )
         let afterSecond = await keyRing.liveCredentialSnapshot(for: cluster.id)
         XCTAssertEqual(afterSecond?.certPEM, attempt2Cert)
@@ -482,7 +520,7 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         )
         XCTAssertEqual(
             coordinator.state,
-            .success(certValidUntil: TeleportFixtureSupport.attemptCertValidBefore, logins: ["alice"]),
+            .success(certValidUntil: attempt2ValidBefore, logins: attempt2Principals),
             "attempt 1's stale pair write must not write the terminal state"
         )
     }
@@ -560,6 +598,142 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         )
         XCTAssertEqual(keyRing.liveCredentialSnapshot(for: cluster.id)?.certPEM, priorCert)
         XCTAssertEqual(keyRing.liveCredentialSnapshot(for: cluster.id)?.privateKeyPEM, priorKey)
+    }
+
+    // MARK: - F1/D3/G5: the D4 helper's gates and branches
+
+    /// F1 (login): the D4 helper must re-apply the stored cert's user-binding
+    /// gate. A prior stored pair whose cert belongs to a foreign Teleport user
+    /// (the row's username was edited after storage) must not be handed off as
+    /// a false `.success` when this attempt's pair write throws: the helper
+    /// clears the credential and fails closed, exactly like the main path
+    /// (:416).
+    func testLoginPairStoreFailureWithAForeignStoredCertClearsAndFails() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let priorCert = TeleportFixtureSupport.makeSynthUserCert(
+            rawKey: Data(repeating: 0x99, count: 32),
+            keyID: "someone-else"  // not cluster.username — the stored cert is foreign
+        )
+        let priorKey = Data("foreign-prior-login-key".utf8)
+        keyRing.storeLoginCert(priorCert, validBefore: TeleportFixtureSupport.attemptCertValidBefore, for: cluster.id)
+        try keyRing.storeEd25519PrivateKey(priorKey, for: cluster.id)
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.server("Certificate user binding check failed: the certificate does not belong to this Teleport user")),
+            "the stored foreign cert must not be handed off as .success"
+        )
+        XCTAssertNil(keyRing.credentials[cluster.id], "the foreign stored credential was cleared")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+    }
+
+    /// D3 (login): a `clear(for:)` landing while the login's pair write is
+    /// parked (the connect path clearing under a parked login) makes the write
+    /// throw `noRegisteredCredential`; the terminal state must be the
+    /// dedicated no-record failure, never a silent success or the generic
+    /// store-failure text. The gated double forwards to the mock's `.login`
+    /// policy check after the gate, so the clear is observed by the write.
+    func testConcurrentClearDuringThePairWriteFailsWithTheNoRecordState() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheLoginCertStore: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilFirstCredentialWriteStarted()
+        XCTAssertEqual(store.storedPairCount, 0, "the pair write is parked, not committed")
+
+        // The connect-path clear lands while the login is parked (D3).
+        await store.clear(for: cluster.id)
+
+        await store.releaseFirstCredentialWrite()
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.unknown("the registered credential was cleared while the flow was in progress")),
+            "the typed no-record error maps to the dedicated message"
+        )
+        XCTAssertEqual(store.storedPairCount, 0, "the thrown write committed nothing")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+    }
+
+    /// G5 (login): the `privKeyData == nil` branch is unreachable in production
+    /// (a Swift `String` always UTF-8-encodes), so it is driven through the
+    /// injected encoder. It must fail closed through the D4 outcome instead of
+    /// committing half a credential.
+    func testLoginNilPrivateKeyDataFailsClosedWithoutAWrite() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(
+            http: http,
+            keyRing: store,
+            privateKeyDataEncoder: { _ in nil }
+        )
+
+        await coordinator.begin(cluster: cluster)
+
+        XCTAssertEqual(coordinator.state, .failed(.unknown("credentials could not be stored")))
+        XCTAssertEqual(store.storedPairCount, 0, "the nil branch must not attempt a pair write")
+        XCTAssertNil(keyRing.liveCertPEM(for: cluster.id))
+        XCTAssertNil(keyRing.liveEd25519PrivateKey(for: cluster.id))
+    }
+
+    /// G5 (login): the D4 helper's post-read re-take. A `cancel()` landing
+    /// while the helper is suspended in `liveCredentialSnapshot` must keep the
+    /// helper from writing the store-failure state over
+    /// `.failed(.faceIDCancelled)`.
+    func testSupersessionDuringTheD4SnapshotReadWithholdsTheStoreFailure() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        keyRing.storeEd25519PrivateKeyError = TeleportPackageError.keychain(errSecAuthFailed)
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheSnapshotRead: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilSnapshotReadStarted()
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
+
+        await store.releaseSnapshotRead()
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.faceIDCancelled),
+            "the stale store-failure must not overwrite the cancel's terminal state"
+        )
     }
 }
 

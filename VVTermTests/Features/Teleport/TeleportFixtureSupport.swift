@@ -165,15 +165,25 @@ final class AttemptTaggedSSHKeyPairGenerator: TeleportSSHKeyPairGenerating {
 /// A per-attempt `HeadlessLoginResponse` whose cert is bound to the attempt's
 /// generated keypair and whose TLS cert matches the committed fixture TLS
 /// keypair, so the bootstrap coordinator's binding checks pass for each
-/// attempt.
+/// attempt. `validBefore`/`principals` default to the shared attempt fixture;
+/// the T1 tests pass a distinct `validBefore` per attempt so a stale attempt's
+/// terminal `.success`/`lastBootstrapResult` is distinguishable from the newer
+/// attempt's.
 extension TeleportFixtureSupport {
     static func makeAttemptHeadlessResponse(
         attempt: Int,
         generator: AttemptTaggedSSHKeyPairGenerator,
         cluster: TeleportCluster,
-        clusterName: String = "teleport.pcad.it"
+        clusterName: String = "teleport.pcad.it",
+        validBefore: Date = attemptCertValidBefore,
+        principals: [String] = ["alice"]
     ) -> HeadlessLoginResponse {
-        let certLine = makeSynthUserCert(rawKey: generator.attempts[attempt].rawKey, keyID: cluster.username)
+        let certLine = makeSynthUserCert(
+            rawKey: generator.attempts[attempt].rawKey,
+            keyID: cluster.username,
+            principals: principals,
+            validBefore: validBefore
+        )
         let tlsPEM = fixtureString("loopback-tls/server.pem")
         let hostSigner = HeadlessLoginResponse.TrustedCerts(
             clusterName: clusterName,
@@ -190,9 +200,16 @@ extension TeleportFixtureSupport {
     static func makeAttemptLoginFinishResponse(
         attempt: Int,
         generator: AttemptTaggedSSHKeyPairGenerator,
-        cluster: TeleportCluster
+        cluster: TeleportCluster,
+        validBefore: Date = attemptCertValidBefore,
+        principals: [String] = ["alice"]
     ) -> LoginFinishResponse {
-        let certLine = makeSynthUserCert(rawKey: generator.attempts[attempt].rawKey, keyID: cluster.username)
+        let certLine = makeSynthUserCert(
+            rawKey: generator.attempts[attempt].rawKey,
+            keyID: cluster.username,
+            principals: principals,
+            validBefore: validBefore
+        )
         return LoginFinishResponse(cert: Data(certLine.utf8).base64EncodedString(), hostSigners: nil)
     }
 }

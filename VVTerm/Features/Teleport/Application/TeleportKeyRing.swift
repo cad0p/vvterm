@@ -338,8 +338,12 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
         // Record commit: cert fields only, so a re-bootstrap preserves the
         // registered SEP metadata. The `??` create path runs only for a
         // `.bootstrap` pair with no existing record (a `.login` pair threw
-        // above); `save()` is synchronous and non-throwing, so no in-process
-        // error can land between the key write and the commit.
+        // above); `save()` cannot throw, so no in-process error can suspend
+        // the body between the key write and the commit. It can still
+        // silently fail to persist (an encode error is logged and the
+        // UserDefaults blob keeps the old record): a durability tear of the
+        // same class as the crash window, not an interleaving one. The
+        // interleaving guarantee is unaffected.
         var cred = credentials[clusterId]
             ?? TeleportCredential(clusterId: clusterId, credentialID: "", userHandle: "", publicKeyRaw: "", deviceName: "")
         cred.sshCertPEM = certPEM
@@ -376,6 +380,11 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
         case errSecSuccess:
             break
         case errSecItemNotFound:
+            // The add is only reached when the update reported not-found, so a
+            // concurrent writer's `errSecDuplicateItem` here means the item
+            // appeared between the two calls: fail closed, never
+            // delete-and-retry (that would destroy a key this writer did not
+            // create).
             var attributes = baseQuery
             attributes[kSecValueData as String] = pemData
             attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -385,8 +394,8 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
                 throw TeleportPackageError.keychain(addStatus)
             }
         default:
-            // A concurrent writer's `errSecDuplicateItem` on the add, an auth
-            // failure, storage pressure: fail closed. Never delete-and-retry.
+            // An update-path status (auth failure, storage pressure, …): fail
+            // closed. Never delete-and-retry.
             logger.error("storeEd25519PrivateKey SecItemUpdate: OSStatus \(updateStatus)")
             throw TeleportPackageError.keychain(updateStatus)
         }

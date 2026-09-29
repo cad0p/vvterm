@@ -35,9 +35,19 @@ enum TeleportCredentialWritePolicy: Sendable {
 }
 
 /// A pair write could not proceed without leaving a torn credential.
-enum TeleportCredentialStoreError: Error, Equatable {
+enum TeleportCredentialStoreError: Error, Equatable, LocalizedError {
     /// `.login` was requested for a cluster with no credential record.
     case noRegisteredCredential(clusterId: UUID)
+
+    /// The user-facing text: no cluster UUID (the payload keeps it for logs).
+    /// The coordinators use this as the D3 terminal message so the
+    /// concurrent-clear case is distinguishable from a keychain failure.
+    var errorDescription: String? {
+        switch self {
+        case .noRegisteredCredential:
+            return "the registered credential was cleared while the flow was in progress"
+        }
+    }
 }
 
 protocol TeleportCredentialStore: Sendable {

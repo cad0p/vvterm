@@ -8,7 +8,11 @@
 //      and `SSHSession` must see the same object + in-memory state);
 //    - the default adapter resolves the single host keyring;
 //    - the movable keyring persists through an injected (suite-scoped)
-//      `UserDefaults`, never `.standard`.
+//      `UserDefaults`, never `.standard`;
+//    - the atomic pair write through the real keyring: the `.bootstrap`
+//      create/update, the `.login` require-existing pass-through, the
+//      preserved SEP metadata, and the real non-destructive keychain write
+//      measured by the seeded-item accessibility round-trip.
 //
 
 #if DEBUG
@@ -21,6 +25,7 @@ import Testing
 struct TeleportCredentialStoreTests {
 
     private func makeIsolatedKeyRing(
+        keychainService: String = "app.vivy.vvterm.tests",
         keychainWriter: TeleportKeyRing.Ed25519KeychainWriter? = nil
     ) -> TeleportKeyRing {
         let suiteName = "TeleportCredentialStoreTests-\(UUID().uuidString)"
@@ -29,7 +34,7 @@ struct TeleportCredentialStoreTests {
             signer: MockSEPKeySigner(outcome: .success),
             logging: DefaultTeleportLogging(),
             config: TeleportKeychainConfig(
-                keychainService: "app.vivy.vvterm.tests",
+                keychainService: keychainService,
                 defaults: defaults
             ),
             keychainWriter: keychainWriter
@@ -99,6 +104,7 @@ struct TeleportCredentialStoreTests {
         let keyRing = makeIsolatedKeyRing()
         let store = TeleportKeyRingCredentialStore(keyRingProvider: { keyRing })
         let clusterId = UUID()
+        defer { keyRing.clear(for: clusterId) }
         let validBefore = Date().addingTimeInterval(3600)
         let key = Data("pair-round-trip-key".utf8)
 
@@ -114,7 +120,6 @@ struct TeleportCredentialStoreTests {
         #expect(snapshot?.certPEM == "pair-round-trip-cert")
         #expect(snapshot?.privateKeyPEM == key)
         #expect(keyRing.credentials[clusterId] != nil, "the bootstrap policy created the record")
-        keyRing.clear(for: clusterId)
     }
 
     /// T5: `.login` with no record and a seeded prior key throws
@@ -125,6 +130,7 @@ struct TeleportCredentialStoreTests {
         let keyRing = makeIsolatedKeyRing()
         let store = TeleportKeyRingCredentialStore(keyRingProvider: { keyRing })
         let clusterId = UUID()
+        defer { keyRing.clear(for: clusterId) }
         let priorKey = Data("seeded-prior-key".utf8)
         try keyRing.storeEd25519PrivateKey(priorKey, for: clusterId)
         #expect(keyRing.liveEd25519PrivateKey(for: clusterId) == priorKey)
@@ -145,7 +151,6 @@ struct TeleportCredentialStoreTests {
         )
         #expect(await store.liveCertPEM(for: clusterId) == nil)
         #expect(keyRing.credentials[clusterId] == nil, "no record was created")
-        keyRing.clear(for: clusterId)
     }
 
     /// T5: a second `.bootstrap` pair write preserves the registered SEP
@@ -156,6 +161,7 @@ struct TeleportCredentialStoreTests {
         let keyRing = makeIsolatedKeyRing()
         let store = TeleportKeyRingCredentialStore(keyRingProvider: { keyRing })
         let clusterId = UUID()
+        defer { keyRing.clear(for: clusterId) }
         let validBefore = Date().addingTimeInterval(3600)
 
         await store.storeRegisteredSEPKey(
@@ -185,8 +191,117 @@ struct TeleportCredentialStoreTests {
         #expect(keyRing.credentials[clusterId]?.publicKeyRaw == Data([9, 9]).base64URLEncodedString())
         #expect(keyRing.credentials[clusterId]?.deviceName == "device-A")
         #expect(keyRing.credentials[clusterId]?.sshCertPEM == "second-cert")
+        #expect(keyRing.credentials[clusterId]?.certValidBefore == validBefore, "the record commit writes the cert's validBefore")
         #expect(keyRing.liveEd25519PrivateKey(for: clusterId) == Data("second-key".utf8))
-        keyRing.clear(for: clusterId)
+    }
+
+    /// G3: the `.login` success path through the *real* keyring (the mock
+    /// already covers the policy; this exercises the production branch): seed
+    /// a record, pair-write with `.login`, and assert both halves plus the
+    /// preserved SEP metadata.
+    @Test
+    func loginPairWriteOnTheRealKeyRingUpdatesTheRecordAndPreservesSEPMetadata() async throws {
+        let keyRing = makeIsolatedKeyRing()
+        let store = TeleportKeyRingCredentialStore(keyRingProvider: { keyRing })
+        let clusterId = UUID()
+        defer { keyRing.clear(for: clusterId) }
+        let validBefore = Date().addingTimeInterval(3600)
+        let key = Data("login-pair-key".utf8)
+
+        await store.storeRegisteredSEPKey(
+            credentialID: Data([4, 5, 6]),
+            userHandle: Data("login-handle".utf8),
+            publicKeyRaw: Data([7]),
+            deviceName: "login-device",
+            for: clusterId
+        )
+        try await store.storeCredentialPair(
+            "login-pair-cert",
+            validBefore: validBefore,
+            privateKeyPEM: key,
+            policy: .login,
+            for: clusterId
+        )
+
+        let snapshot = await store.liveCredentialSnapshot(for: clusterId)
+        #expect(snapshot?.certPEM == "login-pair-cert")
+        #expect(snapshot?.privateKeyPEM == key)
+        #expect(await store.registeredCredentialID(for: clusterId) == Data([4, 5, 6]))
+        #expect(await store.registeredUserHandle(for: clusterId) == Data("login-handle".utf8))
+        #expect(keyRing.credentials[clusterId]?.deviceName == "login-device")
+        #expect(keyRing.credentials[clusterId]?.certValidBefore == validBefore)
+        #expect(keyRing.credentials[clusterId]?.sshCertPEM == "login-pair-cert")
+    }
+
+    /// F2 (behavioural): the *real* keychain write
+    /// (`writeEd25519PrivateKeyToKeychain` through the default closure — no
+    /// injected writer) must update the existing item in place. Seed the item
+    /// directly with a distinct `kSecAttrAccessible`, run a pair write, and
+    /// assert the read-back value is the new key AND the seeded accessibility
+    /// survived: a delete-then-add regression resets the item's attributes to
+    /// the writer's `AfterFirstUnlockThisDeviceOnly` default → red. This is
+    /// the one test that executes the real `SecItemUpdate` path.
+    @Test
+    func realPairWriteUpdatesTheSeededKeychainItemInPlace() async throws {
+        let service = "app.vivy.vvterm.tests.\(UUID().uuidString)"
+        let keyRing = makeIsolatedKeyRing(keychainService: service)
+        let store = TeleportKeyRingCredentialStore(keyRingProvider: { keyRing })
+        let clusterId = UUID()
+        defer { keyRing.clear(for: clusterId) }
+        let account = "vvterm.teleport.sshkey.\(clusterId.uuidString)"
+        let priorKey = Data("seeded-prior-key".utf8)
+        let newKey = Data("pair-written-key".utf8)
+
+        // Seed the item with an accessibility distinct from the writer's add
+        // default, so "update kept the attributes" and "delete-then-add reset
+        // them" are different observations.
+        let seedStatus = SecItemAdd([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: priorKey,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
+        ] as CFDictionary, nil)
+        try #require(seedStatus == errSecSuccess, "the isolated keychain item must seed (OSStatus \(seedStatus))")
+
+        try await store.storeCredentialPair(
+            "real-writer-cert",
+            validBefore: Date().addingTimeInterval(3600),
+            privateKeyPEM: newKey,
+            policy: .bootstrap,
+            for: clusterId
+        )
+
+        let readBack = try #require(
+            Self.readKeychainItem(service: service, account: account),
+            "the pair write must leave the item readable"
+        )
+        #expect(readBack.data == newKey, "the pair write must replace the key value")
+        #expect(
+            readBack.accessibility == kSecAttrAccessibleWhenUnlocked as String,
+            "the update-only writer must preserve the seeded accessibility; a delete-then-add regression resets it to AfterFirstUnlockThisDeviceOnly"
+        )
+        #expect(keyRing.liveEd25519PrivateKey(for: clusterId) == newKey)
+    }
+
+    /// Reads a generic-password item's data + accessibility, or nil when it is
+    /// absent. Used by the F2 real-writer round-trip.
+    private static func readKeychainItem(service: String, account: String) -> (data: Data, accessibility: String?)? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: kCFBooleanTrue as Any,
+            kSecReturnAttributes as String: kCFBooleanTrue as Any,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let attributes = item as? [String: Any],
+              let data = attributes[kSecValueData as String] as? Data else {
+            return nil
+        }
+        return (data, attributes[kSecAttrAccessible as String] as? String)
     }
 
     /// T5: the UI-test mock's readiness flips after a pair write (its fixture
