@@ -361,6 +361,19 @@ jobs:
           xcrun simctl bootstatus "iPhone 17" -b
           xcrun simctl keychain "iPhone 17" add-root-cert "$CERT"
 
+      - name: Provision loopback sshd (issue #291 upload legs)
+        # SSHUploadIntegrationTests' three legs need a real sshd. This is the
+        # same fixture script the PR CI UI shards use (xcode-27 + passwordless
+        # sudo) and it is idempotent, so each of the three matrix legs
+        # provisions its own runner. The rig writes
+        # VVTERM_REPRO_SSH_PORT=22229 for the bytemeter proxy used by
+        # repro-zmx.yml; sshd itself listens on 22232, so override the port
+        # for the test steps (same override as PR CI).
+        run: |
+          set -euo pipefail
+          bash scripts/ci/repro-sshd-setup.sh
+          echo "VVTERM_REPRO_SSH_PORT=22232" >> "$RUNNER_TEMP/vvterm-repro/vvterm-repro.env"
+
       - name: Run Teleport integration tests
         # Source the env file (PEM fixtures + server coordinates) into the
         # xcodebuild process. VVTERM_TELEPORT_* propagate to the test
@@ -375,6 +388,8 @@ jobs:
           set -a
           # shellcheck disable=SC1091
           source "$RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env"
+          # shellcheck disable=SC1091
+          source "$RUNNER_TEMP/vvterm-repro/vvterm-repro.env"
           set +a
           # Plain env vars do NOT reach the simulator test process — xcodebuild
           # forwards only TEST_RUNNER_-prefixed vars to the test runner
@@ -382,10 +397,11 @@ jobs:
           # route instead, which needs build-for-testing). Re-export every
           # fixture var with the prefix so the .enabled(if:) gates evaluate
           # true in the runner.
-          for var in $(compgen -v | grep '^VVTERM_TELEPORT_' || true); do
+          for var in $(compgen -v | grep -E '^VVTERM_(TELEPORT|REPRO_SSH)_' || true); do
             export "TEST_RUNNER_${var}=${!var}"
           done
           echo "fixtures: host=$VVTERM_TELEPORT_HOST port=$VVTERM_TELEPORT_PORT node=$VVTERM_TELEPORT_NODE cluster=$VVTERM_TELEPORT_CLUSTER_NAME cert=$(printf '%s' "$VVTERM_TELEPORT_CERT" | head -c 30)…"
+          echo "upload fixture: user=$VVTERM_REPRO_SSH_USERNAME port=$VVTERM_REPRO_SSH_PORT"
 
           # CODE_SIGNING_ALLOWED=NO (PR CI) leaves the sim app UNSIGNED —
           # no entitlements — and the iOS sim sandbox parks Network.framework
@@ -414,7 +430,9 @@ jobs:
               -configuration Debug \
               -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
               -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              -resultBundlePath "$RUNNER_TEMP/upload-main.xcresult" \
               -only-testing:VVTermTests/TeleportServerIntegrationTests \
+              -only-testing:VVTermTests/SSHUploadIntegrationTests \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 120 \
               CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
@@ -443,7 +461,126 @@ jobs:
           set -e
           kill "$WPID" 2>/dev/null || true
           kill "$SPID" 2>/dev/null || true
+          # B1 guard (fail-closed): a false `.enabled(if:)` gate (fixture env
+          # missing) prints `➜ Suite SSHUploadIntegrationTests skipped.` and
+          # leaves xcodebuild at 0, so a bare suite-name grep reports a
+          # vacuous green. Require positive executed evidence instead —
+          # authoritative from this run's .xcresult bundle, log-shape as the
+          # measured fallback — and fail the step otherwise.
+          verify_upload_suite_executed() {
+            local LOG="$1"
+            local BUNDLE="$2"
+            local UPLOAD_SUITE="SSHUploadIntegrationTests"
+            # 1. The skip marker is exactly the vacuous-green shape.
+            if grep -q "Suite ${UPLOAD_SUITE} skipped" "$LOG"; then
+              echo "::error::${UPLOAD_SUITE} was skipped — fixture env missing or the .enabled(if:) gate false?"
+              exit 1
+            fi
+            # 2. Positive executed evidence: prefer this run's .xcresult
+            #    bundle (authoritative, version-independent) — count the
+            #    suite's passed test-case nodes.
+            local PASSED=0
+            if [ -d "$BUNDLE" ]; then
+              PASSED="$(xcrun xcresulttool get test-results tests --path "$BUNDLE" --format json 2>/dev/null \
+                | python3 -c 'import json,sys; d=json.load(sys.stdin); w=lambda ns:[x for n in (ns or []) for x in [n]+w(n.get("children"))]; print(sum(1 for n in w(d.get("testNodes")) if n.get("name")=="SSHUploadIntegrationTests" for c in (n.get("children") or []) if c.get("result")=="Passed"))' \
+                  2>/dev/null || true)"
+              case "${PASSED:-}" in ''|*[!0-9]*) PASSED=0 ;; esac
+            fi
+            if [ "$PASSED" -ge 3 ]; then
+              echo "${UPLOAD_SUITE} executed: ${PASSED} passed test cases (xcresult: ${BUNDLE})"
+              return 0
+            fi
+            # 3. Measured log-shape fallback: require every leg's per-test
+            #    pass line — a skipped, crashed, or zero-test run cannot
+            #    produce those three lines.
+            for LEG in "testExecPreferredUploadRoundTrips()" \
+                       "testAutomaticUploadRoundTrips()" \
+                       "testExecPreferredUploadToAMissingParentFailsCleanlyAndLeavesTheClientUsable()"; do
+              if ! grep -q "✔ Test ${LEG} passed" "$LOG"; then
+                echo "::error::${UPLOAD_SUITE} did not execute: no pass line for ${LEG} in ${LOG} (fixture env missing or gate false?)"
+                exit 1
+              fi
+            done
+            echo "${UPLOAD_SUITE} executed (log-shape fallback): all 3 legs passed"
+          }
+          if [ "$RC" -eq 0 ]; then
+            verify_upload_suite_executed "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/upload-main.xcresult"
+          fi
           exit "$RC"
+
+      - name: Run upload failing-path leg under MallocScribble (issue #291)
+        # Leg 3 must be able to fail for the defect it claims to cover:
+        # without allocator hardening the second `libssh2_channel_free` is
+        # silent heap corruption, and "still usable" would pass on an unfixed
+        # build. MallocScribble poisons the freed channel block, so the
+        # unfixed tree faults deterministically in the second free; ASan
+        # interposes too but needs a full sanitized rebuild in every matrix
+        # leg. Runs the whole SSHUploadIntegrationTests suite so legs 1-2 are
+        # exercised hardened as well.
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          source "$RUNNER_TEMP/vvterm-teleport/vvterm-teleport.env"
+          # shellcheck disable=SC1091
+          source "$RUNNER_TEMP/vvterm-repro/vvterm-repro.env"
+          set +a
+          for var in $(compgen -v | grep -E '^VVTERM_(TELEPORT|REPRO_SSH)_' || true); do
+            export "TEST_RUNNER_${var}=${!var}"
+          done
+          export TEST_RUNNER_MallocScribble=1
+          xcodebuild test \
+            -scheme VVTermUnitTests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/upload-hardening.xcresult" \
+            -only-testing:VVTermTests/SSHUploadIntegrationTests \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
+            IgnoreFileSystemDeviceInodeChanges=YES \
+            | tee "$RUNNER_TEMP/upload-hardening.log"
+          # Same fail-closed B1 guard as the main test step (identical text):
+          # a skipped suite prints the skip marker, and a zero-test/crashed
+          # run cannot produce the three per-leg pass lines.
+          verify_upload_suite_executed() {
+            local LOG="$1"
+            local BUNDLE="$2"
+            local UPLOAD_SUITE="SSHUploadIntegrationTests"
+            # 1. The skip marker is exactly the vacuous-green shape.
+            if grep -q "Suite ${UPLOAD_SUITE} skipped" "$LOG"; then
+              echo "::error::${UPLOAD_SUITE} was skipped — fixture env missing or the .enabled(if:) gate false?"
+              exit 1
+            fi
+            # 2. Positive executed evidence: prefer this run's .xcresult
+            #    bundle (authoritative, version-independent) — count the
+            #    suite's passed test-case nodes.
+            local PASSED=0
+            if [ -d "$BUNDLE" ]; then
+              PASSED="$(xcrun xcresulttool get test-results tests --path "$BUNDLE" --format json 2>/dev/null \
+                | python3 -c 'import json,sys; d=json.load(sys.stdin); w=lambda ns:[x for n in (ns or []) for x in [n]+w(n.get("children"))]; print(sum(1 for n in w(d.get("testNodes")) if n.get("name")=="SSHUploadIntegrationTests" for c in (n.get("children") or []) if c.get("result")=="Passed"))' \
+                  2>/dev/null || true)"
+              case "${PASSED:-}" in ''|*[!0-9]*) PASSED=0 ;; esac
+            fi
+            if [ "$PASSED" -ge 3 ]; then
+              echo "${UPLOAD_SUITE} executed: ${PASSED} passed test cases (xcresult: ${BUNDLE})"
+              return 0
+            fi
+            # 3. Measured log-shape fallback: require every leg's per-test
+            #    pass line — a skipped, crashed, or zero-test run cannot
+            #    produce those three lines.
+            for LEG in "testExecPreferredUploadRoundTrips()" \
+                       "testAutomaticUploadRoundTrips()" \
+                       "testExecPreferredUploadToAMissingParentFailsCleanlyAndLeavesTheClientUsable()"; do
+              if ! grep -q "✔ Test ${LEG} passed" "$LOG"; then
+                echo "::error::${UPLOAD_SUITE} did not execute: no pass line for ${LEG} in ${LOG} (fixture env missing or gate false?)"
+                exit 1
+              fi
+            done
+            echo "${UPLOAD_SUITE} executed (log-shape fallback): all 3 legs passed"
+          }
+          verify_upload_suite_executed "$RUNNER_TEMP/upload-hardening.log" "$RUNNER_TEMP/upload-hardening.xcresult"
 
       - name: Save e2e DerivedData cache (even on failure)
         if: always()
@@ -502,6 +639,7 @@ jobs:
           name: teleport-e2e-${{ matrix.second-factor }}-${{ matrix.session-recording }}-test-results
           path: |
             ${{ runner.temp }}/test.log
+            ${{ runner.temp }}/upload-hardening.log
             ${{ runner.temp }}/sim-vvterm.log
             ${{ runner.temp }}/samples
           if-no-files-found: ignore
