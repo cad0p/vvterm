@@ -178,38 +178,70 @@ struct GhosttyIsolatedDeinitPinsTests {
     /// deliberate `isolated deinit` because its body called two MainActor
     /// instance methods. It now carries a `nonisolated deinit` with a real body
     /// (the observer removals and the deferred unregister); the two MainActor
-    /// calls live in `cleanup()`. The four tests below pin the converged shape
+    /// calls live in `cleanup()`. The five tests below pin the converged shape
     /// from independent angles: a reversion reds 1, 2 and 3; a stray
-    /// re-introduction elsewhere reds 3; a body collapse reds 1 and 4; and the
-    /// file census test above keeps the exact-marker count load-bearing.
+    /// re-introduction elsewhere reds 3; a body collapse reds 1 and 4; a
+    /// dropped observer teardown reds 5; and the file census test above keeps
+    /// the exact-marker count load-bearing.
     private static let terminalViewFile = "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift"
+    private static let macOSTerminalViewFile = "VVTerm/GhosttyTerminal/GhosttyTerminalView+macOS.swift"
 
-    /// The comment-stripped `GhosttyTerminalView+iOS.swift` source, or `nil`
-    /// after recording why it could not be read.
-    private static func terminalViewSource() -> String? {
+    /// The comment-stripped source of `file`, or `nil` after recording why it
+    /// could not be read.
+    private static func commentStrippedSource(of file: String) -> String? {
         do {
-            return try strippingComments(source(terminalViewFile))
+            return try strippingComments(source(file))
         } catch {
-            Issue.record("\(terminalViewFile): cannot read the pinned source file: \(error)")
+            Issue.record("\(file): cannot read the pinned source file: \(error)")
             return nil
         }
     }
 
-    /// The resolved body of `class GhosttyTerminalView`, or `nil` after
+    /// The resolved body of the class declared at `anchor`, or `nil` after
     /// recording why it did not resolve. The body contains nested types, so
     /// callers must use `relativeDepth` for member-level assertions.
-    private static func terminalViewBody(in text: String) -> Range<String.Index>? {
-        let anchors = occurrences(of: "class GhosttyTerminalView", in: text)
+    private static func classBody(
+        anchor: String,
+        in text: String,
+        file: String
+    ) -> Range<String.Index>? {
+        let anchors = occurrences(of: anchor, in: text)
         guard anchors.count == 1 else {
-            Issue.record("\(terminalViewFile): the `class GhosttyTerminalView` anchor must be unique (found \(anchors.count)); the declaration was renamed, duplicated or moved")
+            Issue.record("\(file): the `\(anchor)` anchor must be unique (found \(anchors.count)); the declaration was renamed, duplicated or moved")
             return nil
         }
         do {
             return try bracedBlock(after: anchors[0], in: text)
         } catch {
-            Issue.record("\(terminalViewFile): the `class GhosttyTerminalView` anchor does not open a braced body: \(error)")
+            Issue.record("\(file): the `\(anchor)` anchor does not open a braced body: \(error)")
             return nil
         }
+    }
+
+    /// The comment-stripped `GhosttyTerminalView+iOS.swift` source, or `nil`
+    /// after recording why it could not be read.
+    private static func terminalViewSource() -> String? {
+        commentStrippedSource(of: terminalViewFile)
+    }
+
+    /// The resolved body of the iOS `class GhosttyTerminalView`, or `nil`.
+    private static func terminalViewBody(in text: String) -> Range<String.Index>? {
+        classBody(anchor: "class GhosttyTerminalView", in: text, file: terminalViewFile)
+    }
+
+    /// The unique class-member `nonisolated deinit` token in the resolved iOS
+    /// terminal view body, or `nil` after recording why it did not resolve.
+    private static func nonisolatedDeinitToken(
+        in text: String,
+        classBody: Range<String.Index>
+    ) -> Range<String.Index>? {
+        let tokens = occurrences(of: "nonisolated deinit", in: text, range: classBody)
+            .filter { relativeDepth(of: $0, to: classBody, in: text) == 1 }
+        guard tokens.count == 1 else {
+            Issue.record("\(terminalViewFile): the class-member `nonisolated deinit` token must be unique to pin its body (found \(tokens.count))")
+            return nil
+        }
+        return tokens[0]
     }
 
     /// 1 of 4 — exactly one `nonisolated deinit` at class-member depth, behind a
@@ -329,13 +361,7 @@ struct GhosttyIsolatedDeinitPinsTests {
     func testGhosttyTerminalViewDeinitBodySurvives() {
         guard let text = Self.terminalViewSource() else { return }
         guard let body = Self.terminalViewBody(in: text) else { return }
-        let tokens = Self.occurrences(of: "nonisolated deinit", in: text, range: body)
-            .filter { Self.relativeDepth(of: $0, to: body, in: text) == 1 }
-        guard tokens.count == 1 else {
-            Issue.record("\(Self.terminalViewFile): the class-member `nonisolated deinit` token must be unique to pin its body (found \(tokens.count))")
-            return
-        }
-        let token = tokens[0]
+        guard let token = Self.nonisolatedDeinitToken(in: text, classBody: body) else { return }
         let afterToken = text[token.upperBound...].drop { $0 == " " || $0 == "\t" || $0 == "\n" }
         #expect(
             afterToken.first == "{",
@@ -350,8 +376,8 @@ struct GhosttyIsolatedDeinitPinsTests {
         )
         let observerRemovals = Self.occurrences(of: "NotificationCenter.default.removeObserver", in: text, range: deinitBody)
         #expect(
-            observerRemovals.count >= 3,
-            "\(Self.terminalViewFile): the deinit body must keep the three observer removals (found \(observerRemovals.count))"
+            observerRemovals.count == 4,
+            "\(Self.terminalViewFile): the deinit body must remove exactly the four registered observer tokens (found \(observerRemovals.count)); the per-token derivation lives in `testGhosttyTerminalViewDeinitRemovesEveryRegisteredObserver`"
         )
         let unregisters = Self.occurrences(of: "unregisterSurface", in: text, range: deinitBody)
         #expect(
@@ -381,6 +407,315 @@ struct GhosttyIsolatedDeinitPinsTests {
         #expect(
             autoscrollCalls.count >= 1,
             "\(Self.terminalViewFile): `cleanup()` must keep the `stopSelectionAutoscroll()` call — it is the behaviour-neutrality premise for deleting that call from the deinit (found \(autoscrollCalls.count))"
+        )
+    }
+
+    // MARK: - #302 observer-teardown pins (terminal views, iOS + macOS)
+
+    /// A `NotificationCenter.addObserver(` registration site inside a
+    /// terminal-view class body, with the stored token the site feeds.
+    private struct ObserverRegistration {
+        let token: String
+        let site: Range<String.Index>
+    }
+
+    /// 5 of 5 — every `NotificationCenter` observer the iOS class registers is
+    /// removed by the converged deinit. The expected token set is **derived from
+    /// the registration sites**, not from a hardcoded name list, so a fifth
+    /// `addObserver` in the class reds here until its teardown is added. The
+    /// exact removal count plus the per-token binding form exclude
+    /// identifier-preserving non-removals (`token = nil`, `_ = token`) and a
+    /// `removeObserver` call that does not use the bound token.
+    @Test
+    func testGhosttyTerminalViewDeinitRemovesEveryRegisteredObserver() {
+        guard let text = Self.terminalViewSource() else { return }
+        guard let body = Self.terminalViewBody(in: text) else { return }
+        guard let deinitBody = Self.nonisolatedDeinitBody(in: text, classBody: body) else { return }
+        Self.checkObserverTeardown(
+            file: Self.terminalViewFile,
+            classBody: body,
+            deinitBody: deinitBody,
+            text: text,
+            expectedTokenCount: 4,
+            expectsTraitRegistration: true
+        )
+    }
+
+    /// The macOS twin carries a plain `deinit` (its two `nonisolated deinit {}`
+    /// markers belong to nested helper classes) with a **one**-token obligation:
+    /// `configReloadObserver` is the only `NotificationCenter` registration in
+    /// the macOS class, and the KVO `appearanceObservation` is auto-invalidated.
+    /// This is a distinct matcher anchored on the plain `deinit {`, not the iOS
+    /// arity parameterized — the count is derived from the macOS registration
+    /// sites, so it would follow a second macOS registration without being
+    /// pinned to the iOS four.
+    @Test
+    func testMacOSTerminalViewPlainDeinitRemovesEveryRegisteredObserver() {
+        guard let text = Self.commentStrippedSource(of: Self.macOSTerminalViewFile) else { return }
+        guard let body = Self.classBody(anchor: "class GhosttyTerminalView", in: text, file: Self.macOSTerminalViewFile) else { return }
+        guard let deinitBody = Self.plainDeinitBody(in: text, classBody: body) else { return }
+        Self.checkObserverTeardown(
+            file: Self.macOSTerminalViewFile,
+            classBody: body,
+            deinitBody: deinitBody,
+            text: text,
+            expectedTokenCount: 1,
+            expectsTraitRegistration: false
+        )
+    }
+
+    private static func checkObserverTeardown(
+        file: String,
+        classBody: Range<String.Index>,
+        deinitBody: Range<String.Index>,
+        text: String,
+        expectedTokenCount: Int,
+        expectsTraitRegistration: Bool
+    ) {
+        let registrations = notificationObserverRegistrations(in: classBody, text: text, file: file)
+        let tokens = uniqueTokens(of: registrations)
+        #expect(
+            tokens.count == expectedTokenCount,
+            "\(file): the `addObserver(` sites must derive exactly \(expectedTokenCount) distinct observer token(s) — a registration that cannot be traced, or a new registration, is a teardown change this pin must see (derived: \(tokens))"
+        )
+
+        if expectsTraitRegistration {
+            assertTraitRegistrationIsNotStored(in: classBody, text: text, file: file)
+        } else {
+            let traitSites = occurrences(of: "registerForTraitChanges(", in: text, range: classBody)
+            #expect(
+                traitSites.isEmpty,
+                "\(file): the macOS class registers no trait-change observer (found \(traitSites.count)); a new trait registration would need its own teardown derivation here"
+            )
+        }
+
+        let removals = occurrences(of: "NotificationCenter.default.removeObserver", in: text, range: deinitBody)
+        #expect(
+            removals.count == expectedTokenCount,
+            "\(file): the deinit body must contain exactly \(expectedTokenCount) `NotificationCenter.default.removeObserver` call site(s) — one per registered token (found \(removals.count))"
+        )
+        #expect(
+            removals.count == tokens.count,
+            "\(file): the deinit must remove exactly the registered tokens (registrations \(tokens.count), removals \(removals.count)): \(tokens)"
+        )
+
+        for token in tokens {
+            assertObserverTokenIsRemovedByBinding(token, in: deinitBody, text: text, file: file)
+        }
+    }
+
+    /// Every `addObserver(` site in the resolved class body, with the token
+    /// derived from the statement shape it feeds: `<token> = … addObserver(` or
+    /// `<token>.append(… addObserver(`. A registration that cannot be traced to
+    /// a stored token is recorded as an issue rather than skipped, so the pin
+    /// cannot go green by losing coverage.
+    private static func notificationObserverRegistrations(
+        in classBody: Range<String.Index>,
+        text: String,
+        file: String
+    ) -> [ObserverRegistration] {
+        var registrations: [ObserverRegistration] = []
+        for site in occurrences(of: "addObserver(", in: text, range: classBody) {
+            guard let token = registrationToken(before: site, in: text, lowerBound: classBody.lowerBound) else {
+                Issue.record("\(file): the `addObserver(` site must be traceable to a stored token (`token = … addObserver(` / `token.append(… addObserver(`); extend the observer-teardown derivation to cover this shape")
+                continue
+            }
+            registrations.append(ObserverRegistration(token: token, site: site))
+        }
+        return registrations
+    }
+
+    /// The derived tokens in first-registration order, with repeated appends to
+    /// the same array token (the two hardware-keyboard registrations)
+    /// collapsed into one obligation.
+    private static func uniqueTokens(of registrations: [ObserverRegistration]) -> [String] {
+        var seen = Set<String>()
+        return registrations.map(\.token).filter { seen.insert($0).inserted }
+    }
+
+    /// The stored property a registration site assigns to, or `nil` when the
+    /// preceding statement matches neither the direct assignment nor the array
+    /// append shape. The backward scan stops at the nearest statement/block
+    /// boundary so an unrelated `=` earlier in the function cannot be borrowed.
+    private static func registrationToken(
+        before site: Range<String.Index>,
+        in text: String,
+        lowerBound: String.Index
+    ) -> String? {
+        var index = site.lowerBound
+        while index > lowerBound {
+            let previous = text.index(before: index)
+            let character = text[previous]
+            if character == "{" || character == "}" || character == ";" {
+                return nil
+            }
+            if character == "=" {
+                if previous > lowerBound {
+                    let beforeAssignment = text.index(before: previous)
+                    if "=!<>+-*/%&|^".contains(text[beforeAssignment]) { return nil }
+                }
+                let afterAssignment = text.index(after: previous)
+                if afterAssignment < site.lowerBound, text[afterAssignment] == "=" { return nil }
+                return identifier(before: previous, in: text, lowerBound: lowerBound)
+            }
+            if character == "(" {
+                let head = text[lowerBound..<previous]
+                guard head.hasSuffix(".append") else { return nil }
+                let receiverEnd = head.index(head.endIndex, offsetBy: -".append".count)
+                return identifier(before: receiverEnd, in: text, lowerBound: lowerBound)
+            }
+            index = previous
+        }
+        return nil
+    }
+
+    /// The identifier ending immediately before `index` (exclusive), after
+    /// skipping the whitespace between the identifier and its separator
+    /// (`token = …` / `token.append(…`). `nil` when there is none.
+    private static func identifier(
+        before index: String.Index,
+        in text: String,
+        lowerBound: String.Index
+    ) -> String? {
+        var cursor = index
+        while cursor > lowerBound {
+            let previous = text.index(before: cursor)
+            let character = text[previous]
+            if character == " " || character == "\t" || character == "\n" || character == "\r" {
+                cursor = previous
+            } else {
+                break
+            }
+        }
+        let identifierEnd = cursor
+        while cursor > lowerBound {
+            let previous = text.index(before: cursor)
+            let character = text[previous]
+            if character.isLetter || character.isNumber || character == "_" {
+                cursor = previous
+            } else {
+                break
+            }
+        }
+        guard cursor < identifierEnd else { return nil }
+        return String(text[cursor..<identifierEnd])
+    }
+
+    /// A token is removed only when the deinit binds it and removes the bound
+    /// observer inside the binding's block. Identifier-preserving shapes
+    /// (`token = nil`, `_ = token`) and non-removing calls are rejected
+    /// explicitly, so the failure names the leak rather than only the missing
+    /// binding.
+    private static func assertObserverTokenIsRemovedByBinding(
+        _ token: String,
+        in deinitBody: Range<String.Index>,
+        text: String,
+        file: String
+    ) {
+        let ifLet = occurrences(of: "if let observer = \(token)", in: text, range: deinitBody)
+            + occurrences(of: "if let observer = self.\(token)", in: text, range: deinitBody)
+        let forIn = occurrences(of: "for observer in \(token)", in: text, range: deinitBody)
+            + occurrences(of: "for observer in self.\(token)", in: text, range: deinitBody)
+        let bindings = (ifLet + forIn).sorted { $0.lowerBound < $1.lowerBound }
+        #expect(
+            bindings.count == 1,
+            "\(file): the deinit must remove `\(token)` through its binding form (`if let observer = \(token)` / `for observer in \(token)`) — found \(bindings.count); `\(token) = nil` or `_ = \(token)` still leaks the registration"
+        )
+        #expect(
+            occurrences(of: "\(token) = nil", in: text, range: deinitBody).isEmpty
+                && occurrences(of: "_ = \(token)", in: text, range: deinitBody).isEmpty,
+            "\(file): the deinit must not merely drop the `\(token)` reference (`= nil` / `_ =`) — the NotificationCenter registration must be removed"
+        )
+        guard bindings.count == 1, let binding = bindings.first else { return }
+        guard let bindingBody = try? bracedBlock(after: binding, in: text) else {
+            Issue.record("\(file): the `\(token)` binding must open a braced block that removes the observer")
+            return
+        }
+        let removals = occurrences(of: "removeObserver(observer)", in: text, range: bindingBody)
+        #expect(
+            removals.count == 1,
+            "\(file): the `\(token)` binding block must call `removeObserver(observer)` exactly once (found \(removals.count)); a removal call that does not use the bound observer leaves this registration in NotificationCenter"
+        )
+    }
+
+    /// The body of the unique class-member `nonisolated deinit` in the iOS
+    /// terminal view, or `nil` after recording why it did not resolve.
+    private static func nonisolatedDeinitBody(
+        in text: String,
+        classBody: Range<String.Index>
+    ) -> Range<String.Index>? {
+        guard let token = nonisolatedDeinitToken(in: text, classBody: classBody) else { return nil }
+        guard let body = try? bracedBlock(after: token, in: text) else {
+            Issue.record("\(terminalViewFile): the class-member `nonisolated deinit` must open a braced body")
+            return nil
+        }
+        return body
+    }
+
+    /// The body of the unique class-member **plain** `deinit` in the macOS
+    /// terminal view. `nonisolated deinit` markers belong to nested helper
+    /// classes, so they are excluded both by the class-member depth filter and
+    /// by requiring the preceding token not to be `nonisolated`.
+    private static func plainDeinitBody(
+        in text: String,
+        classBody: Range<String.Index>
+    ) -> Range<String.Index>? {
+        let tokens = occurrences(of: "deinit", in: text, range: classBody).filter { token in
+            guard relativeDepth(of: token, to: classBody, in: text) == 1 else { return false }
+            let after = text[token.upperBound...].drop { $0 == " " || $0 == "\t" || $0 == "\n" }
+            guard after.first == "{" else { return false }
+            var word = ""
+            for character in text[..<token.lowerBound].reversed() {
+                if character == " " || character == "\t" || character == "\n" {
+                    if word.isEmpty { continue }
+                    break
+                }
+                if character.isLetter || character.isNumber || character == "_" {
+                    word.append(character)
+                } else {
+                    break
+                }
+            }
+            return String(word.reversed()) != "nonisolated"
+        }
+        guard tokens.count == 1 else {
+            Issue.record("\(macOSTerminalViewFile): the class must carry exactly one plain class-member `deinit` with a body (found \(tokens.count)); the macOS twin deliberately uses a plain `deinit`, not the `nonisolated deinit {}` marker")
+            return nil
+        }
+        guard let body = try? bracedBlock(after: tokens[0], in: text) else {
+            Issue.record("\(macOSTerminalViewFile): the plain `deinit` must open a braced body")
+            return nil
+        }
+        return body
+    }
+
+    /// `registerForTraitChanges` is a fifth registration site that returns no
+    /// token: UIKit invalidates it with the view, so it has no deinit
+    /// obligation. Assert that it stays unassigned, because storing its result
+    /// would create a token the derivation above cannot see.
+    private static func assertTraitRegistrationIsNotStored(
+        in classBody: Range<String.Index>,
+        text: String,
+        file: String
+    ) {
+        let sites = occurrences(of: "registerForTraitChanges(", in: text, range: classBody)
+        #expect(
+            sites.count == 1,
+            "\(file): the positive control `registerForTraitChanges(` must occur exactly once in the class body (found \(sites.count)); the observer-teardown derivation is written against that registration set"
+        )
+        guard sites.count == 1 else { return }
+        var tail = String(text[..<sites[0].lowerBound])
+        while let last = tail.last, last == " " || last == "\t" || last == "\n" {
+            tail.removeLast()
+        }
+        let assigned = tail.last == "="
+            && !tail.hasSuffix("==")
+            && !tail.hasSuffix("!=")
+            && !tail.hasSuffix(">=")
+            && !tail.hasSuffix("<=")
+        #expect(
+            !assigned && !tail.hasSuffix(".append("),
+            "\(file): `registerForTraitChanges` must not be assigned to a stored token — it returns none (UIKit auto-invalidates it); if that changes, the observer-teardown derivation must cover the new token"
         )
     }
 
