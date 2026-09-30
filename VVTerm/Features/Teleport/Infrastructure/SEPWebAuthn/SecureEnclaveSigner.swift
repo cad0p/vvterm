@@ -9,8 +9,9 @@
 //  Secure Enclave with a `privateKeyUsage` + `biometryAny` access control, so
 //  every signature prompts Face ID / Touch ID. The key is addressed by its
 //  credential id via `kSecAttrApplicationLabel`, which is also how
-//  `TeleportKeyRing` checks readiness after an app relaunch; the in-memory
-//  cache only saves a keychain round trip.
+//  `TeleportKeyRing` checks readiness after an app relaunch; `loadKey` always
+//  queries the keychain (the truth for "is this device registered") and the
+//  in-memory cache is only the `sign(message:credentialID:)` fast path.
 //
 //  The Secure Enclave is absent on simulators and CI, so this path is covered
 //  by the owner device smoke plus the protocol-level tests that inject
@@ -74,7 +75,18 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
     }
 
     public func sign(message: Data, credentialID: Data) throws -> Data {
-        guard let key = try loadKey(credentialID: credentialID) else {
+        // The in-process cache is the *signing* fast path (SEP-2): a key
+        // created or loaded during this process is reused without another
+        // `SecItemCopyMatching`. `loadKey` itself always queries the
+        // keychain — the keychain, not the cache, is the truth for "is this
+        // device registered" — so only this call site may consult the cache.
+        let key: SecKey
+        if let cached = queue.sync(execute: { keys[credentialID] }) {
+            key = cached
+        } else if let loaded = try loadKey(credentialID: credentialID) {
+            key = loaded
+            queue.sync { keys[credentialID] = loaded }
+        } else {
             throw SignerError.keyNotFound
         }
         // Single-hash rule: the server hashes the message once and verifies
@@ -140,18 +152,38 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
         ]
     }
 
-    public func loadKey(credentialID: Data) throws -> SecKey? {
-        if let cached = queue.sync(execute: { keys[credentialID] }) {
-            return cached
-        }
-
-        let query: [String: Any] = [
+    /// The `SecItemCopyMatching` predicate for an existing SEP credential.
+    ///
+    /// `kSecAttrTokenIDSecureEnclave` scopes the query to SEP-resident keys
+    /// so a software key with a colliding label cannot match (SEP-1: the
+    /// clean-room rewrite dropped the token term; the pre-rewrite and
+    /// device-proven form had it). `kSecAttrKeyType` is deliberately kept as
+    /// well, making this a strict subset of both prior predicates: the key is
+    /// always created with the EC prime-random type
+    /// (`keyAttributes(credentialID:accessControl:)`). `kSecReturnRef`
+    /// returns the `SecKey` directly (the external representation would fail
+    /// for a non-exportable SEP key) and `kSecMatchLimitOne` returns a single
+    /// result. Kept as a pure builder so a simulator unit test can pin the
+    /// whole dictionary without a Secure Enclave.
+    static func loadKeyQuery(credentialID: Data) -> [String: Any] {
+        [
             kSecClass as String: kSecClassKey,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
             kSecAttrApplicationLabel as String: credentialID,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
             kSecReturnRef as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+    }
+
+    public func loadKey(credentialID: Data) throws -> SecKey? {
+        // Always query the keychain (SEP-2): a top-of-function cache
+        // short-circuit could serve a stale in-process `SecKey` after the
+        // keychain item is gone, and readiness must see the item's real
+        // state. The cache stays the `sign(message:credentialID:)` fast
+        // path and is not evicted on `errSecItemNotFound` (exactly pre);
+        // only `sign` consults it.
+        let query = Self.loadKeyQuery(credentialID: credentialID)
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
@@ -160,6 +192,10 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
             // nil to mean "this device has not registered yet".
             return nil
         }
+        // D4 (accepted + recorded): pre returned nil for `errSecSuccess` with
+        // a nil ref; this throws `keyCreationFailed` instead. A nil ref on
+        // success is a keychain fault, not "no key", so the throw is strictly
+        // better.
         guard status == errSecSuccess, let key = result as! SecKey? else {
             throw SignerError.keyCreationFailed("SecItemCopyMatching failed with OSStatus \(status)")
         }

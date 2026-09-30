@@ -41,6 +41,17 @@ struct OpenSSHEd25519PrivateKeyTests {
         return copy
     }
 
+    /// Complement the byte at `offset`. Unlike a constant `mutate`, this is
+    /// *provably* a change (`b ^ 0xFF != b`), so a test that corrupts a
+    /// **random** fixture byte cannot silently no-op on the 1-in-256 runs
+    /// where the constant already equals it (issue #306).
+    private func flip(_ blob: Data, at offset: Int) -> Data {
+        var copy = blob
+        let index = copy.startIndex + offset
+        copy[index] = copy[index] ^ 0xFF
+        return copy
+    }
+
     /// Offset of the private section's first checkint in the blob.
     private func privateSectionOffset(in blob: Data) throws -> Int {
         let publicKeyBlobLength = try #require(SSHAgentProtocolCodec.readUInt32(blob, at: 39))
@@ -125,7 +136,13 @@ struct OpenSSHEd25519PrivateKeyTests {
     func rejectsMismatchedCheckints() throws {
         let fixture = try makeFixture()
         let offset = try privateSectionOffset(in: fixture.blob)
-        let blob = mutate(fixture.blob, at: offset + 4, to: 0xFF)
+        // Complement, not a constant: the fixture's checkint is random, so
+        // writing a fixed byte is a no-op on the 1-in-256 runs where it
+        // already equals that value, and the blob then parses clean (#306).
+        // `b ^ 0xFF != b` makes the corruption provable; the assertion below
+        // names a future no-op instead of letting it surface as a parse pass.
+        let blob = flip(fixture.blob, at: offset + 4)
+        #expect(blob != fixture.blob, "the checkint corruption must change the blob")
         #expect(throws: OpenSSHEd25519PrivateKey.ParseError.checkIntMismatch) {
             try OpenSSHEd25519PrivateKey.parse(blob: blob)
         }
@@ -138,7 +155,10 @@ struct OpenSSHEd25519PrivateKeyTests {
         // Private section layout: checkint×2 (8) + type string (4+11) +
         // string pub (4+32) — flip a byte inside the embedded pub.
         let embeddedPublicKey = offset + 8 + 4 + 11 + 4
-        let blob = mutate(fixture.blob, at: embeddedPublicKey, to: 0xAB)
+        // The embedded public key is random, so this must be a complement
+        // rather than a constant (#306).
+        let blob = flip(fixture.blob, at: embeddedPublicKey)
+        #expect(blob != fixture.blob, "the embedded-public-key corruption must change the blob")
         #expect(throws: OpenSSHEd25519PrivateKey.ParseError.publicKeyMismatch) {
             try OpenSSHEd25519PrivateKey.parse(blob: blob)
         }
@@ -153,7 +173,11 @@ struct OpenSSHEd25519PrivateKeyTests {
         // embedded public halves stay consistent, so only the re-derivation
         // catches the mismatch.
         let seed = offset + 8 + 4 + 11 + 4 + 32 + 4
-        let blob = mutate(fixture.blob, at: seed, to: 0xCD)
+        // The seed is random, so this must be a complement rather than a
+        // constant (#306). A changed seed always re-derives a different
+        // public key, which is exactly what this test needs.
+        let blob = flip(fixture.blob, at: seed)
+        #expect(blob != fixture.blob, "the seed corruption must change the blob")
         #expect(throws: OpenSSHEd25519PrivateKey.ParseError.publicKeyMismatch) {
             try OpenSSHEd25519PrivateKey.parse(blob: blob)
         }

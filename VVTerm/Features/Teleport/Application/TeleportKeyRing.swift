@@ -119,10 +119,21 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
         //   - certExpiry: when does the live cert expire (if any)?
         //
         // The SEP-key probe goes through the signer so UI tests can script
-        // "key present" / "key absent" without a real keychain. A real
-        // `loadKey` call is cheap (a single SecItemCopyMatching), but we
-        // cache the result in `credentials` so repeated readiness checks
-        // don't hit the keychain on every server-row render.
+        // "key present" / "key absent" without a real keychain. `loadKey`
+        // always queries the keychain (SEP-2 restored the pre-rewrite
+        // behaviour: the keychain is the truth for "is this device
+        // registered"), so every readiness computation issues one
+        // `SecItemCopyMatching` and `credentials` is NOT a probe cache. If
+        // that per-render cost ever matters, the cache belongs here and its
+        // invalidation point is credential removal — not a short-circuit
+        // inside `loadKey`. Accepted trade-off (pre parity): a
+        // locked/transient keychain error is indistinguishable from "no
+        // key" and routes to `.needsRegistration`; mapping
+        // `errSecInteractionNotAllowed` is a possible follow-up, not part of
+        // this restore. The same query change also makes the login path's
+        // `loadKey` (`TeleportLoginCoordinator.begin`) hit the keychain every
+        // time; a keychain error there maps to `.faceIDUnavailable`, not
+        // `.needsRegistration` (pre parity; accepted).
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { [weak self] id in
                 self?.hasBootstrapCert(id) == true
