@@ -316,7 +316,11 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// fails with the pre-rewrite literal text instead of arming a new
     /// deadline (A4). A bare `resume` buffers into `pending` — the
     /// install → consume → re-wait shape is the only one that reaches the
-    /// guard with `pending == nil`.
+    /// guard with `pending == nil`. The second wait is bounded externally by
+    /// a ~2 s race because a regression that drops the guard installs a
+    /// continuation no resolver can fire (`resume` returns early on
+    /// `didResume`), which would otherwise run to the job's execution
+    /// allowance instead of failing.
     func testWaitAfterResolutionFailsWithAlreadyResolvedWithNoBufferedResult() async throws {
         let listener = BrowserMFAListener(timeout: 30)
         defer { listener.cancel() }
@@ -335,20 +339,34 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         let delivered = try await first.value
         XCTAssertEqual(delivered.id, "resolved", "the first wait must consume the buffered result")
 
-        do {
-            _ = try await listener.waitForResponse()
-            XCTFail("a wait after a consumed resolution must fail fast")
-        } catch let error as BrowserMFAListenerError {
-            guard case .listenerFailed(let message) = error,
-                  message == "the listener was already resolved"
-            else {
-                return XCTFail(
-                    "expected .listenerFailed(\"the listener was already resolved\"); got \(error)"
-                )
+        let failedFast = await withTaskGroup(of: Bool.self) { group -> Bool in
+            group.addTask {
+                do {
+                    _ = try await listener.waitForResponse()
+                    return false
+                } catch let error as BrowserMFAListenerError {
+                    guard case .listenerFailed(let message) = error,
+                          message == "the listener was already resolved"
+                    else {
+                        return false
+                    }
+                    return true
+                } catch {
+                    return false
+                }
             }
-        } catch {
-            return XCTFail("unexpected error from the post-resolution wait: \(error)")
+            group.addTask {
+                try? await Task.sleep(for: .seconds(2))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
         }
+        XCTAssertTrue(
+            failedFast,
+            "a wait after a consumed resolution must fail fast with .listenerFailed(\"the listener was already resolved\")"
+        )
     }
 
     /// Cancelling a *rejected* second waiter must not resume the first
@@ -389,8 +407,8 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     }
 
     /// A burst of connections must not accumulate per-connection buffers:
-    /// connections over the admission cap are answered 503 immediately and
-    /// do not resolve the login.
+    /// connections over the admission cap are answered 503 after the bounded
+    /// header drain and do not resolve the login.
     func testAdmissionCapRejectsExcessConnections() async throws {
         let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
         _ = try await listener.start()
@@ -411,12 +429,13 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
 
         // The listener drains an over-cap request until the header terminator
         // before answering 503 (`drainRejectedRequest`), so the probe can send
-        // a complete request and read the 503; the #233 RST window is removed
-        // for a request that completes within the drain bounds (header-scoped:
-        // a request body is never drained). The probe carries a *valid* sealed
-        // envelope so a drain that routed into `handle` would answer 200 — the
-        // assertions below then prove the over-cap path never resolves the
-        // login.
+        // a complete request and read the 503. This test pins the "over-cap
+        // answers 503 and never resolves the login" contract; it does not
+        // reproduce the #233 RST class (never reproduced on a real socket —
+        // residual 1), and the closure is header-scoped (a request body is
+        // never drained). The probe carries a *valid* sealed envelope so a
+        // drain that routed into `handle` would answer 200 — the assertions
+        // below then prove the over-cap path never resolves the login.
         let envelope = try Self.encryptedEnvelope(
             plaintext: try Self.loginResponsePlaintext(id: "over-cap"),
             secretKeyHex: listener.secretKeyHex
@@ -441,7 +460,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// `NWConnection.receive` is issued and the partial-then-terminator send
     /// completes it.
     func testOverCapConnectionWaitsForTheRequestBeforeAnswering() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -472,7 +491,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         }
 
         try await send(probe, Data("GET /callback HTTP/1.1\r\nHost: localhost\r\n".utf8))
-        try await Task.sleep(for: .seconds(1.5))
+        try await Task.sleep(for: .milliseconds(250))
         XCTAssertNil(
             result.withLock { $0 },
             "the drain must not answer before the request header is complete"
@@ -521,11 +540,18 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         XCTAssertEqual(listener.activeConnectionCount, 1, "the first connection must hold the only slot")
 
         let request = Self.callbackRequest(secretKey: listener.secretKeyHex, response: nil)
+        let clock = ContinuousClock()
+        let started = clock.now
         let response = try await sendRawRequest(
             request,
             splitAt: request.count - 2,
             host: .ipv4(.loopback),
             port: listener.port
+        )
+        XCTAssertLessThan(
+            clock.now - started,
+            .seconds(5),
+            "the split terminator must be joined, not answered by the readTimeout fallback"
         )
         XCTAssertTrue(
             response.hasPrefix("HTTP/1.1 503"),
@@ -1518,6 +1544,60 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
             ],
         ]
         return try JSONSerialization.data(withJSONObject: payload)
+    }
+
+    // MARK: - Source pins
+
+    /// A5's discard-only invariant, pinned at the source: neither
+    /// `drainRejectedRequest` nor `readRejectedHeader` may mention `buffer`.
+    /// Every behavioural drain test would still pass if a refactor appended
+    /// each rejected chunk to `buffer` before discarding it, which would let
+    /// an over-cap flood pin per-connection memory. FORMATTING TRIPWIRE, NOT
+    /// A PROOF: the slice is anchored on the exact signature and the 4-space
+    /// closing brace, so a rename or restructure defeats it — re-verify the
+    /// discard-only property when restructuring.
+    func testDrainPathNeverBuffersRejectedBytes() throws {
+        let source = try String(
+            contentsOf: Self.repositoryRoot().appendingPathComponent(
+                "VVTerm/Features/Teleport/Infrastructure/BrowserMFAListener.swift"
+            ),
+            encoding: .utf8
+        )
+        for signature in [
+            "private func drainRejectedRequest()",
+            "private func readRejectedHeader(drained: Int, tail: Data)",
+        ] {
+            let body = try Self.functionBody(signature, in: source)
+            XCTAssertFalse(
+                body.contains("buffer"),
+                "\(signature) must stay discard-only (A5); re-verify the discard-only property when restructuring"
+            )
+        }
+    }
+
+    /// The repository root, derived from this file's location
+    /// (`VVTermTests/Features/Teleport/BrowserMFAListenerLoopbackTests.swift`).
+    private static func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // BrowserMFAListenerLoopbackTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
+    }
+
+    /// The text from `\(signature)` to the next 4-space closing brace — the
+    /// body of a class-level method. A rename or re-indent breaks the anchor,
+    /// which is why the assertion carries the "re-verify" message.
+    private static func functionBody(_ signature: String, in source: String) throws -> String {
+        let start = try XCTUnwrap(
+            source.range(of: signature),
+            "could not find \(signature)"
+        )
+        let end = try XCTUnwrap(
+            source.range(of: "\n    }\n", range: start.upperBound..<source.endIndex),
+            "could not find the closing brace of \(signature)"
+        )
+        return String(source[start.lowerBound..<end.lowerBound])
     }
 }
 

@@ -130,7 +130,10 @@ final class TeleportKeyRing: ObservableObject, TeleportCredentialStore {
         // locked/transient keychain error is indistinguishable from "no
         // key" and routes to `.needsRegistration`; mapping
         // `errSecInteractionNotAllowed` is a possible follow-up, not part of
-        // this restore.
+        // this restore. The same query change also makes the login path's
+        // `loadKey` (`TeleportLoginCoordinator.begin`) hit the keychain every
+        // time; a keychain error there maps to `.faceIDUnavailable`, not
+        // `.needsRegistration` (pre parity; accepted).
         let resolver = TeleportDeviceReadinessResolver(
             hasBootstrapCert: { [weak self] id in
                 self?.hasBootstrapCert(id) == true

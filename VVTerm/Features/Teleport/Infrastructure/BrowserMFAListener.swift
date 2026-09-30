@@ -111,10 +111,11 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// the client read it (the `#233` class). Over-cap connections are now
     /// drained (discarded, never buffered) and *then* answered 503. That
     /// bounds each over-cap connection (one `readTimeout` timer, at most
-    /// `maxRequestBytes` read, no admission slot) but not their count — the
-    /// OS fd limit and accept rate are the only bound, so a local flood can
-    /// briefly pin sockets. The drain still cannot *accumulate* memory per
-    /// connection: every drained byte is thrown away.
+    /// `maxRequestBytes` plus one ≤4 KiB read, no admission slot) but not
+    /// their count — the OS fd limit and accept rate are the only bound, so
+    /// a local flood can briefly pin sockets. The drain still cannot
+    /// *accumulate* memory per connection: every drained byte is thrown
+    /// away.
     static let defaultMaxConcurrentConnections = 16
 
     private static let callbackPath = "/callback"
@@ -329,7 +330,15 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 let outcome = withState { state -> (immediate: Result<Proto_CredentialAssertionResponse, Error>?, armDeadline: Bool) in
                     // Guard order is deliberate (A4): cancellation, then a
                     // cancelled listener, then a buffered result, then the
-                    // two fail-fast guards, then install.
+                    // two fail-fast guards, then install. This refines pre
+                    // rather than matching it: pre consumed `pending` before
+                    // checking cancellation and latched `didResume` through
+                    // `onCancel`, so an entry-cancelled wait here leaves
+                    // `pending` intact and `didResume == false` where pre
+                    // dropped the buffered result and latched. Product impact
+                    // nil: every product throw unwinds `BrowserMFACeremony`,
+                    // whose `defer` calls `cancel()`, which drops `pending`
+                    // and latches `didResume` anyway.
                     if Task.isCancelled {
                         return (.failure(CancellationError()), false)
                     }
@@ -851,8 +860,9 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
     /// One discard-only read of an over-cap request. `drained` counts the
     /// discarded bytes and `tail` retains at most the 3 bytes a `\r\n\r\n`
     /// split across fragments could need. `finished` is re-checked before
-    /// every read so a deadline `finish` or `closeFromOwner` cannot race a
-    /// live read.
+    /// every read, which narrows the teardown window: a receive issued after
+    /// a deadline `finish` or `closeFromOwner` completes with an error and
+    /// the once-guard absorbs it.
     private func readRejectedHeader(drained: Int, tail: Data) {
         lock.lock()
         let isFinished = finished
@@ -930,11 +940,12 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
             }
 
             if error != nil || isComplete {
-                // D1 (accepted + recorded): the pre-rewrite listener answered
-                // 500 "recv error" here; the current 400 "Incomplete request"
-                // is the same status class and is terminal for this connection
-                // only — the connection is dead either way, and the reject is
-                // logged through the static line below.
+                // D1 (accepted + recorded): pre answered 500 "recv error" on
+                // a receive error and 400 "incomplete request" on an early
+                // close — this branch merges both. The current 400 is
+                // terminal for this connection only; the connection is dead
+                // either way, and the reject is logged through the static
+                // line below.
                 self.listener.logIncompleteRequest()
                 self.finish(status: 400, body: "Incomplete request", resolution: nil)
                 return
@@ -1019,7 +1030,14 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
     /// Content-Type header, the response bodies, duplicate-query last-wins
     /// (`splitTarget`), and request-fragment tolerance all differ from the
     /// pre-rewrite listener in ways that change neither the wire contract nor
-    /// any control-flow decision.
+    /// any control-flow decision. The group also records the rewrite's
+    /// dropped operator-visible diagnostics (five of pre's six listener logs
+    /// have no current equivalent: the over-cap rejection, the 408 read
+    /// deadline, the 413, the deadline, and the success info — only the
+    /// receive error survives as the static reject line) and, from
+    /// `Attestation.swift`, `UInt16(clamping: cred.id.count)` where pre
+    /// trapped on a >65535-byte credential id: unreachable for 32-byte ids
+    /// and strictly better.
     private static func httpResponse(status: Int, body: String, contentType: String) -> Data {
         let bodyData = Data(body.utf8)
         var head = "HTTP/1.1 \(status) \(reason(status))\r\n"

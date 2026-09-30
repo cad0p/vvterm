@@ -241,8 +241,13 @@ final class SEPSignerAlgorithmTests: XCTestCase {
     /// `kSecAttrTokenIDSecureEnclave` in queries this is red for the wrong
     /// reason; the source pin above is then the honest ceiling (recorded in
     /// the PR body).
+    ///
+    /// The credential id is fresh per run: a deterministic id could be left
+    /// behind by a crashed run, and the resulting `errSecDuplicateItem` must
+    /// be a visible failure, never a silent `XCTSkip` (a green non-test).
+    /// `XCTSkip` is kept only for a genuinely unavailable keychain.
     func testLoadKeyDoesNotReturnASoftwareKeyWithTheSameCredentialLabel() throws {
-        let credentialID = Data((0..<32).map { UInt8($0) })
+        let credentialID = newCredentialID()
         var error: Unmanaged<CFError>?
         let attributes: [CFString: Any] = [
             kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
@@ -253,8 +258,17 @@ final class SEPSignerAlgorithmTests: XCTestCase {
             ] as [CFString: Any],
         ]
         guard SecKeyCreateRandomKey(attributes as CFDictionary, &error) != nil else {
+            let failure = error?.takeRetainedValue()
+            if let failure,
+               (CFErrorGetDomain(failure) as String) == NSOSStatusErrorDomain,
+               CFErrorGetCode(failure) == Int(errSecDuplicateItem)
+            {
+                return XCTFail(
+                    "a leaked software key with this credential id already exists; the cleanup delete below did not run"
+                )
+            }
             throw XCTSkip(
-                "could not create a persistent software key: \(String(describing: error))"
+                "could not create a persistent software key: \(String(describing: failure))"
             )
         }
         defer {
@@ -262,7 +276,11 @@ final class SEPSignerAlgorithmTests: XCTestCase {
                 kSecClass: kSecClassKey,
                 kSecAttrApplicationLabel: credentialID,
             ]
-            SecItemDelete(delete as CFDictionary)
+            let status = SecItemDelete(delete as CFDictionary)
+            XCTAssertTrue(
+                status == errSecSuccess || status == errSecItemNotFound,
+                "the cleanup SecItemDelete must succeed; got OSStatus \(status)"
+            )
         }
 
         let loaded = try SecureEnclaveSigner().loadKey(credentialID: credentialID)

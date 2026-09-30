@@ -182,25 +182,52 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
 
     /// A browser session whose `start()` returned false can never deliver an
     /// approval, so the ceremony must fail fast with `.safariFailed` instead
-    /// of waiting out the 180 s listener deadline (A7).
+    /// of waiting out the 180 s listener deadline (A7). The run is raced
+    /// against a 2 s timer so the counterfactual (the guard reverted) fails
+    /// cleanly instead of hanging to the job's execution allowance.
     func testCeremonyFailsFastWhenTheBrowserSessionDidNotStart() async {
         let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
+        let presenter = NotStartedBrowserMFAPresenter()
         let ceremony = BrowserMFACeremony(
             logging: DefaultTeleportLogging(),
-            presenter: NotStartedBrowserMFAPresenter()
+            presenter: presenter
         )
 
-        do {
-            _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")
-            XCTFail("a browser session that did not start must fail the ceremony")
-        } catch let error as BrowserMFACeremonyError {
-            guard case .safariFailed(let message) = error else {
-                return XCTFail("expected .safariFailed; got \(error)")
+        let run = Task { try await ceremony.run(grpcClient: client, host: "teleport.pcad.it") }
+        let failedFast = await withTaskGroup(of: Bool.self) { group -> Bool in
+            group.addTask {
+                do {
+                    _ = try await run.value
+                    return false
+                } catch let error as BrowserMFACeremonyError {
+                    guard case .safariFailed(let message) = error,
+                          message == "the in-app browser session did not start"
+                    else {
+                        return false
+                    }
+                    return true
+                } catch {
+                    return false
+                }
             }
-            XCTAssertEqual(message, "the in-app browser session did not start")
-        } catch {
-            XCTFail("unexpected error: \(error)")
+            group.addTask {
+                try? await Task.sleep(for: .seconds(2))
+                run.cancel()
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
         }
+        XCTAssertTrue(
+            failedFast,
+            "a browser session that did not start must fail the ceremony fast with .safariFailed"
+        )
+        XCTAssertEqual(
+            presenter.handle?.cancelCount,
+            1,
+            "the ceremony's defer must cancel the not-started session"
+        )
     }
 
     /// A gRPC stub that answers the challenge request with a real

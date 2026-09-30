@@ -181,7 +181,8 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
         // short-circuit could serve a stale in-process `SecKey` after the
         // keychain item is gone, and readiness must see the item's real
         // state. The cache stays the `sign(message:credentialID:)` fast
-        // path.
+        // path and is not evicted on `errSecItemNotFound` (exactly pre);
+        // only `sign` consults it.
         let query = Self.loadKeyQuery(credentialID: credentialID)
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
