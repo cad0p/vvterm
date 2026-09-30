@@ -901,6 +901,33 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         XCTAssertEqual(resolved.id, "oversized-callback")
     }
 
+    /// A complete header block with an unparseable request line is answered
+    /// 400 immediately, not at the read deadline (D2). The pre-rewrite
+    /// listener parsed as soon as it saw `\r\n\r\n`; the rewrite kept
+    /// reading for a parseable line and answered 408 after `readTimeout`.
+    func testMalformedCompleteRequestIsAnswered400Immediately() async throws {
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let request = Data("GARBAGE\r\n\r\n".utf8)
+        let clock = ContinuousClock()
+        let started = clock.now
+        let response = try await sendRawRequest(request, host: .ipv4(.loopback), port: listener.port)
+        let elapsed = clock.now - started
+
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 400"),
+            "a complete but unparseable request must be answered 400; got: \(response)"
+        )
+        XCTAssertLessThan(
+            elapsed,
+            .seconds(60),
+            "the 400 must arrive immediately, not at the 120s read deadline"
+        )
+        XCTAssertFalse(listener.didResume, "a malformed request must not resolve the login")
+    }
+
     /// A client that connects and never sends must not pin the connection:
     /// the bounded idle deadline answers 408 without resolving the login.
     func testSilentConnectionIsAnsweredAndDoesNotResolveTheListener() async throws {

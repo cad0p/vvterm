@@ -892,6 +892,8 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
                 self.lock.lock()
                 self.buffer.append(data)
                 let exceeded = self.buffer.count > BrowserMFAListener.maxRequestBytes
+                let hasCompleteHeader = !exceeded
+                    && self.buffer.range(of: Data("\r\n\r\n".utf8)) != nil
                 let request = exceeded ? nil : Self.parseRequest(self.buffer)
                 self.lock.unlock()
 
@@ -902,6 +904,16 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
                 if let request {
                     let result = self.listener.handle(request)
                     self.finish(status: result.status, body: result.body, resolution: result.resolution)
+                    return
+                }
+                if hasCompleteHeader {
+                    // D2 (restored): the header block is complete but the
+                    // request line is unparseable. Pre answered 400 as soon as
+                    // `\r\n\r\n` arrived; the rewrite kept reading for a
+                    // parseable line and answered 408 at `readTimeout`. A
+                    // split write without a terminator still keeps reading.
+                    self.listener.logIncompleteRequest()
+                    self.finish(status: 400, body: "Incomplete request", resolution: nil)
                     return
                 }
             }
