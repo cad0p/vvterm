@@ -391,9 +391,10 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     /// post-`clear` re-take is the withheld terminal state.
     private(set) var clearedCount = 0
     /// The `updateClusterHostKeys` (Host CA refresh) invocation count — the
-    /// #298 site-#7 discriminator. The mock mutates its TLS state in place, so
-    /// the call itself is the observation point. Incremented at delegate
-    /// entry, before the gate.
+    /// #298 site-#6 discriminator (site #7's is `storedPairCount`: its
+    /// terminal state is masked by the post-pair re-take). The mock mutates
+    /// its TLS state in place, so the call itself is the observation point.
+    /// Incremented at delegate entry, before the gate.
     private(set) var updateClusterHostKeysCallCount = 0
     /// The atomic pair-write count (T2's positive side).
     private(set) var storedPairCount = 0
