@@ -780,10 +780,19 @@ jobs:
   # `VVTermUITests/StatsCardsLayoutUITests/testDetailedCards...`).
   #
   # This job runs OUTSIDE the normal PR CI path (only on workflow_dispatch
-  # with debug_test set). It uses `-collect-test-diagnostics always` to
+  # with debug_test set). It uses `-collect-test-diagnostics on-failure` to
   # capture the full simulator diagnostics that the normal CI path skips
   # (which saves ~10m per failed shard). Use this when a flake needs
   # deeper investigation than the xcresult + test.log provide.
+  #
+  # `on-failure` and `never` are the ONLY values xcodebuild accepts for that
+  # option: anything else fails the step in ~1s with "option
+  # -collect-test-diagnostics requires one of two values: on-failure or
+  # never", before a single test runs. This job shipped with `always` — not a
+  # value — from its introduction (#33) until the #313 acceptance run reached
+  # the step for the first time and exposed it (issue #319). `on-failure` is
+  # this job's semantics (it is dispatched to investigate a failure); the
+  # normal CI path passes `never` deliberately (#251).
   #
   # It downloads the `vvterm-build` artifact that the `build` job uploads
   # from THIS run, so it depends on that job (issue #313: without the
@@ -867,13 +876,20 @@ jobs:
           # Parallel testing is OFF here too: this job exists to capture full
           # per-test diagnostics in the log, and parallel mode routes them into
           # the xcresult instead.
+          #
+          # `-collect-test-diagnostics on-failure`: `on-failure` and `never`
+          # are the only accepted values — `always` is not one, and shipped
+          # here until issue #319. Do not add a `#` comment inside the
+          # backslash-continued invocation below: the continuation joins the
+          # lines before comment processing, so it would comment out every
+          # flag after it.
           xcodebuild test-without-building \
             -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -only-testing:"${{ github.event.inputs.debug_test }}" \
             -parallel-testing-enabled NO \
-            -collect-test-diagnostics always \
+            -collect-test-diagnostics on-failure \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance ${{ github.event.inputs.debug_timeout }} \
             CODE_SIGNING_ALLOWED=NO \
