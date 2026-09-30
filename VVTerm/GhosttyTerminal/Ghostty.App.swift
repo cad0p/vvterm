@@ -1102,13 +1102,13 @@ extension Ghostty {
             // `termio/stream_handler.zig:963-977`) sends `.clipboard_read` to
             // the surface MAILBOX from the I/O thread; `Surface.handleMessage`
             // — documented "Called from the app thread" (`Surface.zig:970-972`,
-            // handler at `:1043`) — handles it on the app thread, which
+            // handler at `:1055-1062`) — handles it on the app thread, which
             // VVTerm's `wakeup` ticks on the main queue. That is the same
             // thread the main-actor `free()` runs on, so the surface-handle
             // read below is not a live race. The context is what makes the
-            // view resolution safe for the callback that does run off-main
-            // (the write callback); it is not needed to make these reads
-            // race-free.
+            // view resolution safe for the callbacks that can run off-main
+            // (the write callback and the `action` fallback); it is not needed
+            // to make these reads race-free.
             guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
                   let terminalView = context.resolve()
             else { return false }
