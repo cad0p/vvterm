@@ -784,14 +784,33 @@ jobs:
   # capture the full simulator diagnostics that the normal CI path skips
   # (which saves ~10m per failed shard). Use this when a flake needs
   # deeper investigation than the xcresult + test.log provide.
+  #
+  # It downloads the `vvterm-build` artifact that the `build` job uploads
+  # from THIS run, so it depends on that job (issue #313: without the
+  # dependency a dispatch starts both jobs together and the download raced
+  # the upload — run 36727783272's download failed at 14:16:45Z, ~9 minutes
+  # before the upload even started).
   debug-test:
     runs-on: xcode-27
     timeout-minutes: 45
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.debug_test != ''
+    # `always()` keeps this job (and its guard step) running when `build`
+    # fails, so the failure is legible instead of a silent skip;
+    # `!cancelled()` stops a superseded run from starting a 45-minute
+    # diagnostic.
+    needs: build
+    if: always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.debug_test != ''
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
     steps:
+      # First step, so a missing artifact is reported by name instead of
+      # surfacing as a bare download failure (#313).
+      - name: Require the build artifact (#313)
+        if: needs.build.result != 'success'
+        run: |
+          echo "::error::debug-test requires the vvterm-build artifact from the build job, but build concluded '${{ needs.build.result }}'. Nothing was downloaded and no test ran (issue #313)."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
