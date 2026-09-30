@@ -180,6 +180,29 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
         )
     }
 
+    /// A browser session whose `start()` returned false can never deliver an
+    /// approval, so the ceremony must fail fast with `.safariFailed` instead
+    /// of waiting out the 180 s listener deadline (A7).
+    func testCeremonyFailsFastWhenTheBrowserSessionDidNotStart() async {
+        let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
+        let ceremony = BrowserMFACeremony(
+            logging: DefaultTeleportLogging(),
+            presenter: NotStartedBrowserMFAPresenter()
+        )
+
+        do {
+            _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")
+            XCTFail("a browser session that did not start must fail the ceremony")
+        } catch let error as BrowserMFACeremonyError {
+            guard case .safariFailed(let message) = error else {
+                return XCTFail("expected .safariFailed; got \(error)")
+            }
+            XCTAssertEqual(message, "the in-app browser session did not start")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     /// A gRPC stub that answers the challenge request with a real
     /// `BrowserMFAChallenge` so the ceremony proceeds to the Safari step.
     private final class ChallengeReturningGRPCClient: TeleportGRPCClienting {

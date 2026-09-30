@@ -755,6 +755,98 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         )
     }
 
+    /// A decrypted assertion that omits a required key is terminal (A3): the
+    /// typed `Decodable` structs require `id`/`type`/`rawId`/`response` and
+    /// the three inner assertion fields, so the request answers 500 and
+    /// resolves the login with `.decodeFailed` — it does not degrade to an
+    /// empty field the way unparseable base64 does. The rewrite's own comment
+    /// claimed the whole pre-rewrite degradation was kept; these two tests are
+    /// the durable record of what actually is kept.
+    func testMissingRequiredAssertionFieldIsTerminal() async throws {
+        try await assertTerminalDecodeFailure(
+            plaintext: try Self.loginResponsePlaintext(
+                id: "missing-signature",
+                omitResponseField: "signature"
+            ),
+            missingField: "response.signature"
+        )
+        try await assertTerminalDecodeFailure(
+            plaintext: try Self.loginResponsePlaintext(
+                id: "missing-id",
+                omitTopLevelField: "id"
+            ),
+            missingField: "id"
+        )
+    }
+
+    private func assertTerminalDecodeFailure(plaintext: Data, missingField: String) async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: plaintext,
+            secretKeyHex: listener.secretKeyHex
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex,
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 500"),
+            "a missing \(missingField) must be answered 500; got: \(response)"
+        )
+
+        do {
+            _ = try await listener.waitForResponse()
+            XCTFail("a missing \(missingField) must resolve the wait terminally")
+        } catch let error as BrowserMFAListenerError {
+            guard case .decodeFailed = error else {
+                return XCTFail("expected .decodeFailed for a missing \(missingField); got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            listener.didResume,
+            "a missing \(missingField) must resolve the wait terminally"
+        )
+    }
+
+    /// The base64 degradation *is* kept: an authenticated field whose string
+    /// cannot be decoded becomes empty, and the callback still answers 200
+    /// (A3). Contrast `testMissingRequiredAssertionFieldIsTerminal`.
+    func testUnparseableBase64FieldDegradesToEmpty() async throws {
+        let listener = BrowserMFAListener(timeout: 60)
+        _ = try await listener.start()
+        defer { listener.cancel() }
+
+        let envelope = try Self.encryptedEnvelope(
+            plaintext: try Self.loginResponsePlaintext(
+                id: "bad-base64",
+                signatureBase64: "!!!"
+            ),
+            secretKeyHex: listener.secretKeyHex
+        )
+        let response = try await probeRawResponse(
+            host: .ipv4(.loopback),
+            port: listener.port,
+            secretKey: listener.secretKeyHex,
+            response: envelope
+        )
+        XCTAssertTrue(
+            response.hasPrefix("HTTP/1.1 200"),
+            "an unparseable base64 field must degrade, not fail; got: \(response)"
+        )
+
+        let resolved = try await listener.waitForResponse()
+        XCTAssertEqual(resolved.id, "bad-base64")
+        XCTAssertTrue(
+            resolved.response.signature.isEmpty,
+            "the unparseable base64 field must degrade to empty bytes"
+        )
+    }
+
     /// A resolution that happens before `waitForResponse()` starts (a local
     /// process can reach the loopback port first, or the deadline can fire
     /// while the ceremony is still starting) must be buffered: the later
@@ -1329,21 +1421,30 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// the listener maps into proto types.
     private static func loginResponsePlaintext(
         id: String,
-        clientDataJSON: Data = Data("client-data".utf8)
+        clientDataJSON: Data = Data("client-data".utf8),
+        omitTopLevelField: String? = nil,
+        omitResponseField: String? = nil,
+        signatureBase64: String? = nil
     ) throws -> Data {
-        let payload: [String: Any] = [
-            "browser_mfa_webauthn_response": [
-                "id": id,
-                "type": "public-key",
-                "rawId": "cmF3LWlk",
-                "response": [
-                    "clientDataJSON": clientDataJSON.base64EncodedString(),
-                    "authenticatorData": Data("auth-data".utf8).base64EncodedString(),
-                    "signature": Data("signature".utf8).base64EncodedString(),
-                    "userHandle": Data("user".utf8).base64EncodedString(),
-                ],
-            ],
+        var responseFields: [String: Any] = [
+            "clientDataJSON": clientDataJSON.base64EncodedString(),
+            "authenticatorData": Data("auth-data".utf8).base64EncodedString(),
+            "signature": signatureBase64 ?? Data("signature".utf8).base64EncodedString(),
+            "userHandle": Data("user".utf8).base64EncodedString(),
         ]
+        if let omitResponseField {
+            responseFields.removeValue(forKey: omitResponseField)
+        }
+        var assertion: [String: Any] = [
+            "id": id,
+            "type": "public-key",
+            "rawId": "cmF3LWlk",
+            "response": responseFields,
+        ]
+        if let omitTopLevelField {
+            assertion.removeValue(forKey: omitTopLevelField)
+        }
+        let payload: [String: Any] = ["browser_mfa_webauthn_response": assertion]
         return try JSONSerialization.data(withJSONObject: payload)
     }
 

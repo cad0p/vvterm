@@ -36,8 +36,13 @@ public protocol WebAuthnSigner: AnyObject {
 /// Errors surfaced by the signer implementations.
 ///
 /// `LocalizedError` so `error.localizedDescription` carries the wrapped
-/// system message (the login coordinator keeps a string fallback over those
-/// substrings for any error it cannot classify more precisely).
+/// system message. The login coordinator's classification order is:
+/// lockout/biometry strings first, then the typed `errSecUserCanceled`
+/// status carried by `.biometricSigningFailed`, and only then the untyped
+/// "cancel" string fallback. The rewrite added `LocalizedError` and thereby
+/// fixed the latent bug where every `SignerError` collapsed into the
+/// generic NSError text and therefore into `.faceIDUnavailable` (A6,
+/// accepted + recorded; the typed status path landed separately in PR 1b).
 public enum SignerError: Error, LocalizedError, CustomStringConvertible {
     case keyCreationFailed(String)
     case keyNotFound

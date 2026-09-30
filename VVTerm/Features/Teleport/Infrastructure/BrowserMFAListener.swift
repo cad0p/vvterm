@@ -543,6 +543,10 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// diagnosable from the app log alone; query values are sensitive and are
     /// never interpolated (see the file header).
     fileprivate func handle(_ request: BrowserMFARequest) -> BrowserMFACallbackResult {
+        // A2 (accepted + recorded): the browser's callback is a GET
+        // (`window.location.replace`); `parseRequest` uppercases the method,
+        // so HEAD/PUT and mixed case all reach this fail-closed 405. Existing
+        // coverage: `testCallbackWithAnUnsupportedMethodIsRejected`.
         guard request.method == "GET" || request.method == "POST" else {
             logger.error("browser MFA callback rejected: unsupported method")
             return BrowserMFACallbackResult(status: 405, body: "Method not allowed", resolution: nil)
@@ -625,11 +629,18 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
 
         var proto = Proto_CredentialAssertionResponse()
         proto.type = assertion.type
-        // An authenticated-but-unparseable base64 field degrades to empty
-        // rather than throwing: the payload already passed AES-GCM, and the
-        // server re-verifies the WebAuthn signature over these fields, so an
-        // empty field cannot forge an approval. (Keeping the pre-rewrite
-        // degradation is a deliberate parity decision.)
+        // Only the base64 decode degrades: an authenticated field whose string
+        // is not valid base64 becomes empty (`flexibleBase64(...) ?? Data()`),
+        // as it did before the rewrite. The pre-rewrite decoder *also* made
+        // every key optional; this one does not — a missing `id`/`type`/
+        // `rawId`/`response` (or inner `clientDataJSON`/`authenticatorData`/
+        // `signature`) key throws and is terminal (500 + `.decodeFailed`),
+        // because the payload already passed AES-GCM but the assertion cannot
+        // be built (A3, pinned by
+        // `testMissingRequiredAssertionFieldIsTerminal` and
+        // `testUnparseableBase64FieldDegradesToEmpty`). The server re-verifies
+        // the WebAuthn signature over these fields, so an empty field cannot
+        // forge an approval.
         proto.rawID = Self.flexibleBase64(assertion.rawId) ?? Data()
         proto.id = assertion.id
 
@@ -919,6 +930,11 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
             }
 
             if error != nil || isComplete {
+                // D1 (accepted + recorded): the pre-rewrite listener answered
+                // 500 "recv error" here; the current 400 "Incomplete request"
+                // is the same status class and is terminal for this connection
+                // only — the connection is dead either way, and the reject is
+                // logged through the static line below.
                 self.listener.logIncompleteRequest()
                 self.finish(status: 400, body: "Incomplete request", resolution: nil)
                 return
@@ -999,6 +1015,11 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
         value.removingPercentEncoding ?? value
     }
 
+    /// Cosmetic rewrite deltas accepted as a group (see #242): the
+    /// Content-Type header, the response bodies, duplicate-query last-wins
+    /// (`splitTarget`), and request-fragment tolerance all differ from the
+    /// pre-rewrite listener in ways that change neither the wire contract nor
+    /// any control-flow decision.
     private static func httpResponse(status: Int, body: String, contentType: String) -> Data {
         let bodyData = Data(body.utf8)
         var head = "HTTP/1.1 \(status) \(reason(status))\r\n"

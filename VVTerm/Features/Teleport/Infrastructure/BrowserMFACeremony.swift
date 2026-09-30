@@ -119,6 +119,9 @@ final class BrowserMFACeremony: NSObject {
         logger.info("browser MFA challenge received request_id=\(String(requestID.prefix(16)), privacy: .public)")
 
         guard let approvalURL = URL(string: "https://\(host)/web/mfa/browser/\(requestID)") else {
+            // D3 (accepted + recorded): the pre-rewrite code force-unwrapped
+            // this URL (`URL(string:)!`); the guard throws `.safariFailed` for
+            // the same server-built page without the crash risk.
             throw BrowserMFACeremonyError.safariFailed("could not build the approval URL")
         }
 
@@ -132,6 +135,11 @@ final class BrowserMFACeremony: NSObject {
                 logger.info("browser MFA safari finished")
             }
         }
+        // A7 (accepted + recorded): a session whose `start()` returned false
+        // can never deliver an approval — pre waited out the 180 s listener
+        // deadline. Fail closed immediately; the `defer` above still cancels
+        // the session and the listener. Pinned by
+        // `testCeremonyFailsFastWhenTheBrowserSessionDidNotStart`.
         guard let safariHandle, safariHandle.didStart else {
             throw BrowserMFACeremonyError.safariFailed("the in-app browser session did not start")
         }

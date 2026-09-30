@@ -191,6 +191,10 @@ public final class SecureEnclaveSigner: WebAuthnSigner, SEPKeySigning {
             // nil to mean "this device has not registered yet".
             return nil
         }
+        // D4 (accepted + recorded): pre returned nil for `errSecSuccess` with
+        // a nil ref; this throws `keyCreationFailed` instead. A nil ref on
+        // success is a keychain fault, not "no key", so the throw is strictly
+        // better.
         guard status == errSecSuccess, let key = result as! SecKey? else {
             throw SignerError.keyCreationFailed("SecItemCopyMatching failed with OSStatus \(status)")
         }

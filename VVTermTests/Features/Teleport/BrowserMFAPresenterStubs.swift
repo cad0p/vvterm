@@ -38,4 +38,27 @@ final class StubBrowserMFASessionHandle: BrowserMFASessionHandle {
         cancelCount += 1
     }
 }
+
+/// A presenter stub whose handle reports `didStart == false`, so the
+/// ceremony's fail-fast guard is exercised without Safari (A7).
+@MainActor
+final class NotStartedBrowserMFAPresenter: BrowserMFAPresenting {
+    func present(
+        url: URL,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) async -> any BrowserMFASessionHandle {
+        NotStartedBrowserMFASessionHandle()
+    }
+}
+
+/// A session handle that never started.
+@MainActor
+final class NotStartedBrowserMFASessionHandle: BrowserMFASessionHandle {
+    let didStart = false
+    private(set) var cancelCount = 0
+
+    func cancel() {
+        cancelCount += 1
+    }
+}
 #endif
