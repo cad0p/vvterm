@@ -133,6 +133,173 @@ final class SEPSignerAlgorithmTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - SEP-1: the load query scopes to the Secure Enclave
+
+    /// Pins the whole `loadKeyQuery` dictionary (SEP-1): the token term the
+    /// clean-room rewrite dropped, the retained key type, and the explicit
+    /// absence of every key-*creation* attribute. A full-dictionary compare
+    /// fails if the token term is dropped again (the regression) and catches
+    /// accidental extra terms.
+    func testLoadKeyQueryScopesToTheSecureEnclave() {
+        let credentialID = Data((0..<32).map { UInt8($0) })
+        let query = SecureEnclaveSigner.loadKeyQuery(credentialID: credentialID)
+
+        let expected: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+            kSecAttrApplicationLabel as String: credentialID,
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecReturnRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        XCTAssertEqual(
+            query as NSDictionary,
+            expected as NSDictionary,
+            "the load query must be the token-scoped, label+key-type, return-ref, match-one dictionary"
+        )
+
+        // Creation-only attributes must not leak into the lookup predicate:
+        // `keyAttributes(credentialID:accessControl:)` owns those.
+        for creationOnly in [
+            kSecAttrIsPermanent,
+            kSecPrivateKeyAttrs,
+            kSecAttrAccessControl,
+            kSecAttrKeySizeInBits,
+        ] {
+            XCTAssertNil(
+                query[creationOnly as String],
+                "\(creationOnly) is a key-creation attribute and must not appear in the load query"
+            )
+        }
+    }
+
+    /// SEP-2 source pin: `loadKey` always queries the keychain and never
+    /// short-circuits on the in-process cache; the cache read is the
+    /// `sign(message:credentialID:)` fast path.
+    ///
+    /// FORMATTING TRIPWIRE, NOT A PROOF: the slice is anchored on the
+    /// function signature and its 4-space closing brace, so a rename or a
+    /// restructure defeats it — re-verify the ordering when restructuring.
+    func testLoadKeyQueriesTheKeychainAndDoesNotShortCircuitOnTheCache() throws {
+        let source = try String(
+            contentsOf: Self.repositoryRoot().appendingPathComponent(
+                "VVTerm/Features/Teleport/Infrastructure/SEPWebAuthn/SecureEnclaveSigner.swift"
+            ),
+            encoding: .utf8
+        )
+
+        let loadBody = try Self.functionBody(
+            "public func loadKey(credentialID: Data)",
+            in: source
+        )
+        XCTAssertTrue(
+            loadBody.contains("SecItemCopyMatching"),
+            "loadKey must query the keychain"
+        )
+        XCTAssertTrue(
+            loadBody.contains("Self.loadKeyQuery(credentialID: credentialID)"),
+            "loadKey must use the pinned query builder"
+        )
+        let cacheOccurrences = loadBody.components(separatedBy: "keys[credentialID]").count - 1
+        XCTAssertEqual(
+            cacheOccurrences,
+            1,
+            "loadKey must not short-circuit on the cache: only the post-query write may touch keys[...] (re-verify the ordering when restructuring)"
+        )
+        XCTAssertTrue(
+            loadBody.contains("queue.sync { keys[credentialID] = key }"),
+            "the post-query cache write must remain"
+        )
+
+        let signBody = try Self.functionBody(
+            "public func sign(message: Data, credentialID: Data)",
+            in: source
+        )
+        let cacheRead = try XCTUnwrap(
+            signBody.range(of: "keys[credentialID]"),
+            "sign(message:credentialID:) must read the cache first (re-verify the ordering when restructuring)"
+        )
+        let loadCall = try XCTUnwrap(
+            signBody.range(of: "loadKey(credentialID: credentialID)"),
+            "sign(message:credentialID:) must fall back to loadKey (re-verify the ordering when restructuring)"
+        )
+        XCTAssertLessThan(
+            cacheRead.lowerBound,
+            loadCall.lowerBound,
+            "the cache read must precede the loadKey fallback"
+        )
+        XCTAssertTrue(
+            signBody.contains("queue.sync(execute: { keys[credentialID] })"),
+            "the cache read must be the sign fast path"
+        )
+    }
+
+    /// SEP-1 behavioural candidate: a software P-256 key carrying the same
+    /// `kSecAttrApplicationLabel` and `kSecAttrKeyType` must not satisfy the
+    /// token-scoped load query. If the simulator ignores
+    /// `kSecAttrTokenIDSecureEnclave` in queries this is red for the wrong
+    /// reason; the source pin above is then the honest ceiling (recorded in
+    /// the PR body).
+    func testLoadKeyDoesNotReturnASoftwareKeyWithTheSameCredentialLabel() throws {
+        let credentialID = Data((0..<32).map { UInt8($0) })
+        var error: Unmanaged<CFError>?
+        let attributes: [CFString: Any] = [
+            kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits: 256,
+            kSecPrivateKeyAttrs: [
+                kSecAttrIsPermanent: true,
+                kSecAttrApplicationLabel: credentialID,
+            ] as [CFString: Any],
+        ]
+        guard SecKeyCreateRandomKey(attributes as CFDictionary, &error) != nil else {
+            throw XCTSkip(
+                "could not create a persistent software key: \(String(describing: error))"
+            )
+        }
+        defer {
+            let delete: [CFString: Any] = [
+                kSecClass: kSecClassKey,
+                kSecAttrApplicationLabel: credentialID,
+            ]
+            SecItemDelete(delete as CFDictionary)
+        }
+
+        let loaded = try SecureEnclaveSigner().loadKey(credentialID: credentialID)
+        XCTAssertNil(
+            loaded,
+            "a software key with the same label must not match the SEP-scoped query"
+        )
+    }
+
+    // MARK: - Source helpers
+
+    /// The repository root, derived from this file's location
+    /// (`VVTermTests/Features/Teleport/SEPSignerAlgorithmTests.swift`).
+    private static func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SEPSignerAlgorithmTests.swift
+            .deletingLastPathComponent()  // Teleport/
+            .deletingLastPathComponent()  // Features/
+            .deletingLastPathComponent()  // VVTermTests/
+    }
+
+    /// The text from `\(signature)` (the full `public func …` anchor) to the
+    /// next 4-space closing brace — the body of a class-level method. The
+    /// `public func` prefix is required because the protocol declares the
+    /// unqualified signature first. A rename or re-indent breaks the anchor,
+    /// which is why each assertion carries the "re-verify" message.
+    private static func functionBody(_ signature: String, in source: String) throws -> String {
+        let start = try XCTUnwrap(
+            source.range(of: signature),
+            "could not find \(signature)"
+        )
+        let end = try XCTUnwrap(
+            source.range(of: "\n    }\n", range: start.upperBound..<source.endIndex),
+            "could not find the closing brace of \(signature)"
+        )
+        return String(source[start.lowerBound..<end.lowerBound])
+    }
 }
 
 #endif
