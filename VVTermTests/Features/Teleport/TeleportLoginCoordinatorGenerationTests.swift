@@ -21,12 +21,11 @@
 //  the helper's stored-cert user-binding gate (F1), the typed no-record
 //  mapping (D3) and its post-read re-take, plus the `privKeyData == nil`
 //  branch (unreachable in production; driven through the injected encoder).
-//  The guards after `registeredCredentialID`, `registeredUserHandle`,
-//  `keyRing.clear`, `clusterTLSState` and `updateClusterHostKeys` are
-//  untested-by-design: the production `TeleportKeyRing` witness cannot
-//  suspend, and the fixture login response sets `hostSigners: nil` so the
-//  refresh block is skipped. They stay as future-proofing against a
-//  suspension-capable store.
+//  The `#298` section pins the guards after `registeredCredentialID`,
+//  `registeredUserHandle`, `keyRing.clear`, `clusterTLSState` and
+//  `updateClusterHostKeys` (each one red under its own single guard deletion);
+//  the production `TeleportKeyRing` witness cannot suspend today, so they
+//  stay as future-proofing against a suspension-capable store.
 //
 
 #if DEBUG
@@ -53,6 +52,20 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
 
     private static let credentialID = Data([1, 2, 3, 4])
 
+    /// The fixture cluster's `domain_name` — the pinned TLS state's
+    /// `clusterName` must equal it for `matchesPinnedCluster` to hold.
+    private static let fixtureDomainName = "teleport.pcad.it"
+
+    /// The pinned Host CA checking key (authorized_keys line), from the
+    /// committed fixture; the refresh payload adds `rotatedHostCA` on top so
+    /// the update policy accepts an additions-only refresh.
+    private static let pinnedHostCA = TeleportFixtureSupport
+        .fixtureString("OpenSSH/ca_ed25519.pub")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    private static let rotatedHostCA = TeleportFixtureSupport
+        .fixtureString("OpenSSH/ca_foreign.pub")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
     private func makeCluster() -> TeleportCluster {
         TeleportCluster(host: "teleport.pcad.it", username: Self.fixtureCertKeyID)
     }
@@ -61,7 +74,8 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
     /// (an unseeded keyring would make the absence assertions vacuous).
     private func makeRegisteredKeyRing(
         clusterId: UUID,
-        credentialID: Data = TeleportLoginCoordinatorGenerationTests.credentialID
+        credentialID: Data = TeleportLoginCoordinatorGenerationTests.credentialID,
+        userHandle: Data = Data("user-handle".utf8)
     ) -> MockTeleportKeyRing {
         let keyRing = MockTeleportKeyRing()
         keyRing.seed(
@@ -71,11 +85,27 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
                 hasSEPKey: true,
                 certValidBefore: nil,
                 credentialID: credentialID,
-                userHandle: Data("user-handle".utf8),
+                userHandle: userHandle,
                 deviceName: "test-device"
             )
         )
         return keyRing
+    }
+
+    /// Seeds the pinned TLS state the Host-CA refresh needs on the underlying
+    /// mock, *before* it is wrapped: the wrapper's `clusterTLSState` read gate
+    /// would otherwise park the seed's read. `clusterName` matches the fixture
+    /// `domain_name` so `matchesPinnedCluster` is true and the refresh call is
+    /// reachable (sites #6/#7).
+    private func seedPinnedTLSState(on keyRing: MockTeleportKeyRing, clusterId: UUID) {
+        keyRing.storeClusterTLSState(
+            TeleportClusterTLSState(
+                clusterName: Self.fixtureDomainName,
+                clusterCAPEMs: ["pinned-pem"],
+                hostCACheckingKeys: [Self.pinnedHostCA]
+            ),
+            for: clusterId
+        )
     }
 
     /// The verified login fixture chain (copied from
@@ -752,6 +782,265 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
             .failed(.faceIDCancelled),
             "the stale store-failure must not overwrite the cancel's terminal state"
         )
+    }
+
+    // MARK: - #298: the remaining login continuation guards
+
+    /// Site #1 — the re-take after the `registeredCredentialID` read.
+    ///
+    /// Fixture: an **unseeded** keyring, so the read returns nil and the
+    /// deleted guard falls into the `.failed(.noRegisteredKey)` branch.
+    /// Supersession: `cancel()` (single attempt — no second `begin`).
+    ///
+    /// Discriminator: the state stays `.failed(.faceIDCancelled)`; with the
+    /// `:232` guard deleted it becomes `.failed(.noRegisteredKey)`.
+    /// Positive control: the read really returned nil (the guard-deleted run
+    /// observed `.noRegisteredKey`).
+    ///
+    /// Counterfactual (measured): deleting only the `:232` guard fails this
+    /// test in 1.338 s with
+    /// `("failed(VVTerm.TeleportLoginError.noRegisteredKey)") is not equal to ("failed(VVTerm.TeleportLoginError.faceIDCancelled)")`
+    /// — an assertion, not an allowance kill.
+    func testCancelDuringTheRegisteredCredentialIDReadIsNotClobberedByTheNilBranch() async throws {
+        let cluster = makeCluster()
+        let keyRing = MockTeleportKeyRing()
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheRegisteredCredentialIDRead: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilRegisteredCredentialIDReadStarted()
+        XCTAssertEqual(
+            coordinator.state, .idle,
+            "the flow is parked in the credentialID read, before any terminal write"
+        )
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
+
+        await store.releaseRegisteredCredentialIDRead()
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.faceIDCancelled),
+            "the guard-deleted nil branch would write .failed(.noRegisteredKey) over the cancel"
+        )
+    }
+
+    /// Site #2 — the re-take after the `registeredUserHandle` read.
+    ///
+    /// Fixture: a seeded record with a non-empty credentialID and an **empty
+    /// userHandle**, so site #1 passes and the userHandle read returns nil.
+    /// Supersession: `cancel()`.
+    ///
+    /// Discriminator: `.failed(.faceIDCancelled)` survives; with the `:239`
+    /// guard deleted the nil branch becomes `.failed(.noRegisteredKey)`.
+    /// Positive control: the flow reached the #2 read (`state == .idle` at the
+    /// park), so site #1 did not take its nil branch.
+    ///
+    /// Counterfactual (measured): deleting only the `:239` guard fails this
+    /// test in 0.431 s with
+    /// `("failed(VVTerm.TeleportLoginError.noRegisteredKey)") is not equal to ("failed(VVTerm.TeleportLoginError.faceIDCancelled)")`
+    /// — an assertion, not an allowance kill.
+    func testCancelDuringTheRegisteredUserHandleReadIsNotClobberedByTheNilBranch() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id, userHandle: Data())
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheRegisteredUserHandleRead: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilRegisteredUserHandleReadStarted()
+        XCTAssertEqual(
+            coordinator.state, .idle,
+            "site #1 read a credentialID, so the flow reached the userHandle read"
+        )
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
+
+        await store.releaseRegisteredUserHandleRead()
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.faceIDCancelled),
+            "the guard-deleted nil branch would write .failed(.noRegisteredKey) over the cancel"
+        )
+    }
+
+    /// Site #5 — the post-`clear` re-take in the foreign-cert branch.
+    ///
+    /// Fixture: the standard seeded keyring + a mismatch cluster username
+    /// (≠ `user-cert-ed25519`), so the fixture cert fails the user-binding
+    /// check and the coordinator parks in the fail-closed `clear` (the clear
+    /// gate already existed). Supersession: `cancel()`.
+    ///
+    /// Discriminator: `.failed(.faceIDCancelled)` survives; with the `:435`
+    /// guard deleted the binding-failure `.failed(.server(…))` overwrites it.
+    /// Positive control: `clearedCount == 1` — the in-flight clear is allowed
+    /// to commit (§1.4).
+    ///
+    /// Counterfactual (measured): deleting only the `:435` guard fails this
+    /// test in 0.956 s with
+    /// `("failed(VVTerm.TeleportLoginError.server("Certificate user binding check failed: the certificate does not belong to this Teleport user"))") is not equal to ("failed(VVTerm.TeleportLoginError.faceIDCancelled)")`
+    /// — an assertion, not an allowance kill.
+    func testCancelDuringTheMismatchClearIsNotClobberedByTheBindingFailure() async throws {
+        let cluster = TeleportCluster(host: Self.fixtureDomainName, username: "not-the-fixture-user")
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheClear: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = fixtureLoginFinishResponse()
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilClearStarted()
+        XCTAssertEqual(store.clearedCount, 0, "the clear is parked, not committed")
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
+
+        await store.releaseClear()
+        await beginTask.value
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(.faceIDCancelled),
+            "the guard-deleted binding failure would overwrite the cancel with .failed(.server(…))"
+        )
+        XCTAssertEqual(store.clearedCount, 1, "the in-flight clear is allowed to land (§1.4)")
+    }
+
+    /// Site #6 — the re-take after the pinned `clusterTLSState` name read.
+    ///
+    /// Fixture: the standard seeded keyring + the `hostSigners` login-finish
+    /// fixture + a pinned TLS state whose `clusterName` matches the fixture
+    /// `domain_name` (seeded on the underlying mock before wrapping).
+    /// Supersession: `cancel()`.
+    ///
+    /// Discriminator: `updateClusterHostKeysCallCount == 0`; with the `:460`
+    /// guard deleted the stale flow sees the matching name and calls the
+    /// refresh (the counter becomes 1). **The update gate stays off** so the
+    /// guard-deleted run cannot park at `:465`.
+    /// Positive control: before `begin`, the underlying mock still holds the
+    /// seeded state with `clusterName == fixtureDomainName` — the
+    /// matching-name read is otherwise proven only by the counterfactual.
+    ///
+    /// Counterfactual (measured): deleting only the `:460` guard fails this
+    /// test in 0.457 s with `("1") is not equal to ("0")` on the
+    /// `updateClusterHostKeysCallCount` assertion — an assertion, not an
+    /// allowance kill.
+    func testCancelDuringThePinnedNameReadSkipsTheHostKeyRefresh() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        seedPinnedTLSState(on: keyRing, clusterId: cluster.id)
+        XCTAssertEqual(
+            keyRing.clusterTLSState(for: cluster.id)?.clusterName,
+            Self.fixtureDomainName,
+            "the pinned TLS state is seeded on the underlying mock before the flow starts"
+        )
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheLoginCertStore: false,
+            gateTheClusterTLSStateRead: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = makeLoginFinishResponse(
+            domainName: Self.fixtureDomainName,
+            checkingKeys: [Self.pinnedHostCA, Self.rotatedHostCA]
+        )
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilClusterTLSStateReadStarted()
+        XCTAssertEqual(coordinator.state, .fetchingCert, "the flow is parked in the pinned-name read")
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
+
+        await store.releaseClusterTLSStateRead()
+        await beginTask.value
+
+        XCTAssertEqual(
+            store.updateClusterHostKeysCallCount,
+            0,
+            "the guard-deleted stale flow would call updateClusterHostKeys once"
+        )
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled), "the cancel state still holds")
+    }
+
+    /// Site #7 — the re-take after `updateClusterHostKeys`.
+    ///
+    /// Fixture: the same seeded pinned TLS state and `hostSigners` response as
+    /// site #6, but gating the refresh call itself and leaving the pinned-name
+    /// read gate off. Supersession: `cancel()`.
+    ///
+    /// Discriminator: `storedPairCount == 0`; with the `:466` guard deleted the
+    /// stale flow falls through to the pair write and commits it (the count
+    /// becomes 1). The terminal state is **not** the discriminator — it is
+    /// masked by the post-pair re-take at `:523` (which stays present), so it
+    /// is asserted only as a positive control. `gateTheLoginCertStore: false`
+    /// is the load-bearing pin for the guard-deleted pair write (the `.login`
+    /// policy consults only that gate).
+    /// Positive control: the state is still `.failed(.faceIDCancelled)`.
+    ///
+    /// Counterfactual (measured): deleting only the `:466` guard fails this
+    /// test in 0.452 s with `("1") is not equal to ("0")` on the
+    /// `storedPairCount` assertion — an assertion, not an allowance kill.
+    func testCancelDuringTheHostKeyRefreshIsNotClobberedByThePairWrite() async throws {
+        let cluster = makeCluster()
+        let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
+        seedPinnedTLSState(on: keyRing, clusterId: cluster.id)
+        let store = GatedTeleportCredentialStore(
+            underlying: keyRing,
+            gateTheFirstStore: false,
+            gateTheLoginCertStore: false,
+            gateTheUpdateClusterHostKeys: true
+        )
+        let http = MockTeleportHTTPClient()
+        http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
+        http.scriptedLoginFinishResponse = makeLoginFinishResponse(
+            domainName: Self.fixtureDomainName,
+            checkingKeys: [Self.pinnedHostCA, Self.rotatedHostCA]
+        )
+        let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+
+        let beginTask = Task { await coordinator.begin(cluster: cluster) }
+        await store.waitUntilUpdateClusterHostKeysStarted()
+        XCTAssertEqual(store.updateClusterHostKeysCallCount, 1, "the refresh call was entered, then parked")
+
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled))
+
+        await store.releaseUpdateClusterHostKeys()
+        await beginTask.value
+
+        XCTAssertEqual(
+            store.storedPairCount,
+            0,
+            "the guard-deleted stale flow would fall through to and commit the pair write"
+        )
+        XCTAssertEqual(coordinator.state, .failed(.faceIDCancelled), "the cancel state still holds")
     }
 }
 
