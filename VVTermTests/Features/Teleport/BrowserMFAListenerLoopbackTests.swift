@@ -522,8 +522,15 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// The drain's ≤3-byte tail window must recognize a `\r\n\r\n` split
     /// across two TCP writes — the fiddliest part of the port — and then
     /// answer 503.
+    ///
+    /// Host-state tolerance, not a retry: the drain only falls back to its
+    /// 503 at `readTimeout` (120 s here), so the response wait is raced
+    /// against the file's established 60 s bound (`connect(_:)` and
+    /// `receiveResponse(_:)`, #260). A stall up to 60 s stays green; a
+    /// broken tail join fails cleanly and bounded instead of waiting out
+    /// the fallback.
     func testOverCapConnectionDrainsASplitTerminator() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -540,19 +547,30 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         XCTAssertEqual(listener.activeConnectionCount, 1, "the first connection must hold the only slot")
 
         let request = Self.callbackRequest(secretKey: listener.secretKeyHex, response: nil)
-        let clock = ContinuousClock()
-        let started = clock.now
-        let response = try await sendRawRequest(
-            request,
-            splitAt: request.count - 2,
-            host: .ipv4(.loopback),
-            port: listener.port
-        )
-        XCTAssertLessThan(
-            clock.now - started,
-            .seconds(5),
-            "the split terminator must be joined, not answered by the readTimeout fallback"
-        )
+        let responseTask = Task {
+            try await sendRawRequest(
+                request,
+                splitAt: request.count - 2,
+                host: .ipv4(.loopback),
+                port: listener.port
+            )
+        }
+        let response: String? = await withTaskGroup(of: String?.self) { group -> String? in
+            group.addTask {
+                try? await responseTask.value
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(60))
+                responseTask.cancel()
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let response else {
+            return XCTFail("the split terminator was not joined before the drain's readTimeout fallback")
+        }
         XCTAssertTrue(
             response.hasPrefix("HTTP/1.1 503"),
             "a split terminator must still drain to 503; got: \(response)"
