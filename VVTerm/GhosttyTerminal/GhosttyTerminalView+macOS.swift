@@ -217,6 +217,13 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
     }
 
     deinit {
+        // Remove the config-reload observer. A view released without
+        // `cleanup()` (its single MainActor teardown site) would otherwise keep
+        // the block registered in NotificationCenter for the process lifetime.
+        if let observer = configReloadObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
         // Stop display link immediately (CVDisplayLink operations are thread-safe)
         if let link = displayLink {
             CVDisplayLinkStop(link)
@@ -225,7 +232,10 @@ class GhosttyTerminalView: NSView, NSUserInterfaceValidations {
         displayLinkCallbackContext?.release()
 
         // Surface cleanup happens via Surface's deinit
-        // Note: Cannot access @MainActor properties in deinit
+        // Note: plain stored properties are readable here (the body above and
+        // below reads `displayLink`, `displayLinkCallbackContext`,
+        // `ghosttyAppWrapper` and `surfaceReference`); only @MainActor-isolated
+        // *methods* must be deferred to a Task, as the unregister below does.
         // Tracking areas are automatically cleaned up by NSView
         // Appearance observation is automatically invalidated
 
