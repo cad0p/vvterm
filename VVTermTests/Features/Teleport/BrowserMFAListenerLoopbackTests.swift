@@ -265,6 +265,129 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
         XCTAssertTrue(cancelled, "cancellation must beat the buffered success")
     }
 
+    /// A second concurrent wait must fail fast with the exact guard message
+    /// instead of overwriting the first waiter's continuation and orphaning
+    /// it (A4). A regression that drops the guard would leave this wait
+    /// suspended until the 30 s listener deadline, so the test also keeps the
+    /// listener timeout far below the required job's per-test allowance.
+    /// No socket is needed: the guard is reached without `start()`.
+    func testSecondConcurrentWaitFailsFastInsteadOfOrphaningTheFirst() async throws {
+        let listener = BrowserMFAListener(timeout: 30)
+        defer { listener.cancel() }
+
+        var expected = Proto_CredentialAssertionResponse()
+        expected.id = "first-waiter"
+
+        let first = Task { try await listener.waitForResponse() }
+        let installDeadline = ContinuousClock.now + .seconds(15)
+        while !listener.isAwaitingResponse, ContinuousClock.now < installDeadline {
+            await Task.yield()
+        }
+        XCTAssertTrue(
+            listener.isAwaitingResponse,
+            "the first waiter must install its continuation before the second starts"
+        )
+
+        do {
+            _ = try await listener.waitForResponse()
+            XCTFail("a second concurrent wait must fail fast instead of orphaning the first")
+        } catch let error as BrowserMFAListenerError {
+            guard case .listenerFailed(let message) = error,
+                  message == "a wait is already in progress"
+            else {
+                return XCTFail(
+                    "expected .listenerFailed(\"a wait is already in progress\"); got \(error)"
+                )
+            }
+        } catch {
+            return XCTFail("unexpected error from the second wait: \(error)")
+        }
+
+        XCTAssertTrue(
+            listener.isAwaitingResponse,
+            "the first waiter's continuation must survive the rejected second wait"
+        )
+        listener.resume(.success(expected))
+        let delivered = try await first.value
+        XCTAssertEqual(delivered.id, "first-waiter", "the first waiter must receive the payload")
+    }
+
+    /// Once a resolution's buffered result has been consumed, a further wait
+    /// fails with the pre-rewrite literal text instead of arming a new
+    /// deadline (A4). A bare `resume` buffers into `pending` — the
+    /// install → consume → re-wait shape is the only one that reaches the
+    /// guard with `pending == nil`.
+    func testWaitAfterResolutionFailsWithAlreadyResolvedWithNoBufferedResult() async throws {
+        let listener = BrowserMFAListener(timeout: 30)
+        defer { listener.cancel() }
+
+        var expected = Proto_CredentialAssertionResponse()
+        expected.id = "resolved"
+
+        let first = Task { try await listener.waitForResponse() }
+        let installDeadline = ContinuousClock.now + .seconds(15)
+        while !listener.isAwaitingResponse, ContinuousClock.now < installDeadline {
+            await Task.yield()
+        }
+        XCTAssertTrue(listener.isAwaitingResponse, "the first waiter must install before resume")
+
+        listener.resume(.success(expected))
+        let delivered = try await first.value
+        XCTAssertEqual(delivered.id, "resolved", "the first wait must consume the buffered result")
+
+        do {
+            _ = try await listener.waitForResponse()
+            XCTFail("a wait after a consumed resolution must fail fast")
+        } catch let error as BrowserMFAListenerError {
+            guard case .listenerFailed(let message) = error,
+                  message == "the listener was already resolved"
+            else {
+                return XCTFail(
+                    "expected .listenerFailed(\"the listener was already resolved\"); got \(error)"
+                )
+            }
+        } catch {
+            return XCTFail("unexpected error from the post-resolution wait: \(error)")
+        }
+    }
+
+    /// Cancelling a *rejected* second waiter must not resume the first
+    /// waiter's continuation (A4's per-wait token). The second task is
+    /// cancelled before its body can run, so its cancellation handler fires
+    /// while the first waiter is installed — without the token that handler
+    /// would call `resume(.failure(CancellationError()))` and abort the first
+    /// waiter.
+    func testCancelledRejectedSecondWaitDoesNotCancelTheFirst() async throws {
+        let listener = BrowserMFAListener(timeout: 30)
+        defer { listener.cancel() }
+
+        var expected = Proto_CredentialAssertionResponse()
+        expected.id = "survivor"
+
+        let first = Task { try await listener.waitForResponse() }
+        let installDeadline = ContinuousClock.now + .seconds(15)
+        while !listener.isAwaitingResponse, ContinuousClock.now < installDeadline {
+            await Task.yield()
+        }
+        XCTAssertTrue(listener.isAwaitingResponse, "the first waiter must install before the second starts")
+
+        // `cancel()` before the task can run: no suspension between creation
+        // and cancellation, so the body observes a cancelled task.
+        let second = Task { try await listener.waitForResponse() }
+        second.cancel()
+        if case .success = await second.result {
+            XCTFail("a cancelled second wait must not succeed")
+        }
+
+        XCTAssertTrue(
+            listener.isAwaitingResponse,
+            "a rejected waiter's cancellation must not resume the first waiter"
+        )
+        listener.resume(.success(expected))
+        let delivered = try await first.value
+        XCTAssertEqual(delivered.id, "survivor", "the first waiter must still receive the payload")
+    }
+
     /// A burst of connections must not accumulate per-connection buffers:
     /// connections over the admission cap are answered 503 immediately and
     /// do not resolve the login.

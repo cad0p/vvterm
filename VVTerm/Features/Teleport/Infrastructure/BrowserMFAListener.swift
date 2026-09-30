@@ -131,6 +131,12 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
         var cancelled = false
         var pending: Result<Proto_CredentialAssertionResponse, Error>?
         var continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>?
+        /// Monotonic per-wait token, and the token of the wait that installed
+        /// `continuation`. `onCancel` compares its token and no-ops on a
+        /// mismatch, so a rejected second waiter cannot resume the installed
+        /// first waiter (A4).
+        var nextWaitToken: UInt64 = 0
+        var activeWaitToken: UInt64?
         var listeners: [NWListener] = []
         var connections: [ObjectIdentifier: BrowserMFAHTTPConnection] = [:]
     }
@@ -296,24 +302,53 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     /// test-driven `resume`). A result that arrived before the wait is
     /// delivered immediately; a task cancelled before the wait throws
     /// `CancellationError` instead of consuming a buffered result.
+    ///
+    /// A second concurrent wait fails fast with `.listenerFailed` instead of
+    /// overwriting the first waiter's continuation (A4). A bare `resume`
+    /// buffers into `pending`, so the "already resolved" failure is reached
+    /// only by a wait after a resolution whose buffered result was consumed.
     func waitForResponse() async throws -> Proto_CredentialAssertionResponse {
-        try await withTaskCancellationHandler {
+        // The per-wait token lets `onCancel` resolve only the wait this call
+        // installed: a rejected second waiter's cancellation must not resume
+        // the first waiter's continuation.
+        let token = withState { state -> UInt64 in
+            state.nextWaitToken &+= 1
+            return state.nextWaitToken
+        }
+        return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let outcome = withState { state -> (immediate: Result<Proto_CredentialAssertionResponse, Error>?, armDeadline: Bool) in
+                    // Guard order is deliberate (A4): cancellation, then a
+                    // cancelled listener, then a buffered result, then the
+                    // two fail-fast guards, then install.
                     if Task.isCancelled {
                         return (.failure(CancellationError()), false)
                     }
                     if state.cancelled {
+                        // Recorded retention, not a restore: pre had no
+                        // `cancelled` flag and surfaced `.listenerFailed`
+                        // here; a cancelled listener reporting cancellation
+                        // is the framework-idiomatic signal.
                         return (.failure(CancellationError()), false)
                     }
                     if let pending = state.pending {
                         state.pending = nil
                         return (pending, false)
                     }
+                    if state.continuation != nil {
+                        return (
+                            .failure(BrowserMFAListenerError.listenerFailed("a wait is already in progress")),
+                            false
+                        )
+                    }
                     if state.didResume {
-                        return (.failure(BrowserMFAListenerError.timedOut), false)
+                        return (
+                            .failure(BrowserMFAListenerError.listenerFailed("the listener was already resolved")),
+                            false
+                        )
                     }
                     state.continuation = continuation
+                    state.activeWaitToken = token
                     state.isAwaiting = true
                     return (nil, true)
                 }
@@ -325,8 +360,30 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
                 }
             }
         } onCancel: {
-            resume(.failure(CancellationError()))
+            cancelWait(token: token)
         }
+    }
+
+    /// Resolves the wait installed by `token` with `CancellationError`; a
+    /// no-op when `token` is not the installed wait.
+    ///
+    /// This closes the second-waiter cancellation hole (A4): a *rejected*
+    /// second waiter whose task is cancelled while its cancellation handler
+    /// runs must not resume the first waiter's continuation.
+    private func cancelWait(token: UInt64) {
+        let continuation: CheckedContinuation<Proto_CredentialAssertionResponse, Error>? = withState { state in
+            guard state.activeWaitToken == token, let installed = state.continuation else {
+                return nil
+            }
+            state.continuation = nil
+            state.activeWaitToken = nil
+            state.isAwaiting = false
+            state.didResume = true
+            return installed
+        }
+        guard let continuation else { return }
+        cancelDeadline()
+        continuation.resume(throwing: CancellationError())
     }
 
     /// Resolves the login with `result` exactly once. Later results are
@@ -337,6 +394,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             state.didResume = true
             if let installed = state.continuation {
                 state.continuation = nil
+                state.activeWaitToken = nil
                 state.isAwaiting = false
                 return installed
             }
@@ -358,6 +416,7 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
             state.pending = nil
             let continuation = state.continuation
             state.continuation = nil
+            state.activeWaitToken = nil
             state.isAwaiting = false
             let listeners = state.listeners
             state.listeners = []
