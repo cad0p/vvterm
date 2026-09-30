@@ -56,6 +56,25 @@ enum LoopbackTLSServerTestSupport {
     }
 }
 
+/// Host-state tolerance for `LoopbackTLSServer`'s `.ready` transition (#260).
+///
+/// `NWListener.start` is asynchronous, and the simulator's Network.framework
+/// can take seconds to reach `.ready` while the runner hosts five concurrent
+/// macOS jobs — it logs `nw_listener_socket_inbox_create_socket setsockopt
+/// SO_NECP_LISTENUUID failed [2: No such file or directory]` while doing so.
+/// A 5 s bound expired three times in the required `unit-tests` job, the third
+/// on the #313 acceptance dispatch (run 36760904338) in
+/// `SSHTLSTransportPumpFDCloserTests.testCloseReleasesThePumpFdWithAParkedSendAndAfterActorRelease`.
+///
+/// This is a host-state tolerance, not retry machinery: the listener must
+/// still reach `.ready` within this bound or the test throws
+/// `LoopbackTLSServerTestError.listenerStart`, so a genuinely unusable
+/// listener is not hidden — only the lateness is absorbed. If a `.ready`
+/// timeout ever survives this bound, the next step is a fresh-listener retry
+/// or an investigation of the NECP socket-create failure, not another
+/// increase.
+private let listenerReadyWaitSeconds: TimeInterval = 20
+
 /// A loopback `NWListener` presenting the given test identity over TLS.
 final class LoopbackTLSServer {
 
@@ -105,7 +124,7 @@ final class LoopbackTLSServer {
         }
         listener.start(queue: queue)
 
-        guard ready.wait(timeout: .now() + 5) == .success,
+        guard ready.wait(timeout: .now() + listenerReadyWaitSeconds) == .success,
               listener.state == .ready,
               let assignedPort = listener.port else {
             listener.cancel()

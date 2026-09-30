@@ -44,6 +44,24 @@ enum LoopbackHTTPServerError: Error {
     case listenerStart
 }
 
+/// Host-state tolerance for `LoopbackHTTPServer`'s `.ready` transition
+/// (#260).
+///
+/// `NWListener.start` is asynchronous, and the simulator's Network.framework
+/// can take seconds to reach `.ready` while the runner hosts five concurrent
+/// macOS jobs — it logs `nw_listener_socket_inbox_create_socket setsockopt
+/// SO_NECP_LISTENUUID failed [2: No such file or directory]` while doing so.
+/// A 5 s bound expired in the required `unit-tests` job (first instance:
+/// `testPost_postsJSONToTheHeadlessLoginPathAndDecodes200`, run 36212681243).
+///
+/// This is a host-state tolerance, not retry machinery: the listener must
+/// still reach `.ready` within this bound or the test throws
+/// `LoopbackHTTPServerError.listenerStart`, so a genuinely unusable listener
+/// is not hidden — only the lateness is absorbed. If a `.ready` timeout ever
+/// survives this bound, the next step is a fresh-listener retry or an
+/// investigation of the NECP socket-create failure, not another increase.
+private let listenerReadyWaitSeconds: TimeInterval = 20
+
 /// A one-shot in-process plain-HTTP server for the shared-session post tests.
 /// Accepts a single request, captures it, and replies with the scripted
 /// response.
@@ -101,7 +119,7 @@ final class LoopbackHTTPServer {
         }
         listener.start(queue: queue)
 
-        guard ready.wait(timeout: .now() + 5) == .success,
+        guard ready.wait(timeout: .now() + listenerReadyWaitSeconds) == .success,
               listener.state == .ready,
               let assignedPort = listener.port else {
             listener.cancel()
