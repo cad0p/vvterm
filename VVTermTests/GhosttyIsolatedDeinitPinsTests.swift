@@ -422,10 +422,18 @@ struct GhosttyIsolatedDeinitPinsTests {
     /// 5 of 5 — every `NotificationCenter` observer the iOS class registers is
     /// removed by the converged deinit. The expected token set is **derived from
     /// the registration sites**, not from a hardcoded name list, so a fifth
-    /// `addObserver` in the class reds here until its teardown is added. The
+    /// `addObserver` in the class body reds here until its teardown is added. The
     /// exact removal count plus the per-token binding form exclude
     /// identifier-preserving non-removals (`token = nil`, `_ = token`) and a
     /// `removeObserver` call that does not use the bound token.
+    ///
+    /// Measured limits (tripwire, not proof): a dead-code-guarded removal
+    /// (`if false` / `#if false`, or a string literal carrying the binding text)
+    /// stays green — measured 10/10 green with an `if false` wrapper; a second
+    /// `addObserver` overwriting the same stored token is invisible (the
+    /// derivation dedupes by token name); and a registration added in an
+    /// extension or another file is invisible to the class-body scan (measured
+    /// false green, 10/10). An in-class fifth registration is caught.
     @Test
     func testGhosttyTerminalViewDeinitRemovesEveryRegisteredObserver() {
         guard let text = Self.terminalViewSource() else { return }
@@ -442,7 +450,10 @@ struct GhosttyIsolatedDeinitPinsTests {
     }
 
     /// The macOS twin carries a plain `deinit` (its two `nonisolated deinit {}`
-    /// markers belong to nested helper classes) with a **one**-token obligation:
+    /// markers belong to top-level `private final class` helpers declared after
+    /// this class body — `DisplayLinkCallbackContext` and
+    /// `TerminalZoomIndicatorView`, not nested types) with a **one**-token
+    /// obligation:
     /// `configReloadObserver` is the only `NotificationCenter` registration in
     /// the macOS class, and the KVO `appearanceObservation` is auto-invalidated.
     /// This is a distinct matcher anchored on the plain `deinit {`, not the iOS
@@ -605,7 +616,11 @@ struct GhosttyIsolatedDeinitPinsTests {
     /// observer inside the binding's block. Identifier-preserving shapes
     /// (`token = nil`, `_ = token`) and non-removing calls are rejected
     /// explicitly, so the failure names the leak rather than only the missing
-    /// binding.
+    /// binding. The required idiom is
+    /// `if let observer = <token> { NotificationCenter.default.removeObserver(observer) }`
+    /// (`for observer in <token>` for the array token); the in-block
+    /// `removeObserver(observer)` match is literal, so a multi-line call also
+    /// reds conservatively.
     private static func assertObserverTokenIsRemovedByBinding(
         _ token: String,
         in deinitBody: Range<String.Index>,
@@ -619,7 +634,7 @@ struct GhosttyIsolatedDeinitPinsTests {
         let bindings = (ifLet + forIn).sorted { $0.lowerBound < $1.lowerBound }
         #expect(
             bindings.count == 1,
-            "\(file): the deinit must remove `\(token)` through its binding form (`if let observer = \(token)` / `for observer in \(token)`) — found \(bindings.count); `\(token) = nil` or `_ = \(token)` still leaks the registration"
+            "\(file): the deinit must remove `\(token)` as `if let observer = \(token) { NotificationCenter.default.removeObserver(observer) }` (the array form is `for observer in \(token) { … }`) — found \(bindings.count); the check is deliberately conservative about equivalent spellings, and `\(token) = nil` / `_ = \(token)` still leaks the registration"
         )
         #expect(
             occurrences(of: "\(token) = nil", in: text, range: deinitBody).isEmpty
@@ -653,9 +668,10 @@ struct GhosttyIsolatedDeinitPinsTests {
     }
 
     /// The body of the unique class-member **plain** `deinit` in the macOS
-    /// terminal view. `nonisolated deinit` markers belong to nested helper
-    /// classes, so they are excluded both by the class-member depth filter and
-    /// by requiring the preceding token not to be `nonisolated`.
+    /// terminal view. The `nonisolated deinit` markers belong to top-level
+    /// helper classes after the class body, so they are excluded both by the
+    /// class-member depth filter and by requiring the preceding token not to be
+    /// `nonisolated`.
     private static func plainDeinitBody(
         in text: String,
         classBody: Range<String.Index>

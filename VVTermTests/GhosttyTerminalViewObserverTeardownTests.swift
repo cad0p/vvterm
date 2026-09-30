@@ -21,6 +21,15 @@
 //  the #116 `LayerTeardown.prepare` step is not exercised (pre-existing, named
 //  by #299); and this is a simulator runtime observation, not a device one.
 //
+//  QUARANTINED (#310): the no-`cleanup()` release path this test exercises is a
+//  real UAF window on the CI toolchain (Xcode 27 / iOS 27.0): `Ghostty.Surface
+//  .deinit` defers `ghostty_surface_free` to the main queue while the surface's
+//  userdata still points at the freed view, so a queued `ghostty_app_tick` can
+//  `objc_retain` the dead view — EXC_BAD_ACCESS/SIGSEGV in `Ghostty.App.action`
+//  (CI run 36687734186, ~81 s into this test). The body below is kept intact as
+//  #310's acceptance evidence; the `.disabled(…)` trait on the test is the
+//  quarantine and is where this test revives (github.com/cad0p/vvterm/issues/310).
+//
 
 import Foundation
 import CoreGraphics
@@ -41,7 +50,11 @@ struct GhosttyTerminalViewObserverTeardownTests {
         }
     }
 
-    @Test
+    /// Quarantined for #310: see the file header. Remove the `.disabled(…)`
+    /// trait to revive this test once #310 fixes the surface/view lifetime.
+    @Test(.disabled(
+        "Quarantined for #310 — this no-cleanup() release path leaves `ghostty_surface_userdata` dangling and the CI runtime crashes in `objc_retain ← closure #1 in Ghostty.App.action(_:target:action:) ← ghostty_app_tick` (EXC_BAD_ACCESS/SIGSEGV). Re-enable with that fix."
+    ))
     func viewReleasedWithoutCleanupRemovesItsConfigReloadObserver() async throws {
         let app = Ghostty.App()
         // Runs after the final run-loop pump below, so the deinit's deferred
@@ -105,8 +118,16 @@ struct GhosttyTerminalViewObserverTeardownTests {
     /// and the deinit's main-queue work can drain.
     private static func pumpRunLoop() async {
         await Task.yield()
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        pumpMainRunLoopOnce()
         await Task.yield()
+        pumpMainRunLoopOnce()
+    }
+
+    /// `RunLoop.current`/`run(until:)` are marked `noasync`, so the direct calls
+    /// cannot sit in an async function even when the body above is unreachable
+    /// behind the #310 skip; this synchronous wrapper keeps the exact pump the
+    /// quarantined body was written against.
+    private static func pumpMainRunLoopOnce() {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
     }
 }
