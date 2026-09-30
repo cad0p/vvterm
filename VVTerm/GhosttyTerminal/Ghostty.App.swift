@@ -1098,15 +1098,17 @@ extension Ghostty {
         // be read so performable paste bindings fall through to the terminal.
         static func readClipboard(_ userdata: UnsafeMutableRawPointer?, location: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) -> Bool {
             // userdata is the surface's retained callback context (#310).
-            // Thread contract: the pinned core handles `.clipboard_read` in
-            // the surface's IO message loop (`Surface.zig:1056-1061`, reached
-            // from paste key/mouse handling), i.e. on the IO thread — not on
-            // the app thread that `free()` runs on. The context makes the view
-            // resolution safe on that thread; it does not make the reads below
+            // Thread contract: the core's termio stream handler (OSC 52,
+            // `termio/stream_handler.zig:963-977`) sends `.clipboard_read` to
+            // the surface MAILBOX from the I/O thread; `Surface.handleMessage`
+            // — documented "Called from the app thread" (`Surface.zig:970-972`,
+            // handler at `:1043`) — handles it on the app thread, which
+            // VVTerm's `wakeup` ticks on the main queue. That is the same
+            // thread the main-actor `free()` runs on, so the surface-handle
+            // read below is not a live race. The context is what makes the
+            // view resolution safe for the callback that does run off-main
+            // (the write callback); it is not needed to make these reads
             // race-free.
-            // Residual (pre-existing, out of scope for #310): once a view
-            // resolves, `terminalView.surface?.unsafeCValue` and
-            // `Clipboard.readString()` are both read off the main thread.
             guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
                   let terminalView = context.resolve()
             else { return false }
