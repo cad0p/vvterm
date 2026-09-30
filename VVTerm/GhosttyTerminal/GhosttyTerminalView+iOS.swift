@@ -1717,6 +1717,9 @@ class GhosttyTerminalView: UIView {
     // window, and a live selection-autoscroll CADisplayLink retains this view, so
     // the deinit is unreachable while one exists.
     nonisolated deinit {
+        if let observer = configReloadObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         for observer in hardwareKeyboardObservers {
             NotificationCenter.default.removeObserver(observer)
         }
