@@ -6161,11 +6161,15 @@ class GhosttyTerminalView: UIView {
     /// Setup the write callback to capture keyboard input
     func setupWriteCallback() {
         guard let surface = surface?.unsafeCValue else { return }
+        guard let callbackContext else { return }
 
-        let userdata = Unmanaged.passUnretained(self).toOpaque()
+        // #310: the callback's userdata is the retained context, not this
+        // view's address — the termio IO thread can invoke the write callback
+        // after the view was released without `cleanup()` (custom-io.patch
+        // documents that userdata must outlive the surface).
+        let userdata = callbackContext.userdata
         ghostty_surface_set_write_callback(surface, { userdata, data, len in
-            guard let userdata = userdata else { return }
-            let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+            guard let view = Ghostty.SurfaceCallbackContext.fromOpaque(userdata)?.resolve() else { return }
             guard let data = data, len > 0 else { return }
             let swiftData = Data(bytes: data, count: len)
             // Call directly - Ghostty calls this from main thread, no queue hop needed
