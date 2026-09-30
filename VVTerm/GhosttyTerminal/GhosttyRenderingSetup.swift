@@ -81,6 +81,8 @@ class GhosttyRenderingSetup {
     ///   - window: The containing window
     ///   - paneId: Optional pane identifier
     ///   - command: Optional command to execute
+    ///   - callbackContext: The retained userdata context (#310); installed as
+    ///     `surfaceConfig.userdata` before the surface is created
     ///   - useCustomIO: If true, uses callback backend for custom I/O (SSH clients)
     func setupSurface(
         view: NSView,
@@ -90,6 +92,7 @@ class GhosttyRenderingSetup {
         window: NSWindow?,
         paneId: String? = nil,
         command: String? = nil,
+        callbackContext: Ghostty.SurfaceCallbackContext,
         useCustomIO: Bool = false
     ) -> ghostty_surface_t? {
         // Configure surface with working directory
@@ -99,8 +102,11 @@ class GhosttyRenderingSetup {
         surfaceConfig.platform_tag = GHOSTTY_PLATFORM_MACOS
         surfaceConfig.platform.macos.nsview = Unmanaged.passUnretained(view).toOpaque()
 
-        // Set userdata
-        surfaceConfig.userdata = Unmanaged.passUnretained(view).toOpaque()
+        // #310: userdata is the retained callback context, never the view's
+        // address — the surface can outlive the view on a no-cleanup() release
+        // path. The context is installed before `ghostty_surface_new` because
+        // the core emits set_title/cell_size from inside `Surface.init`.
+        surfaceConfig.userdata = callbackContext.userdata
 
         // Set scale factor for retina displays
         surfaceConfig.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
@@ -141,7 +147,12 @@ class GhosttyRenderingSetup {
         // Create the surface
         // NOTE: subprocess spawns during ghostty_surface_new, so size warnings may appear
         // if view frame isn't set yet - this is unavoidable with current API
-        guard let cSurface = ghostty_surface_new(ghosttyApp, &surfaceConfig) else {
+        // `withExtendedLifetime` keeps the context (and therefore the userdata
+        // pointer it vends) alive until the core has finished its init-time
+        // callbacks and `ghostty_surface_new` has returned.
+        guard let cSurface = withExtendedLifetime(callbackContext, {
+            ghostty_surface_new(ghosttyApp, &surfaceConfig)
+        }) else {
             Self.logger.error("ghostty_surface_new failed")
             return nil
         }
@@ -172,6 +183,8 @@ class GhosttyRenderingSetup {
     ///   - initialBounds: Initial view bounds
     ///   - paneId: Optional pane identifier
     ///   - command: Optional command to execute
+    ///   - callbackContext: The retained userdata context (#310); installed as
+    ///     `surfaceConfig.userdata` before the surface is created
     ///   - useCustomIO: If true, uses callback backend for custom I/O (SSH clients)
     func setupSurface(
         view: UIView,
@@ -180,6 +193,7 @@ class GhosttyRenderingSetup {
         initialBounds: CGRect,
         paneId: String? = nil,
         command: String? = nil,
+        callbackContext: Ghostty.SurfaceCallbackContext,
         useCustomIO: Bool = false
     ) -> ghostty_surface_t? {
         // Configure surface with working directory
@@ -189,8 +203,11 @@ class GhosttyRenderingSetup {
         surfaceConfig.platform_tag = GHOSTTY_PLATFORM_IOS
         surfaceConfig.platform.ios.uiview = Unmanaged.passUnretained(view).toOpaque()
 
-        // Set userdata
-        surfaceConfig.userdata = Unmanaged.passUnretained(view).toOpaque()
+        // #310: userdata is the retained callback context, never the view's
+        // address — the surface can outlive the view on a no-cleanup() release
+        // path. The context is installed before `ghostty_surface_new` because
+        // the core emits set_title/cell_size from inside `Surface.init`.
+        surfaceConfig.userdata = callbackContext.userdata
 
         // Set scale factor for retina displays
         // Use contentScaleFactor which we set in GhosttyTerminalView.init to UIScreen.main.scale
@@ -231,7 +248,12 @@ class GhosttyRenderingSetup {
         }
 
         // Create the surface
-        guard let cSurface = ghostty_surface_new(ghosttyApp, &surfaceConfig) else {
+        // `withExtendedLifetime` keeps the context (and therefore the userdata
+        // pointer it vends) alive until the core has finished its init-time
+        // callbacks and `ghostty_surface_new` has returned.
+        guard let cSurface = withExtendedLifetime(callbackContext, {
+            ghostty_surface_new(ghosttyApp, &surfaceConfig)
+        }) else {
             Self.logger.error("ghostty_surface_new failed")
             return nil
         }
