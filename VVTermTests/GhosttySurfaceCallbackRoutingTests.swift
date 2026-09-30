@@ -69,6 +69,70 @@ struct GhosttySurfaceCallbackRoutingTests {
         }
     }
 
+    /// Test-owned invocation record for the dead-window write probe.
+    ///
+    /// The production write callback returns before any observable side effect
+    /// when the context resolves nil, so the only way to tell "the callback ran
+    /// and dropped the response" from "the callback never ran" is a callback the
+    /// test owns. The probe carries the surface's real context userdata (passed
+    /// through the C userdata, since a C function pointer cannot capture
+    /// context) and resolves it through the same production helper the real
+    /// callback uses. Written from the termio IO thread, read from the main
+    /// actor after a bounded wait.
+    private final class WriteCallbackProbe {
+        /// The surface's retained context userdata, resolved exactly as the
+        /// production write callback resolves it.
+        let contextUserdata: UnsafeMutableRawPointer
+
+        private let lock = NSLock()
+        private var invocations = 0
+        private var dropped = 0
+        private var resolvedViews = 0
+
+        init(contextUserdata: UnsafeMutableRawPointer) {
+            self.contextUserdata = contextUserdata
+        }
+
+        /// Recover the probe from the callback's userdata, mirroring the
+        /// production callback's `fromOpaque` shape.
+        static func from(_ userdata: UnsafeMutableRawPointer?) -> WriteCallbackProbe? {
+            guard let userdata else { return nil }
+            return Unmanaged<WriteCallbackProbe>.fromOpaque(userdata).takeUnretainedValue()
+        }
+
+        /// Recorded before `resolve()`, so a never-invoked callback cannot look
+        /// like a ran-and-dropped one.
+        func noteInvocation() {
+            lock.lock(); defer { lock.unlock() }
+            invocations += 1
+        }
+
+        func noteDropped() {
+            lock.lock(); defer { lock.unlock() }
+            dropped += 1
+        }
+
+        func noteResolvedView() {
+            lock.lock(); defer { lock.unlock() }
+            resolvedViews += 1
+        }
+
+        var invocationCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return invocations
+        }
+
+        var droppedCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return dropped
+        }
+
+        var resolvedViewCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return resolvedViews
+        }
+    }
+
     private static func makeTerminal(
         app: Ghostty.App,
         appHandle: ghostty_app_t,
@@ -109,6 +173,22 @@ struct GhosttySurfaceCallbackRoutingTests {
             pumpMainRunLoopOnce()
         }
         return box.value == nil
+    }
+
+    /// Runs the main run loop until `condition` holds or the timeout expires,
+    /// and reports whether it held. Used for the IO-thread write dispatch,
+    /// which is not a main-queue block and so cannot be drained through the
+    /// context completion signal.
+    private static func waitUntil(
+        timeout: TimeInterval = 2.0,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition(), Date() < deadline {
+            await Task.yield()
+            pumpMainRunLoopOnce()
+        }
+        return condition()
     }
 
     /// `RunLoop.current.run(until:)` is marked `noasync`, so it cannot sit in an
@@ -194,6 +274,7 @@ struct GhosttySurfaceCallbackRoutingTests {
 
         await Self.waitUntilViewDeallocates(weakView)
         #expect(weakView.value == nil, "the view must deallocate once its last reference drops")
+        #expect(heldSurface != nil, "the held wrapper must keep the surface alive after the view drops")
 
         // Resolve through the surface's userdata exactly as the action fallback
         // does; the transient context reference dies with the expression so the
@@ -281,9 +362,17 @@ struct GhosttySurfaceCallbackRoutingTests {
     }
 
     /// Sibling-site dead-window oracle: after the view is dropped, feeding the
-    /// still-alive surface invokes the custom-IO write callback with the dead
-    /// userdata. Pre-fix that callback retains the freed view; post-fix the
-    /// context resolves nil and the response is dropped.
+    /// still-alive surface invokes the write callback with the dead userdata.
+    /// Pre-fix that callback retains the freed view; post-fix the context
+    /// resolves nil and the response is dropped.
+    ///
+    /// The production callback returns before any observable side effect when
+    /// `resolve()` yields nil, so its own invocation cannot be observed in the
+    /// dead window. This test therefore installs a probe callback carrying the
+    /// same context userdata: the probe records the invocation *before*
+    /// resolving through the same `SurfaceCallbackContext` helper, which is
+    /// what makes "the callback ran and dropped the response" distinguishable
+    /// from "the callback never ran".
     @Test
     func writeCallbackInTheDeadViewWindowResolvesToNilWithoutCrashing() async throws {
         let app = Ghostty.App()
@@ -292,6 +381,8 @@ struct GhosttySurfaceCallbackRoutingTests {
 
         let weakView = WeakBox<GhosttyTerminalView>()
         let weakContext = WeakBox<Ghostty.SurfaceCallbackContext>()
+        let collector = WriteCollector()
+        var probe: WriteCallbackProbe?
         var heldSurface: Ghostty.Surface?
         var handle: ghostty_surface_t?
         var liveDeliveryWorked = false
@@ -304,26 +395,55 @@ struct GhosttySurfaceCallbackRoutingTests {
             handle = cHandle
             weakContext.value = surface.callbackContext
 
-            let collector = WriteCollector()
             terminal.writeCallback = { collector.append($0) }
             terminal.setupWriteCallback()
             terminal.acceptsTerminalInput = true
 
-            // Positive control: the same feed path delivers while the view is
-            // alive, so the dead-window feed below exercises a working channel.
+            // Positive control: the same feed path delivers through the
+            // production write callback while the view is alive.
             surface.feedText("\u{1B}]10;?\u{07}")
             Self.pumpMainRunLoop()
             liveDeliveryWorked = collector.combinedString.contains("\u{1B}]10;rgb:")
+
+            // Replace the production callback with the probe, keeping the same
+            // surface and the same context userdata, and let the install land
+            // before the view drops. Nothing is fed between the replacement and
+            // the drop, so every probe invocation below is a dead-window one.
+            let installedProbe = WriteCallbackProbe(contextUserdata: surface.callbackContext.userdata)
+            probe = installedProbe
+            ghostty_surface_set_write_callback(
+                cHandle,
+                { userdata, data, len in
+                    // State travels through the C userdata: a C function
+                    // pointer cannot capture context, mirroring the shape of
+                    // the production callback.
+                    guard let probe = WriteCallbackProbe.from(userdata) else { return }
+                    probe.noteInvocation()
+                    guard let view = Ghostty.SurfaceCallbackContext
+                        .fromOpaque(probe.contextUserdata)?
+                        .resolve()
+                    else {
+                        probe.noteDropped()
+                        return
+                    }
+                    probe.noteResolvedView()
+                    guard let data, len > 0 else { return }
+                    view.writeCallback?(Data(bytes: data, count: len))
+                },
+                Unmanaged.passUnretained(installedProbe).toOpaque()
+            )
+            Self.pumpMainRunLoop()
         }
 
         #expect(liveDeliveryWorked, "positive control: the write callback delivers while the view is alive")
-        guard let handle else {
+        guard let handle, let probe else {
             Issue.record("surface creation failed")
             return
         }
 
         await Self.waitUntilViewDeallocates(weakView)
         #expect(weakView.value == nil, "the view must deallocate once its last reference drops")
+        #expect(heldSurface != nil, "the held wrapper must keep the surface alive after the view drops")
 
         let contextView = Ghostty.SurfaceCallbackContext
             .fromOpaque(ghostty_surface_userdata(handle))?
@@ -331,12 +451,39 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(contextView == nil, "the dead view must resolve to nil")
         #expect(weakContext.value != nil, "the held surface wrapper must keep the context alive")
 
-        // The write callback's userdata is the context; feeding here runs it
-        // synchronously with the view already gone. Pre-fix: freed-view retain.
-        var bytes = Array("\u{1B}]10;?\u{07}".utf8)
+        // Feed with the view already gone: the probe must be invoked and must
+        // resolve the dead context to nil. Pre-fix this feed crashes in the
+        // freed-view retain; post-fix the response is dropped.
+        let invocationsBeforeDeadFeed = probe.invocationCount
+        let droppedBeforeDeadFeed = probe.droppedCount
+        let resolvedViewsBeforeDeadFeed = probe.resolvedViewCount
+        let deliveredBeforeDeadFeed = collector.combinedString
+
+        let bytes = Array("\u{1B}]10;?\u{07}".utf8)
         bytes.withUnsafeBufferPointer { buffer in
             ghostty_surface_feed_data(handle, buffer.baseAddress, buffer.count)
         }
+
+        let observedDeadWindowInvocation = await Self.waitUntil {
+            probe.invocationCount > invocationsBeforeDeadFeed
+        }
+        #expect(
+            observedDeadWindowInvocation,
+            "the dead-window write callback must actually run (a never-invoked callback must not pass)"
+        )
+        #expect(
+            probe.droppedCount - droppedBeforeDeadFeed
+                == probe.invocationCount - invocationsBeforeDeadFeed,
+            "every dead-window invocation must resolve the dead view to nil and drop the response"
+        )
+        #expect(
+            probe.resolvedViewCount == resolvedViewsBeforeDeadFeed,
+            "a dead context must never resolve a view"
+        )
+        #expect(
+            collector.combinedString == deliveredBeforeDeadFeed,
+            "the dead-window response must not reach the view write callback"
+        )
 
         heldSurface = nil
         #expect(weakContext.value != nil, "the queued deferred free block must retain the context")

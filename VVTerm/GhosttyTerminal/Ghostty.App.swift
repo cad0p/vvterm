@@ -800,7 +800,11 @@ extension Ghostty {
         static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
             // Get the terminal view from surface userdata if target is a surface
             var titleTargetDescription = "target \(target.tag.rawValue)"
-            var activeSurfaceCount = 0
+            // The active-surface registry is MainActor state and is only read
+            // on the main thread, so the warning below must not print a
+            // meaningful-looking count for an off-main action: it stays
+            // "unavailable" unless the registry was actually consulted.
+            var activeSurfaceCountDescription = "active surfaces: unavailable"
             let terminalView: GhosttyTerminalView? = {
                 guard target.tag == GHOSTTY_TARGET_SURFACE else { return nil }
                 guard let surface = target.target.surface else { return nil }
@@ -819,7 +823,7 @@ extension Ghostty {
                 // context above has already resolved the same weak view.
                 if Thread.isMainThread, let appUserdata = ghostty_app_userdata(app) {
                     let state = Unmanaged<App>.fromOpaque(appUserdata).takeUnretainedValue()
-                    activeSurfaceCount = state.activeSurfaceCount()
+                    activeSurfaceCountDescription = "active surfaces: \(state.activeSurfaceCount())"
                     if let registeredView = state.terminalView(for: surface) {
                         return registeredView
                     }
@@ -839,7 +843,7 @@ extension Ghostty {
                             if TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] != title {
                                 TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] = title
                                 Ghostty.logger.warning(
-                                    "Ghostty title received without terminal view: \(title, privacy: .public), target: \(titleTargetDescription, privacy: .public), active surfaces: \(activeSurfaceCount)"
+                                    "Ghostty title received without terminal view: \(title, privacy: .public), target: \(titleTargetDescription, privacy: .public), \(activeSurfaceCountDescription)"
                                 )
                             }
                             return
@@ -1094,10 +1098,15 @@ extension Ghostty {
         // be read so performable paste bindings fall through to the terminal.
         static func readClipboard(_ userdata: UnsafeMutableRawPointer?, location: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) -> Bool {
             // userdata is the surface's retained callback context (#310).
-            // Thread contract: the core delivers this from `handleMessage` on
-            // the app thread (the same thread as `free()`), so the surface
-            // handle read below is not a live race; the context is what makes
-            // the view resolution safe on any thread.
+            // Thread contract: the pinned core handles `.clipboard_read` in
+            // the surface's IO message loop (`Surface.zig:1056-1061`, reached
+            // from paste key/mouse handling), i.e. on the IO thread — not on
+            // the app thread that `free()` runs on. The context makes the view
+            // resolution safe on that thread; it does not make the reads below
+            // race-free.
+            // Residual (pre-existing, out of scope for #310): once a view
+            // resolves, `terminalView.surface?.unsafeCValue` and
+            // `Clipboard.readString()` are both read off the main thread.
             guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
                   let terminalView = context.resolve()
             else { return false }

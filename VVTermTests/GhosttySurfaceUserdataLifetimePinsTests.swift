@@ -38,8 +38,9 @@
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>`):
 //    P-A  re-add `Unmanaged<GhosttyTerminalView>` to the action fallback →
 //         `offenders: ["Ghostty.App.swift"]`.
-//    P-B  revert the `readClipboard` route to the raw view cast →
-//         `expected 3 context routes in Ghostty.App.swift, found 2`.
+//    P-B  rename the `readClipboard` context route to a non-context helper →
+//         `P-B: readClipboard must resolve through the context exactly once; found 0`
+//         (and the file-level count drops to 2).
 //    P-C  delete `callbackContext.invalidate()` from `free()` →
 //         the invalidate-before-free order assertion fails.
 //    P-D  revert the iOS write callback to `passUnretained(self)` →
@@ -156,6 +157,32 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             ).count == 1,
             "P-B: the action fallback must pair ghostty_surface_userdata(surface) with the context helper"
         )
+
+        // Per-site anchors: the file-level count above can stay at 3 while one
+        // site is left unrouted and another is routed twice (or a route moves
+        // out of its function), so each of the three app routes is anchored to
+        // its own function body.
+        let appRoutingSites: [(name: String, anchor: String)] = [
+            ("action fallback", "func action("),
+            ("readClipboard", "func readClipboard("),
+            ("closeSurface", "func closeSurface("),
+        ]
+        for site in appRoutingSites {
+            let anchor = try #require(
+                Self.occurrences(of: site.anchor, in: appText).first,
+                "P-B: Ghostty.App.swift must keep \(site.name)"
+            )
+            let body = try Self.bracedBlock(after: anchor, in: appText)
+            let routes = Self.flexibleOccurrences(
+                of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
+                in: appText,
+                range: body
+            )
+            #expect(
+                routes.count == 1,
+                "P-B: \(site.name) must resolve through the context exactly once; found \(routes.count)"
+            )
+        }
 
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
             let text = Self.strippingComments(try source(file))
