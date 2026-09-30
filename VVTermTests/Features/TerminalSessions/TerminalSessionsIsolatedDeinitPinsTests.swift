@@ -11,7 +11,11 @@
 //  the back-deployed MainActor deinit path and aborts in libmalloc (`pointer
 //  being freed was not allocated`) — swiftlang/swift#85663, #88036. The sweep
 //  adds the repo's standard empty marker (`nonisolated deinit {}`) to every such
-//  class in VVTerm/Features/TerminalSessions; these pins keep it there.
+//  class in VVTerm/Features/TerminalSessions; these pins keep it there. The one
+//  converged exception is `TerminalKeyboardCoordinator`: #308 gave it a real
+//  `nonisolated deinit` body (observer teardown + verification-task cancel), so
+//  it is pinned by the dedicated body tests at the end of this file instead of
+//  the exact-marker table.
 //
 //  WHY SOURCE PINS AND NOT A RUNTIME TEST: the abort reproduces on the iOS
 //  26.3.1 simulator runtime but not on the CI runtime, so a runtime test is
@@ -74,7 +78,6 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
     private static let pins: [Pin] = [
         Pin(file: "VVTerm/Features/TerminalSessions/Application/EternalTerminalRuntime.swift", anchor: "final class EternalTerminalRuntime", control: "let paneId: UUID"),
         Pin(file: "VVTerm/Features/TerminalSessions/Application/LiveActivityManager.swift", anchor: "final class LiveActivityManager", control: "static let shared"),
-        Pin(file: "VVTerm/Features/TerminalSessions/Application/TerminalKeyboardCoordinator.swift", anchor: "final class TerminalKeyboardCoordinator", control: "var isSoftwareKeyboardVisible"),
         Pin(file: "VVTerm/Features/TerminalSessions/Application/TerminalScreenAwakeCoordinator+iOS.swift", anchor: "final class TerminalScreenAwakeCoordinator", control: "private var requestingRouteIDs"),
         Pin(file: "VVTerm/Features/TerminalSessions/Application/TerminalTabManager.swift", anchor: "final class TerminalTabManager", control: "static let shared"),
         Pin(file: "VVTerm/Features/TerminalSessions/Application/TerminalTransportWriteQueue.swift", anchor: "final class TerminalTransportWriteQueue", control: "private var pendingWrite"),
@@ -95,7 +98,6 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
     private static let markerCountsPerFile: [(file: String, count: Int)] = [
         (file: "VVTerm/Features/TerminalSessions/Application/EternalTerminalRuntime.swift", count: 1),
         (file: "VVTerm/Features/TerminalSessions/Application/LiveActivityManager.swift", count: 1),
-        (file: "VVTerm/Features/TerminalSessions/Application/TerminalKeyboardCoordinator.swift", count: 1),
         (file: "VVTerm/Features/TerminalSessions/Application/TerminalScreenAwakeCoordinator+iOS.swift", count: 1),
         (file: "VVTerm/Features/TerminalSessions/Application/TerminalTabManager.swift", count: 1),
         (file: "VVTerm/Features/TerminalSessions/Application/TerminalTransportWriteQueue.swift", count: 1),
@@ -110,13 +112,15 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
     // MARK: - Tests
 
     /// Table completeness: every other test in this suite iterates `Self.pins`,
-    /// so an emptied or shortened table would be silently vacuous. 13
-    /// is the sweep's recorded class count for this area (one marker per class).
+    /// so an emptied or shortened table would be silently vacuous. 12
+    /// is the exact-marker table's recorded class count for this area (one
+    /// marker per class; the #308-converged `TerminalKeyboardCoordinator` is
+    /// pinned by the body tests below instead).
     @Test
     func testTerminalSessionsPinTableIsComplete() {
         #expect(
-            Self.pins.count == 13,
-            "the TerminalSessions pin table must stay complete: expected 13 rows, found \(Self.pins.count)"
+            Self.pins.count == 12,
+            "the TerminalSessions pin table must stay complete: expected 12 rows, found \(Self.pins.count)"
         )
     }
 
@@ -168,6 +172,349 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
                 "\(entry.file): expected \(entry.count) `nonisolated deinit {}` markers, found \(count)"
             )
         }
+    }
+
+    // MARK: - #308 convergence pins (TerminalKeyboardCoordinator)
+
+    /// `TerminalKeyboardCoordinator` is the class #308 converged: it used to
+    /// carry the sweep's exact `nonisolated deinit {}` marker, and now carries a
+    /// `nonisolated deinit` with a real body (remove every keyboard-observer
+    /// token, then cancel the pending presentation-verification task). The three
+    /// tests below pin the converged shape from independent angles: a reversion
+    /// to the empty marker reds 1 and 2; a body collapse reds 2; a dropped
+    /// observer removal or a dropped task cancel reds 3. The file is
+    /// deliberately no longer in the exact-marker table above (a body is
+    /// invisible to that spelling), so these tests are its only pins.
+    private static let keyboardCoordinatorFile = "VVTerm/Features/TerminalSessions/Application/TerminalKeyboardCoordinator.swift"
+
+    /// The comment-stripped source of `file`, or `nil` after recording why it
+    /// could not be read.
+    private static func commentStrippedSource(of file: String) -> String? {
+        do {
+            return try strippingComments(source(file))
+        } catch {
+            Issue.record("\(file): cannot read the pinned source file: \(error)")
+            return nil
+        }
+    }
+
+    /// The resolved body of the class declared at `anchor`, or `nil` after
+    /// recording why it did not resolve. The body contains nested types, so
+    /// callers must use `relativeDepth` for member-level assertions.
+    private static func classBody(
+        anchor: String,
+        in text: String,
+        file: String
+    ) -> Range<String.Index>? {
+        let anchors = occurrences(of: anchor, in: text)
+        guard anchors.count == 1 else {
+            Issue.record("\(file): the `\(anchor)` anchor must be unique (found \(anchors.count)); the declaration was renamed, duplicated or moved")
+            return nil
+        }
+        do {
+            return try bracedBlock(after: anchors[0], in: text)
+        } catch {
+            Issue.record("\(file): the `\(anchor)` anchor does not open a braced body: \(error)")
+            return nil
+        }
+    }
+
+    /// The comment-stripped coordinator source, or `nil` after recording why it
+    /// could not be read.
+    private static func keyboardCoordinatorSource() -> String? {
+        commentStrippedSource(of: keyboardCoordinatorFile)
+    }
+
+    /// The coordinator's resolved class body behind the suite's mandatory
+    /// positive control, or `nil` after recording why it did not resolve. Every
+    /// converged-shape test calls this, so a mis-resolved span fails loudly
+    /// instead of passing by accident.
+    private static func checkedKeyboardCoordinatorBody(in text: String) -> Range<String.Index>? {
+        guard let body = classBody(
+            anchor: "final class TerminalKeyboardCoordinator",
+            in: text,
+            file: keyboardCoordinatorFile
+        ) else { return nil }
+        let controls = occurrences(of: "var isSoftwareKeyboardVisible", in: text, range: body)
+        #expect(
+            controls.count == 1,
+            "\(keyboardCoordinatorFile): the positive control `var isSoftwareKeyboardVisible` must occur exactly once in the resolved class body (found \(controls.count))"
+        )
+        guard controls.count == 1 else { return nil }
+        return body
+    }
+
+    /// The unique class-member `nonisolated deinit` token in the resolved
+    /// coordinator body, or `nil` after recording why it did not resolve.
+    private static func nonisolatedDeinitToken(
+        in text: String,
+        classBody: Range<String.Index>
+    ) -> Range<String.Index>? {
+        let tokens = occurrences(of: "nonisolated deinit", in: text, range: classBody)
+            .filter { relativeDepth(of: $0, to: classBody, in: text) == 1 }
+        guard tokens.count == 1 else {
+            Issue.record("\(keyboardCoordinatorFile): the class-member `nonisolated deinit` token must be unique to pin its body (found \(tokens.count))")
+            return nil
+        }
+        return tokens[0]
+    }
+
+    /// The body of the unique class-member `nonisolated deinit`, or `nil` after
+    /// recording why it did not resolve.
+    private static func nonisolatedDeinitBody(
+        in text: String,
+        classBody: Range<String.Index>
+    ) -> Range<String.Index>? {
+        guard let token = nonisolatedDeinitToken(in: text, classBody: classBody) else { return nil }
+        guard let body = try? bracedBlock(after: token, in: text) else {
+            Issue.record("\(keyboardCoordinatorFile): the class-member `nonisolated deinit` must open a braced body")
+            return nil
+        }
+        return body
+    }
+
+    /// 1 of 3 — exactly one `nonisolated deinit` at class-member depth, behind
+    /// the positive control. The exact-marker table above deliberately does not
+    /// see this body-bearing spelling.
+    @Test
+    func testTerminalKeyboardCoordinatorCarriesExactlyOneNonisolatedDeinit() {
+        guard let text = Self.keyboardCoordinatorSource() else { return }
+        guard let body = Self.checkedKeyboardCoordinatorBody(in: text) else { return }
+        let tokens = Self.occurrences(of: "nonisolated deinit", in: text, range: body)
+            .filter { Self.relativeDepth(of: $0, to: body, in: text) == 1 }
+        #expect(
+            tokens.count == 1,
+            "\(Self.keyboardCoordinatorFile): TerminalKeyboardCoordinator must carry exactly one `nonisolated deinit` at class-member depth (found \(tokens.count)); #308 converged it off the exact `nonisolated deinit {}` marker"
+        )
+    }
+
+    /// 2 of 3 — the converged deinit body survives: the token is followed by a
+    /// real braced body, so a future #294-style collapse back to
+    /// `nonisolated deinit {}` reds here.
+    @Test
+    func testTerminalKeyboardCoordinatorDeinitBodySurvives() {
+        guard let text = Self.keyboardCoordinatorSource() else { return }
+        guard let body = Self.checkedKeyboardCoordinatorBody(in: text) else { return }
+        guard let token = Self.nonisolatedDeinitToken(in: text, classBody: body) else { return }
+        let afterToken = text[token.upperBound...].drop { $0 == " " || $0 == "\t" || $0 == "\n" }
+        #expect(
+            afterToken.first == "{",
+            "\(Self.keyboardCoordinatorFile): `nonisolated deinit` must be followed by a body, not by `;` or another declaration"
+        )
+        guard afterToken.first == "{", let deinitBody = try? Self.bracedBlock(after: token, in: text) else { return }
+        #expect(
+            !text[deinitBody].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "\(Self.keyboardCoordinatorFile): the converged `nonisolated deinit` body must not be empty; #308 keeps nonisolated teardown here"
+        )
+    }
+
+    /// 3 of 3 — every obligation the class body creates is unwound by the
+    /// deinit. The expected token set is derived from the registration sites,
+    /// not hardcoded, and the three-site count keeps the derivation honest; the
+    /// array binding plus the literal in-block removal excludes
+    /// `keyboardObservers = nil` / `_ = keyboardObservers`. The
+    /// five-registration cardinality is deliberately not encoded here — the
+    /// runtime test (`TerminalKeyboardCoordinatorObserverTeardownTests`) owns it.
+    ///
+    /// Measured limits (tripwire, not proof): an `if false`/`#if false`-guarded
+    /// removal and a removal inside a string literal stay green, and a
+    /// registration added in an extension or another file is invisible to the
+    /// class-body scan. An in-class extra registration reds the site count.
+    @Test
+    func testTerminalKeyboardCoordinatorDeinitRemovesEveryRegisteredObserver() {
+        guard let text = Self.keyboardCoordinatorSource() else { return }
+        guard let body = Self.checkedKeyboardCoordinatorBody(in: text) else { return }
+        guard let deinitBody = Self.nonisolatedDeinitBody(in: text, classBody: body) else { return }
+
+        let registrations = Self.notificationObserverRegistrations(in: body, text: text, file: Self.keyboardCoordinatorFile)
+        #expect(
+            registrations.count == 3,
+            "\(Self.keyboardCoordinatorFile): the class body must carry exactly three traceable `addObserver` registration sites (found \(registrations.count)); the derivation is written against that measured set"
+        )
+        let tokens = Self.uniqueTokens(of: registrations)
+        #expect(
+            tokens == ["keyboardObservers"],
+            "\(Self.keyboardCoordinatorFile): the `addObserver` sites must derive exactly the stored array token `keyboardObservers` (derived: \(tokens))"
+        )
+
+        let removals = Self.occurrences(of: "NotificationCenter.default.removeObserver", in: text, range: deinitBody)
+        #expect(
+            removals.count == tokens.count,
+            "\(Self.keyboardCoordinatorFile): the deinit must remove exactly the registered tokens (derived tokens \(tokens.count), removals \(removals.count)): \(tokens)"
+        )
+        for token in tokens {
+            Self.assertObserverTokenIsRemovedByBinding(token, in: deinitBody, text: text, file: Self.keyboardCoordinatorFile)
+        }
+
+        // The second resource: a pending verification task retains the terminal
+        // it captured across its 1 s sleep, so the deinit must cancel it too.
+        let normalized = Self.whitespaceNormalized(text[deinitBody])
+        #expect(
+            normalized.contains("presentationVerifyTask"),
+            "\(Self.keyboardCoordinatorFile): the deinit body must reference the stored `presentationVerifyTask`; a pending verification task retains its captured terminal past the coordinator's life"
+        )
+        #expect(
+            normalized.contains(".cancel()"),
+            "\(Self.keyboardCoordinatorFile): the deinit body must cancel `presentationVerifyTask` with `.cancel()`"
+        )
+    }
+
+    // MARK: - #308 obligation-derivation helpers
+
+    /// A `NotificationCenter.addObserver` registration site inside the
+    /// coordinator's class body, with the stored token the site feeds.
+    private struct ObserverRegistration {
+        let token: String
+        let site: Range<String.Index>
+    }
+
+    /// Every `addObserver` registration site in the class body, with the token
+    /// derived from the statement shape it feeds: `<token> = … addObserver(…)`
+    /// or `<token>.append(… addObserver(…)…)`.
+    ///
+    /// The needle is `addObserver`, not `addObserver(`: the boundary-aware
+    /// matcher checks the character after the match, and `addObserver(forName:`
+    /// leaves an identifier character (`f`) there — measured 1 of 3 sites with
+    /// the longer needle, 3 of 3 with the shorter one. A registration that
+    /// cannot be traced is recorded as an issue rather than skipped, so the pin
+    /// cannot go green by losing coverage.
+    private static func notificationObserverRegistrations(
+        in body: Range<String.Index>,
+        text: String,
+        file: String
+    ) -> [ObserverRegistration] {
+        var registrations: [ObserverRegistration] = []
+        for site in occurrences(of: "addObserver", in: text, range: body) {
+            guard let token = registrationToken(before: site, in: text, lowerBound: body.lowerBound) else {
+                Issue.record("\(file): the `addObserver` site must be traceable to a stored token (`token = … addObserver(…)` / `token.append(… addObserver(…)…)`); extend the observer-teardown derivation to cover this shape")
+                continue
+            }
+            registrations.append(ObserverRegistration(token: token, site: site))
+        }
+        return registrations
+    }
+
+    /// The derived tokens in first-registration order, with repeated appends to
+    /// the same array token (`keyboardObservers` for all three sites) collapsed
+    /// into one obligation.
+    private static func uniqueTokens(of registrations: [ObserverRegistration]) -> [String] {
+        var seen = Set<String>()
+        return registrations.map(\.token).filter { seen.insert($0).inserted }
+    }
+
+    /// The stored property a registration site assigns to, or `nil` when the
+    /// preceding statement matches neither the direct assignment nor the array
+    /// append shape. The backward scan stops at the nearest statement/block
+    /// boundary so an unrelated `=` earlier in the function cannot be borrowed.
+    private static func registrationToken(
+        before site: Range<String.Index>,
+        in text: String,
+        lowerBound: String.Index
+    ) -> String? {
+        var index = site.lowerBound
+        while index > lowerBound {
+            let previous = text.index(before: index)
+            let character = text[previous]
+            if character == "{" || character == "}" || character == ";" {
+                return nil
+            }
+            if character == "=" {
+                if previous > lowerBound {
+                    let beforeAssignment = text.index(before: previous)
+                    if "=!<>+-*/%&|^".contains(text[beforeAssignment]) { return nil }
+                }
+                let afterAssignment = text.index(after: previous)
+                if afterAssignment < site.lowerBound, text[afterAssignment] == "=" { return nil }
+                return identifier(before: previous, in: text, lowerBound: lowerBound)
+            }
+            if character == "(" {
+                let head = text[lowerBound..<previous]
+                guard head.hasSuffix(".append") else { return nil }
+                let receiverEnd = head.index(head.endIndex, offsetBy: -".append".count)
+                return identifier(before: receiverEnd, in: text, lowerBound: lowerBound)
+            }
+            index = previous
+        }
+        return nil
+    }
+
+    /// The identifier ending immediately before `index` (exclusive), after
+    /// skipping the whitespace between the identifier and its separator
+    /// (`token = …` / `token.append(…`). `nil` when there is none.
+    private static func identifier(
+        before index: String.Index,
+        in text: String,
+        lowerBound: String.Index
+    ) -> String? {
+        var cursor = index
+        while cursor > lowerBound {
+            let previous = text.index(before: cursor)
+            let character = text[previous]
+            if character == " " || character == "\t" || character == "\n" || character == "\r" {
+                cursor = previous
+            } else {
+                break
+            }
+        }
+        let identifierEnd = cursor
+        while cursor > lowerBound {
+            let previous = text.index(before: cursor)
+            let character = text[previous]
+            if character.isLetter || character.isNumber || character == "_" {
+                cursor = previous
+            } else {
+                break
+            }
+        }
+        guard cursor < identifierEnd else { return nil }
+        return String(text[cursor..<identifierEnd])
+    }
+
+    /// A token is removed only when the deinit binds it and removes the bound
+    /// observer inside the binding's block. Identifier-preserving shapes
+    /// (`token = nil`, `_ = token`) and non-removing calls are rejected
+    /// explicitly, so the failure names the leak rather than only the missing
+    /// binding. The required idiom is
+    /// `for observer in <token> { NotificationCenter.default.removeObserver(observer) }`
+    /// (or the `if let observer = <token>` form for a single token); the
+    /// in-block `removeObserver(observer)` match is literal, so a multi-line
+    /// call also reds conservatively.
+    private static func assertObserverTokenIsRemovedByBinding(
+        _ token: String,
+        in deinitBody: Range<String.Index>,
+        text: String,
+        file: String
+    ) {
+        let ifLet = occurrences(of: "if let observer = \(token)", in: text, range: deinitBody)
+            + occurrences(of: "if let observer = self.\(token)", in: text, range: deinitBody)
+        let forIn = occurrences(of: "for observer in \(token)", in: text, range: deinitBody)
+            + occurrences(of: "for observer in self.\(token)", in: text, range: deinitBody)
+        let bindings = (ifLet + forIn).sorted { $0.lowerBound < $1.lowerBound }
+        #expect(
+            bindings.count == 1,
+            "\(file): the deinit must remove `\(token)` as `for observer in \(token) { NotificationCenter.default.removeObserver(observer) }` (the single-token form is `if let observer = \(token) { … }`) — found \(bindings.count); the check is deliberately conservative about equivalent spellings, and `\(token) = nil` / `_ = \(token)` still leaks the registration"
+        )
+        #expect(
+            occurrences(of: "\(token) = nil", in: text, range: deinitBody).isEmpty
+                && occurrences(of: "_ = \(token)", in: text, range: deinitBody).isEmpty,
+            "\(file): the deinit must not merely drop the `\(token)` reference (`= nil` / `_ =`) — the NotificationCenter registration must be removed"
+        )
+        guard bindings.count == 1, let binding = bindings.first else { return }
+        guard let bindingBody = try? bracedBlock(after: binding, in: text) else {
+            Issue.record("\(file): the `\(token)` binding must open a braced block that removes the observer")
+            return
+        }
+        let removals = occurrences(of: "removeObserver(observer)", in: text, range: bindingBody)
+        #expect(
+            removals.count == 1,
+            "\(file): the `\(token)` binding block must call `removeObserver(observer)` exactly once (found \(removals.count)); a removal call that does not use the bound observer leaves this registration in NotificationCenter"
+        )
+    }
+
+    /// The body text with every whitespace run collapsed to a single space, so
+    /// a call can be matched without depending on how it wraps across lines.
+    private static func whitespaceNormalized(_ text: Substring) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     // MARK: - Pin checks
