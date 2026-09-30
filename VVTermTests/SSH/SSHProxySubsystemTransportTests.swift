@@ -122,6 +122,18 @@ final class ConcurrentAccessDetector: @unchecked Sendable {
 
 struct SSHProxySubsystemTransportTests {
 
+    /// Host-state waits in this suite: every one of these polls a condition the
+    /// pump is expected to reach (a banner forwarded, an EOF delivered). They
+    /// are condition-driven, so the only fixed quantity is the tolerance — and
+    /// 3 s is not tolerance on a loaded CI runner, where this suite shares the
+    /// required `unit-tests` job with four UI shards and a build (5 concurrent
+    /// macOS jobs). A 3 s bound produced a spurious
+    /// `waitForCondition: timed out after 3.00…s` failure in run `36742183814`
+    /// (issue #317). The assertions are unchanged: a genuine stall still fails,
+    /// with the elapsed time named. If a stall ever survives this bound, the
+    /// next step is a product investigation, not another increase.
+    private static let hostStateWaitSeconds: TimeInterval = 20
+
     // MARK: - Socketpair creation
 
     @Test
@@ -189,7 +201,7 @@ struct SSHProxySubsystemTransportTests {
 
         // The pump is async; give it a moment to drain the channel into the
         // socketpair, then read the banner back from the libssh2FD.
-        let received = try await readBytesAsync(fd: fd, count: banner.count, timeoutSeconds: 3)
+        let received = try await readBytesAsync(fd: fd, count: banner.count, timeoutSeconds: Self.hostStateWaitSeconds)
         #expect(received == banner)
     }
 
@@ -228,7 +240,7 @@ struct SSHProxySubsystemTransportTests {
         _ = try writeAll(fd: fd, bytes: clientBanner)
 
         // Wait for the pump to forward the bytes.
-        try await waitForCondition(timeoutSeconds: 3) {
+        try await waitForCondition(timeoutSeconds: Self.hostStateWaitSeconds) {
             received.hasBytes(clientBanner.count)
         }
         #expect(Array(received.snapshot().prefix(clientBanner.count)) == clientBanner)
@@ -253,7 +265,7 @@ struct SSHProxySubsystemTransportTests {
 
         // After EOF, a read on the libssh2FD should return 0 (EOF) rather than
         // blocking indefinitely. Give the pump a moment to close the pump end.
-        let result = try await readWithTimeout(fd: fd, count: 1, timeoutSeconds: 3)
+        let result = try await readWithTimeout(fd: fd, count: 1, timeoutSeconds: Self.hostStateWaitSeconds)
         #expect(result == 0, "expected EOF (0) on libssh2FD after channel EOF")
     }
 
@@ -333,10 +345,10 @@ struct SSHProxySubsystemTransportTests {
         // arrive on the libssh2FD (channel->FD), and the outbound banner
         // should arrive on the channel (FD->channel).
         let receivedInbound = try await readBytesAsync(
-            fd: fd, count: inboundBanner.count, timeoutSeconds: 3
+            fd: fd, count: inboundBanner.count, timeoutSeconds: Self.hostStateWaitSeconds
         )
         #expect(receivedInbound == inboundBanner)
-        try await waitForCondition(timeoutSeconds: 3) {
+        try await waitForCondition(timeoutSeconds: Self.hostStateWaitSeconds) {
             writtenToChannel.hasBytes(outboundBanner.count)
         }
         #expect(
@@ -445,7 +457,7 @@ struct SSHProxySubsystemTransportTests {
         let expected = SSHAgentProtocolCodec.identitiesAnswerFrame(
             SSHAgentProtocolCodec.Identity(keyBlob: material.certBlob)
         )
-        try await waitForCondition(timeoutSeconds: 3) {
+        try await waitForCondition(timeoutSeconds: Self.hostStateWaitSeconds) {
             agentBytes.writtenBytes.count >= expected.count
         }
         #expect(Data(agentBytes.writtenBytes) == expected)
