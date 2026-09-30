@@ -21,14 +21,16 @@
 //  the #116 `LayerTeardown.prepare` step is not exercised (pre-existing, named
 //  by #299); and this is a simulator runtime observation, not a device one.
 //
-//  QUARANTINED (#310): the no-`cleanup()` release path this test exercises is a
-//  real UAF window on the CI toolchain (Xcode 27 / iOS 27.0): `Ghostty.Surface
-//  .deinit` defers `ghostty_surface_free` to the main queue while the surface's
-//  userdata still points at the freed view, so a queued `ghostty_app_tick` can
-//  `objc_retain` the dead view — EXC_BAD_ACCESS/SIGSEGV in `Ghostty.App.action`
-//  (CI run 36687734186, ~81 s into this test). The body below is kept intact as
-//  #310's acceptance evidence; the `.disabled(…)` trait on the test is the
-//  quarantine and is where this test revives (github.com/cad0p/vvterm/issues/310).
+//  REVIVED (#310): this test is the issue's literal acceptance evidence. It
+//  exercises the no-`cleanup()` release path that used to leave
+//  `ghostty_surface_userdata` pointing at the freed view; #310 moved the
+//  userdata to a retained `Ghostty.SurfaceCallbackContext`, so a queued
+//  `ghostty_app_tick` resolves nil instead of `objc_retain`-ing the dead view
+//  (github.com/cad0p/vvterm/issues/310). Its own assertions still cover only
+//  #302's weak-nil view/token — it was green pre-fix on Xcode 26.3 when the
+//  tick did not land — so it is a smoke signal; the deterministic routing
+//  oracles live in `GhosttySurfaceCallbackRoutingTests`. The two run-loop pumps
+//  below are kept as written by the #302/#309 work.
 //
 
 import Foundation
@@ -50,11 +52,10 @@ struct GhosttyTerminalViewObserverTeardownTests {
         }
     }
 
-    /// Quarantined for #310: see the file header. Remove the `.disabled(…)`
-    /// trait to revive this test once #310 fixes the surface/view lifetime.
-    @Test(.disabled(
-        "Quarantined for #310 — this no-cleanup() release path leaves `ghostty_surface_userdata` dangling and the CI runtime crashes in `objc_retain ← closure #1 in Ghostty.App.action(_:target:action:) ← ghostty_app_tick` (EXC_BAD_ACCESS/SIGSEGV). Re-enable with that fix."
-    ))
+    /// Revived for #310: the retained context userdata makes this
+    /// no-cleanup() release path safe. The deterministic routing oracles live
+    /// in `GhosttySurfaceCallbackRoutingTests`; this test is the smoke signal.
+    @Test
     func viewReleasedWithoutCleanupRemovesItsConfigReloadObserver() async throws {
         let app = Ghostty.App()
         // Runs after the final run-loop pump below, so the deinit's deferred
