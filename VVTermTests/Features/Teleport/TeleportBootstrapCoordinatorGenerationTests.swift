@@ -309,10 +309,11 @@ final class GatedTeleportHTTPClient: TeleportHTTPClienting {
 /// writes in the reverted two-call shape, and/or the final cluster-TLS store)
 /// on a continuation, so a test can interleave a supersession while the
 /// coordinator is suspended *inside* the persistence sequence. Reads and the
-/// ungated writes delegate to the underlying mock; writes are counted.
-/// `liveCredentialSnapshot` can also be gated, so a test can supersede the
-/// coordinator during a D4 helper's snapshot read. Shared with the dismissal
-/// tests in `TeleportBootstrapViewWiringTests`.
+/// ungated writes delegate to the underlying mock; writes are counted. The
+/// credentialID/userHandle reads, the pinned-name read, the Host-CA refresh
+/// and `liveCredentialSnapshot` can also be gated, so a test can supersede the
+/// coordinator during a read. Shared with the dismissal tests in
+/// `TeleportBootstrapViewWiringTests`.
 ///
 /// The first credential write — the atomic pair write in the new shape, or the
 /// first single in the reverted two-call shape — also parks on a shared
@@ -327,6 +328,16 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let loginCertGate = BootstrapGate()
     private let clearGate = BootstrapGate()
     private let snapshotGate = BootstrapGate()
+    // The four #298 read/refresh gates park **every** call, unlike the
+    // claim-once `firstWriteGate`. That is safe only because every test that
+    // enables one is single-attempt: the gated read/refresh is reached by
+    // exactly one `begin`, so a gate can never be a second caller's blocker.
+    // If a test ever adds a second attempt to a gated call, the gate must
+    // become claim-once (see `holdFirstCredentialWriteIfNeeded`).
+    private let registeredCredentialIDGate = BootstrapGate()
+    private let registeredUserHandleGate = BootstrapGate()
+    private let clusterTLSStateGate = BootstrapGate()
+    private let updateClusterHostKeysGate = BootstrapGate()
     /// The shared hold-first gate: parks only the *first* credential write
     /// across both shapes, before any mutation. Later credential writes pass
     /// through.
@@ -337,6 +348,10 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private let gateTheLoginCertStore: Bool
     private let gateTheClear: Bool
     private let gateTheSnapshotRead: Bool
+    private let gateTheRegisteredCredentialIDRead: Bool
+    private let gateTheRegisteredUserHandleRead: Bool
+    private let gateTheClusterTLSStateRead: Bool
+    private let gateTheUpdateClusterHostKeys: Bool
 
     private var certStoreStarted = false
     private var certStoreWaiters: [CheckedContinuation<Void, Never>] = []
@@ -350,6 +365,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     private var firstWriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var snapshotReadStarted = false
     private var snapshotReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var registeredCredentialIDReadStarted = false
+    private var registeredCredentialIDReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var registeredUserHandleReadStarted = false
+    private var registeredUserHandleReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var clusterTLSStateReadStarted = false
+    private var clusterTLSStateReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var updateClusterHostKeysStarted = false
+    private var updateClusterHostKeysWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Committed write counts: incremented only after the underlying store
     /// accepted the write, so a throwing write (the `.login` no-record case,
@@ -367,6 +390,11 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     /// allowed to land (§1.4), so the discriminating assertion for the
     /// post-`clear` re-take is the withheld terminal state.
     private(set) var clearedCount = 0
+    /// The `updateClusterHostKeys` (Host CA refresh) invocation count — the
+    /// #298 site-#7 discriminator. The mock mutates its TLS state in place, so
+    /// the call itself is the observation point. Incremented at delegate
+    /// entry, before the gate.
+    private(set) var updateClusterHostKeysCallCount = 0
     /// The atomic pair-write count (T2's positive side).
     private(set) var storedPairCount = 0
     /// Direct single-write invocation counts. The pair write also bumps the
@@ -389,7 +417,11 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         gateTheLastStore: Bool = false,
         gateTheLoginCertStore: Bool = false,
         gateTheClear: Bool = false,
-        gateTheSnapshotRead: Bool = false
+        gateTheSnapshotRead: Bool = false,
+        gateTheRegisteredCredentialIDRead: Bool = false,
+        gateTheRegisteredUserHandleRead: Bool = false,
+        gateTheClusterTLSStateRead: Bool = false,
+        gateTheUpdateClusterHostKeys: Bool = false
     ) {
         self.underlying = underlying
         self.gateTheFirstStore = gateTheFirstStore
@@ -397,6 +429,10 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
         self.gateTheLoginCertStore = gateTheLoginCertStore
         self.gateTheClear = gateTheClear
         self.gateTheSnapshotRead = gateTheSnapshotRead
+        self.gateTheRegisteredCredentialIDRead = gateTheRegisteredCredentialIDRead
+        self.gateTheRegisteredUserHandleRead = gateTheRegisteredUserHandleRead
+        self.gateTheClusterTLSStateRead = gateTheClusterTLSStateRead
+        self.gateTheUpdateClusterHostKeys = gateTheUpdateClusterHostKeys
     }
 
     /// Suspends until the gated `storeBootstrapCert` has been entered.
@@ -433,6 +469,54 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
 
     func releaseSnapshotRead() async {
         await snapshotGate.release()
+    }
+
+    /// Suspends until the gated `registeredCredentialID` read has been entered.
+    func waitUntilRegisteredCredentialIDReadStarted() async {
+        guard !registeredCredentialIDReadStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            registeredCredentialIDReadWaiters.append(continuation)
+        }
+    }
+
+    func releaseRegisteredCredentialIDRead() async {
+        await registeredCredentialIDGate.release()
+    }
+
+    /// Suspends until the gated `registeredUserHandle` read has been entered.
+    func waitUntilRegisteredUserHandleReadStarted() async {
+        guard !registeredUserHandleReadStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            registeredUserHandleReadWaiters.append(continuation)
+        }
+    }
+
+    func releaseRegisteredUserHandleRead() async {
+        await registeredUserHandleGate.release()
+    }
+
+    /// Suspends until the gated `clusterTLSState` read has been entered.
+    func waitUntilClusterTLSStateReadStarted() async {
+        guard !clusterTLSStateReadStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            clusterTLSStateReadWaiters.append(continuation)
+        }
+    }
+
+    func releaseClusterTLSStateRead() async {
+        await clusterTLSStateGate.release()
+    }
+
+    /// Suspends until the gated `updateClusterHostKeys` has been entered.
+    func waitUntilUpdateClusterHostKeysStarted() async {
+        guard !updateClusterHostKeysStarted else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            updateClusterHostKeysWaiters.append(continuation)
+        }
+    }
+
+    func releaseUpdateClusterHostKeys() async {
+        await updateClusterHostKeysGate.release()
     }
 
     /// Suspends until the gated `clear` has been entered.
@@ -489,7 +573,14 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     // MARK: - Reads (delegate)
 
     func clusterTLSState(for clusterId: UUID) async -> TeleportClusterTLSState? {
-        underlying.clusterTLSState(for: clusterId)
+        if gateTheClusterTLSStateRead {
+            clusterTLSStateReadStarted = true
+            let waiters = clusterTLSStateReadWaiters
+            clusterTLSStateReadWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await clusterTLSStateGate.wait()
+        }
+        return underlying.clusterTLSState(for: clusterId)
     }
 
     func liveCertPEM(for clusterId: UUID) async -> String? {
@@ -512,11 +603,25 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func registeredCredentialID(for clusterId: UUID) async -> Data? {
-        underlying.registeredCredentialID(for: clusterId)
+        if gateTheRegisteredCredentialIDRead {
+            registeredCredentialIDReadStarted = true
+            let waiters = registeredCredentialIDReadWaiters
+            registeredCredentialIDReadWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await registeredCredentialIDGate.wait()
+        }
+        return underlying.registeredCredentialID(for: clusterId)
     }
 
     func registeredUserHandle(for clusterId: UUID) async -> Data? {
-        underlying.registeredUserHandle(for: clusterId)
+        if gateTheRegisteredUserHandleRead {
+            registeredUserHandleReadStarted = true
+            let waiters = registeredUserHandleReadWaiters
+            registeredUserHandleReadWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await registeredUserHandleGate.wait()
+        }
+        return underlying.registeredUserHandle(for: clusterId)
     }
 
     // MARK: - Writes
@@ -653,7 +758,15 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
     }
 
     func updateClusterHostKeys(_ checkingKeys: [String], for clusterId: UUID) async -> TeleportHostKeyUpdateResult {
-        underlying.updateClusterHostKeys(checkingKeys, for: clusterId)
+        updateClusterHostKeysCallCount += 1
+        if gateTheUpdateClusterHostKeys {
+            updateClusterHostKeysStarted = true
+            let waiters = updateClusterHostKeysWaiters
+            updateClusterHostKeysWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await updateClusterHostKeysGate.wait()
+        }
+        return underlying.updateClusterHostKeys(checkingKeys, for: clusterId)
     }
 
     func clear(for clusterId: UUID) async {

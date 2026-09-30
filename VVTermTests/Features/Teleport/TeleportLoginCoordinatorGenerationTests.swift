@@ -106,6 +106,24 @@ final class TeleportLoginCoordinatorGenerationTests: XCTestCase {
         MockTeleportHTTPClient.makeFixtureLoginFinishResponse()
     }
 
+    /// The `hostSigners` login-finish fixture: the `domain_name` the refresh
+    /// policy matches against the pinned cluster name plus the `checking_keys`
+    /// it accepts. The app-target mock deliberately carries
+    /// `hostSigners: nil` (and empty checking keys), so the refresh block is
+    /// only reachable with this test-target builder — copied from
+    /// `TeleportCertBindingCoordinatorTests.makeLoginFinishResponse`.
+    private func makeLoginFinishResponse(
+        domainName: String,
+        checkingKeys: [String]
+    ) -> LoginFinishResponse {
+        LoginFinishResponse(
+            cert: Data(TeleportFixtureSupport.fixedIssuedUserCert.utf8).base64EncodedString(),
+            hostSigners: [
+                LoginFinishResponse.HostSigner(domainName: domainName, checkingKeys: checkingKeys)
+            ]
+        )
+    }
+
     private func fixtureSuccessState() -> TeleportLoginState {
         .success(certValidUntil: Self.fixtureCertValidUntil, logins: ["alice"])
     }
