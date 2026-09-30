@@ -104,8 +104,17 @@ nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
     static let defaultReadTimeout: TimeInterval = 10
     /// How long the bind pair may take to report ready before startup fails.
     static let defaultStartTimeout: TimeInterval = 15
-    /// The admission cap: connections beyond this are answered 503 instead of
-    /// pinning sockets (a local slowloris cannot exhaust the process).
+    /// The admission cap: connections beyond this are rejected.
+    ///
+    /// The clean-room rewrite answered them 503 immediately, closing with
+    /// unread inbound data, so the kernel could RST the response away before
+    /// the client read it (the `#233` class). Over-cap connections are now
+    /// drained (discarded, never buffered) and *then* answered 503. That
+    /// bounds each over-cap connection (one `readTimeout` timer, at most
+    /// `maxRequestBytes` read, no admission slot) but not their count — the
+    /// OS fd limit and accept rate are the only bound, so a local flood can
+    /// briefly pin sockets. The drain still cannot *accumulate* memory per
+    /// connection: every drained byte is thrown away.
     static let defaultMaxConcurrentConnections = 16
 
     private static let callbackPath = "/callback"
@@ -766,13 +775,16 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
     }
 
     /// Starts the connection. Admitted connections arm the non-resetting read
-    /// deadline and start reading; over-cap connections are answered 503
-    /// immediately and never counted.
+    /// deadline and start reading; over-cap connections drain (and discard)
+    /// their request header before the 503, so the kernel's RST cannot discard
+    /// the response (the `#233` class; header-scoped — a request body is never
+    /// drained). The drain never takes an admission slot and never touches
+    /// `buffer`.
     func start() {
         connection.start(queue: queue)
 
         guard admitted else {
-            finish(status: 503, body: "Too many connections", resolution: nil)
+            drainRejectedRequest()
             return
         }
 
@@ -800,6 +812,73 @@ nonisolated private final class BrowserMFAHTTPConnection: @unchecked Sendable {
         lock.unlock()
         item?.cancel()
         connection.cancel()
+    }
+
+    /// Reads and discards an over-cap connection's request header, then
+    /// answers 503 through `finish`'s once-guard.
+    ///
+    /// The pre-rewrite listener drained before answering 503 so the kernel's
+    /// RST could not discard the response before the client read it (the
+    /// `#233` class). The drain is discard-only — it never touches
+    /// `self.buffer`, so an over-cap client cannot pin per-connection memory —
+    /// and bounded by the header terminator, `maxRequestBytes`, and
+    /// `readTimeout`. A request body is never drained: the closure is
+    /// header-scoped. No admission slot is taken (the connection was rejected
+    /// before admission) and none is released.
+    private func drainRejectedRequest() {
+        let item = DispatchWorkItem { [weak self] in
+            self?.finish(status: 503, body: "Too many connections", resolution: nil)
+        }
+        lock.lock()
+        deadline = item
+        lock.unlock()
+        queue.asyncAfter(deadline: .now() + listener.readTimeout, execute: item)
+
+        readRejectedHeader(drained: 0, tail: Data())
+    }
+
+    /// One discard-only read of an over-cap request. `drained` counts the
+    /// discarded bytes and `tail` retains at most the 3 bytes a `\r\n\r\n`
+    /// split across fragments could need. `finished` is re-checked before
+    /// every read so a deadline `finish` or `closeFromOwner` cannot race a
+    /// live read.
+    private func readRejectedHeader(drained: Int, tail: Data) {
+        lock.lock()
+        let isFinished = finished
+        lock.unlock()
+        guard !isFinished else { return }
+
+        connection.receive(
+            minimumIncompleteLength: 1,
+            maximumLength: 4096
+        ) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if error != nil {
+                self.finish(status: 503, body: "Too many connections", resolution: nil)
+                return
+            }
+            if let data, !data.isEmpty {
+                let total = drained + data.count
+                var window = tail
+                window.append(data)
+                if window.range(of: Data("\r\n\r\n".utf8)) != nil
+                    || total >= BrowserMFAListener.maxRequestBytes
+                {
+                    self.finish(status: 503, body: "Too many connections", resolution: nil)
+                    return
+                }
+                self.readRejectedHeader(
+                    drained: total,
+                    tail: window.count > 3 ? Data(window.suffix(3)) : window
+                )
+                return
+            }
+            if isComplete {
+                self.finish(status: 503, body: "Too many connections", resolution: nil)
+                return
+            }
+            self.readRejectedHeader(drained: drained, tail: tail)
+        }
     }
 
     private func receiveMore() {
