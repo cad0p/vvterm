@@ -53,11 +53,19 @@ struct TerminalKeyboardCoordinatorObserverTeardownTests {
 
             // Positive controls, count first: an empty or renamed Mirror must
             // fail here, not pass the death assertions vacuously below.
-            #expect(boxes.count == 5, "the Mirror must find all five registrations")
-            for (index, box) in boxes.enumerated() {
-                #expect(box.value != nil, "keyboardObservers[\(index)] must be alive inside the construction scope")
+            // `withExtendedLifetime` because Swift only guarantees a local's
+            // lifetime to its last use: `mirroredKeyboardObservers(of:)` is the
+            // coordinator's last syntactic use, so under optimized ARC it could
+            // deallocate (and correctly remove the tokens) before these controls
+            // run, false-redding them. Latent today (tests run Debug); pinned so
+            // it cannot become real.
+            withExtendedLifetime(coordinator) {
+                #expect(boxes.count == 5, "the Mirror must find all five registrations")
+                for (index, box) in boxes.enumerated() {
+                    #expect(box.value != nil, "keyboardObservers[\(index)] must be alive inside the construction scope")
+                }
+                #expect(weakCoordinator.value != nil, "the coordinator must still be alive inside the construction scope")
             }
-            #expect(weakCoordinator.value != nil, "the coordinator must still be alive inside the construction scope")
             return boxes
         }
 

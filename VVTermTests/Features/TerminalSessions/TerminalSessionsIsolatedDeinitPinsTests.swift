@@ -319,7 +319,11 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
     /// Measured limits (tripwire, not proof): an `if false`/`#if false`-guarded
     /// removal and a removal inside a string literal stay green, and a
     /// registration added in an extension or another file is invisible to the
-    /// class-body scan. An in-class extra registration reds the site count.
+    /// class-body scan. An in-class *extra* registration reds the site count,
+    /// but a *replacement* of one `.append(…)` with a direct assignment
+    /// (`keyboardObservers = [addObserver(…)]`) keeps the site count at three
+    /// and stays green here — the runtime suite's `count == 5` control catches
+    /// that one, because the overwritten token leaves the array.
     @Test
     func testTerminalKeyboardCoordinatorDeinitRemovesEveryRegisteredObserver() {
         guard let text = Self.keyboardCoordinatorSource() else { return }
@@ -348,14 +352,14 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
 
         // The second resource: a pending verification task retains the terminal
         // it captured across its 1 s sleep, so the deinit must cancel it too.
+        // One linked spelling, not two independent substrings: `contains("presentationVerifyTask")`
+        // plus `contains(".cancel()")` also accepts `presentationVerifyTask = nil`
+        // followed by an unrelated cancel (measured GREEN), which defeats the
+        // task half of the fix while every test stays green.
         let normalized = Self.whitespaceNormalized(text[deinitBody])
         #expect(
-            normalized.contains("presentationVerifyTask"),
-            "\(Self.keyboardCoordinatorFile): the deinit body must reference the stored `presentationVerifyTask`; a pending verification task retains its captured terminal past the coordinator's life"
-        )
-        #expect(
-            normalized.contains(".cancel()"),
-            "\(Self.keyboardCoordinatorFile): the deinit body must cancel `presentationVerifyTask` with `.cancel()`"
+            normalized.contains("presentationVerifyTask?.cancel()"),
+            "\(Self.keyboardCoordinatorFile): the deinit body must cancel the stored `presentationVerifyTask` (`presentationVerifyTask?.cancel()`); a pending verification task retains the terminal it captured across its 1 s sleep past the coordinator's life"
         )
     }
 
@@ -494,6 +498,20 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
             bindings.count == 1,
             "\(file): the deinit must remove `\(token)` as `for observer in \(token) { NotificationCenter.default.removeObserver(observer) }` (the single-token form is `if let observer = \(token) { … }`) — found \(bindings.count); the check is deliberately conservative about equivalent spellings, and `\(token) = nil` / `_ = \(token)` still leaks the registration"
         )
+        // The binding must iterate the whole stored collection: require the next
+        // non-whitespace character to open the loop body (`{`). Without this, a
+        // partial-iteration spelling keeps the bare-token match and stays green —
+        // measured GREEN for `.prefix(3)`, `.dropLast()`, `[0..<2]`, `where`, and
+        // `if let observer = \(token).first`, each of which leaves registrations
+        // installed. The runtime suite's `count == 5` control is the behavioural
+        // backstop; this is the static one.
+        if let binding = bindings.first {
+            let nextNonWhitespace = text[binding.upperBound...].first { !$0.isWhitespace }
+            #expect(
+                nextNonWhitespace == "{",
+                "\(file): the `\(token)` binding must iterate the whole stored collection — expected `{` immediately after `\(token)`, found \(nextNonWhitespace.map(String.init) ?? "end of body"); a partial iteration (`.prefix(…)`, `[0..<n]`, `.first`, `where`) leaves registrations installed"
+            )
+        }
         #expect(
             occurrences(of: "\(token) = nil", in: text, range: deinitBody).isEmpty
                 && occurrences(of: "_ = \(token)", in: text, range: deinitBody).isEmpty,
