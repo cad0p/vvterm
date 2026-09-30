@@ -11,6 +11,14 @@ extension Ghostty {
         /// Track if surface has been explicitly freed
         private var hasBeenFreed = false
 
+        /// The surface's retained userdata context (#310).
+        ///
+        /// Held strongly for as long as this wrapper can free the surface, so
+        /// the raw pointer stored in the surface's userdata stays valid until
+        /// `ghostty_surface_free` has run — including on the deferred `deinit`
+        /// path, where the view that created the surface is already gone.
+        let callbackContext: Ghostty.SurfaceCallbackContext
+
         /// Read the underlying C value for this surface. This is unsafe because the value will be
         /// freed when the Surface class is deinitialized.
         var unsafeCValue: ghostty_surface_t? {
@@ -20,8 +28,14 @@ extension Ghostty {
         }
 
         /// Initialize from the C structure.
-        init(cSurface: ghostty_surface_t) {
+        ///
+        /// - Parameters:
+        ///   - cSurface: The surface handle created by `ghostty_surface_new`.
+        ///   - callbackContext: The context installed as the surface userdata
+        ///     before the surface was created (#310).
+        init(cSurface: ghostty_surface_t, callbackContext: Ghostty.SurfaceCallbackContext) {
             self.surface = cSurface
+            self.callbackContext = callbackContext
         }
 
         /// Explicitly free the surface. Call this from cleanup() on main actor.
@@ -37,6 +51,11 @@ extension Ghostty {
             surface = nil
             lock.unlock()
 
+            // #310: suppress callbacks before the free. The context stays alive
+            // (this wrapper holds it, and the view holds it until it goes away),
+            // so the userdata pointer remains valid while the free joins the
+            // renderer and IO threads.
+            callbackContext.invalidate()
             ghostty_surface_free(surf)
         }
 
@@ -51,11 +70,20 @@ extension Ghostty {
             surface = nil
             lock.unlock()
 
+            // #310: invalidate before the free on this path too, and keep the
+            // context alive across the deferred free. Without the retain the
+            // window would only move: the surface's userdata would dangle on a
+            // freed context instead of a freed view.
+            callbackContext.invalidate()
+            let context = callbackContext
+
             // Fallback: schedule free on main actor
             // This is a safety net - prefer calling free() explicitly
             // MainActor.run used to avoid Sendable warning on raw pointer
             DispatchQueue.main.async {
-                ghostty_surface_free(surf)
+                withExtendedLifetime(context) {
+                    ghostty_surface_free(surf)
+                }
             }
         }
 

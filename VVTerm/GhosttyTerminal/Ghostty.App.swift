@@ -800,20 +800,35 @@ extension Ghostty {
         static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
             // Get the terminal view from surface userdata if target is a surface
             var titleTargetDescription = "target \(target.tag.rawValue)"
-            var activeSurfaceCount = 0
+            // The active-surface registry is MainActor state and is only read
+            // on the main thread, so the warning below must not print a
+            // meaningful-looking count for an off-main action: it stays
+            // "unavailable" unless the registry was actually consulted.
+            var activeSurfaceCountDescription = "active surfaces: unavailable"
             let terminalView: GhosttyTerminalView? = {
                 guard target.tag == GHOSTTY_TARGET_SURFACE else { return nil }
                 guard let surface = target.target.surface else { return nil }
                 titleTargetDescription = String(describing: surface)
-                if let appUserdata = ghostty_app_userdata(app) {
+
+                // #310: resolve the retained context first. It is
+                // lock-protected and safe to read off the main actor; a dead
+                // view resolves to nil without touching MainActor state, so
+                // this also retires the unchecked off-main registry access.
+                let contextView = Ghostty.SurfaceCallbackContext
+                    .fromOpaque(ghostty_surface_userdata(surface))?
+                    .resolve()
+
+                // The registry stays the preferred route, but it is MainActor
+                // state: only consult it on the main thread. Off-main the
+                // context above has already resolved the same weak view.
+                if Thread.isMainThread, let appUserdata = ghostty_app_userdata(app) {
                     let state = Unmanaged<App>.fromOpaque(appUserdata).takeUnretainedValue()
-                    activeSurfaceCount = state.activeSurfaceCount()
+                    activeSurfaceCountDescription = "active surfaces: \(state.activeSurfaceCount())"
                     if let registeredView = state.terminalView(for: surface) {
                         return registeredView
                     }
                 }
-                guard let surfaceUserdata = ghostty_surface_userdata(surface) else { return nil }
-                return Unmanaged<GhosttyTerminalView>.fromOpaque(surfaceUserdata).takeUnretainedValue()
+                return contextView
             }()
 
             switch action.tag {
@@ -828,7 +843,7 @@ extension Ghostty {
                             if TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] != title {
                                 TitleDeliveryLogCache.lastUndeliveredTitleBySurface[titleTargetDescription] = title
                                 Ghostty.logger.warning(
-                                    "Ghostty title received without terminal view: \(title, privacy: .public), target: \(titleTargetDescription, privacy: .public), active surfaces: \(activeSurfaceCount)"
+                                    "Ghostty title received without terminal view: \(title, privacy: .public), target: \(titleTargetDescription, privacy: .public), \(activeSurfaceCountDescription)"
                                 )
                             }
                             return
@@ -1082,9 +1097,21 @@ extension Ghostty {
         // clipboard content was provided to libghostty, false when it can't
         // be read so performable paste bindings fall through to the terminal.
         static func readClipboard(_ userdata: UnsafeMutableRawPointer?, location: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) -> Bool {
-            // userdata is the GhosttyTerminalView instance
-            guard let userdata = userdata else { return false }
-            let terminalView = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+            // userdata is the surface's retained callback context (#310).
+            // Thread contract: the core's termio stream handler (OSC 52,
+            // `termio/stream_handler.zig:963-977`) sends `.clipboard_read` to
+            // the surface MAILBOX from the I/O thread; `Surface.handleMessage`
+            // — documented "Called from the app thread" (`Surface.zig:970-972`,
+            // handler at `:1055-1062`) — handles it on the app thread, which
+            // VVTerm's `wakeup` ticks on the main queue. That is the same
+            // thread the main-actor `free()` runs on, so the surface-handle
+            // read below is not a live race. The context is what makes the
+            // view resolution safe for the callbacks that can run off-main
+            // (the write callback and the `action` fallback); it is not needed
+            // to make these reads race-free.
+            guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
+                  let terminalView = context.resolve()
+            else { return false }
             guard let surface = terminalView.surface?.unsafeCValue else { return false }
 
             // Read from macOS clipboard
@@ -1143,9 +1170,12 @@ extension Ghostty {
         }
 
         static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
-            // userdata is the GhosttyTerminalView instance
-            guard let userdata = userdata else { return }
-            let terminalView = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+            // userdata is the surface's retained callback context (#310); a
+            // view already released without `cleanup()` resolves to nil, so
+            // the close callback becomes a no-op instead of a UAF.
+            guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
+                  let terminalView = context.resolve()
+            else { return }
 
             Ghostty.logger.info("Close surface: processAlive=\(processAlive)")
 

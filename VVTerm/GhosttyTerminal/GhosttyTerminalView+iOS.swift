@@ -1087,6 +1087,13 @@ class GhosttyTerminalView: UIView {
     private weak var ghosttyAppWrapper: Ghostty.App?
     internal var surface: Ghostty.Surface?
     private var surfaceReference: Ghostty.SurfaceReference?
+
+    /// The surface's retained userdata context (#310), created before the
+    /// surface and held for the view's lifetime. The surface's callbacks
+    /// resolve the view through it, so a callback in the dead-view window (the
+    /// surface outlives a view released without `cleanup()`) resolves to nil
+    /// instead of retaining freed memory.
+    private var callbackContext: Ghostty.SurfaceCallbackContext?
     private let worktreePath: String
     private let paneId: String?
     private let initialCommand: String?
@@ -1982,6 +1989,14 @@ class GhosttyTerminalView: UIView {
             return
         }
 
+        // #310: create and store the retained callback context BEFORE the
+        // renderer call. The core emits cell_size/size_limit/set_title from
+        // inside `ghostty_surface_new` (Surface.zig:694,700,753-787), so the
+        // userdata must already be this context when those callbacks arrive.
+        // On a creation failure the view just drops the unused context.
+        let callbackContext = Ghostty.SurfaceCallbackContext(view: self)
+        self.callbackContext = callbackContext
+
         guard let cSurface = renderingSetup.setupSurface(
             view: self,
             ghosttyApp: app,
@@ -1989,6 +2004,7 @@ class GhosttyTerminalView: UIView {
             initialBounds: bounds,
             paneId: paneId,
             command: initialCommand,
+            callbackContext: callbackContext,
             useCustomIO: useCustomIO
         ) else {
             return
@@ -2001,7 +2017,7 @@ class GhosttyTerminalView: UIView {
         configureIOSurfaceLayers(size: bounds.size)
 
         // Wrap in Swift Surface class
-        self.surface = Ghostty.Surface(cSurface: cSurface)
+        self.surface = Ghostty.Surface(cSurface: cSurface, callbackContext: callbackContext)
 
         // Register surface with app wrapper for config update tracking
         if let wrapper = ghosttyAppWrapper {
@@ -6145,11 +6161,15 @@ class GhosttyTerminalView: UIView {
     /// Setup the write callback to capture keyboard input
     func setupWriteCallback() {
         guard let surface = surface?.unsafeCValue else { return }
+        guard let callbackContext else { return }
 
-        let userdata = Unmanaged.passUnretained(self).toOpaque()
+        // #310: the callback's userdata is the retained context, not this
+        // view's address — the termio IO thread can invoke the write callback
+        // after the view was released without `cleanup()` (custom-io.patch
+        // documents that userdata must outlive the surface).
+        let userdata = callbackContext.userdata
         ghostty_surface_set_write_callback(surface, { userdata, data, len in
-            guard let userdata = userdata else { return }
-            let view = Unmanaged<GhosttyTerminalView>.fromOpaque(userdata).takeUnretainedValue()
+            guard let view = Ghostty.SurfaceCallbackContext.fromOpaque(userdata)?.resolve() else { return }
             guard let data = data, len > 0 else { return }
             let swiftData = Data(bytes: data, count: len)
             // Call directly - Ghostty calls this from main thread, no queue hop needed
