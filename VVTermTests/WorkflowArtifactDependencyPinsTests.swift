@@ -56,7 +56,7 @@ struct WorkflowArtifactDependencyPinsTests {
         //    cannot match the anchored pattern.
         #expect(
             job.text.range(of: #"(?m)^    needs:\s*build\s*$"#, options: .regularExpression) != nil,
-            "the debug-test job must declare a job-level `needs: build` key at indent 4 (issue #313)"
+            "the debug-test job must declare `needs: build` (the canonical spelling) so its `vvterm-build` download cannot race the upload; a `needs: [build]` list form also reds this pin — re-affirm the dependency and the spelling (issue #313)"
         )
 
         // 2. Exactly one step anchored on `uses: actions/download-artifact`
@@ -92,6 +92,38 @@ struct WorkflowArtifactDependencyPinsTests {
         #expect(
             job.text.contains("timeout-minutes: 45"),
             "the debug-test job must still declare its 45-minute timeout"
+        )
+
+        // 4. The legible-failure package (issue #313): a dispatch must still
+        //    evaluate this job when `build` failed — the explicit status
+        //    functions keep GitHub from skipping it silently on a failed
+        //    dependency — with the same event gate as before.
+        let normalized = job.text.replacingOccurrences(
+            of: #"\s+"#, with: " ", options: .regularExpression
+        )
+        #expect(
+            normalized.contains(
+                "always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.debug_test != ''"
+            ),
+            "the debug-test job must keep the dispatch gate `always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.debug_test != ''`; without `always()` (and `!cancelled()`) a failed `build` silently skips this job and hides the missing artifact (issue #313)"
+        )
+
+        // 5. The first step must fail by name when the producer did not
+        //    succeed, before anything downloads.
+        let guardStep = try #require(
+            steps.first { step in
+                step.first?.range(
+                    of: #"^      - name: Require the build artifact \(#313\)\s*$"#,
+                    options: .regularExpression
+                ) != nil
+            },
+            "the debug-test job must contain a `Require the build artifact (#313)` step so a failed producer fails this job by name (issue #313)"
+        )
+        #expect(
+            guardStep.contains { line in
+                line.range(of: #"^\s*if:\s*needs\.build\.result\s*!=\s*'success'\s*$"#, options: .regularExpression) != nil
+            },
+            "the `Require the build artifact (#313)` step must run on `needs.build.result != 'success'` so it fires exactly when the producer did not succeed (issue #313)"
         )
     }
 
