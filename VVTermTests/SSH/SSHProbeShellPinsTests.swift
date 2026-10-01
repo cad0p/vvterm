@@ -63,23 +63,30 @@
 //  WHAT THE SCANNER CANNOT SEE. The pins are a tripwire, not a proof.
 //  Comments are stripped everywhere. For the call-form pins (B, C, E) the
 //  contents of string literals are blanked out as well — a string containing
-//  `wrapPOSIXShellCommand(` therefore cannot satisfy a call pin — while an
-//  interpolation (`\( … )`) is kept as code and scanned recursively, because
-//  a real call inside an interpolation is the production pattern, not a
-//  decoy. The blanker is still not a tokenizer: raw strings, one-line strings
-//  and multi-line strings are recognized, but a default-argument closure in a
-//  `func` declaration can still make the body walk bind the wrong block.
-//  Remaining defeats: braces inside string literals are counted by the block
-//  walk (balanced in these files today), a login-shell token assembled at
-//  runtime is invisible, a wrapper *reference* bound without a call
-//  (`let wrap = …wrapPOSIXShellCommand; wrap(x)`), a call text assembled
-//  from concatenated identifier pieces (`"wrapPOSIX" + "ShellCommand("`), a
-//  `shellPathExport` reference bound without a call
-//  (`let e = …shellPathExport; e()`), a converted body that composes a
-//  `$HOME/.local/bin` PATH export by hand instead of calling the named
-//  helper, and a dead-branch builder call
+//  `wrapPOSIXShellCommand(` therefore cannot satisfy a call pin — while
+//  interpolation bodies are kept as code and scanned recursively, because a
+//  real call inside an interpolation is the production pattern, not a decoy:
+//  `\( … )` in a one-line or multi-line string, and `\#( … )` (the matching
+//  hash count for `##" … "##`, …) in a raw string. The blanker is still not a
+//  tokenizer: raw strings, one-line strings and multi-line strings are
+//  recognized, but a default-argument closure in a `func` declaration can
+//  still make the body walk bind the wrong block. Pin E sweeps the
+//  string-verbatim copy for the hand-rolled `$HOME/.local/bin` literal and
+//  the blanked copy for the `shellPathExport(` call, so neither spelling is
+//  invisible to it. Remaining defeats: braces inside string literals are
+//  counted by the block walk (balanced in these files today), a login-shell
+//  token assembled at runtime is invisible, a wrapper *reference* bound
+//  without a call (`let wrap = …wrapPOSIXShellCommand; wrap(x)`), a call text
+//  assembled from concatenated identifier pieces
+//  (`"wrapPOSIX" + "ShellCommand("`), a `shellPathExport` reference bound
+//  without a call (`let e = …shellPathExport; e()`), a converted body that
+//  composes a `$HOME/.local/bin` PATH export without spelling the literal (a
+//  variable or an interpolation), and a dead-branch builder call
 //  (`if false { _ = wrapPOSIXProbeCommand(body) }`) that satisfies pin C's
-//  builder-call assertion as long as the file-level count is preserved. A
+//  builder-call assertion as long as the file-level count is preserved. The
+//  `$SHELL`/`SHELL` token branch requires a command-position boundary; the
+//  shell-name branch keeps word-boundary semantics, so a shell name in a
+//  non-exec context (`echo sh -lc`) is an accepted fail-closed over-match. A
 //  commented-out token cannot satisfy the pins (comments are stripped). Any
 //  intentional login site added later must be added to the allowlists below
 //  deliberately.
@@ -211,9 +218,10 @@ struct SSHProbeShellPinsTests {
     /// scan reads this so a string literal — including a call-form literal
     /// such as `"wrapPOSIXShellCommand("` — cannot satisfy pin B/C/E's
     /// call-form assertions. The blanker recognizes one-line, multi-line and
-    /// raw strings, and keeps interpolation bodies (`\( … )`) as code by
-    /// scanning them recursively, so a call interpolated into a command string
-    /// is still counted.
+    /// raw strings, and keeps interpolation bodies as code by scanning them
+    /// recursively — `\( … )` for the quoted strings and `\#( … )` (hash
+    /// count matched) for raw strings — so a call interpolated into a command
+    /// string is still counted.
     private static func strippingCommentsAndStrings(_ source: String) -> String {
         Self.scanning(source, blankingStringContents: true)
     }
@@ -239,7 +247,7 @@ struct SSHProbeShellPinsTests {
                 )
             }
         }
-        for path in appTargetNonSynchronizedSwiftFileReferences() {
+        for path in appTargetNonSynchronizedSwiftFileReferences().paths {
             result.append(ScannedFile(path: path, isSynchronized: false))
         }
         return result.sorted { $0.path < $1.path }
@@ -251,25 +259,31 @@ struct SSHProbeShellPinsTests {
         let isSynchronized: Bool
     }
 
-    /// The target's non-synchronized `Sources`-phase Swift files, as
-    /// repository-relative paths. These are the classic `PBXGroup` +
-    /// `PBXBuildFile` references that compile into the `VVTerm` target without
-    /// belonging to a `fileSystemSynchronizedGroups` root, so `allSwiftFiles()`
-    /// would never sweep them. The roots pin requires this to be empty; the
-    /// files are still appended to the scan set so a misconfiguration reddens
-    /// every pin that would see their contents, not just the roots pin.
-    private func appTargetNonSynchronizedSwiftFileReferences() -> [String] {
+    /// The target's non-synchronized `Sources`-phase Swift files plus whether
+    /// the `Sources` phase resolved at all. The paths are the classic
+    /// `PBXGroup` + `PBXBuildFile` references that compile into the `VVTerm`
+    /// target without belonging to a `fileSystemSynchronizedGroups` root, so
+    /// `allSwiftFiles()` would never sweep them. The roots pin requires the
+    /// paths to be empty *and* `resolved` to be true: when the project, the
+    /// target, its `buildPhases`, or the `PBXSourcesBuildPhase` entries cannot
+    /// be read, the empty path list would otherwise fail open.
+    private struct NonSynchronizedSources {
+        let paths: [String]
+        let resolved: Bool
+    }
+
+    private func appTargetNonSynchronizedSwiftFileReferences() -> NonSynchronizedSources {
         let projectURL = repositoryRoot()
             .appendingPathComponent("VVTerm.xcodeproj/project.pbxproj")
         guard let project = try? String(contentsOf: projectURL, encoding: .utf8) else {
-            return []
+            return NonSynchronizedSources(paths: [], resolved: false)
         }
         return Self.nonSynchronizedSwiftSourcePaths(in: project)
     }
 
     /// The parser behind `appTargetNonSynchronizedSwiftFileReferences()`,
     /// split out so the roots pin and the sweep share one resolution.
-    private static func nonSynchronizedSwiftSourcePaths(in project: String) -> [String] {
+    private static func nonSynchronizedSwiftSourcePaths(in project: String) -> NonSynchronizedSources {
         var pathsByFileID: [String: String] = [:]
         for file in pbxEntries(in: project, isa: "PBXFileReference") {
             guard let path = pbxValue(forKey: "path", in: file.body) else { continue }
@@ -277,17 +291,23 @@ struct SSHProbeShellPinsTests {
         }
 
         for target in pbxEntries(in: project, isa: "PBXNativeTarget") {
-            guard pbxValue(forKey: "name", in: target.body) == "VVTerm",
-                  let buildPhases = pbxValue(forKey: "buildPhases", in: target.body)
-            else { continue }
+            guard pbxValue(forKey: "name", in: target.body) == "VVTerm" else { continue }
+            guard let buildPhases = pbxValue(forKey: "buildPhases", in: target.body) else {
+                return NonSynchronizedSources(paths: [], resolved: false)
+            }
 
             var sourceFileIDs: [String] = []
+            var resolvedSourcePhase = false
             for phaseID in hexIdentifiers(in: buildPhases) {
                 guard let phase = pbxEntries(in: project, isa: "PBXSourcesBuildPhase")
-                    .first(where: { $0.id == phaseID }),
-                    let files = pbxValue(forKey: "files", in: phase.body)
+                    .first(where: { $0.id == phaseID })
                 else { continue }
+                resolvedSourcePhase = true
+                guard let files = pbxValue(forKey: "files", in: phase.body) else { continue }
                 sourceFileIDs.append(contentsOf: hexIdentifiers(in: files))
+            }
+            guard resolvedSourcePhase else {
+                return NonSynchronizedSources(paths: [], resolved: false)
             }
 
             let buildFilePaths = pbxEntries(in: project, isa: "PBXBuildFile")
@@ -299,11 +319,14 @@ struct SSHProbeShellPinsTests {
                     return pathsByFileID[id]
                 }
             let fileReferencePaths = sourceFileIDs.compactMap { pathsByFileID[$0] }
-            return (buildFilePaths + fileReferencePaths)
-                .filter { $0.hasSuffix(".swift") }
-                .sorted()
+            return NonSynchronizedSources(
+                paths: (buildFilePaths + fileReferencePaths)
+                    .filter { $0.hasSuffix(".swift") }
+                    .sorted(),
+                resolved: true
+            )
         }
-        return []
+        return NonSynchronizedSources(paths: [], resolved: false)
     }
 
     // MARK: - Pin A allowlists
@@ -603,7 +626,9 @@ struct SSHProbeShellPinsTests {
     /// already sweeps it — the new root is scanned before it is trusted. A
     /// classic `PBXGroup` + `Sources`-phase file is not under any root, so it
     /// must fail this pin instead: the target must contribute zero
-    /// non-synchronized Swift sources (the header states this choice).
+    /// non-synchronized Swift sources (the header states this choice), and the
+    /// assertion fails closed if the target's `buildPhases` or its
+    /// `PBXSourcesBuildPhase` cannot be resolved at all.
     @Test
     func testAppTargetSweepRootsArePinned() {
         let roots = appTargetSourceRoots()
@@ -614,8 +639,12 @@ struct SSHProbeShellPinsTests {
 
         let nonSynchronized = appTargetNonSynchronizedSwiftFileReferences()
         #expect(
-            nonSynchronized.isEmpty,
-            "the VVTerm app target compiles non-synchronized Swift source(s) \(nonSynchronized); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
+            nonSynchronized.resolved,
+            "the VVTerm app target's `buildPhases`/`PBXSourcesBuildPhase` could not be resolved from VVTerm.xcodeproj, so the non-synchronized-sources assertion cannot run; failing closed because the Sources phase is the scan-scope tripwire"
+        )
+        #expect(
+            nonSynchronized.paths.isEmpty,
+            "the VVTerm app target compiles non-synchronized Swift source(s) \(nonSynchronized.paths); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
         )
     }
 
@@ -875,13 +904,15 @@ struct SSHProbeShellPinsTests {
     /// pre-#324 bodies. The wrapper injects the curated system PATH; a body
     /// converted by #324 that re-adds `shellPathExport()` would re-promote
     /// `$HOME/.local/bin` ahead of the system dirs, which is the defect this
-    /// pin keeps closed. The file-level sweep fires on either the
-    /// `shellPathExport(` call text or a hand-rolled `$HOME/.local/bin`
-    /// literal, so the same defect cannot be reintroduced without the named
-    /// helper. Documented defeats: a reference bound without a call
+    /// pin keeps closed. The file-level sweep fires on both spellings: the
+    /// `shellPathExport(` call text is counted in the string-blanked copy,
+    /// and a hand-rolled `$HOME/.local/bin` literal — which can only live
+    /// inside a string literal — is counted in the comment-stripped,
+    /// string-verbatim copy, so the same defect cannot be reintroduced by
+    /// either form. Documented defeats: a reference bound without a call
     /// (`let e = RemoteTerminalBootstrap.shellPathExport; e()`) and a PATH
-    /// string that reaches `$HOME/.local/bin` without spelling it (a variable
-    /// or an interpolation) remain invisible to this scan.
+    /// string that reaches `$HOME/.local/bin` without spelling the literal (a
+    /// variable or an interpolation) remain invisible to this scan.
     @Test
     func testOnlyAllowlistedBodiesSelfExportTheUserLocalPath() throws {
         let files = allSwiftFiles()
@@ -894,9 +925,17 @@ struct SSHProbeShellPinsTests {
         )
 
         for file in files {
-            let text = Self.strippingCommentsAndStrings(try source(file.path))
+            let fileText = try source(file.path)
+            // The call form is invisible inside a blanked string literal, so
+            // the reference count reads the string-blanked copy; the
+            // `$HOME/.local/bin` literal can only live inside a string, so its
+            // sweep reads the comment-stripped, string-verbatim copy.
+            let text = Self.strippingCommentsAndStrings(fileText)
             let references = Self.occurrences(of: "shellPathExport(", in: text).count
-            let handRolled = Self.occurrences(of: "$HOME/.local/bin", in: text).count
+            let handRolled = Self.occurrences(
+                of: "$HOME/.local/bin",
+                in: Self.strippingComments(fileText)
+            ).count
             if references > 0 || handRolled > 0 {
                 #expect(
                     Self.expectedShellPathExportSites[file.path] != nil,
@@ -1078,9 +1117,11 @@ struct SSHProbeShellPinsTests {
     }
 
     /// A copy of the string literal that opens at `start`: the content is
-    /// blanked while interpolation bodies — `\( … )` — are scanned
-    /// recursively so their calls stay visible, and the closing delimiter is
-    /// preserved. Returns the copy and the index just past the literal.
+    /// blanked while interpolation bodies are scanned recursively so their
+    /// calls stay visible — `\( … )` for the quoted strings and `\#( … )`
+    /// (the delimiter's hash count) for raw strings — and the closing
+    /// delimiter is preserved. Returns the copy and the index just past the
+    /// literal.
     private static func scannedString(
         _ characters: [Character],
         openingAt start: Int,
@@ -1091,17 +1132,35 @@ struct SSHProbeShellPinsTests {
         let contentStart = start + delimiter.count
         let close = Self.stringEnd(from: start, delimiter: delimiter, in: characters)
         var cursor = contentStart
-        let isRaw = delimiter.hasSuffix("#")
+        // Raw-string delimiters are hash-*prefixed* (`#"`, `##"`, `#"""`),
+        // so raw-ness is `hasPrefix`, not `hasSuffix`.
+        let isRaw = delimiter.hasPrefix("#")
+        let hashCount = delimiter.filter { $0 == "#" }.count
         while cursor < close.contentEnd {
             let character = characters[cursor]
-            if !isRaw, character == "\\", cursor + 1 < close.contentEnd {
-                if characters[cursor + 1] == "(" {
+            if character == "\\" {
+                var escapeIndex = cursor + 1
+                if isRaw {
+                    var hashes = 0
+                    while escapeIndex < close.contentEnd, characters[escapeIndex] == "#" {
+                        hashes += 1
+                        escapeIndex += 1
+                    }
+                    guard hashes == hashCount else {
+                        // Fewer/more hashes than the delimiter: literal text,
+                        // blanked with the rest of the content.
+                        result.append(" ")
+                        cursor += 1
+                        continue
+                    }
+                }
+                if escapeIndex < close.contentEnd, characters[escapeIndex] == "(" {
                     let interpolation = Self.interpolationEnd(
                         in: characters,
-                        from: cursor + 2,
+                        from: escapeIndex + 1,
                         to: close.contentEnd
                     )
-                    result.append(contentsOf: "\\(")
+                    result.append(contentsOf: characters[cursor...escapeIndex])
                     result.append(contentsOf: scan(
                         characters,
                         from: interpolation.openDepth,
@@ -1112,10 +1171,12 @@ struct SSHProbeShellPinsTests {
                     cursor = interpolation.closeDepth + 1
                     continue
                 }
-                result.append(character)
-                result.append(contentsOf: Self.blanked(characters, from: cursor + 1, to: min(cursor + 2, close.contentEnd)))
-                cursor += 2
-                continue
+                if !isRaw, cursor + 1 < close.contentEnd {
+                    result.append(character)
+                    result.append(contentsOf: Self.blanked(characters, from: cursor + 1, to: min(cursor + 2, close.contentEnd)))
+                    cursor += 2
+                    continue
+                }
             }
             result.append(character == "\n" ? "\n" : " ")
             cursor += 1
@@ -1174,7 +1235,7 @@ struct SSHProbeShellPinsTests {
         delimiter: String,
         in characters: [Character]
     ) -> (contentEnd: Int, closing: [Character], index: Int) {
-        let isRaw = delimiter.hasSuffix("#")
+        let isRaw = delimiter.hasPrefix("#")
         let quoteCount = delimiter.filter { $0 == "\"" }.count
         let hashes = delimiter.filter { $0 == "#" }.count
         var cursor = start + delimiter.count
@@ -1257,9 +1318,14 @@ struct SSHProbeShellPinsTests {
     /// `tail -l`, `flush -l` stay unmatched (their `sh` prefix is not a word,
     /// and a quote/backslash gap requires a real token before the flag). A
     /// token opening a string literal (`"sh -lc `) is caught, as is one after
-    /// a path slash (`/bin/sh -lc`).
+    /// a path slash (`/bin/sh -lc`). The `$SHELL`/`SHELL` branch additionally
+    /// requires a command-position boundary — string start, after `;`/newline/
+    /// `|`/`&`/`(` (with optional spaces/tabs), after `exec`, or after a quote
+    /// or backslash — so `echo $SHELL -l` no longer matches; the shell-name
+    /// branch keeps word-boundary semantics, so `echo sh -lc` remains an
+    /// accepted fail-closed over-match.
     private static let loginShellTokenPattern =
-        #"(?:(?<![A-Za-z0-9_])(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)|(?<![A-Za-z0-9_$])(?:\$\{SHELL\}|\$SHELL|SHELL))(?:["\'\]][ \t]|[ \t]|\\[tnr]|\\["\'])+[\"\'\]]?(?:-[A-Za-z]*l[A-Za-z]*\b|--login\b)"#
+        #"(?:(?<![A-Za-z0-9_])(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)|(?<![A-Za-z0-9_$])(?<=(?:^|[;\n|&()])[ \t]{0,8}|exec[ \t]{0,8}|["'\\])(?:\$\{SHELL\}|\$SHELL|SHELL))(?:["\'\]][ \t]|[ \t]|\\[tnr]|\\["\'])+[\"\'\]]?(?:-[A-Za-z]*l[A-Za-z]*\b|--login\b)"#
 
     /// The number of regex matches for `pattern` in `text` (optionally inside
     /// `range`), in source order.
