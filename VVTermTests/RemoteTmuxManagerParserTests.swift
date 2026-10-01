@@ -309,6 +309,48 @@ struct RemoteTmuxManagerParserTests {
         #expect(command.contains("=vvterm_managed"))
         #expect(command.contains("private-exists"))
         #expect(command.contains("private-missing"))
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("sh -lc"))
+        #expect(!command.contains("/bin/sh -lc"))
+        #expect(command.contains("export PATH="))
+        #expect(command.contains("2>/dev/null"))
+    }
+
+    @Test
+    func unixListSessionCommandsUseNonLoginShells() {
+        let commands = RemoteTmuxManager.shared.listSessionCommands(backend: .unixTmux)
+
+        #expect(commands.count == 3)
+        for command in commands {
+            #expect(command.hasPrefix("sh -c '"))
+            #expect(!command.contains("sh -lc"))
+            #expect(!command.contains("/bin/sh -lc"))
+            #expect(command.contains("export PATH="))
+            #expect(command.contains("list-sessions"))
+            #expect(command.contains("2>/dev/null"))
+        }
+        #expect(commands[0].contains("#{session_name} #{session_attached} #{session_windows}"))
+        #expect(commands[1].contains("#{session_name} #{session_attached}"))
+        #expect(!commands[1].contains("session_windows"))
+        #expect(!commands[2].contains("-F"))
+    }
+
+    @Test
+    func unixCurrentPathCommandUsesNonLoginShell() {
+        let command = RemoteTmuxManager.shared.currentPathCommand(
+            sessionName: "vvterm_managed",
+            backend: .unixTmux
+        )
+
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("sh -lc"))
+        #expect(!command.contains("/bin/sh -lc"))
+        #expect(command.contains("export PATH="))
+        #expect(command.contains("list-panes -t"))
+        #expect(command.contains("vvterm_managed"))
+        #expect(command.contains("#{pane_current_path}"))
+        #expect(command.contains("| head -n 1"))
+        #expect(command.contains("2>/dev/null"))
     }
 
     @Test
@@ -619,6 +661,8 @@ struct RemoteTmuxManagerParserTests {
         let probe = RemoteTmuxManager.shared.tmuxAvailabilityProbeCommand(okMarker: "__VVTERM_TMUX_OK__")
         #expect(probe.hasPrefix("sh -c "))
         #expect(!probe.contains("sh -lc "))
+        #expect(!probe.contains("/bin/sh -lc"))
+        #expect(probe.contains("export PATH="))
         #expect(probe.contains("command -v tmux"))
         #expect(probe.contains("/usr/bin/tmux"))
         #expect(probe.contains("/bin/tmux"))

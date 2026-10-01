@@ -279,6 +279,41 @@ struct RemoteMoshManagerTests {
     }
 
     @Test
+    func moshAvailabilityProbeUsesNonLoginShellAndKeepsMarkerContract() {
+        let okMarker = "__VVTERM_MOSH_TEST_OK__"
+        let probe = RemoteMoshManager.availabilityProbeCommand(okMarker: okMarker)
+
+        #expect(probe.hasPrefix("sh -c '"))
+        #expect(!probe.contains("sh -lc"))
+        #expect(!probe.contains("/bin/sh -lc"))
+        #expect(probe.contains("export PATH="))
+        #expect(probe.contains("command -v mosh-server"))
+        #expect(probe.contains("mosh-server --version"))
+        #expect(probe.contains(okMarker))
+        #expect(probe.contains("__VVTERM_MOSH_NO__"))
+        #expect(probe.contains("2>&1"))
+    }
+
+    @Test
+    func moshAvailabilityWiringExecutesTheNonLoginProbe() async {
+        let executor = MoshTerminationExecutor(results: [.success("__VVTERM_MOSH_OK__")])
+
+        let available = await RemoteMoshManager.shared.isMoshServerAvailable(execute: { command, timeout in
+            try await executor.execute(command: command, timeout: timeout)
+        })
+
+        #expect(available)
+        let invocations = await executor.snapshot()
+        #expect(invocations.count == 1)
+        #expect(invocations[0].command.hasPrefix("sh -c '"))
+        #expect(!invocations[0].command.contains("sh -lc"))
+        #expect(!invocations[0].command.contains("/bin/sh -lc"))
+        #expect(invocations[0].command.contains("command -v mosh-server"))
+        #expect(invocations[0].command.contains("__VVTERM_MOSH_OK__"))
+        #expect(invocations[0].timeout == .seconds(8))
+    }
+
+    @Test
     func activatingServerLeaseDoesNotTerminateIt() async {
         let recorder = MoshCleanupRecorder()
         let lease = RemoteMoshServerLease(
