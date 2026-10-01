@@ -774,4 +774,435 @@ struct GhosttySurfaceCallbackRoutingTests {
             )
         }
     }
+
+    // MARK: - #327 clipboard confirmation contract
+
+    /// #327 acceptance (allow): a non-bracketed multi-line paste that the user
+    /// allows must reach the terminal CR-encoded (`\n` → `\r`,
+    /// `input/paste.zig:109-115`) and complete the request exactly once with the
+    /// payload length and `confirmed == true`.
+    @Test
+    func unsafePasteAllowedCompletesOnceWithTheCREncodedPayload() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-allow")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+        #expect(surface.callbackContext.resolve() === terminal, "positive control: the context must resolve the live view")
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#327-allow-\(UUID().uuidString)\nsecond-line"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the multi-line payload must be seeded before the paste")
+        #expect(collector.combinedString.isEmpty, "positive control: the collector must be empty before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { request in
+            seamConsultations.noteInvocation()
+            #expect(request.payload == payload, "the seam must receive the copied payload")
+            #expect(request.lineCount == 2, "the prompt line count must reflect the payload")
+            return true
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        let encodedPayload = payload.replacingOccurrences(of: "\n", with: "\r")
+        let delivered = await Self.waitUntil(timeout: 5.0) {
+            collector.combinedString.contains(encodedPayload)
+        }
+        #expect(delivered, "an allowed unsafe paste must reach the terminal CR-encoded")
+        #expect(
+            !collector.combinedString.contains(payload),
+            "the raw multi-line payload must not reach the terminal: newlines are translated to CR"
+        )
+        #expect(seamConsultations.invocationCount == 1, "the confirmation seam must be consulted exactly once")
+        #if DEBUG
+        let completions = GhosttyClipboardConfirmDebug.completions
+        #expect(completions.count == 1, "the request must be completed exactly once")
+        #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+        #expect(completions.first?.byteLength == payload.utf8.count)
+        #expect(completions.first?.confirmed == true)
+        #expect(GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE])
+        #endif
+    }
+
+    /// #327 acceptance (deny): an unsafe paste the user denies must complete the
+    /// request exactly once as a deny (empty data + `confirmed: true`), write
+    /// nothing, and consult the seam exactly once — asserted before the
+    /// no-write claim so the deny branch cannot pass vacuously.
+    @Test
+    func unsafePasteDeniedCompletesOnceWithEmptyDataAndWritesNothing() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-deny")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+        #expect(surface.callbackContext.resolve() === terminal, "positive control: the context must resolve the live view")
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#327-deny-\(UUID().uuidString)\nsecond-line"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the multi-line payload must be seeded before the paste")
+        #expect(collector.combinedString.isEmpty, "positive control: the collector must be empty before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { _ in
+            seamConsultations.noteInvocation()
+            return false
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        #if DEBUG
+        let completed = await Self.waitUntil(timeout: 5.0) {
+            GhosttyClipboardConfirmDebug.completions.count == 1
+        }
+        #expect(completed, "the denied request must be completed")
+        #expect(
+            seamConsultations.invocationCount == 1,
+            "the seam must be consulted exactly once (asserted before the no-write claim)"
+        )
+        let completions = GhosttyClipboardConfirmDebug.completions
+        #expect(completions.count == 1, "the request must be completed exactly once")
+        #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+        #expect(completions.first?.byteLength == 0, "the deny form completes with empty data")
+        #expect(completions.first?.confirmed == true)
+        #endif
+
+        // The deny completion carries empty data, so the core returns before
+        // any paste can be queued. Give the IO FIFO a bounded chance to deliver
+        // a write, then assert nothing arrived.
+        let wrote = await Self.waitUntil(timeout: 0.5) { !collector.combinedString.isEmpty }
+        #expect(wrote == false, "a denied unsafe paste must write nothing to the terminal")
+        #expect(collector.combinedString.isEmpty)
+    }
+
+    /// #327 completion-time gate: if the surface dies while the confirmation
+    /// request is in flight, the completion must be skipped. The seam runs in
+    /// the `Task` *after* the callback-frame resolve guard, so freeing the
+    /// surface there is the only place a test can invalidate the captured
+    /// handle post-capture: `cleanup()` invalidates the context and nils the
+    /// view's surface before the gate runs. Without the gate the completion
+    /// would run against the freed surface handle.
+    ///
+    /// What this proves: the gate as a whole is load-bearing (deleting it
+    /// crashes the test host on the freed handle). It does NOT independently
+    /// discriminate the `unsafeCValue == surface` half: `cleanup()` invalidates
+    /// the context first, so a mutation that keeps the resolve but deletes the
+    /// comparison stays green here — that half is pinned structurally by P-G in
+    /// `GhosttySurfaceUserdataLifetimePinsTests`.
+    @Test
+    func surfaceDeathDuringTheConfirmationSeamSkipsTheCompletion() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-seam-death")
+        // `cleanup()` runs inside the seam below; this defer is the
+        // teardown-hygiene backstop (cleanup() is idempotent).
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#327-seam-death-\(UUID().uuidString)\nsecond-line"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the multi-line payload must be seeded before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { _ in
+            seamConsultations.noteInvocation()
+            // Free the surface while the request is in flight: the only window
+            // in which the captured handle can be invalidated after the
+            // callback-frame resolve guard.
+            terminal.cleanup()
+            return true
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        let consulted = await Self.waitUntil(timeout: 5.0) { seamConsultations.invocationCount == 1 }
+        #expect(consulted, "the seam must be consulted exactly once")
+        #expect(
+            surface.callbackContext.resolve() == nil,
+            "positive control: the seam must have freed the surface's context"
+        )
+
+        // The gate runs synchronously right after the seam returns, so the
+        // skip decision has already run once the seam consult is observable.
+        // Wait a bounded while anyway so a broken gate that completes on a
+        // later hop cannot escape the assertion.
+        let completed = await Self.waitUntil(timeout: 0.5) {
+            #if DEBUG
+            !GhosttyClipboardConfirmDebug.completions.isEmpty
+            #else
+            false
+            #endif
+        }
+        #expect(completed == false, "a completion into a surface freed during the prompt must be skipped")
+        #if DEBUG
+        #expect(
+            GhosttyClipboardConfirmDebug.completions.isEmpty,
+            "no completion may land after the surface died in the seam"
+        )
+        #expect(
+            GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE],
+            "the callback kind is recorded before the surface dies"
+        )
+        #endif
+        #expect(collector.combinedString.isEmpty, "no completion means nothing may be written to the terminal")
+    }
+
+    /// #327 control: a safe (single-line) paste is pasted without consulting
+    /// the confirmation seam at all — protection fires only on unsafe input.
+    @Test
+    func safePasteBypassesTheConfirmationSeam() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-safe")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { _ in
+            seamConsultations.noteInvocation()
+            return false
+        }
+
+        let payload = "vvterm-#327-safe-\(UUID().uuidString)"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the safe payload must be seeded before the paste")
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        let delivered = await Self.waitUntil(timeout: 5.0) {
+            collector.combinedString.contains(payload)
+        }
+        #expect(delivered, "a safe paste must still reach the terminal")
+        #expect(seamConsultations.invocationCount == 0, "the confirm seam must not be consulted for a safe paste")
+        #if DEBUG
+        #expect(GhosttyClipboardConfirmDebug.completions.isEmpty, "a safe paste needs no confirmation completion")
+        #endif
+    }
+
+    /// #327 policy: only `.paste` requires the user prompt. The callback is
+    /// deliberately not invoked with a synthetic `state`: the core allocates
+    /// that state itself (`embedded.zig:701`) and a test-supplied pointer would
+    /// be a nil deref or a wrong-allocator free.
+    @Test
+    func onlyPasteRequestsRequireUserPrompt() {
+        #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ) == false)
+        #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE) == false)
+    }
+
+    /// #327 copy: the prompt body is neutral, never contains the payload, and
+    /// carries the computed line count; the shared title is the pinned value.
+    @Test
+    func clipboardConfirmationPromptCopyIsNeutralAndCountsLines() {
+        let payload = "first-secret-line\nsecond-secret-line\n"
+        let request = ClipboardConfirmationRequest(payload: payload)
+        #expect(ClipboardConfirmationRequest.promptTitle == "Paste Unsafe Text?")
+        #expect(ClipboardConfirmationRequest.lineCount(for: "one") == 1)
+        #expect(request.lineCount == 3)
+        #expect(request.promptBody.contains("newlines or control characters"))
+        #expect(request.promptBody.contains("3 lines"))
+        #expect(!request.promptBody.contains("secret"), "the prompt body must never carry payload content")
+        #expect(!ClipboardConfirmationRequest.promptBody(lineCount: 1).contains("1 lines"))
+        #expect(ClipboardConfirmationRequest.promptBody(lineCount: 1).contains("1 line."))
+    }
+
+    /// #327 posture: `clipboard-read = deny` means an OSC 52 read never starts a
+    /// request. A remote OSC 52 read is fed, then an OSC 52 *write* of a known
+    /// barrier value; both travel the same FIFO mailbox
+    /// (`stream_handler.zig:963-984`), so the barrier landing on the pasteboard
+    /// proves the read was handled first. Without that barrier the test is
+    /// green pre-fix and proves nothing.
+    @Test
+    func osc52ReadIsDeniedByConfigBeforeAnyRequestStarts() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-osc52-read")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let seed = "vvterm-#327-seed-\(UUID().uuidString)"
+        Clipboard.copy(seed)
+        #expect(Clipboard.readString() == seed, "the clipboard must be seeded before the read")
+
+        // OSC 52 read (`?` payload), then the FIFO barrier: an OSC 52 write of a
+        // known value, base64-encoded per the protocol (`Surface.zig:2187-2207`
+        // decodes it before the write reaches the app).
+        surface.feedText("\u{1B}]52;c;?\u{07}")
+        let barrier = "vvterm-#327-barrier-\(UUID().uuidString)"
+        let barrierPayload = Data(barrier.utf8).base64EncodedString()
+        surface.feedText("\u{1B}]52;c;\(barrierPayload)\u{07}")
+
+        let barrierLanded = await Self.waitUntil(timeout: 5.0) {
+            Clipboard.readString() == barrier
+        }
+        #expect(
+            barrierLanded,
+            "the barrier write must land after the read was handled, and the read must not overwrite it"
+        )
+        #expect(Clipboard.readString() == barrier, "the pasteboard must read the barrier, never a read response")
+
+        // (a) No OSC 52 read response reached the pty.
+        #expect(
+            !collector.combinedString.contains("\u{1B}]52;c;"),
+            "a denied OSC 52 read must not reply with clipboard contents"
+        )
+        #if DEBUG
+        // (b) The read never reached the confirm callback at all.
+        #expect(
+            GhosttyClipboardConfirmDebug.callbackKinds.isEmpty,
+            "remote input must never request a clipboard confirmation under clipboard-read = deny"
+        )
+        #expect(GhosttyClipboardConfirmDebug.completions.isEmpty, "no clipboard request may be completed")
+        #endif
+    }
+
+    /// #327 config pin: the generated config denies remote clipboard reads.
+    /// Comment lines are filtered so the assertion pins the directive itself,
+    /// not the explanatory comment.
+    @Test
+    func configContentDeniesRemoteClipboardReads() {
+        let content = Ghostty.ConfigBuilder.configContent(
+            primaryFontFamily: "SF Mono",
+            fontSize: 13,
+            shellName: "zsh",
+            theme: ""
+        )
+        let directives = content
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        #expect(directives.contains("clipboard-read = deny"))
+    }
+
+    /// #327 dead-surface resolve path: a dead surface must not crash, must not
+    /// consult the seam, and must not complete anything; the callback kind is
+    /// recorded before the resolve guard. `state: nil` is safe here because
+    /// the production resolve guard returns before any state use. The guard
+    /// *ordering* is not observable through this test (with `state: nil`, the
+    /// `complete` helper's own nil-state guard makes the two orderings
+    /// indistinguishable); it is pinned structurally by P-E in
+    /// `GhosttySurfaceUserdataLifetimePinsTests`. Accepted dead-surface
+    /// residual, tracked in the follow-up issue.
+    @Test
+    func confirmReadClipboardOnADeadSurfaceSkipsWithoutCrashing() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+
+        let weakView = WeakBox<GhosttyTerminalView>()
+        let weakContext = WeakBox<Ghostty.SurfaceCallbackContext>()
+        var heldSurface: Ghostty.Surface?
+        var userdata: UnsafeMutableRawPointer?
+        let seamConsultations = InvocationSpy()
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        autoreleasepool {
+            let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-dead")
+            weakView.value = terminal
+            guard let surface = terminal.surface, let cHandle = surface.unsafeCValue else { return }
+            heldSurface = surface
+            weakContext.value = surface.callbackContext
+            userdata = surface.callbackContext.userdata
+            terminal.clipboardConfirmationDecision = { _ in
+                seamConsultations.noteInvocation()
+                return true
+            }
+        }
+
+        await Self.waitUntilViewDeallocates(weakView)
+        #expect(weakView.value == nil, "the view must deallocate once its last reference drops")
+        #expect(heldSurface != nil, "the held wrapper must keep the surface alive after the view drops")
+        #expect(weakContext.value != nil, "the held wrapper must keep the context alive after the view drops")
+
+        "vvterm-#327-dead-payload".withCString { payloadCString in
+            Ghostty.App.confirmReadClipboard(
+                userdata,
+                string: payloadCString,
+                state: nil,
+                request: GHOSTTY_CLIPBOARD_REQUEST_PASTE
+            )
+        }
+
+        // No Task may have been scheduled and no completion may have landed.
+        _ = await Self.waitUntil(timeout: 0.5) { seamConsultations.invocationCount > 0 }
+        #expect(seamConsultations.invocationCount == 0, "a dead surface must never consult the confirmation seam")
+        #if DEBUG
+        #expect(GhosttyClipboardConfirmDebug.completions.isEmpty, "a dead surface must complete nothing")
+        #expect(
+            GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE],
+            "the callback must record its kind before the resolve guard"
+        )
+        #endif
+
+        heldSurface = nil
+        #expect(weakContext.value != nil, "the queued deferred free block must retain the context")
+        let drained = await Self.drainUntilNil(weakContext)
+        #expect(drained, "the deferred free block must run and release the context")
+    }
 }

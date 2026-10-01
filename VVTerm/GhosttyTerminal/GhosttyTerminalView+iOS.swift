@@ -6144,6 +6144,11 @@ class GhosttyTerminalView: UIView {
     /// Callback invoked when user types in the terminal
     var writeCallback: ((Data) -> Void)?
 
+    /// Test seam: answers the unsafe-paste confirmation for this view (#327).
+    /// Nil in production, where the platform prompt is presented instead.
+    /// Per-view (not static) so Swift Testing parallelism cannot cross-talk.
+    var clipboardConfirmationDecision: (@MainActor (ClipboardConfirmationRequest) -> Bool)?
+
     /// Feed data from SSH channel to the terminal for rendering.
     func feedData(_ data: Data) {
         guard let surface = surface?.unsafeCValue else { return }

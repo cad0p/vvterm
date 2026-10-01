@@ -8,6 +8,10 @@
 //  `Ghostty.SurfaceCallbackContext`; every callback resolves the view through
 //  it, and both `ghostty_surface_free` paths invalidate it first.
 //
+//  #327 extends this file with P-E (the clipboard-confirmation resolve guards)
+//  and P-F (prompt title + default-button parity), and with P-G (the
+//  completion gate's captured-handle comparison).
+//
 //  WHAT THESE PINS ASSERT
 //    P-A  repo-wide: no `Unmanaged<GhosttyTerminalView>` cast remains anywhere
 //         under `VVTerm/` (the scan fails closed when it enumerates no files
@@ -27,12 +31,27 @@
 //    P-D  both `setupWriteCallback` bodies pass `callbackContext.userdata` to
 //         `ghostty_surface_set_write_callback`, unwrap the context, and carry
 //         no `Unmanaged.passUnretained(self)` view cast.
+//    P-E  (#327) `confirmReadClipboard`'s two `complete(surface:` call sites
+//         are each preceded by their own `fromOpaque` resolve guard — the
+//         ordering test 8 cannot observe with `state: nil`.
+//    P-F  (#327 tripwire) both platform presenters take the prompt title from
+//         `ClipboardConfirmationRequest.promptTitle` (no inlined literal) and
+//         designate the paste action as the default button.
+//    P-G  (#327) the confirmation completion `Task` resolves the context once,
+//         compares the captured handle (`liveView.surface?.unsafeCValue ==
+//         surface`) as the last check before the completion, and keeps the
+//         drop-path `else` between them — the half the behavioural seam-death
+//         test cannot discriminate (`cleanup()` invalidates the context first,
+//         so deleting only the comparison stays green there).
 //
 //  WHAT THEY DO NOT SEE. A renamed helper, an aliased userdata pointer, a
 //  callback that unwraps the context and then casts the view through a new
 //  spelling, or a behavioural regression in the context itself. Comments are
 //  stripped before every scan, so a commented-out cast cannot satisfy a pin,
-//  but a string literal containing the pinned text could.
+//  but a string literal containing the pinned text could. P-E and P-G see the
+//  presence and order of the resolve/comparison tokens, not the semantics of
+//  the guards they sit in; P-F is a parity tripwire, not a behaviour test — a
+//  default button set by another mechanism would escape it.
 //
 //  MEASURED COUNTERFACTUALS (each pin red under a targeted mutation, run with
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>`):
@@ -45,6 +64,14 @@
 //         the invalidate-before-free order assertion fails.
 //    P-D  revert the iOS write callback to `passUnretained(self)` →
 //         `callbackContext.userdata` count 0 / `passUnretained(self)` present.
+//    P-E  route the paste-branch resolve through a renamed helper (the scan is
+//         exact-token: `fromOpaque(` must appear) → `routes.count → 1` and the
+//         second `complete(surface:` site fails `precedingRoutes > index`.
+//    P-F  inline `"Paste Unsafe Text?"` in the iOS presenter → the iOS
+//         literal-absence assertion fails.
+//    P-G  delete `, liveView.surface?.unsafeCValue == surface` from the
+//         completion gate (keeping the resolve) → the comparison count drops
+//         to 0.
 
 import Foundation
 import Testing
@@ -86,6 +113,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     private static let renderingSetupSource = "VVTerm/GhosttyTerminal/GhosttyRenderingSetup.swift"
     private static let iOSViewSource = "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift"
     private static let macOSViewSource = "VVTerm/GhosttyTerminal/GhosttyTerminalView+macOS.swift"
+    private static let iOSClipboardConfirmationSource = "VVTerm/GhosttyTerminal/Ghostty.App+ClipboardConfirmation+iOS.swift"
+    private static let macOSClipboardConfirmationSource = "VVTerm/GhosttyTerminal/Ghostty.App+ClipboardConfirmation+macOS.swift"
 
     /// The exact helper every routed callback must use.
     private static let contextRoute = "Ghostty.SurfaceCallbackContext.fromOpaque("
@@ -132,7 +161,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     // MARK: - P-B: every routing site resolves through the context
 
-    /// The three app-level routing sites and the one-per-platform write
+    /// The app-level routing sites (action/readClipboard/closeSurface and the
+    /// #327 confirmation callback's two branches) and the one-per-platform write
     /// callbacks all use the context helper, and the only
     /// `ghostty_surface_userdata(` read is the action fallback paired with it.
     @Test
@@ -143,8 +173,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             in: appText
         )
         #expect(
-            appRoutes.count == 3,
-            "P-B: Ghostty.App.swift must route action/readClipboard/closeSurface through the context; found \(appRoutes.count)"
+            appRoutes.count == 5,
+            "P-B: Ghostty.App.swift must route action/readClipboard/closeSurface and both confirmReadClipboard branches through the context; found \(appRoutes.count)"
         )
         #expect(
             Self.occurrences(of: "ghostty_surface_userdata(", in: appText).count == 1,
@@ -162,10 +192,11 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         // site is left unrouted and another is routed twice (or a route moves
         // out of its function), so each of the three app routes is anchored to
         // its own function body.
-        let appRoutingSites: [(name: String, anchor: String)] = [
-            ("action fallback", "func action("),
-            ("readClipboard", "func readClipboard("),
-            ("closeSurface", "func closeSurface("),
+        let appRoutingSites: [(name: String, anchor: String, expected: Int)] = [
+            ("action fallback", "func action(", 1),
+            ("readClipboard", "func readClipboard(", 1),
+            ("closeSurface", "func closeSurface(", 1),
+            ("clipboard confirmation", "func confirmReadClipboard(", 2),
         ]
         for site in appRoutingSites {
             let anchor = try #require(
@@ -179,10 +210,32 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
                 range: body
             )
             #expect(
-                routes.count == 1,
-                "P-B: \(site.name) must resolve through the context exactly once; found \(routes.count)"
+                routes.count == site.expected,
+                "P-B: \(site.name) must resolve through the context \(site.expected) time(s); found \(routes.count)"
             )
         }
+
+        // #327 non-negotiable 1: the confirmation completion runs after the
+        // callback frame, so its Task closure must use the captured context and
+        // never re-read the unretained userdata.
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-B: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+        let taskAnchor = try #require(
+            Self.occurrences(of: "Task ", in: appText, range: confirmBody).first,
+            "P-B: the confirmation callback must dispatch its completion through a Task"
+        )
+        let taskBody = try Self.bracedBlock(after: taskAnchor, in: appText)
+        #expect(
+            Self.flexibleOccurrences(
+                of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
+                in: appText,
+                range: taskBody
+            ).isEmpty,
+            "P-B: the confirmation completion closure must use the captured context, never re-read userdata"
+        )
 
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
             let text = Self.strippingComments(try source(file))
@@ -345,6 +398,171 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
                 "P-D: \(file) must not cast the write-callback userdata to the view"
             )
         }
+    }
+
+    // MARK: - P-E: resolve-before-complete ordering in confirmReadClipboard
+
+    /// The ordering the #327 dead-surface routing test cannot observe with
+    /// `state: nil`: every `complete(surface:` call site in
+    /// `confirmReadClipboard` must be preceded by its own `fromOpaque` resolve
+    /// guard. The k-th completion site needs at least k preceding routes, so
+    /// deleting either the deny-branch resolve or the paste-branch resolve reds
+    /// this pin (the callback may only be completed on a resolved live
+    /// surface handle).
+    @Test
+    func testPEConfirmReadClipboardResolvesBeforeEveryCompletion() throws {
+        let appText = Self.strippingComments(try source(Self.appSource))
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-E: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+
+        let routes = Self.flexibleOccurrences(
+            of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            routes.count == 2,
+            "P-E: confirmReadClipboard must resolve through the context in both branches; found \(routes.count)"
+        )
+        let completionSites = Self.flexibleOccurrences(
+            of: "complete( surface:",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            completionSites.count == 2,
+            "P-E: confirmReadClipboard must route its two completions through complete(surface:); found \(completionSites.count)"
+        )
+        for (index, site) in completionSites.enumerated() {
+            let precedingRoutes = routes.filter { $0.lowerBound < site.lowerBound }.count
+            #expect(
+                precedingRoutes > index,
+                "P-E: completion site \(index + 1) in confirmReadClipboard must be preceded by its own fromOpaque resolve guard; found \(precedingRoutes) preceding route(s)"
+            )
+        }
+    }
+
+    // MARK: - P-F: prompt title and default-button parity
+
+    /// #327 tripwire: the prompt title lives in one shared constant and each
+    /// platform presenter designates the paste action as the default button.
+    /// This freezes the parity contract the unit seam cannot observe (the
+    /// presenters are never instantiated in tests).
+    @Test
+    func testPFPlatformPresentersShareTheTitleAndDefaultButton() throws {
+        let iOS = Self.strippingComments(try source(Self.iOSClipboardConfirmationSource))
+        let macOS = Self.strippingComments(try source(Self.macOSClipboardConfirmationSource))
+
+        #expect(
+            Self.occurrences(of: "title: ClipboardConfirmationRequest.promptTitle", in: iOS).count == 1,
+            "P-F: the iOS presenter must take its alert title from the shared constant"
+        )
+        #expect(
+            Self.occurrences(of: "alert.messageText = ClipboardConfirmationRequest.promptTitle", in: macOS).count == 1,
+            "P-F: the macOS presenter must take its alert title from the shared constant"
+        )
+        for (name, text) in [("iOS", iOS), ("macOS", macOS)] {
+            #expect(
+                Self.occurrences(of: "\"Paste Unsafe Text?\"", in: text).isEmpty,
+                "P-F: the \(name) presenter must not inline the prompt title"
+            )
+        }
+
+        // Both platforms designate the paste action as the default button:
+        // iOS via `preferredAction`, macOS via the Return key equivalent on
+        // the first-added button.
+        #expect(
+            Self.occurrences(of: "preferredAction = pasteAction", in: iOS).count == 1,
+            "P-F: the iOS paste action must be the alert's preferred (default) action"
+        )
+        #expect(
+            Self.occurrences(of: "pasteButton.keyEquivalent = \"\\r\"", in: macOS).count == 1,
+            "P-F: the macOS paste button must carry the Return key equivalent"
+        )
+        #expect(
+            Self.occurrences(of: "cancelButton.keyEquivalent = \"\\u{1B}\"", in: macOS).count == 1,
+            "P-F: the macOS cancel button must keep the Escape key equivalent"
+        )
+    }
+
+    // MARK: - P-G: the completion gate compares the captured handle
+
+    /// #327 hardening: the completion `Task` in `confirmReadClipboard` must end
+    /// with the handle-comparison gate — one `context.resolve()` binding
+    /// `liveView`, the captured handle compared with
+    /// `liveView.surface?.unsafeCValue == surface`, and the guard's `else`
+    /// drop path as the last thing before the completion. The behavioural
+    /// seam-death test cannot discriminate this half: `cleanup()` invalidates
+    /// the context first, so a mutation that keeps the resolve but deletes the
+    /// comparison stays green there.
+    @Test
+    func testPGClipboardCompletionGateComparesTheCapturedHandle() throws {
+        let appText = Self.strippingComments(try source(Self.appSource))
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-G: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+        let taskAnchor = try #require(
+            Self.occurrences(of: "Task ", in: appText, range: confirmBody).first,
+            "P-G: the confirmation callback must dispatch its completion through a Task"
+        )
+        let taskBody = try Self.bracedBlock(after: taskAnchor, in: appText)
+
+        let resolves = Self.occurrences(of: "context.resolve()", in: appText, range: taskBody)
+        #expect(
+            resolves.count == 1,
+            "P-G: the completion Task must resolve the captured context exactly once; found \(resolves.count)"
+        )
+        let comparisons = Self.occurrences(
+            of: "liveView.surface?.unsafeCValue == surface",
+            in: appText,
+            range: taskBody
+        )
+        #expect(
+            comparisons.count == 1,
+            "P-G: the completion gate must compare the captured surface handle exactly once, not merely resolve the view; found \(comparisons.count)"
+        )
+        let completions = Self.occurrences(of: "complete(", in: appText, range: taskBody)
+        #expect(
+            completions.count == 1,
+            "P-G: the completion Task must complete the request exactly once; found \(completions.count)"
+        )
+        guard let resolve = resolves.first, let comparison = comparisons.first, let completion = completions.first else {
+            return
+        }
+        #expect(
+            resolve.lowerBound < comparison.lowerBound,
+            "P-G: the resolve must bind the view the handle comparison reads"
+        )
+        #expect(
+            comparison.lowerBound < completion.lowerBound,
+            "P-G: the handle comparison must precede the completion"
+        )
+
+        // "Immediately before": the only code between the comparison and the
+        // completion is the guard's `else` drop path (its log line and its
+        // `return`), so a gate moved earlier — or reduced to a bare resolve —
+        // cannot satisfy this pin.
+        let between = String(appText[comparison.upperBound..<completion.lowerBound])
+        #expect(
+            Self.occurrences(of: "else {", in: between).count == 1,
+            "P-G: the handle comparison must own a guard else-branch before the completion"
+        )
+        #expect(
+            Self.occurrences(
+                of: "clipboard confirmation completion skipped: surface no longer live",
+                in: between
+            ).count == 1,
+            "P-G: the gate's drop path must sit between the comparison and the completion"
+        )
+        #expect(
+            Self.occurrences(of: "context.resolve()", in: between).isEmpty,
+            "P-G: no further resolve may sit between the handle comparison and the completion"
+        )
     }
 
     // MARK: - Source helpers
