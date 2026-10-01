@@ -133,6 +133,25 @@ struct GhosttySurfaceCallbackRoutingTests {
         }
     }
 
+    /// Minimal invocation counter for callbacks whose only observable effect is
+    /// "it ran" (e.g. `onProcessExit`). The close callback dispatches through a
+    /// main-queue block, which a bare run-loop pump does not run, so the tests
+    /// wait on this counter through the bounded `waitUntil` helper.
+    private final class InvocationSpy {
+        private let lock = NSLock()
+        private var invocations = 0
+
+        func noteInvocation() {
+            lock.lock(); defer { lock.unlock() }
+            invocations += 1
+        }
+
+        var invocationCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return invocations
+        }
+    }
+
     private static func makeTerminal(
         app: Ghostty.App,
         appHandle: ghostty_app_t,
@@ -489,5 +508,261 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(weakContext.value != nil, "the queued deferred free block must retain the context")
         let drained = await Self.drainUntilNil(weakContext)
         #expect(drained, "the deferred free block must run and release the context")
+    }
+
+    // MARK: - #312 clipboard / close / free coverage
+
+    /// Live-path acceptance for `Ghostty.App.readClipboard` (#312): a real
+    /// custom-IO surface with a readable clipboard must paste the payload
+    /// through the write callback.
+    ///
+    /// `pasteTextFromClipboard()` drives this same binding but discards its
+    /// `Bool`, and #312 wants the binding's answer, so the test calls
+    /// `perform(action:)` directly; `acceptsTerminalInput = true` states the
+    /// view-level precondition (`canRouteTerminalInput`) explicitly.
+    ///
+    /// The payload is single-line on purpose: a multi-line payload fails
+    /// `input.paste.isSafe` and dead-ends in the confirm stub (#327), which is
+    /// deliberately not exercised here.
+    @Test
+    func readClipboardResolvesTheLiveViewAndPastesTheClipboard() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-live")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+        #expect(surface.callbackContext.resolve() === terminal, "positive control: the context must resolve the live view")
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        let payload = "vvterm-#312-live-\(UUID().uuidString)"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the clipboard seed must read back before the paste")
+        #expect(collector.combinedString.isEmpty, "positive control: the collector must be empty before the paste")
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        // The paste write is queued through the custom-IO FIFO to the termio
+        // thread, so bounded-wait for the delivery instead of pumping a fixed
+        // number of turns.
+        let delivered = await Self.waitUntil(timeout: 5.0) {
+            collector.combinedString.contains(payload)
+        }
+        #expect(delivered, "the pasted clipboard payload must reach the write callback")
+    }
+
+    /// Dead-window acceptance for `Ghostty.App.readClipboard` (#312): the view
+    /// is gone but the surface wrapper (and therefore the context userdata) is
+    /// retained, so the paste binding drives the real clipboard route. The
+    /// route must report `false` and write nothing.
+    ///
+    /// The clipboard is seeded non-empty first: otherwise `false` could just
+    /// mean "empty clipboard" and the suppression claim would be vacuous.
+    @Test
+    func readClipboardReturnsFalseAndWritesNothingInTheDeadViewWindow() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+
+        let weakView = WeakBox<GhosttyTerminalView>()
+        let weakContext = WeakBox<Ghostty.SurfaceCallbackContext>()
+        let collector = WriteCollector()
+        var heldSurface: Ghostty.Surface?
+        var handle: ghostty_surface_t?
+        var userdataIsContext = false
+
+        let payload = "vvterm-#312-dead-\(UUID().uuidString)"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the clipboard must be seeded before the dead-window paste")
+
+        autoreleasepool {
+            let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-dead-window")
+            weakView.value = terminal
+            guard let surface = terminal.surface, let cHandle = surface.unsafeCValue else { return }
+            heldSurface = surface
+            handle = cHandle
+            weakContext.value = surface.callbackContext
+
+            terminal.writeCallback = { collector.append($0) }
+            terminal.setupWriteCallback()
+            terminal.acceptsTerminalInput = true
+
+            userdataIsContext = ghostty_surface_userdata(cHandle) == surface.callbackContext.userdata
+        }
+
+        #expect(userdataIsContext, "the surface userdata must be the retained context before the view drops")
+        guard let handle, heldSurface != nil else {
+            Issue.record("surface creation failed")
+            return
+        }
+
+        await Self.waitUntilViewDeallocates(weakView)
+        #expect(weakView.value == nil, "the view must deallocate once its last reference drops")
+        #expect(heldSurface != nil, "the held wrapper must keep the surface alive after the view drops")
+        #expect(weakContext.value != nil, "the held wrapper must keep the context alive after the view drops")
+
+        let userdata = ghostty_surface_userdata(handle)
+        #expect(userdata != nil, "the surface must still carry the context userdata")
+        let deadContextView = Ghostty.SurfaceCallbackContext.fromOpaque(userdata)?.resolve()
+        #expect(deadContextView == nil, "the dead view must resolve to nil")
+
+        let handled = heldSurface?.perform(action: "paste_from_clipboard")
+        #expect(handled == false, "the dead-window paste binding must report false")
+
+        let wrote = await Self.waitUntil(timeout: 0.5) { !collector.combinedString.isEmpty }
+        #expect(wrote == false, "the dead-window paste must not write anything to the terminal")
+
+        heldSurface = nil
+        #expect(weakContext.value != nil, "the queued deferred free block must retain the context")
+        let drained = await Self.drainUntilNil(weakContext)
+        #expect(drained, "the deferred free block must run and release the context")
+    }
+
+    /// Live-path acceptance for `Ghostty.App.closeSurface` (#312): the close
+    /// callback resolves the live view and dispatches `onProcessExit`.
+    ///
+    /// The dispatch is a main-queue block, which a bare run-loop pump does not
+    /// run (measured by this suite), so the test bounded-waits on the spy.
+    @Test
+    func closeSurfaceInvokesOnProcessExitWhileTheViewIsAlive() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "close-live")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        let handle = try #require(surface.unsafeCValue)
+        #expect(surface.callbackContext.resolve() === terminal, "positive control: the context must resolve the live view")
+
+        let spy = InvocationSpy()
+        terminal.onProcessExit = { spy.noteInvocation() }
+
+        // Pass the userdata the way the core's `close_surface_cb` would: the
+        // surface's own userdata, not the context pointer (identical post-#310).
+        let userdata = try #require(ghostty_surface_userdata(handle))
+        Ghostty.App.closeSurface(userdata, processAlive: false)
+
+        let dispatched = await Self.waitUntil { spy.invocationCount > 0 }
+        #expect(dispatched, "closeSurface must dispatch onProcessExit on the main queue while the view is alive")
+    }
+
+    /// Dead-window acceptance for `Ghostty.App.closeSurface` (#312): the dead
+    /// userdata must resolve to nil, so the call neither crashes nor dispatches
+    /// to a live control view's `onProcessExit`.
+    @Test
+    func closeSurfaceInTheDeadViewWindowDoesNotCrashOrDispatch() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+
+        // Live control: its spy must stay silent when the call carries the dead
+        // userdata instead.
+        let controlTerminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "close-live-control")
+        defer { controlTerminal.cleanup() }
+        let controlSurface = try #require(controlTerminal.surface)
+        _ = try #require(controlSurface.unsafeCValue)
+        #expect(
+            controlSurface.callbackContext.resolve() === controlTerminal,
+            "positive control: the control context must resolve its live view"
+        )
+        let controlSpy = InvocationSpy()
+        controlTerminal.onProcessExit = { controlSpy.noteInvocation() }
+
+        let weakView = WeakBox<GhosttyTerminalView>()
+        let weakContext = WeakBox<Ghostty.SurfaceCallbackContext>()
+        var heldSurface: Ghostty.Surface?
+        var handle: ghostty_surface_t?
+        var userdataIsContext = false
+
+        autoreleasepool {
+            let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "close-dead-window")
+            weakView.value = terminal
+            guard let surface = terminal.surface, let cHandle = surface.unsafeCValue else { return }
+            heldSurface = surface
+            handle = cHandle
+            weakContext.value = surface.callbackContext
+            userdataIsContext = ghostty_surface_userdata(cHandle) == surface.callbackContext.userdata
+        }
+
+        #expect(userdataIsContext, "the surface userdata must be the retained context before the view drops")
+        guard let handle, heldSurface != nil else {
+            Issue.record("surface creation failed")
+            return
+        }
+
+        await Self.waitUntilViewDeallocates(weakView)
+        #expect(weakView.value == nil, "the view must deallocate once its last reference drops")
+        #expect(heldSurface != nil, "the held wrapper must keep the surface alive after the view drops")
+        #expect(weakContext.value != nil, "the held wrapper must keep the context alive after the view drops")
+
+        let userdata = ghostty_surface_userdata(handle)
+        #expect(userdata != nil, "the surface must still carry the context userdata")
+        let deadContextView = Ghostty.SurfaceCallbackContext.fromOpaque(userdata)?.resolve()
+        #expect(deadContextView == nil, "the dead view must resolve to nil")
+
+        Ghostty.App.closeSurface(userdata, processAlive: false)
+
+        let dispatched = await Self.waitUntil(timeout: 0.5) { controlSpy.invocationCount > 0 }
+        #expect(dispatched == false, "the dead-window close must not dispatch the control view's onProcessExit")
+
+        heldSurface = nil
+        #expect(weakContext.value != nil, "the queued deferred free block must retain the context")
+        let drained = await Self.drainUntilNil(weakContext)
+        #expect(drained, "the deferred free block must run and release the context")
+    }
+
+    /// `Ghostty.Surface.free()`'s invalidate (#312): drive the production
+    /// teardown (`terminal.cleanup()` runs `LayerTeardown.prepare` then
+    /// `free()`) while retaining the view, and assert the context is already
+    /// invalidated — suppression from invalidation, not from the weak view
+    /// going nil.
+    ///
+    /// The direct `readClipboard` probe runs against a non-empty clipboard so
+    /// its `false` cannot be the empty-clipboard `false`. No deferred-free
+    /// drain here: `cleanup()` frees synchronously.
+    @Test
+    func freeInvalidatesTheContextWhileTheViewIsStillAlive() throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "free-invalidate")
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+        let context = surface.callbackContext
+        weak var weakView: GhosttyTerminalView? = terminal
+        #expect(context.resolve() === terminal, "positive control: the context must resolve the live view before cleanup")
+
+        let payload = "vvterm-#312-free-\(UUID().uuidString)"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the clipboard must be non-empty before the suppression probe")
+
+        terminal.cleanup()
+
+        // Swift may end a local's lifetime at its last use; the post-cleanup
+        // assertions need the view demonstrably alive while the context is
+        // already invalidated.
+        withExtendedLifetime(terminal) {
+            #expect(weakView != nil, "cleanup() must not deallocate the retained view")
+            #expect(context.resolve() == nil, "free() must invalidate the context while the view is still alive")
+
+            let handled = Ghostty.App.readClipboard(
+                context.userdata,
+                location: GHOSTTY_CLIPBOARD_STANDARD,
+                state: nil
+            )
+            #expect(
+                handled == false,
+                "an invalidated context must refuse the clipboard read even with a non-empty clipboard"
+            )
+        }
     }
 }
