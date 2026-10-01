@@ -97,7 +97,8 @@ struct EternalTerminalStatePolicyTests {
     func bootstrapCommandUsesKnownPOSIXShellAndExpandedPath() {
         let command = SSHETBootstrapExecutor.remoteBootstrapCommand("start-et")
 
-        #expect(command.hasPrefix("/bin/sh -lc"))
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("-lc"))
         #expect(command.contains("export PATH="))
         #expect(command.contains("command -v etterminal"))
         #expect(command.contains("start-et"))
