@@ -17,24 +17,31 @@
 //  iOS).
 //
 //  WHAT THESE PINS ASSERT (and what they do not see). Five pins, all
-//  comment-stripping the source first:
+//  stripped of comments first:
 //    ROOTS. the app-target scan roots themselves: the `VVTerm` native
 //       target's `fileSystemSynchronizedGroups` must be exactly `VVTerm/` +
-//       `VVTermShared/`; a new root reddens here before a probe in it can
-//       hide.
+//       `VVTermShared/`; a new synchronized root reddens here and is already
+//       swept by `allSwiftFiles()`. Because a classic `PBXGroup` +
+//       `Sources`-phase file would compile into the target *without* being
+//       swept, this pin also asserts that the target's `Sources` phase has no
+//       non-synchronized Swift file references and fails closed if one
+//       appears — the scan root can never silently widen past the sweep.
 //    A. a recursive `.swift` scan of every app-target root: the login tokens
-//       (a shell name followed by a login flag, whitespace-tolerant — this
-//       covers `sh -lc`, `sh -l -c`, `sh --login -c`, `fish -lc`, `csh -lc`)
-//       may appear only in the Mosh 4 / Tmux 3 / Bootstrap 6 file allowlist,
+//       (a shell name — or `$SHELL` / `${SHELL}` — followed by a login flag,
+//       whitespace- and `\t`-escape-tolerant — this covers `sh -lc`,
+//       `sh -l -c`, `sh --login -c`, `fish -lc`, `csh -lc`, `exec "$SHELL" -l`)
+//       may appear only in the Mosh 4 / Tmux 3 / Bootstrap 7 file allowlist,
 //       and the login-shell emitters (`defaultLoginShellCommand(`,
-//       `exec "${SHELL:-/bin/sh}" -l`) only in the emitter allowlist; inside
-//       the three login-shell files the token may appear only inside the
-//       enumerated function bodies, and the emitter files have a
-//       per-function/occurrence/declaration allowlist of their own.
+//       `exec "${SHELL:-/bin/sh}" -l`, the `$SHELL` exec fallback) only in the
+//       emitter allowlist; inside the three login-shell files the token may
+//       appear only inside the enumerated function bodies, and the emitter
+//       files have a per-function/occurrence/declaration allowlist of their
+//       own.
 //    B. a recursive `.swift` scan of every app-target root for the call form
-//       `wrapPOSIXShellCommand(` (whitespace-tolerant before the paren): the
-//       only files that may call it are `RemoteEnvironmentResolver` (2 calls
-//       in `launchPlan`), `RemoteTmuxManager` (1 call in
+//       `wrapPOSIXShellCommand(` (whitespace-tolerant before the paren),
+//       scanned after string contents are blanked out: the only files that
+//       may call it are `RemoteEnvironmentResolver` (2 calls in
+//       `launchPlan`), `RemoteTmuxManager` (1 call in
 //       `createSessionCommand`) and `RemoteTerminalBootstrap` (the
 //       declaration); a new function or a file-scope binding inside an
 //       allowlisted file reddens, and the two clipboard files that #324
@@ -53,23 +60,29 @@
 //       self-export it; a body converted by #324 must not re-add it, or it
 //       would re-promote `$HOME/.local/bin` ahead of the curated system dirs.
 //
-//  A renamed function reddens the exact-name comparisons (a deliberate
-//  tripwire, not a silent pass); a token moved to a new function reddens the
-//  set comparison and the occurrence-count pin. It is a tripwire, not a
-//  proof. Remaining defeats: braces inside string literals are counted by the
-//  block walk (balanced in these files today), a default-argument closure
-//  would make the walk bind the wrong block, raw strings (`#"..."#`) are not
-//  recognized by the comment stripper, comments inside an interpolation are
-//  not stripped, a login-shell token assembled at runtime is invisible, a
-//  wrapper reference bound without a call
-//  (`let wrap = …wrapPOSIXShellCommand; wrap(x)`) and a wrapper call whose
-//  call text is assembled from concatenated identifier pieces
-//  (`"wrapPOSIX" + "ShellCommand("`) are invisible to the call-form scan, and
-//  a dead-branch builder call (`if false { _ = wrapPOSIXProbeCommand(body) }`)
-//  satisfies pin C's builder-call assertion as long as the file-level count
-//  is preserved. A commented-out token cannot satisfy the pins (comments are
-//  stripped). Any intentional login site added later must be added to the
-//  allowlists below deliberately.
+//  WHAT THE SCANNER CANNOT SEE. The pins are a tripwire, not a proof.
+//  Comments are stripped everywhere. For the call-form pins (B, C, E) the
+//  contents of string literals are blanked out as well — a string containing
+//  `wrapPOSIXShellCommand(` therefore cannot satisfy a call pin — while an
+//  interpolation (`\( … )`) is kept as code and scanned recursively, because
+//  a real call inside an interpolation is the production pattern, not a
+//  decoy. The blanker is still not a tokenizer: raw strings, one-line strings
+//  and multi-line strings are recognized, but a default-argument closure in a
+//  `func` declaration can still make the body walk bind the wrong block.
+//  Remaining defeats: braces inside string literals are counted by the block
+//  walk (balanced in these files today), a login-shell token assembled at
+//  runtime is invisible, a wrapper *reference* bound without a call
+//  (`let wrap = …wrapPOSIXShellCommand; wrap(x)`), a call text assembled
+//  from concatenated identifier pieces (`"wrapPOSIX" + "ShellCommand("`), a
+//  `shellPathExport` reference bound without a call
+//  (`let e = …shellPathExport; e()`), a converted body that composes a
+//  `$HOME/.local/bin` PATH export by hand instead of calling the named
+//  helper, and a dead-branch builder call
+//  (`if false { _ = wrapPOSIXProbeCommand(body) }`) that satisfies pin C's
+//  builder-call assertion as long as the file-level count is preserved. A
+//  commented-out token cannot satisfy the pins (comments are stripped). Any
+//  intentional login site added later must be added to the allowlists below
+//  deliberately.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the suite at a
 //  mutated tree. Measured in `SSHExecGateLivenessPinsTests` on this runner: a
@@ -115,7 +128,10 @@ struct SSHProbeShellPinsTests {
     /// `testAppTargetSweepRootsArePinned` fails closed when the set changes,
     /// and `allSwiftFiles()` sweeps every enumerated root, so a probe cannot
     /// enter the module through an unwatched root — the new root is swept
-    /// before it is allowlisted.
+    /// before it is allowlisted. A non-synchronized Swift file (a classic
+    /// `PBXGroup` reference in the target's `Sources` phase) is *not* under a
+    /// root, so the same pin asserts there is none: the target's Sources
+    /// phase is enumerated too and must contribute zero Swift files.
     private static let expectedAppTargetSourceRoots = ["VVTerm", "VVTermShared"]
 
     /// The app target's Swift source roots, read from the Xcode project. An
@@ -164,12 +180,17 @@ struct SSHProbeShellPinsTests {
         }
     }
 
-    /// The value of a `key = value;` assignment inside a PBX entry body.
+    /// The value of a `key = value;` assignment inside a PBX entry body. The
+    /// match must be preceded by a token boundary (start of body or
+    /// whitespace), so `fileRef` cannot match the `fileReference` key and
+    /// `name` cannot match a comment's `name` text.
     private static func pbxValue(forKey key: String, in body: String) -> String? {
-        guard let start = body.range(of: "\(key) = "),
-              let end = body[start.upperBound...].firstIndex(of: ";")
+        guard let exact = body.range(of: "\(key) = "),
+              exact.lowerBound == body.startIndex
+                || body[body.index(before: exact.lowerBound)].isWhitespace,
+              let end = body[exact.upperBound...].firstIndex(of: ";")
         else { return nil }
-        return String(body[start.upperBound..<end])
+        return String(body[exact.upperBound..<end])
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -183,13 +204,29 @@ struct SSHProbeShellPinsTests {
         }
     }
 
+    // MARK: - String-aware scanning
+
+    /// A copy of `source` whose string-literal *contents* are blanked out
+    /// (delimiters and newlines kept), on top of the comment stripping. The
+    /// scan reads this so a string literal — including a call-form literal
+    /// such as `"wrapPOSIXShellCommand("` — cannot satisfy pin B/C/E's
+    /// call-form assertions. The blanker recognizes one-line, multi-line and
+    /// raw strings, and keeps interpolation bodies (`\( … )`) as code by
+    /// scanning them recursively, so a call interpolated into a command string
+    /// is still counted.
+    private static func strippingCommentsAndStrings(_ source: String) -> String {
+        Self.scanning(source, blankingStringContents: true)
+    }
+
     /// Every `.swift` file under every app-target source root (see
-    /// `appTargetSourceRoots()`), as repository-relative paths, recursively.
-    /// The swept roots are the fail-closed scope: a new file anywhere in the
-    /// app target must be consciously allowlisted before it can emit a login
-    /// shell or reference the login wrapper.
-    private func allSwiftFiles() -> [String] {
-        var result: [String] = []
+    /// `appTargetSourceRoots()`), as repository-relative paths, recursively,
+    /// plus the target's non-synchronized `Sources`-phase Swift references
+    /// (`appTargetNonSynchronizedSwiftFileReferences()`), which the roots pin
+    /// requires to be empty. The paths are the fail-closed scope: a new file
+    /// anywhere in the app target must be consciously allowlisted before it
+    /// can emit a login shell or reference the login wrapper.
+    private func allSwiftFiles() -> [ScannedFile] {
+        var result: [ScannedFile] = []
         for root in appTargetSourceRoots() {
             let directory = repositoryRoot().appendingPathComponent(root)
             guard let enumerator = FileManager.default.enumerator(atPath: directory.path) else {
@@ -197,10 +234,76 @@ struct SSHProbeShellPinsTests {
             }
             while let relativePath = enumerator.nextObject() as? String {
                 guard relativePath.hasSuffix(".swift") else { continue }
-                result.append("\(root)/\(relativePath)")
+                result.append(
+                    ScannedFile(path: "\(root)/\(relativePath)", isSynchronized: true)
+                )
             }
         }
-        return result.sorted()
+        for path in appTargetNonSynchronizedSwiftFileReferences() {
+            result.append(ScannedFile(path: path, isSynchronized: false))
+        }
+        return result.sorted { $0.path < $1.path }
+    }
+
+    /// One swept source file and whether it lives under a synchronized root.
+    private struct ScannedFile {
+        let path: String
+        let isSynchronized: Bool
+    }
+
+    /// The target's non-synchronized `Sources`-phase Swift files, as
+    /// repository-relative paths. These are the classic `PBXGroup` +
+    /// `PBXBuildFile` references that compile into the `VVTerm` target without
+    /// belonging to a `fileSystemSynchronizedGroups` root, so `allSwiftFiles()`
+    /// would never sweep them. The roots pin requires this to be empty; the
+    /// files are still appended to the scan set so a misconfiguration reddens
+    /// every pin that would see their contents, not just the roots pin.
+    private func appTargetNonSynchronizedSwiftFileReferences() -> [String] {
+        let projectURL = repositoryRoot()
+            .appendingPathComponent("VVTerm.xcodeproj/project.pbxproj")
+        guard let project = try? String(contentsOf: projectURL, encoding: .utf8) else {
+            return []
+        }
+        return Self.nonSynchronizedSwiftSourcePaths(in: project)
+    }
+
+    /// The parser behind `appTargetNonSynchronizedSwiftFileReferences()`,
+    /// split out so the roots pin and the sweep share one resolution.
+    private static func nonSynchronizedSwiftSourcePaths(in project: String) -> [String] {
+        var pathsByFileID: [String: String] = [:]
+        for file in pbxEntries(in: project, isa: "PBXFileReference") {
+            guard let path = pbxValue(forKey: "path", in: file.body) else { continue }
+            pathsByFileID[file.id] = path
+        }
+
+        for target in pbxEntries(in: project, isa: "PBXNativeTarget") {
+            guard pbxValue(forKey: "name", in: target.body) == "VVTerm",
+                  let buildPhases = pbxValue(forKey: "buildPhases", in: target.body)
+            else { continue }
+
+            var sourceFileIDs: [String] = []
+            for phaseID in hexIdentifiers(in: buildPhases) {
+                guard let phase = pbxEntries(in: project, isa: "PBXSourcesBuildPhase")
+                    .first(where: { $0.id == phaseID }),
+                    let files = pbxValue(forKey: "files", in: phase.body)
+                else { continue }
+                sourceFileIDs.append(contentsOf: hexIdentifiers(in: files))
+            }
+
+            let buildFilePaths = pbxEntries(in: project, isa: "PBXBuildFile")
+                .filter { sourceFileIDs.contains($0.id) }
+                .compactMap { pbxValue(forKey: "fileRef", in: $0.body) }
+                .compactMap { fileRefValue -> String? in
+                    // The value text is `ID /* name */`; keep the leading hex ID.
+                    guard let id = hexIdentifiers(in: fileRefValue).first else { return nil }
+                    return pathsByFileID[id]
+                }
+            let fileReferencePaths = sourceFileIDs.compactMap { pathsByFileID[$0] }
+            return (buildFilePaths + fileReferencePaths)
+                .filter { $0.hasSuffix(".swift") }
+                .sorted()
+        }
+        return []
     }
 
     // MARK: - Pin A allowlists
@@ -243,14 +346,14 @@ struct SSHProbeShellPinsTests {
     ]
 
     /// Occurrence counts of the login tokens at the widened family: Mosh
-    /// 110/112/134/154; Tmux 381/416/1062; Bootstrap 156/157/158 (`exec
-    /// bash|zsh|sh -l` in `defaultLoginShellCommand`), 187 (`/bin/sh -lc` in
-    /// `wrapPOSIXShellCommand`), 315 (the parser prefix array holds two tokens
-    /// on one line).
+    /// 110/112/134/154; Tmux 381/416/1062; Bootstrap 156 (`exec "$SHELL" -l`),
+    /// 157/158/159 (`exec bash|zsh|sh -l` in `defaultLoginShellCommand`), 187
+    /// (`/bin/sh -lc` in `wrapPOSIXShellCommand`), 327 (the parser prefix array
+    /// holds two tokens on one line).
     private static let expectedLoginShellOccurrences: [String: Int] = [
         "VVTerm/Core/SSH/RemoteMoshManager.swift": 4,
         "VVTerm/Core/SSH/RemoteTmuxManager.swift": 3,
-        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 6
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 7
     ]
 
     /// The login-shell emitters that are not `-lc` literals but still hand a
@@ -264,22 +367,30 @@ struct SSHProbeShellPinsTests {
     ///   `exec "${SHELL:-/bin/sh}" -l` (`:475`).
     /// - `RemoteTerminalBootstrap.moshStartupScript` — the mosh startup
     ///   fallback (`:177`); the `defaultLoginShellCommand` declaration itself
-    ///   is the one allowed emitter reference outside a func body.
+    ///   is the one allowed emitter reference outside a func body, and
+    ///   `defaultLoginShellCommand`'s own `exec "$SHELL" -l` fallback keeps
+    ///   its body in this allowlist (the widened emitter family counts it).
     private static let expectedLoginShellEmitterSites: [String: [String]] = [
         "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift": ["launchPlan"],
         "VVTerm/Core/SSH/RemoteTmuxManager.swift": [
             "createSessionCommand",
             "missingSessionCommand"
         ],
-        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": ["moshStartupScript"]
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": [
+            "defaultLoginShellCommand",
+            "moshStartupScript"
+        ]
     ]
 
     /// Emitter occurrences inside function bodies (the `defaultLoginShellCommand`
     /// declaration is outside every body and counted separately below).
+    /// Bootstrap has two: the `exec "$SHELL" -l` fallback inside
+    /// `defaultLoginShellCommand` and the `defaultLoginShellCommand()` call
+    /// inside `moshStartupScript`.
     private static let expectedLoginShellEmitterOccurrences: [String: Int] = [
         "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift": 1,
         "VVTerm/Core/SSH/RemoteTmuxManager.swift": 2,
-        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 1
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 2
     ]
 
     /// The number of emitter references that legitimately sit *outside* a
@@ -293,10 +404,15 @@ struct SSHProbeShellPinsTests {
 
     /// The emitter patterns. The second tolerates the Swift string-literal
     /// escaping of the embedded quotes (`exec \"…\"` in the source), which a
-    /// plain substring scan would miss.
+    /// plain substring scan would miss. The third covers the `$SHELL`
+    /// non-parameter-expansion fallback (`exec "$SHELL" -l`), which is a
+    /// login-shell emitter but is not part of the second pattern's `${SHELL:-…}`
+    /// form; its `(?!:)` keeps the parameter-expansion form out so the two
+    /// patterns cannot double-count one line.
     private static let loginShellEmitterPatterns = [
         #"defaultLoginShellCommand\("#,
-        #"exec [^ ]*\$\{SHELL:-/bin/sh\}[^ ]* -l"#
+        #"exec [^ ]*\$\{SHELL:-/bin/sh\}[^ ]* -l"#,
+        #"\bexec ?["\' ]*(?:\$SHELL|\$\{SHELL\}|SHELL)(?!:)["\']*[ \t]+-[A-Za-z]*l"#
     ]
 
     // MARK: - Pin B allowlists
@@ -306,8 +422,10 @@ struct SSHProbeShellPinsTests {
     /// scan cannot see `wrapPOSIXShellCommand(body)`, so this is the allowlist
     /// that catches a new probe adopting the login wrapper. The scan looks for
     /// the call form `wrapPOSIXShellCommand(` (whitespace-tolerant before the
-    /// paren), so a preserved-count string literal cannot stand in for a
-    /// call.
+    /// paren) in a copy whose string contents are blanked out, so neither a
+    /// bare-identifier literal nor a call-form literal can stand in for a
+    /// call; a reference bound without a call and a call text assembled from
+    /// concatenated identifier pieces remain defeats (see the header).
     ///
     /// - `RemoteTmuxManager.createSessionCommand` — builds the interactive
     ///   terminal window's login shell (the intentional login site at
@@ -343,9 +461,10 @@ struct SSHProbeShellPinsTests {
 
     /// Pin B's reference form: the call, tolerating Swift-legal whitespace
     /// before the open paren. Scanning the call form (rather than the bare
-    /// identifier) stops a preserved-count string literal from satisfying the
-    /// occurrence pins; a reference bound without a call and a call text
-    /// assembled from concatenated identifier pieces are the remaining
+    /// identifier) stops a bare-identifier string literal from satisfying the
+    /// occurrence pins, and blanking string contents first stops a
+    /// call-form literal as well; a reference bound without a call and a call
+    /// text assembled from concatenated identifier pieces are the remaining
     /// defeats (see the header).
     private static let loginWrapperCallPattern = #"wrapPOSIXShellCommand\s*\("#
 
@@ -481,13 +600,22 @@ struct SSHProbeShellPinsTests {
     /// The roots pin (fail-closed scan scope): the sweep must cover every
     /// Swift root that compiles into the `VVTerm` app target. If the Xcode
     /// project grows a synchronized root, this reddens and `allSwiftFiles()`
-    /// already sweeps it — the new root is scanned before it is trusted.
+    /// already sweeps it — the new root is scanned before it is trusted. A
+    /// classic `PBXGroup` + `Sources`-phase file is not under any root, so it
+    /// must fail this pin instead: the target must contribute zero
+    /// non-synchronized Swift sources (the header states this choice).
     @Test
     func testAppTargetSweepRootsArePinned() {
         let roots = appTargetSourceRoots()
         #expect(
             roots == Self.expectedAppTargetSourceRoots,
             "the VVTerm app target's synchronized Swift roots are \(roots); a new root must be consciously added to expectedAppTargetSourceRoots (it is already swept, this is the tripwire)"
+        )
+
+        let nonSynchronized = appTargetNonSynchronizedSwiftFileReferences()
+        #expect(
+            nonSynchronized.isEmpty,
+            "the VVTerm app target compiles non-synchronized Swift source(s) \(nonSynchronized); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
         )
     }
 
@@ -499,20 +627,20 @@ struct SSHProbeShellPinsTests {
 
         // The recursive, fail-closed sweep: a new file (or a new literal in an
         // existing file) cannot adopt login semantics silently.
-        for path in files {
-            let text = Self.strippingComments(try source(path))
+        for file in files {
+            let text = Self.strippingComments(try source(file.path))
             let tokenCount = Self.shFamilyLoginTokenCount(in: text)
             if tokenCount > 0 {
                 #expect(
-                    Self.expectedLoginShellOccurrences[path] == tokenCount,
-                    "\(path): \(tokenCount) sh-family login token(s); expected \(Self.expectedLoginShellOccurrences[path].map { String($0) } ?? "none") — a new login-shell literal must be consciously allowlisted"
+                    Self.expectedLoginShellOccurrences[file.path] == tokenCount,
+                    "\(file.path): \(tokenCount) sh-family login token(s); expected \(Self.expectedLoginShellOccurrences[file.path].map { String($0) } ?? "none") — a new login-shell literal must be consciously allowlisted"
                 )
             }
             let emitterCount = Self.loginShellEmitterCount(in: text)
             if emitterCount > 0 {
                 #expect(
-                    Self.expectedLoginShellEmitterSites[path] != nil,
-                    "\(path): \(emitterCount) login-shell emitter reference(s); the file is not in the emitter allowlist"
+                    Self.expectedLoginShellEmitterSites[file.path] != nil,
+                    "\(file.path): \(emitterCount) login-shell emitter reference(s); the file is not in the emitter allowlist"
                 )
             }
         }
@@ -597,7 +725,8 @@ struct SSHProbeShellPinsTests {
 
         let knownFiles = Set(Self.expectedLoginShellSites.keys)
             .union(Self.expectedLoginShellEmitterSites.keys)
-        let missing = knownFiles.subtracting(files)
+        let sweptPaths = Set(files.map(\.path))
+        let missing = knownFiles.subtracting(sweptPaths)
         #expect(
             missing.isEmpty,
             "the recursive sweep missed known login-shell files \(missing.sorted()) — the sweep root is wrong, or a pinned file was moved"
@@ -609,30 +738,33 @@ struct SSHProbeShellPinsTests {
     /// functions may call it. This is the pin the literal-token scan cannot
     /// be: a new probe written as `wrapPOSIXShellCommand(body)` carries no
     /// literal `sh -lc`. The scan uses the call form
-    /// `wrapPOSIXShellCommand(` (whitespace-tolerant before the paren), so a
-    /// preserved-count string literal cannot stand in for a call.
+    /// `wrapPOSIXShellCommand(` (whitespace-tolerant before the paren) in a
+    /// copy whose string contents are blanked, so neither a bare-identifier
+    /// nor a call-form string literal can stand in for a call (see the header
+    /// for the defeats that remain).
     @Test
     func testOnlyAllowlistedFilesAndFunctionsReferenceTheLoginWrapper() throws {
         let files = allSwiftFiles()
         let knownFiles = Set(Self.expectedLoginWrapperSites.keys)
-        let missing = knownFiles.subtracting(files)
+        let sweptPaths = Set(files.map(\.path))
+        let missing = knownFiles.subtracting(sweptPaths)
         #expect(
             missing.isEmpty,
             "the recursive sweep missed known login-wrapper files \(missing.sorted()) — the sweep root is wrong, or a pinned file was moved"
         )
 
-        for path in files {
-            let text = Self.strippingComments(try source(path))
+        for file in files {
+            let text = Self.strippingCommentsAndStrings(try source(file.path))
             if Self.loginWrapperCallCount(in: text) > 0 {
                 #expect(
-                    Self.expectedLoginWrapperSites[path] != nil,
-                    "\(path): a login-wrapper call must be consciously allowlisted"
+                    Self.expectedLoginWrapperSites[file.path] != nil,
+                    "\(file.path): a login-wrapper call must be consciously allowlisted"
                 )
             }
         }
 
         for (path, allowed) in Self.expectedLoginWrapperSites {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingCommentsAndStrings(try source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -681,7 +813,7 @@ struct SSHProbeShellPinsTests {
     @Test
     func testConvertedProbeFilesUseTheNonLoginWrapperAtEverySite() throws {
         for (path, expected) in Self.expectedProbeWrapperOccurrences {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingCommentsAndStrings(try source(path))
             let probeCount = Self.occurrences(of: "wrapPOSIXProbeCommand(", in: text).count
             #expect(
                 probeCount == expected,
@@ -694,7 +826,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for builder in Self.probeBuilders {
-            let text = Self.strippingComments(try source(builder.path))
+            let text = Self.strippingCommentsAndStrings(try source(builder.path))
             let bodies = try Self.functionBodies(in: text)
             let matches = bodies.filter { $0.name == builder.function }
             #expect(
@@ -743,29 +875,38 @@ struct SSHProbeShellPinsTests {
     /// pre-#324 bodies. The wrapper injects the curated system PATH; a body
     /// converted by #324 that re-adds `shellPathExport()` would re-promote
     /// `$HOME/.local/bin` ahead of the system dirs, which is the defect this
-    /// pin keeps closed.
+    /// pin keeps closed. The file-level sweep fires on either the
+    /// `shellPathExport(` call text or a hand-rolled `$HOME/.local/bin`
+    /// literal, so the same defect cannot be reintroduced without the named
+    /// helper. Documented defeats: a reference bound without a call
+    /// (`let e = RemoteTerminalBootstrap.shellPathExport; e()`) and a PATH
+    /// string that reaches `$HOME/.local/bin` without spelling it (a variable
+    /// or an interpolation) remain invisible to this scan.
     @Test
     func testOnlyAllowlistedBodiesSelfExportTheUserLocalPath() throws {
         let files = allSwiftFiles()
         let knownFiles = Set(Self.expectedShellPathExportSites.keys)
-        let missing = knownFiles.subtracting(files)
+        let sweptPaths = Set(files.map(\.path))
+        let missing = knownFiles.subtracting(sweptPaths)
         #expect(
             missing.isEmpty,
             "the recursive sweep missed known self-exporting files \(missing.sorted()) — the sweep root is wrong, or a pinned file was moved"
         )
 
-        for path in files {
-            let text = Self.strippingComments(try source(path))
-            if text.range(of: "shellPathExport(") != nil {
+        for file in files {
+            let text = Self.strippingCommentsAndStrings(try source(file.path))
+            let references = Self.occurrences(of: "shellPathExport(", in: text).count
+            let handRolled = Self.occurrences(of: "$HOME/.local/bin", in: text).count
+            if references > 0 || handRolled > 0 {
                 #expect(
-                    Self.expectedShellPathExportSites[path] != nil,
-                    "\(path): only an allowlisted pre-#324 body may call shellPathExport() — it re-promotes $HOME/.local/bin ahead of the system dirs"
+                    Self.expectedShellPathExportSites[file.path] != nil,
+                    "\(file.path): \(references) shellPathExport() reference(s) and \(handRolled) hand-rolled $HOME/.local/bin literal(s); only an allowlisted pre-#324 body may self-export the user-local PATH — it re-promotes $HOME/.local/bin ahead of the system dirs"
                 )
             }
         }
 
         for (path, allowed) in Self.expectedShellPathExportSites {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingCommentsAndStrings(try source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -807,18 +948,56 @@ struct SSHProbeShellPinsTests {
     /// inside `//` line comments and nested `/* … */` block comments become
     /// spaces; newlines are preserved, so slice anchors still resolve. String
     /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes) and `"""…"""`
-    /// but not raw strings (`#"…"#`) or comments inside an interpolation.
+    /// a comment); the scanner covers `"…"` (with `\` escapes), `"""…"""`,
+    /// raw strings (`#"…"#`, any hash count) and interpolation brackets. A
+    /// comment that sits inside an interpolation is preserved along with the
+    /// rest of the interpolation; the call-form scan
+    /// (`strippingCommentsAndStrings`) is the one that strips it.
     private static func strippingComments(_ source: String) -> String {
+        scanning(source, blankingStringContents: false)
+    }
+
+    /// The single scanner behind the two views of a source file:
+    /// `strippingComments` (strings verbatim, for the login-token scan) and
+    /// `strippingCommentsAndStrings` (string contents blanked, for the
+    /// call-form scans). Comments become spaces in both; newlines are
+    /// preserved, so slice anchors and range arithmetic still resolve.
+    ///
+    /// When blanking string contents, an interpolation (`\( … )`) is kept as
+    /// code — its body is scanned recursively, because a real call inside an
+    /// interpolation (the production pattern: `"\(RemoteTerminalBootstrap
+    /// .shellPathExport()); …"`) is not a string decoy. When copying strings
+    /// verbatim the whole literal, interpolation included, is kept as text, so
+    /// the login-token scan keeps seeing tokens inside interpolated literals.
+    private static func scanning(
+        _ source: String,
+        blankingStringContents: Bool
+    ) -> String {
         let characters = Array(source)
-        var result = ""
+        var result: [Character] = []
         result.reserveCapacity(characters.count)
-        var index = 0
+        result.append(contentsOf: scan(
+            characters,
+            from: 0,
+            to: characters.count,
+            blankingStringContents: blankingStringContents
+        ))
+        return String(result)
+    }
+
+    /// The recursive worker behind `scanning(_:blankingStringContents:)`.
+    private static func scan(
+        _ characters: [Character],
+        from start: Int,
+        to end: Int,
+        blankingStringContents: Bool
+    ) -> [Character] {
+        var result: [Character] = []
+        result.reserveCapacity(end - start)
+        var index = start
         var blockCommentDepth = 0
         var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
+        while index < end {
             let character = characters[index]
             if inLineComment {
                 if character == "\n" {
@@ -831,13 +1010,13 @@ struct SSHProbeShellPinsTests {
                 continue
             }
             if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
+                if character == "/", index + 1 < end, characters[index + 1] == "*" {
                     blockCommentDepth += 1
-                    result.append("  ")
+                    result.append(contentsOf: "  ")
                     index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
+                } else if character == "*", index + 1 < end, characters[index + 1] == "/" {
                     blockCommentDepth -= 1
-                    result.append("  ")
+                    result.append(contentsOf: "  ")
                     index += 2
                 } else {
                     result.append(character == "\n" ? "\n" : " ")
@@ -845,53 +1024,31 @@ struct SSHProbeShellPinsTests {
                 }
                 continue
             }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
+            if character == "/", index + 1 < end, characters[index + 1] == "/" {
                 inLineComment = true
-                result.append("  ")
+                result.append(contentsOf: "  ")
                 index += 2
                 continue
             }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
+            if character == "/", index + 1 < end, characters[index + 1] == "*" {
                 blockCommentDepth = 1
-                result.append("  ")
+                result.append(contentsOf: "  ")
                 index += 2
                 continue
             }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
+            if let delimiter = Self.stringDelimiter(at: index, in: characters, to: end) {
+                if blankingStringContents {
+                    let scanned = Self.scannedString(
+                        characters,
+                        openingAt: index,
+                        delimiter: delimiter
+                    )
+                    result.append(contentsOf: scanned.characters)
+                    index = scanned.afterDelimiter
                 } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
+                    let close = Self.stringEnd(from: index, delimiter: delimiter, in: characters)
+                    result.append(contentsOf: characters[index..<close.index])
+                    index = close.index
                 }
                 continue
             }
@@ -901,15 +1058,208 @@ struct SSHProbeShellPinsTests {
         return result
     }
 
-    /// The login-token pattern: a shell name followed by a login flag, either
-    /// a short-flag cluster containing `l` (`-lc`, `-l`, `-il`, …) or
-    /// `--login`. `\s+` keeps `sh  -lc` and `sh\n-lc` caught without a
-    /// whitespace-collapsed copy; the widened family also catches `sh -l -c`,
-    /// `sh --login -c`, `fish -lc` and `csh -lc`; `\b` is a strict superset
-    /// of the plan's `(^|[\s/])` prefix, so a token opening a string literal
-    /// (`"sh -lc `) is caught as well as one after a path slash.
+    /// The string-delimiter sequence beginning at `start` (`"`, `"""`, `#"`,
+    /// `##"`, …), or nil when the characters there do not open a string.
+    private static func stringDelimiter(
+        at start: Int,
+        in characters: [Character],
+        to end: Int
+    ) -> String? {
+        var cursor = start
+        while cursor < end, characters[cursor] == "#" {
+            cursor += 1
+        }
+        guard cursor < end, characters[cursor] == "\"" else { return nil }
+        let hashes = String(repeating: "#", count: cursor - start)
+        if cursor + 2 < end, characters[cursor + 1] == "\"", characters[cursor + 2] == "\"" {
+            return hashes + "\"\"\""
+        }
+        return hashes + "\""
+    }
+
+    /// A copy of the string literal that opens at `start`: the content is
+    /// blanked while interpolation bodies — `\( … )` — are scanned
+    /// recursively so their calls stay visible, and the closing delimiter is
+    /// preserved. Returns the copy and the index just past the literal.
+    private static func scannedString(
+        _ characters: [Character],
+        openingAt start: Int,
+        delimiter: String
+    ) -> (characters: [Character], afterDelimiter: Int) {
+        var result: [Character] = []
+        result.append(contentsOf: characters[start..<(start + delimiter.count)])
+        let contentStart = start + delimiter.count
+        let close = Self.stringEnd(from: start, delimiter: delimiter, in: characters)
+        var cursor = contentStart
+        let isRaw = delimiter.hasSuffix("#")
+        while cursor < close.contentEnd {
+            let character = characters[cursor]
+            if !isRaw, character == "\\", cursor + 1 < close.contentEnd {
+                if characters[cursor + 1] == "(" {
+                    let interpolation = Self.interpolationEnd(
+                        in: characters,
+                        from: cursor + 2,
+                        to: close.contentEnd
+                    )
+                    result.append(contentsOf: "\\(")
+                    result.append(contentsOf: scan(
+                        characters,
+                        from: interpolation.openDepth,
+                        to: interpolation.closeDepth,
+                        blankingStringContents: true
+                    ))
+                    result.append(")")
+                    cursor = interpolation.closeDepth + 1
+                    continue
+                }
+                result.append(character)
+                result.append(contentsOf: Self.blanked(characters, from: cursor + 1, to: min(cursor + 2, close.contentEnd)))
+                cursor += 2
+                continue
+            }
+            result.append(character == "\n" ? "\n" : " ")
+            cursor += 1
+        }
+        result.append(contentsOf: characters[close.contentEnd..<close.index])
+        return (result, close.index)
+    }
+
+    /// The end of an interpolation whose body starts at `start`: the body
+    /// (returned as `openDepth..<closeDepth`) ends at the matching `)` at
+    /// bracket depth zero; a `)` inside a string literal inside the body does
+    /// not close it, and a nested interpolation is skipped along with its own
+    /// string. A body that never closes runs to `end` and returns an empty
+    /// span (fail-closed: nothing is executed, the text stays blanked).
+    private static func interpolationEnd(
+        in characters: [Character],
+        from start: Int,
+        to end: Int
+    ) -> (openDepth: Int, closeDepth: Int) {
+        var cursor = start
+        var depth = 0
+        while cursor < end {
+            let character = characters[cursor]
+            if character == "(" || character == "[" || character == "{" {
+                depth += 1
+                cursor += 1
+            } else if character == ")" {
+                if depth == 0 {
+                    return (start, cursor)
+                }
+                depth -= 1
+                cursor += 1
+            } else if character == "]" || character == "}" {
+                if depth > 0 { depth -= 1 }
+                cursor += 1
+            } else if let delimiter = Self.stringDelimiter(at: cursor, in: characters, to: end) {
+                cursor = Self.stringEnd(from: cursor, delimiter: delimiter, in: characters).index
+            } else {
+                cursor += 1
+            }
+        }
+        return (end, end)
+    }
+
+    /// The end of the string literal that opens at `start`, where the opening
+    /// delimiter is `delimiter` (one quote plus its hash prefix, three quotes,
+    /// or one quote). `contentEnd` is the index just past the content (where
+    /// the closing sequence begins); `closing` is that sequence (the quote or
+    /// `"""` suffix); `index` is the first character after it. A raw string
+    /// has no escapes; a non-raw one treats a backslash as escaping the next
+    /// character — including `\(`, whose interpolation contents are scanned
+    /// with a bracket stack (and any string inside them skipped) so a `"` or
+    /// `)` inside an interpolation cannot terminate the outer literal.
+    private static func stringEnd(
+        from start: Int,
+        delimiter: String,
+        in characters: [Character]
+    ) -> (contentEnd: Int, closing: [Character], index: Int) {
+        let isRaw = delimiter.hasSuffix("#")
+        let quoteCount = delimiter.filter { $0 == "\"" }.count
+        let hashes = delimiter.filter { $0 == "#" }.count
+        var cursor = start + delimiter.count
+        var bracketStack: [Character] = []
+        while cursor < characters.count {
+            if isRaw {
+                let closingLength = quoteCount + hashes
+                if cursor + closingLength <= characters.count,
+                   Array(characters[cursor..<(cursor + closingLength)])
+                    == Array(repeating: "\"", count: quoteCount)
+                        + Array(repeating: "#", count: hashes) {
+                    return (cursor, Array(characters[cursor..<(cursor + closingLength)]), cursor + closingLength)
+                }
+                cursor += 1
+            } else if quoteCount == 3 {
+                if cursor + 3 <= characters.count,
+                   characters[cursor] == "\"",
+                   characters[cursor + 1] == "\"",
+                   characters[cursor + 2] == "\"" {
+                    return (cursor, Array("\"\"\""), cursor + 3)
+                }
+                cursor += 1
+            } else if characters[cursor] == "\\" {
+                if cursor + 1 < characters.count, characters[cursor + 1] == "(" {
+                    cursor = Self.interpolationEnd(in: characters, from: cursor + 2, to: characters.count).closeDepth + 1
+                } else {
+                    cursor += 2
+                }
+            } else if characters[cursor] == "\"" {
+                return (cursor, Array("\""), cursor + 1)
+            } else if bracketStack.isEmpty {
+                cursor += 1
+            } else {
+                let character = characters[cursor]
+                if character == "(" || character == "[" || character == "{" {
+                    bracketStack.append(character)
+                } else if character == ")" || character == "]" || character == "}" {
+                    if Self.matches(closing: character, opening: bracketStack.last) {
+                        bracketStack.removeLast()
+                    }
+                }
+                cursor += 1
+            }
+        }
+        return (characters.count, [], characters.count)
+    }
+
+    /// Whether a closing bracket matches the current top of the interpolation
+    /// bracket stack.
+    private static func matches(closing: Character, opening: Character?) -> Bool {
+        switch closing {
+        case ")": return opening == "("
+        case "]": return opening == "["
+        case "}": return opening == "{"
+        default: return false
+        }
+    }
+
+    /// `characters[from..<to]` with every non-newline character replaced by a
+    /// space (newlines are preserved so the scan keeps line structure).
+    private static func blanked(
+        _ characters: [Character],
+        from: Int,
+        to: Int
+    ) -> [Character] {
+        guard from < to else { return [] }
+        return characters[from..<to].map { $0 == "\n" ? "\n" : " " }
+    }
+
+    /// The login-token pattern: a shell name — or a `$SHELL` / `${SHELL}`
+    /// parameter expansion — followed by a login flag, either a short-flag
+    /// cluster containing `l` (`-lc`, `-l`, `-il`, …) or `--login`. The gap
+    /// tolerates the Swift string-literal escaping of whitespace (`sh\t-lc`,
+    /// `sh\n-lc`) and of a surrounding quote (`exec \"$SHELL\" -l`), plus an
+    /// optional closing quote/bracket between the token and the flag, so an
+    /// emulated shell line is caught in both the raw and the escaped spelling.
+    /// The identifier branch keeps its `\b` word-boundary semantics (`sh`, not
+    /// `flush`), while the `$SHELL` branch uses a negative lookbehind so
+    /// `MY_SHELL`/`$SHELLX` cannot match; controls `ls -l`, `grep -l`,
+    /// `tail -l`, `flush -l` stay unmatched (their `sh` prefix is not a word,
+    /// and a quote/backslash gap requires a real token before the flag). A
+    /// token opening a string literal (`"sh -lc `) is caught, as is one after
+    /// a path slash (`/bin/sh -lc`).
     private static let loginShellTokenPattern =
-        #"\b(sh|bash|zsh|dash|ksh|fish|csh|tcsh)\s+(?:-[A-Za-z]*l[A-Za-z]*\b|--login\b)"#
+        #"(?:(?<![A-Za-z0-9_])(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)|(?<![A-Za-z0-9_$])(?:\$\{SHELL\}|\$SHELL|SHELL))(?:["\'\]][ \t]|[ \t]|\\[tnr]|\\["\'])+[\"\'\]]?(?:-[A-Za-z]*l[A-Za-z]*\b|--login\b)"#
 
     /// The number of regex matches for `pattern` in `text` (optionally inside
     /// `range`), in source order.
