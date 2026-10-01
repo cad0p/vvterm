@@ -53,6 +53,90 @@ enum Ghostty {
 
 }
 
+// MARK: - #327 clipboard confirmation
+
+/// Which ghostty clipboard-request kinds may prompt the user (#327).
+///
+/// Only the user-initiated paste kind may prompt. `.osc_52_read` cannot exist
+/// under `clipboard-read = deny` (`Surface.zig:5898-5904` refuses before a
+/// request is allocated) and must never be user-authorized if that config ever
+/// changes; `.osc_52_write` cannot reach the confirm callback at all (its write
+/// path never travels through `startClipboardRequest`).
+enum ClipboardConfirmationPolicy {
+    static func requiresUserPrompt(_ request: ghostty_clipboard_request_e) -> Bool {
+        request == GHOSTTY_CLIPBOARD_REQUEST_PASTE
+    }
+}
+
+/// One unsafe-paste confirmation request: the payload the completion will use
+/// if the user allows the paste, plus the neutral presentation copy.
+///
+/// The copy never claims more than the code checked: `input.paste.isSafe`
+/// rejects a bare `ESC[201~` as well as `\n` (`input/paste.zig:175-177`), so
+/// the body says "newlines or control characters" and shows only the payload's
+/// line count — never the payload itself.
+struct ClipboardConfirmationRequest {
+    let payload: String
+
+    var lineCount: Int { Self.lineCount(for: payload) }
+    var promptBody: String { Self.promptBody(lineCount: lineCount) }
+
+    static func lineCount(for payload: String) -> Int {
+        payload.components(separatedBy: "\n").count
+    }
+
+    static func promptBody(lineCount: Int) -> String {
+        "This text may be unsafe to paste: it can contain newlines or control "
+            + "characters. It contains \(lineCount) line\(lineCount == 1 ? "" : "s")."
+    }
+}
+
+#if DEBUG
+/// DEBUG-only telemetry for the #327 confirm/completion contract. Records the
+/// request kind and the completion's byte length and confirmed flag — never
+/// payload content. Precedent: `SSHClientUITestDebug`
+/// (`VVTerm/Core/SSH/SSHClient.swift`).
+nonisolated enum GhosttyClipboardConfirmDebug {
+    struct Completion: Equatable {
+        let kind: ghostty_clipboard_request_e
+        let byteLength: Int
+        let confirmed: Bool
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recordedCallbackKinds: [ghostty_clipboard_request_e] = []
+    nonisolated(unsafe) private static var recordedCompletions: [Completion] = []
+
+    /// Every `confirmReadClipboard` invocation's kind.
+    static var callbackKinds: [ghostty_clipboard_request_e] {
+        lock.lock(); defer { lock.unlock() }
+        return recordedCallbackKinds
+    }
+
+    /// Every completion routed through `complete(...)`.
+    static var completions: [Completion] {
+        lock.lock(); defer { lock.unlock() }
+        return recordedCompletions
+    }
+
+    static func noteCallback(kind: ghostty_clipboard_request_e) {
+        lock.lock(); defer { lock.unlock() }
+        recordedCallbackKinds.append(kind)
+    }
+
+    static func noteCompletion(kind: ghostty_clipboard_request_e, byteLength: Int, confirmed: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        recordedCompletions.append(Completion(kind: kind, byteLength: byteLength, confirmed: confirmed))
+    }
+
+    static func reset() {
+        lock.lock(); defer { lock.unlock() }
+        recordedCallbackKinds.removeAll()
+        recordedCompletions.removeAll()
+    }
+}
+#endif
+
 // MARK: - Ghostty.App
 
 extension Ghostty {
@@ -182,6 +266,12 @@ extension Ghostty {
 
             # Custom keybinds
             keybind = shift+enter=text:\\n
+
+            # Remote programs may not read the local clipboard (OSC 52 read).
+            # Denied explicitly rather than left to the default `ask`: the app
+            # has no clipboard-read prompt, and a denied read never starts a
+            # request, so no clipboard-request state can be retained.
+            clipboard-read = deny
 
             \(platformInputConfig)
 
@@ -1122,20 +1212,134 @@ extension Ghostty {
                 ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
             }
 
-            Ghostty.logger.debug("Read clipboard: \(clipboardString.prefix(50))...")
+            Ghostty.logger.debug("Read clipboard: \(clipboardString.prefix(50), privacy: .private)...")
             return true
         }
 
+        /// #327: the ghostty clipboard-confirmation contract. The core calls
+        /// this after a clipboard read when the request needs confirmation;
+        /// the embedder must then complete the request exactly once
+        /// (`apprt/embedded.zig:60-68`, `:1998-2010`). Only the user-initiated
+        /// paste kind prompts; every other kind is denied immediately, without
+        /// a prompt and without copying the payload.
         static func confirmReadClipboard(
             _ userdata: UnsafeMutableRawPointer?,
             string: UnsafePointer<CChar>?,
             state: UnsafeMutableRawPointer?,
             request: ghostty_clipboard_request_e
         ) {
-            // Clipboard read confirmation
-            // For security, apps can confirm before allowing clipboard access
-            // For now, just log it
-            Ghostty.logger.debug("Clipboard read confirmation requested")
+            #if DEBUG
+            GhosttyClipboardConfirmDebug.noteCallback(kind: request)
+            #endif
+
+            // Kind policy first: a kind that will be denied must not even copy
+            // the payload, whose pointer is only valid inside this frame.
+            //
+            // `.osc_52_read` cannot reach here under `clipboard-read = deny`
+            // (`Surface.zig:1055-1058`, `:5898-5904`); if that config ever
+            // becomes `ask`, this branch must present a read-specific prompt
+            // (upstream macOS: `macos/Sources/Ghostty/Ghostty.App.swift:305-334`)
+            // or the read is denied.
+            guard ClipboardConfirmationPolicy.requiresUserPrompt(request) else {
+                Ghostty.logger.warning("clipboard request denied without prompt kind=\(request.rawValue)")
+                guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
+                      let view = context.resolve(),
+                      let surface = view.surface?.unsafeCValue
+                else {
+                    // Accepted residual: no live surface handle to complete on.
+                    Ghostty.logger.warning("clipboard request deny skipped: dead surface kind=\(request.rawValue)")
+                    return
+                }
+                // Empty data is the deny form: for `.paste` the core returns
+                // before pasting (`Surface.zig:5918`); for `.osc_52_read` it
+                // replies with an empty OSC 52 payload (`:6006-6027`). Either
+                // way the completion destroys the request state
+                // (`embedded.zig:751`).
+                complete(surface: surface, payload: "", state: state, confirmed: true, kind: request)
+                return
+            }
+
+            // Copy NOW: `string` points at the core's request state and is only
+            // valid for the duration of this callback frame (the confirm route
+            // forwards `str.ptr` without copying — `embedded.zig:736-744`).
+            let payload = string.map { String(cString: $0) } ?? ""
+
+            // `userdata` is unretained (`Ghostty.SurfaceCallbackContext.swift`)
+            // and only valid inside this frame, so the completion closure must
+            // keep the resolved context (and the view) alive itself: a
+            // completion-time `fromOpaque(userdata)` would be a #310-class UAF.
+            guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
+                  let view = context.resolve(),
+                  let surface = view.surface?.unsafeCValue
+            else {
+                // Accepted residual: the surface is gone, so there is no live
+                // handle to complete on (the core exports no cancel route).
+                // Reachable only from a user-driven paste on a surface that died
+                // during this call — never from remote input.
+                Ghostty.logger.warning("clipboard confirmation skipped: dead surface")
+                return
+            }
+
+            // Keep the alert off the binding stack: this frame returns before
+            // any presentation starts.
+            Task { @MainActor in
+                let confirmation = ClipboardConfirmationRequest(payload: payload)
+                let allow: Bool
+                if let decision = view.clipboardConfirmationDecision {
+                    // Test seam: per-view, so parallel tests cannot cross-talk.
+                    allow = decision(confirmation)
+                } else {
+                    allow = await Ghostty.App.presentClipboardConfirmation(confirmation, on: view)
+                }
+
+                // Completion-time gate: the captured surface handle must still
+                // be the view's live surface. `unsafeCValue` is nil after
+                // `cleanup()` freed it while the view lives on, and a recreated
+                // surface would carry a different handle.
+                guard let liveView = context.resolve(),
+                      liveView.surface?.unsafeCValue == surface
+                else {
+                    Ghostty.logger.warning("clipboard confirmation completion skipped: surface no longer live")
+                    return
+                }
+
+                complete(
+                    surface: surface,
+                    payload: allow ? payload : "",
+                    state: state,
+                    confirmed: true,
+                    kind: request
+                )
+            }
+        }
+
+        /// Completes a clipboard request. The core's shim owns the one-shot
+        /// contract — "can only be called once for a given request. Once it is
+        /// called with a request the request pointer will be invalidated"
+        /// (`apprt/embedded.zig:1998-2010`) — so every exit path of
+        /// `confirmReadClipboard` routes through here and the DEBUG telemetry
+        /// records each call, making "at most once" checkable in one place.
+        private static func complete(
+            surface: ghostty_surface_t,
+            payload: String,
+            state: UnsafeMutableRawPointer?,
+            confirmed: Bool,
+            kind: ghostty_clipboard_request_e
+        ) {
+            guard let state else {
+                Ghostty.logger.warning("clipboard completion skipped: no request state kind=\(kind.rawValue)")
+                return
+            }
+            #if DEBUG
+            GhosttyClipboardConfirmDebug.noteCompletion(
+                kind: kind,
+                byteLength: payload.utf8.count,
+                confirmed: confirmed
+            )
+            #endif
+            payload.withCString { ptr in
+                ghostty_surface_complete_clipboard_request(surface, ptr, state, confirmed)
+            }
         }
 
         static func writeClipboard(

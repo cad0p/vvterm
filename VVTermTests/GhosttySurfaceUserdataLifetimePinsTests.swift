@@ -132,7 +132,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     // MARK: - P-B: every routing site resolves through the context
 
-    /// The three app-level routing sites and the one-per-platform write
+    /// The app-level routing sites (action/readClipboard/closeSurface and the
+    /// #327 confirmation callback's two branches) and the one-per-platform write
     /// callbacks all use the context helper, and the only
     /// `ghostty_surface_userdata(` read is the action fallback paired with it.
     @Test
@@ -143,8 +144,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             in: appText
         )
         #expect(
-            appRoutes.count == 3,
-            "P-B: Ghostty.App.swift must route action/readClipboard/closeSurface through the context; found \(appRoutes.count)"
+            appRoutes.count == 5,
+            "P-B: Ghostty.App.swift must route action/readClipboard/closeSurface and both confirmReadClipboard branches through the context; found \(appRoutes.count)"
         )
         #expect(
             Self.occurrences(of: "ghostty_surface_userdata(", in: appText).count == 1,
@@ -162,10 +163,11 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         // site is left unrouted and another is routed twice (or a route moves
         // out of its function), so each of the three app routes is anchored to
         // its own function body.
-        let appRoutingSites: [(name: String, anchor: String)] = [
-            ("action fallback", "func action("),
-            ("readClipboard", "func readClipboard("),
-            ("closeSurface", "func closeSurface("),
+        let appRoutingSites: [(name: String, anchor: String, expected: Int)] = [
+            ("action fallback", "func action(", 1),
+            ("readClipboard", "func readClipboard(", 1),
+            ("closeSurface", "func closeSurface(", 1),
+            ("clipboard confirmation", "func confirmReadClipboard(", 2),
         ]
         for site in appRoutingSites {
             let anchor = try #require(
@@ -179,10 +181,32 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
                 range: body
             )
             #expect(
-                routes.count == 1,
-                "P-B: \(site.name) must resolve through the context exactly once; found \(routes.count)"
+                routes.count == site.expected,
+                "P-B: \(site.name) must resolve through the context \(site.expected) time(s); found \(routes.count)"
             )
         }
+
+        // #327 non-negotiable 1: the confirmation completion runs after the
+        // callback frame, so its Task closure must use the captured context and
+        // never re-read the unretained userdata.
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-B: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+        let taskAnchor = try #require(
+            Self.occurrences(of: "Task ", in: appText, range: confirmBody).first,
+            "P-B: the confirmation callback must dispatch its completion through a Task"
+        )
+        let taskBody = try Self.bracedBlock(after: taskAnchor, in: appText)
+        #expect(
+            Self.flexibleOccurrences(
+                of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
+                in: appText,
+                range: taskBody
+            ).isEmpty,
+            "P-B: the confirmation completion closure must use the captured context, never re-read userdata"
+        )
 
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
             let text = Self.strippingComments(try source(file))
