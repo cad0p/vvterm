@@ -205,8 +205,11 @@ enum RemoteTerminalBootstrap {
     /// a probe that does not need it. A body that genuinely needs a user-local
     /// binary (`etterminal`, the tmux/mosh candidates) keeps its own full
     /// `shellPathExport()`: the wrapper export runs first, the body's own
-    /// export still wins the first position, and those bodies stay
-    /// byte-identical. Trade-off: a tool installed only via a profile-managed
+    /// export still wins the first position, and the body's source is
+    /// unchanged — the effective PATH is the body's own prefix, then the
+    /// wrapper's system list, then the inherited tail, so the system
+    /// directories appear twice with the resolution order unchanged.
+    /// Trade-off: a tool installed only via a profile-managed
     /// toolchain (nix/asdf/mise/linuxbrew) is no longer discovered, and a
     /// profile-set `DISPLAY`/`WAYLAND_DISPLAY`/`TMPDIR` no longer reaches the
     /// probe (the exec channel's environment is what the probe actually runs
