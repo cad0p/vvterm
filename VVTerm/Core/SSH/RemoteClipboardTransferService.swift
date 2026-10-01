@@ -80,12 +80,11 @@ actor RemoteClipboardTransferService {
         }
     }
 
-    private func createRemoteTemporaryPath(
-        extension fileExtension: String,
-        using sshClient: SSHClient
-    ) async throws -> String {
-        let sanitizedExtension = sanitizeExtension(fileExtension)
-        let mktempCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+    /// The path-parsed temp-file creation probe. Pure and `nonisolated` so
+    /// the command shape can be asserted directly
+    /// (`TerminalRichPasteProbeCommandTests`) without an SSH client.
+    nonisolated static func temporaryPathCommand(extension sanitizedExtension: String) -> String {
+        RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
             """
             tmp_base="${TMPDIR:-/tmp}";
             tmp_path="$(mktemp "${tmp_base%/}/vvterm-clipboard-XXXXXX")" || exit 1;
@@ -97,6 +96,14 @@ actor RemoteClipboardTransferService {
             printf '%s\n' "$target_path"
             """
         )
+    }
+
+    private func createRemoteTemporaryPath(
+        extension fileExtension: String,
+        using sshClient: SSHClient
+    ) async throws -> String {
+        let sanitizedExtension = sanitizeExtension(fileExtension)
+        let mktempCommand = Self.temporaryPathCommand(extension: sanitizedExtension)
 
         let output = try await sshClient.execute(mktempCommand)
         let path = output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -121,7 +128,7 @@ actor RemoteClipboardTransferService {
         guard !didSweepStaleFiles else { return }
         didSweepStaleFiles = true
 
-        let command = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+        let command = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
             """
             tmp_base="${TMPDIR:-/tmp}";
             for path in "${tmp_base%/}"/vvterm-clipboard-*; do
@@ -156,7 +163,7 @@ actor RemoteClipboardTransferService {
     ) async {
         guard !path.isEmpty else { return }
         let quotedPath = RemoteTerminalBootstrap.shellQuoted(path)
-        let command = RemoteTerminalBootstrap.wrapPOSIXShellCommand("rm -f -- \(quotedPath)")
+        let command = RemoteTerminalBootstrap.wrapPOSIXProbeCommand("rm -f -- \(quotedPath)")
         logger.debug(
             "Deleting remote clipboard temp file [session: \(self.sessionId.uuidString, privacy: .public)] [path: \(path, privacy: .public)]"
         )

@@ -93,8 +93,9 @@ actor TerminalRichPasteCoordinator {
         }
 
         let sentinel = "__vvterm_clipboard_seeded__"
-        let wrappedCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
-            "if \(clipboardCommand) >/dev/null 2>&1; then printf '%s' \(RemoteTerminalBootstrap.shellQuoted(sentinel)); fi"
+        let wrappedCommand = Self.clipboardSeedCommand(
+            clipboardCommand: clipboardCommand,
+            sentinel: sentinel
         )
 
         do {
@@ -109,6 +110,15 @@ actor TerminalRichPasteCoordinator {
             )
             return false
         }
+    }
+
+    /// The sentinel-parsed seed probe. Pure and `nonisolated` so the command
+    /// shape can be asserted directly (`TerminalRichPasteProbeCommandTests`)
+    /// without an SSH client; the instance method stays actor-isolated.
+    nonisolated static func clipboardSeedCommand(clipboardCommand: String, sentinel: String) -> String {
+        RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
+            "if \(clipboardCommand) >/dev/null 2>&1; then printf '%s' \(RemoteTerminalBootstrap.shellQuoted(sentinel)); fi"
+        )
     }
 
     private func remoteClipboardSeedCapability(using sshClient: SSHClient) async -> RemoteClipboardSeedCapability {
@@ -135,8 +145,10 @@ actor TerminalRichPasteCoordinator {
         return capability
     }
 
-    private func probeUnixClipboardCapability(using sshClient: SSHClient) async -> RemoteClipboardSeedCapability {
-        let command = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+    /// The exact-match `wayland`/`x11` capability probe. Pure and
+    /// `nonisolated` for the same reason as `clipboardSeedCommand()`.
+    nonisolated static func unixClipboardProbeCommand() -> String {
+        RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
             """
             if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-copy >/dev/null 2>&1; then
               printf '%s' wayland
@@ -147,6 +159,10 @@ actor TerminalRichPasteCoordinator {
             fi
             """
         )
+    }
+
+    private func probeUnixClipboardCapability(using sshClient: SSHClient) async -> RemoteClipboardSeedCapability {
+        let command = Self.unixClipboardProbeCommand()
 
         do {
             let output = try await sshClient.execute(command)
@@ -164,8 +180,10 @@ actor TerminalRichPasteCoordinator {
         }
     }
 
-    private func probeDarwinClipboardCapability(using sshClient: SSHClient) async -> RemoteClipboardSeedCapability {
-        let command = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+    /// The exact-match `darwin` capability probe. Pure and `nonisolated` for
+    /// the same reason as `clipboardSeedCommand()`.
+    nonisolated static func darwinClipboardProbeCommand() -> String {
+        RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
             """
             if command -v osascript >/dev/null 2>&1 && launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
               printf '%s' darwin
@@ -174,6 +192,10 @@ actor TerminalRichPasteCoordinator {
             fi
             """
         )
+    }
+
+    private func probeDarwinClipboardCapability(using sshClient: SSHClient) async -> RemoteClipboardSeedCapability {
+        let command = Self.darwinClipboardProbeCommand()
 
         do {
             let output = try await sshClient.execute(command)

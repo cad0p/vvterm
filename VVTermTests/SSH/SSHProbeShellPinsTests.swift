@@ -45,8 +45,8 @@
 //  aliased wrapper reference (`let wrap = …wrapPOSIXShellCommand; wrap(x)`)
 //  and a wrapper call from outside `VVTerm/Core/SSH/` and its non-recursive
 //  sweep are invisible, and the acknowledged #324 passed-probe class
-//  (clipboard / rich-paste / stats probes that still run in a login shell)
-//  is listed in the wrapper inventory rather than asserted non-login. A
+//  (stats / ET probes that still run in a login shell) is listed in the
+//  wrapper inventory rather than asserted non-login. A
 //  commented-out `sh -lc` cannot satisfy the pins (comments are stripped).
 //  Any intentional login site added later must be added to the allowlists
 //  below deliberately.
@@ -201,15 +201,12 @@ struct SSHProbeShellPinsTests {
     /// definition included. The directory-inventory pin fails closed when a
     /// new file appears here, so a new probe cannot adopt the login wrapper
     /// silently. `TerminalRichPasteCoordinator` and
-    /// `RemoteClipboardTransferService` are the acknowledged #324 residual
-    /// class (parsed probes that still run in a login shell); they are listed
-    /// so the inventory is explicit, not because their use is endorsed.
+    /// `RemoteClipboardTransferService` left this set in #324: their parsed
+    /// probes now run through `wrapPOSIXProbeCommand`.
     private static let knownLoginWrapperReferences: Set<String> = [
-        "VVTerm/Core/SSH/RemoteClipboardTransferService.swift",
         "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift",
         "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift",
-        "VVTerm/Core/SSH/RemoteTmuxManager.swift",
-        "VVTerm/Core/SSH/TerminalRichPasteCoordinator.swift"
+        "VVTerm/Core/SSH/RemoteTmuxManager.swift"
     ]
 
     /// The three files the per-function login-token allowlist enumerates.
