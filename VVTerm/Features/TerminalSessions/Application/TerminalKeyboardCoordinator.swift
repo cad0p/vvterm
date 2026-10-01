@@ -44,8 +44,19 @@ final class TerminalKeyboardCoordinator: ObservableObject {
     // Explicit nonisolated deinit: the compiler-synthesized deinit of a
     // MainActor-isolated class takes the back-deployed isolated-deinit path,
     // which aborts (invalid free) when released outside a task context —
-    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
-    nonisolated deinit {}
+    // swiftlang/swift#85663, #88036. The body unwinds the resources the
+    // initializer installed: NotificationCenter retains a block-based observer's
+    // token until `removeObserver`, so without this a released coordinator keeps
+    // five observers (and their `[weak self]` blocks) installed for the process
+    // lifetime; and a pending verification task retains the terminal it captured
+    // across its 1 s sleep. `removeObserver` and `Task.cancel()` are both
+    // nonisolated, and a deinit may read its own stored properties.
+    nonisolated deinit {
+        for observer in keyboardObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        presentationVerifyTask?.cancel()
+    }
     /// UIKit responder ownership is separate from durable typing intent. Every
     /// transition creates a new generation so delayed verification or rebuild
     /// work can never revive a responder session that another app now owns.
