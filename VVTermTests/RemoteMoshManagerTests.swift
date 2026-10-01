@@ -300,16 +300,33 @@ struct RemoteMoshManagerTests {
         // today, so reachability is nil), and it is spliced into a body whose
         // own literal is single-quoted. A marker containing `'` must not be
         // interpolated raw, or it would close that literal and change the
-        // command sequence. The shell-quoted form is the assertion: a raw
-        // `printf '\(marker)'` interpolation does not contain it.
+        // command sequence: it must be shell-quoted as a `%s` argument
+        // instead. Asserted at the *body* level — the outer `sh -c '…'`
+        // wrapper escapes every quote in the body one more time, so a
+        // probe-level substring check cannot see the marker's own quoting
+        // (measured: `probe.contains(shellQuoted(marker))` is false even on the
+        // fixed builder).
         let hostileMarker = "x'; id; '"
         let probe = RemoteMoshManager.availabilityProbeCommand(okMarker: hostileMarker)
+        let body = Self.probeBody(probe)
 
-        #expect(probe.contains(RemoteTerminalBootstrap.shellQuoted(hostileMarker)))
         #expect(
-            !probe.contains("printf '%s' \(hostileMarker)"),
-            "the marker must be shell-quoted, not interpolated raw"
+            body.contains("printf '%s' \(RemoteTerminalBootstrap.shellQuoted(hostileMarker))"),
+            "the marker must be printed through a shell-quoted %s argument"
         )
+        #expect(
+            !body.contains("printf '\(hostileMarker)'"),
+            "the marker must not be spliced raw into the format literal"
+        )
+    }
+
+    /// The probe body with the outer `sh -c '…'` quoting removed. The wrapper
+    /// escapes every `'` in the body as `'\''`, so the inverse turns each of
+    /// those back into a plain `'`. Test-only: it lets an assertion be written
+    /// in the body's own terms instead of the doubly-escaped probe's.
+    private static func probeBody(_ probe: String) -> String {
+        let body = probe.dropFirst("sh -c '".count).dropLast()
+        return body.replacingOccurrences(of: "'\\''", with: "'")
     }
 
     @Test
