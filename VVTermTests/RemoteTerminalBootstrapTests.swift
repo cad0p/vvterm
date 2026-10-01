@@ -46,6 +46,16 @@ struct RemoteTerminalBootstrapTests {
     }
 
     @Test
+    func wrapPOSIXProbeCommandInjectsTheCuratedSystemPath() {
+        let command = RemoteTerminalBootstrap.wrapPOSIXProbeCommand("printf 'marker'")
+
+        #expect(command.contains(RemoteTerminalBootstrap.shellSystemPathExport()))
+        #expect(command.contains("/opt/homebrew/bin"))
+        #expect(command.contains("/usr/bin"))
+        #expect(!command.contains("$HOME/.local/bin"))
+    }
+
+    @Test
     func launchPlanWithoutStartupCommandUsesPOSIXLoginShellBootstrap() {
         let plan = RemoteTerminalBootstrap.launchPlan(startupCommand: nil, environment: posixEnvironment)
 

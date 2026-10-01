@@ -277,6 +277,35 @@ struct SSHProbeShellPinsTests {
         }
     }
 
+    /// Pin 6 (#324, pin D): the non-login wrapper is the single construction
+    /// point for every parsed probe, so the curated *system* PATH export
+    /// (`shellSystemPathExport()`) is injected there rather than by each body.
+    /// The wrapper's output must carry the export and keep the `sh -c '`
+    /// prefix, and its source body must reference `shellSystemPathExport()` —
+    /// a body-level `shellPathValue()` prepend cannot satisfy this pin.
+    @Test
+    func testProbeWrapperInjectsTheCuratedSystemPathExport() throws {
+        let path = "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift"
+        let command = RemoteTerminalBootstrap.wrapPOSIXProbeCommand("printf 'marker'")
+
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(command.contains(RemoteTerminalBootstrap.shellSystemPathExport()))
+        #expect(!command.contains("$HOME/.local/bin"))
+
+        let text = Self.strippingComments(try source(path))
+        let bodies = try Self.functionBodies(in: text)
+        let matches = bodies.filter { $0.name == "wrapPOSIXProbeCommand" }
+        #expect(
+            matches.count == 1,
+            "\(path) must keep exactly one `wrapPOSIXProbeCommand`"
+        )
+        let body = try #require(matches.first)
+        #expect(
+            text.range(of: "shellSystemPathExport()", range: body.body) != nil,
+            "\(path): wrapPOSIXProbeCommand must inject shellSystemPathExport() itself"
+        )
+    }
+
     /// Pin 3 (#323): the terminal-type resolver must never reference the login
     /// token or the login wrapper — it probes with the non-login
     /// `wrapPOSIXProbeCommand`. (`RemoteEnvironmentResolver`'s two intentional
