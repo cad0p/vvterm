@@ -28,11 +28,21 @@ actor RemoteMoshManager {
         return .otherUnprivileged
     }
 
-    func isMoshServerAvailable(using client: SSHClient) async -> Bool {
-        let okMarker = "__VVTERM_MOSH_OK__"
+    nonisolated static func availabilityProbeCommand(okMarker: String) -> String {
         let body = "\(RemoteTerminalBootstrap.shellPathExport()); if command -v mosh-server >/dev/null 2>&1 && mosh-server --version >/dev/null 2>&1; then printf '\(okMarker)'; else printf '__VVTERM_MOSH_NO__'; fi"
-        let command = "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
-        let output = try? await client.execute(command, timeout: availabilityTimeout)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(body)
+    }
+
+    func isMoshServerAvailable(using client: SSHClient) async -> Bool {
+        await isMoshServerAvailable { command, timeout in
+            try await client.execute(command, timeout: timeout)
+        }
+    }
+
+    func isMoshServerAvailable(execute: CommandExecutor) async -> Bool {
+        let okMarker = "__VVTERM_MOSH_OK__"
+        let command = Self.availabilityProbeCommand(okMarker: okMarker)
+        let output = try? await execute(command, availabilityTimeout)
         return output?.contains(okMarker) == true
     }
 

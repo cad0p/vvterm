@@ -306,7 +306,7 @@ actor RemoteTmuxManager {
         if \(tmuxProbe) has-session -t \(exactSession) 2>/dev/null || \(tmuxProbe) has-session -t \(plainSession) 2>/dev/null; then \
         printf '%s' \(exists); else printf '%s' \(missing); fi
         """
-        return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(body)
     }
 
     nonisolated func installAndAttachScript(
@@ -879,7 +879,7 @@ actor RemoteTmuxManager {
         }
     }
 
-    nonisolated private func listSessionCommands(backend: RemoteTmuxBackend) -> [String] {
+    nonisolated func listSessionCommands(backend: RemoteTmuxBackend) -> [String] {
         switch backend {
         case .unixTmux:
             let tmux = tmuxCommand(includeUTF8: false)
@@ -888,7 +888,7 @@ actor RemoteTmuxManager {
                 "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-sessions -F '#{session_name} #{session_attached}' 2>/dev/null",
                 "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-sessions 2>/dev/null"
             ]
-            return bodies.map { "sh -lc \(RemoteTerminalBootstrap.shellQuoted($0))" }
+            return bodies.map { RemoteTerminalBootstrap.wrapPOSIXProbeCommand($0) }
 
         case .windowsPsmux(let commandName, _, _):
             return [
@@ -1058,13 +1058,13 @@ actor RemoteTmuxManager {
         }
     }
 
-    nonisolated private func currentPathCommand(sessionName: String, backend: RemoteTmuxBackend) -> String {
+    nonisolated func currentPathCommand(sessionName: String, backend: RemoteTmuxBackend) -> String {
         switch backend {
         case .unixTmux:
             let quotedSession = RemoteTerminalBootstrap.shellQuoted(sessionName)
             let tmux = tmuxCommand(includeUTF8: false)
             let body = "\(RemoteTerminalBootstrap.shellPathExport()); \(tmux) list-panes -t \(quotedSession) -F '#{pane_current_path}' 2>/dev/null | head -n 1"
-            return "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
+            return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(body)
 
         case .windowsPsmux(let commandName, _, _):
             let script = "& \(powerShellQuoted(commandName)) list-panes -t \(powerShellQuoted(sessionName)) -F '#{pane_current_path}' 2>$null | Select-Object -First 1"

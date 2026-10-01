@@ -187,11 +187,29 @@ enum RemoteTerminalBootstrap {
         "/bin/sh -lc \(doubleQuotedShellArgument(script))"
     }
 
-    /// Non-login POSIX wrapper for connect-time probes (remote environment /
-    /// terminal type detection). Unlike `wrapPOSIXShellCommand`, it never
-    /// sources the account's login profile, so login hooks (e.g. tmux/zmx
-    /// auto-attach in .bash_profile/.zprofile) cannot fire inside the probe's
-    /// exec channel and swallow its marker output.
+    /// Non-login POSIX wrapper for parsed capability probes (remote
+    /// environment / terminal type detection, tmux/mosh availability, tmux
+    /// session presence/list/path). Unlike `wrapPOSIXShellCommand`, it never
+    /// sources the account's login profile (`/etc/profile` + `~/.profile`),
+    /// so a login hook (e.g. tmux/zmx auto-attach) cannot fire inside the
+    /// probe's exec channel and swallow or interleave with its parsed output.
+    /// The SSH server's outer `$SHELL -c` startup files are outside this
+    /// wrapper.
+    ///
+    /// PATH trade-off: `sh -c` keeps the body's curated `shellPathValue()`
+    /// prefix plus the inherited `$PATH` tail, but a tool installed only via
+    /// a profile-managed toolchain (nix/asdf/mise/linuxbrew) is no longer
+    /// discovered. The tmux candidate list is a detection fallback, not a
+    /// discovery mechanism, and the mosh availability probe has no candidate
+    /// fallback. No live regression is demonstrable: the tmux session probes
+    /// only run for a backend the already-non-login availability probe
+    /// resolved, every candidate directory is a subset of `shellPathValue()`,
+    /// and the mosh availability probe is unwired. Both wrappers execute the
+    /// same body, whose `export PATH=...` puts the curated prefix first, so
+    /// `-l` only contributes the profile-modified tail; switching to `-c` can
+    /// drop tail entries, never promote one ahead of the curated prefix (the
+    /// pre-existing `$HOME/.local/bin` priority is unchanged, so the
+    /// binary-hijack exposure is neutral-to-reduced).
     nonisolated static func wrapPOSIXProbeCommand(_ script: String) -> String {
         "sh -c \(shellQuoted(script))"
     }
