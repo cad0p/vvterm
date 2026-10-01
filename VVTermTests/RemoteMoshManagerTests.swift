@@ -295,6 +295,24 @@ struct RemoteMoshManagerTests {
     }
 
     @Test
+    func moshAvailabilityProbeShellQuotesTheMarker() {
+        // The marker is a caller-supplied string (the builder is internal
+        // today, so reachability is nil), and it is spliced into a body whose
+        // own literal is single-quoted. A marker containing `'` must not be
+        // interpolated raw, or it would close that literal and change the
+        // command sequence. The shell-quoted form is the assertion: a raw
+        // `printf '\(marker)'` interpolation does not contain it.
+        let hostileMarker = "x'; id; '"
+        let probe = RemoteMoshManager.availabilityProbeCommand(okMarker: hostileMarker)
+
+        #expect(probe.contains(RemoteTerminalBootstrap.shellQuoted(hostileMarker)))
+        #expect(
+            !probe.contains("printf '%s' \(hostileMarker)"),
+            "the marker must be shell-quoted, not interpolated raw"
+        )
+    }
+
+    @Test
     func moshAvailabilityWiringExecutesTheNonLoginProbe() async {
         let executor = MoshTerminationExecutor(results: [.success("__VVTERM_MOSH_OK__")])
 
