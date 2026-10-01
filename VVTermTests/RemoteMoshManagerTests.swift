@@ -279,6 +279,76 @@ struct RemoteMoshManagerTests {
     }
 
     @Test
+    func moshAvailabilityProbeUsesNonLoginShellAndKeepsMarkerContract() {
+        let okMarker = "__VVTERM_MOSH_TEST_OK__"
+        let probe = RemoteMoshManager.availabilityProbeCommand(okMarker: okMarker)
+
+        #expect(probe.hasPrefix("sh -c '"))
+        #expect(!probe.contains("sh -lc"))
+        #expect(!probe.contains("/bin/sh -lc"))
+        #expect(probe.contains("export PATH="))
+        #expect(probe.contains("command -v mosh-server"))
+        #expect(probe.contains("mosh-server --version"))
+        #expect(probe.contains(okMarker))
+        #expect(probe.contains("__VVTERM_MOSH_NO__"))
+        #expect(probe.contains("2>&1"))
+    }
+
+    @Test
+    func moshAvailabilityProbeShellQuotesTheMarker() {
+        // The marker is a caller-supplied string (the builder is internal
+        // today, so reachability is nil), and it is spliced into a body whose
+        // own literal is single-quoted. A marker containing `'` must not be
+        // interpolated raw, or it would close that literal and change the
+        // command sequence: it must be shell-quoted as a `%s` argument
+        // instead. Asserted at the *body* level — the outer `sh -c '…'`
+        // wrapper escapes every quote in the body one more time, so a
+        // probe-level substring check cannot see the marker's own quoting
+        // (measured: `probe.contains(shellQuoted(marker))` is false even on the
+        // fixed builder).
+        let hostileMarker = "x'; id; '"
+        let probe = RemoteMoshManager.availabilityProbeCommand(okMarker: hostileMarker)
+        let body = Self.probeBody(probe)
+
+        #expect(
+            body.contains("printf '%s' \(RemoteTerminalBootstrap.shellQuoted(hostileMarker))"),
+            "the marker must be printed through a shell-quoted %s argument"
+        )
+        #expect(
+            !body.contains("printf '\(hostileMarker)'"),
+            "the marker must not be spliced raw into the format literal"
+        )
+    }
+
+    /// The probe body with the outer `sh -c '…'` quoting removed. The wrapper
+    /// escapes every `'` in the body as `'\''`, so the inverse turns each of
+    /// those back into a plain `'`. Test-only: it lets an assertion be written
+    /// in the body's own terms instead of the doubly-escaped probe's.
+    private static func probeBody(_ probe: String) -> String {
+        let body = probe.dropFirst("sh -c '".count).dropLast()
+        return body.replacingOccurrences(of: "'\\''", with: "'")
+    }
+
+    @Test
+    func moshAvailabilityWiringExecutesTheNonLoginProbe() async {
+        let executor = MoshTerminationExecutor(results: [.success("__VVTERM_MOSH_OK__")])
+
+        let available = await RemoteMoshManager.shared.isMoshServerAvailable(execute: { command, timeout in
+            try await executor.execute(command: command, timeout: timeout)
+        })
+
+        #expect(available)
+        let invocations = await executor.snapshot()
+        #expect(invocations.count == 1)
+        #expect(invocations[0].command.hasPrefix("sh -c '"))
+        #expect(!invocations[0].command.contains("sh -lc"))
+        #expect(!invocations[0].command.contains("/bin/sh -lc"))
+        #expect(invocations[0].command.contains("command -v mosh-server"))
+        #expect(invocations[0].command.contains("__VVTERM_MOSH_OK__"))
+        #expect(invocations[0].timeout == .seconds(8))
+    }
+
+    @Test
     func activatingServerLeaseDoesNotTerminateIt() async {
         let recorder = MoshCleanupRecorder()
         let lease = RemoteMoshServerLease(

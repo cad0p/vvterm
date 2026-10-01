@@ -28,11 +28,27 @@ actor RemoteMoshManager {
         return .otherUnprivileged
     }
 
+    /// Builds the non-login mosh availability probe. The marker is
+    /// `shellQuoted` instead of being interpolated into the body's own single
+    /// quotes: a marker containing `'` would otherwise close that literal and
+    /// change the command sequence (the marker is a constant today, and the
+    /// builder is internal, so reachability is nil — but the builder takes a
+    /// caller-supplied string, and quoting it is one line).
+    nonisolated static func availabilityProbeCommand(okMarker: String) -> String {
+        let body = "\(RemoteTerminalBootstrap.shellPathExport()); if command -v mosh-server >/dev/null 2>&1 && mosh-server --version >/dev/null 2>&1; then printf '%s' \(RemoteTerminalBootstrap.shellQuoted(okMarker)); else printf '__VVTERM_MOSH_NO__'; fi"
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(body)
+    }
+
     func isMoshServerAvailable(using client: SSHClient) async -> Bool {
+        await isMoshServerAvailable { command, timeout in
+            try await client.execute(command, timeout: timeout)
+        }
+    }
+
+    func isMoshServerAvailable(execute: CommandExecutor) async -> Bool {
         let okMarker = "__VVTERM_MOSH_OK__"
-        let body = "\(RemoteTerminalBootstrap.shellPathExport()); if command -v mosh-server >/dev/null 2>&1 && mosh-server --version >/dev/null 2>&1; then printf '\(okMarker)'; else printf '__VVTERM_MOSH_NO__'; fi"
-        let command = "sh -lc \(RemoteTerminalBootstrap.shellQuoted(body))"
-        let output = try? await client.execute(command, timeout: availabilityTimeout)
+        let command = Self.availabilityProbeCommand(okMarker: okMarker)
+        let output = try? await execute(command, availabilityTimeout)
         return output?.contains(okMarker) == true
     }
 

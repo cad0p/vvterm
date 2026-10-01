@@ -309,6 +309,51 @@ struct RemoteTmuxManagerParserTests {
         #expect(command.contains("=vvterm_managed"))
         #expect(command.contains("private-exists"))
         #expect(command.contains("private-missing"))
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("sh -lc"))
+        #expect(!command.contains("/bin/sh -lc"))
+        #expect(command.contains("export PATH="))
+        #expect(command.contains("2>/dev/null"))
+    }
+
+    @Test
+    func unixListSessionCommandsUseNonLoginShells() {
+        let commands = RemoteTmuxManager.shared.listSessionCommands(backend: .unixTmux)
+
+        #expect(commands.count == 3)
+        for command in commands {
+            #expect(command.hasPrefix("sh -c '"))
+            #expect(!command.contains("sh -lc"))
+            #expect(!command.contains("/bin/sh -lc"))
+            #expect(command.contains("export PATH="))
+            #expect(command.contains("list-sessions"))
+            #expect(command.contains("2>/dev/null"))
+        }
+        #expect(commands[0].contains("#{session_name} #{session_attached} #{session_windows}"))
+        #expect(commands[1].contains("#{session_name} #{session_attached}"))
+        #expect(!commands[1].contains("session_windows"))
+        #expect(!commands[2].contains("-F"))
+    }
+
+    @Test
+    func unixCurrentPathCommandUsesNonLoginShell() {
+        let command = RemoteTmuxManager.shared.currentPathCommand(
+            sessionName: "vvterm_managed",
+            backend: .unixTmux
+        )
+
+        #expect(command.hasPrefix("sh -c '"))
+        #expect(!command.contains("sh -lc"))
+        #expect(!command.contains("/bin/sh -lc"))
+        #expect(command.contains("export PATH="))
+        #expect(command.contains("list-panes -t"))
+        #expect(
+            command.contains(RemoteTerminalBootstrap.shellQuoted("vvterm_managed")),
+            "the session argument must reach tmux as the quoted session name"
+        )
+        #expect(command.contains("#{pane_current_path}"))
+        #expect(command.contains("| head -n 1"))
+        #expect(command.contains("2>/dev/null"))
     }
 
     @Test
@@ -619,6 +664,8 @@ struct RemoteTmuxManagerParserTests {
         let probe = RemoteTmuxManager.shared.tmuxAvailabilityProbeCommand(okMarker: "__VVTERM_TMUX_OK__")
         #expect(probe.hasPrefix("sh -c "))
         #expect(!probe.contains("sh -lc "))
+        #expect(!probe.contains("/bin/sh -lc"))
+        #expect(probe.contains("export PATH="))
         #expect(probe.contains("command -v tmux"))
         #expect(probe.contains("/usr/bin/tmux"))
         #expect(probe.contains("/bin/tmux"))
@@ -626,6 +673,39 @@ struct RemoteTmuxManagerParserTests {
         #expect(probe.contains("-V >/dev/null 2>&1"))
         #expect(probe.contains("__VVTERM_TMUX_OK__"))
         #expect(probe.contains("__VVTERM_TMUX_NO__"))
+    }
+
+    @Test
+    func tmuxAvailabilityProbeShellQuotesTheMarker() {
+        // Mirrors `moshAvailabilityProbeShellQuotesTheMarker`: the marker is a
+        // caller-supplied string spliced into a body whose own literal is
+        // single-quoted, so a marker containing `'` must be shell-quoted as a
+        // `%s` argument rather than interpolated raw. Asserted at the *body*
+        // level — the outer `sh -c '…'` wrapper escapes every quote in the
+        // body again, so a probe-level substring check cannot see it. The
+        // probe must also stay on the shared non-login wrapper.
+        let hostileMarker = "x'; id; '"
+        let probe = RemoteTmuxManager.shared.tmuxAvailabilityProbeCommand(okMarker: hostileMarker)
+        let body = Self.probeBody(probe)
+
+        #expect(
+            body.contains("printf '%s' \(RemoteTerminalBootstrap.shellQuoted(hostileMarker))"),
+            "the marker must be printed through a shell-quoted %s argument"
+        )
+        #expect(
+            !body.contains("printf '\(hostileMarker)'"),
+            "the marker must not be spliced raw into the format literal"
+        )
+        #expect(probe.hasPrefix("sh -c '"))
+    }
+
+    /// The probe body with the outer `sh -c '…'` quoting removed. The wrapper
+    /// escapes every `'` in the body as `'\''`, so the inverse turns each of
+    /// those back into a plain `'`. Test-only: it lets an assertion be written
+    /// in the body's own terms instead of the doubly-escaped probe's.
+    private static func probeBody(_ probe: String) -> String {
+        let body = probe.dropFirst("sh -c '".count).dropLast()
+        return body.replacingOccurrences(of: "'\\''", with: "'")
     }
 
     @Test
