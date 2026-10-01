@@ -92,7 +92,7 @@ nonisolated enum StorageHealthProbe {
             fi
             """
         }
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func darwinCommand(
@@ -115,7 +115,7 @@ nonisolated enum StorageHealthProbe {
                 device: RemoteTerminalBootstrap.shellQuoted(smartctlDevicePath)
             )
         }
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func bsdCommand(platform: BSDPlatform, devicePath: String) -> String {
@@ -145,7 +145,7 @@ nonisolated enum StorageHealthProbe {
         fi
         \(basePOSIXScript(device: device))
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func windowsScript(diskNumber: UInt32) -> String {
@@ -224,6 +224,7 @@ nonisolated enum StorageHealthProbe {
 
     private static func basePOSIXScript(device: String) -> String {
         """
+        export LC_ALL=C LANG=C
         if command -v smartctl >/dev/null 2>&1; then
             printf '%s\n' '\(Marker.smartBegin)'
             smartctl -q noserial -a -j -- \(device) 2>&1 || true

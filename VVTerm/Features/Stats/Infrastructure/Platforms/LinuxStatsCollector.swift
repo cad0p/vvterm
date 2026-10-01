@@ -35,7 +35,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
             (nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv,noheader,nounits 2>/dev/null || true); echo '---SEP---'; \
             (lspci -mm 2>/dev/null | grep -Ei 'VGA|3D|Display' || true)
             """
-        let cmd = RemoteTerminalBootstrap.wrapPOSIXShellCommand(profileScript)
+        let cmd = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(profileScript)
         let output = try await client.execute(cmd, timeout: .seconds(5))
         let sections = output.components(separatedBy: "---SEP---")
         let hostname = sections[safe: 0]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -188,7 +188,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
                 (ip -s link 2>/dev/null || ifconfig -a 2>/dev/null); echo '---SEP---'; \
                 (ps -e 2>/dev/null | wc -l)
                 """
-            let fallbackOutput = try await client.execute(RemoteTerminalBootstrap.wrapPOSIXShellCommand(fallbackCmd))
+            let fallbackOutput = try await client.execute(RemoteTerminalBootstrap.wrapPOSIXProbeCommand(fallbackCmd))
             fallbackSections = fallbackOutput.components(separatedBy: "---SEP---")
 
             let topOutput = fallbackSections.count > 0 ? fallbackSections[0] : ""
@@ -258,7 +258,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
         // changes much less often than capacity, so keep it out of the 2-second path.
         let volumeMetadata = await volumeMetadata(client: client, context: context)
         let dfOutput = try await client.execute(
-            RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+            RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
                 "LC_ALL=C LANG=C; volume_df=$(df -BM -P -T -x tmpfs -x devtmpfs -x squashfs 2>/dev/null); "
                     + "if [ -n \"$volume_df\" ]; then printf '%s\\n' \"$volume_df\"; "
                     + "else df -BM -P -x tmpfs -x devtmpfs -x squashfs 2>/dev/null; fi"
@@ -978,7 +978,7 @@ struct LinuxStatsCollector: PlatformStatsCollector {
     ) async -> [String: VolumeCollectionMetadata] {
         if context.beginVolumeMetadataRefresh(for: .linux),
            let output = try? await client.execute(
-               RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+               RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
                    "LC_ALL=C LANG=C lsblk -J -p -o NAME,UUID,FSTYPE 2>/dev/null"
                ),
                timeout: .seconds(5)

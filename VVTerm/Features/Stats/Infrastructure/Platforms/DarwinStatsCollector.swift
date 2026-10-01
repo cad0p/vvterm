@@ -5,7 +5,7 @@ import Foundation
 /// Stats collector for macOS/Darwin systems using sysctl, vm_stat, etc.
 struct DarwinStatsCollector: PlatformStatsCollector {
     private static let periodicProcessLimit = 24
-    static let statsBatchCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand("""
+    static let statsBatchCommand = RemoteTerminalBootstrap.wrapPOSIXProbeCommand("""
         export LC_ALL=C LANG=C
         sysctl -n vm.loadavg 2>/dev/null || uptime | sed 's/.*load average[s]*: //'; echo '---SEP---'
         sysctl -n kern.boottime; echo '---SEP---'
@@ -14,16 +14,17 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         netstat -ibn; echo '---SEP---'
         sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
         """)
-    static let topCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+    static let topCommand = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
         "export LC_ALL=C LANG=C; top -l 1 -n 0 -s 0 2>/dev/null | grep 'CPU usage' || echo 'CPU usage: 0% user, 0% sys, 100% idle'"
     )
-    static let dfCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+    static let dfCommand = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
         "export LC_ALL=C LANG=C; df -m 2>/dev/null | grep -E '^/dev'"
     )
-    static let diskutilListCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+    static let diskutilListCommand = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
         "export LC_ALL=C LANG=C; /usr/sbin/diskutil list -plist 2>/dev/null"
     )
     private static let processorLoadScript = """
+        export LC_ALL=C LANG=C
         if [ -x /usr/bin/ruby ]; then
             /usr/bin/ruby <<'RUBY' && exit 0
         require 'fiddle'
@@ -117,7 +118,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         fi
         "$HELPER"
         """
-    private static let processorLoadCommand = RemoteTerminalBootstrap.wrapPOSIXShellCommand(processorLoadScript)
+    private static let processorLoadCommand = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(processorLoadScript)
 
     func getSystemInfo(client: SSHClient) async throws -> (hostname: String, osInfo: String, cpuCores: Int) {
         let cmd = "uname -srm; echo '---SEP---'; hostname; echo '---SEP---'; sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1"
@@ -144,7 +145,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
             sysctl -n hw.logicalcpu 2>/dev/null; echo '---SEP---'; \
             sysctl -n hw.memsize 2>/dev/null
             """
-        let cmd = RemoteTerminalBootstrap.wrapPOSIXShellCommand(profileScript)
+        let cmd = RemoteTerminalBootstrap.wrapPOSIXProbeCommand(profileScript)
         let output = try await client.execute(cmd, timeout: .seconds(5))
         let sections = output.components(separatedBy: "---SEP---")
         let displayJSON = (try? await client.execute(
@@ -680,7 +681,7 @@ struct DarwinStatsCollector: PlatformStatsCollector {
         for source in sources where metadata[source]?.stableIdentifier == nil {
             guard isSafeDarwinDevicePath(source),
                   let output = try? await client.execute(
-                      RemoteTerminalBootstrap.wrapPOSIXShellCommand(
+                      RemoteTerminalBootstrap.wrapPOSIXProbeCommand(
                           "export LC_ALL=C LANG=C; /usr/sbin/diskutil info -plist \(RemoteTerminalBootstrap.shellQuoted(source)) 2>/dev/null"
                       ),
                       timeout: .seconds(4)

@@ -28,7 +28,7 @@ enum UnixProcessTelemetry {
         limit: Int?
     ) async throws -> Collection {
         let snapshotOutput = try await client.execute(
-            RemoteTerminalBootstrap.wrapPOSIXShellCommand(cpuSnapshotCommand(platform: platform)),
+            RemoteTerminalBootstrap.wrapPOSIXProbeCommand(cpuSnapshotCommand(platform: platform)),
             timeout: .seconds(8)
         )
         let cumulativeCPUTimeByPID = parseCPUSnapshot(snapshotOutput, platform: platform)
@@ -53,7 +53,7 @@ enum UnixProcessTelemetry {
         }
 
         let detailsOutput = try await client.execute(
-            RemoteTerminalBootstrap.wrapPOSIXShellCommand(processDetailsCommand(
+            RemoteTerminalBootstrap.wrapPOSIXProbeCommand(processDetailsCommand(
                 platform: platform,
                 limit: selectedPIDs == nil ? limit : nil,
                 pids: selectedPIDs
