@@ -908,6 +908,13 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// handle post-capture: `cleanup()` invalidates the context and nils the
     /// view's surface before the gate runs. Without the gate the completion
     /// would run against the freed surface handle.
+    ///
+    /// What this proves: the gate as a whole is load-bearing (deleting it
+    /// crashes the test host on the freed handle). It does NOT independently
+    /// discriminate the `unsafeCValue == surface` half: `cleanup()` invalidates
+    /// the context first, so a mutation that keeps the resolve but deletes the
+    /// comparison stays green here — that half is pinned structurally by P-G in
+    /// `GhosttySurfaceUserdataLifetimePinsTests`.
     @Test
     func surfaceDeathDuringTheConfirmationSeamSkipsTheCompletion() async throws {
         let app = Ghostty.App()

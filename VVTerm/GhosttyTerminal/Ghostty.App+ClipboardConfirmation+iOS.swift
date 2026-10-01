@@ -20,6 +20,12 @@ import UIKit
 /// `CheckedContinuation` double-resume traps, so every path claims the
 /// continuation through this lock first.
 private final class ClipboardConfirmationResumeState: @unchecked Sendable {
+    // Explicit nonisolated deinit: the compiler-synthesized deinit of a
+    // MainActor-isolated class takes the back-deployed isolated-deinit path,
+    // which aborts (invalid free) when released outside a task context —
+    // swiftlang/swift#85663, #88036. Empty body, no behavior change.
+    nonisolated deinit {}
+
     private let lock = NSLock()
     private var didResume = false
 
@@ -45,9 +51,18 @@ extension Ghostty.App {
         // Prefer the window that hosts the terminal so a multi-scene iPad
         // (Stage Manager) prompts on the terminal's own scene; the global key
         // window stays the fallback for a view that is not in a window yet.
-        let sceneWindow = view.window
+        // The liveness precondition (visible, foreground-active scene, rooted)
+        // is deliberately kept: accepting a hidden or backgrounded host window
+        // would shadow the known-live key window and present where no
+        // `viewDidAppear` runs, stranding the continuation. On iOS 15+
+        // `isKeyWindow` is scene-scoped, so preferring the scene's key window
+        // still keeps the prompt on the terminal's own scene.
+        let sceneWindow = view.window?.windowScene?.keyWindow ?? view.window
         let window: UIWindow?
-        if let sceneWindow, sceneWindow.rootViewController != nil {
+        if let sceneWindow,
+           !sceneWindow.isHidden,
+           sceneWindow.windowScene?.activationState == .foregroundActive,
+           sceneWindow.rootViewController != nil {
             window = sceneWindow
         } else {
             window = UIApplication.shared.connectedScenes

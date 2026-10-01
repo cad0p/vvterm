@@ -9,7 +9,8 @@
 //  it, and both `ghostty_surface_free` paths invalidate it first.
 //
 //  #327 extends this file with P-E (the clipboard-confirmation resolve guards)
-//  and P-F (prompt title + default-button parity).
+//  and P-F (prompt title + default-button parity), and with P-G (the
+//  completion gate's captured-handle comparison).
 //
 //  WHAT THESE PINS ASSERT
 //    P-A  repo-wide: no `Unmanaged<GhosttyTerminalView>` cast remains anywhere
@@ -36,15 +37,21 @@
 //    P-F  (#327 tripwire) both platform presenters take the prompt title from
 //         `ClipboardConfirmationRequest.promptTitle` (no inlined literal) and
 //         designate the paste action as the default button.
+//    P-G  (#327) the confirmation completion `Task` resolves the context once,
+//         compares the captured handle (`liveView.surface?.unsafeCValue ==
+//         surface`) as the last check before the completion, and keeps the
+//         drop-path `else` between them — the half the behavioural seam-death
+//         test cannot discriminate (`cleanup()` invalidates the context first,
+//         so deleting only the comparison stays green there).
 //
 //  WHAT THEY DO NOT SEE. A renamed helper, an aliased userdata pointer, a
 //  callback that unwraps the context and then casts the view through a new
 //  spelling, or a behavioural regression in the context itself. Comments are
 //  stripped before every scan, so a commented-out cast cannot satisfy a pin,
-//  but a string literal containing the pinned text could. P-E sees the
-//  presence and order of the resolve tokens, not the semantics of the guards
-//  they sit in; P-F is a parity tripwire, not a behaviour test — a default
-//  button set by another mechanism would escape it.
+//  but a string literal containing the pinned text could. P-E and P-G see the
+//  presence and order of the resolve/comparison tokens, not the semantics of
+//  the guards they sit in; P-F is a parity tripwire, not a behaviour test — a
+//  default button set by another mechanism would escape it.
 //
 //  MEASURED COUNTERFACTUALS (each pin red under a targeted mutation, run with
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>`):
@@ -62,6 +69,9 @@
 //         second `complete(surface:` site fails `precedingRoutes > index`.
 //    P-F  inline `"Paste Unsafe Text?"` in the iOS presenter → the iOS
 //         literal-absence assertion fails.
+//    P-G  delete `, liveView.surface?.unsafeCValue == surface` from the
+//         completion gate (keeping the resolve) → the comparison count drops
+//         to 0.
 
 import Foundation
 import Testing
@@ -475,6 +485,83 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         #expect(
             Self.occurrences(of: "cancelButton.keyEquivalent = \"\\u{1B}\"", in: macOS).count == 1,
             "P-F: the macOS cancel button must keep the Escape key equivalent"
+        )
+    }
+
+    // MARK: - P-G: the completion gate compares the captured handle
+
+    /// #327 hardening: the completion `Task` in `confirmReadClipboard` must end
+    /// with the handle-comparison gate — one `context.resolve()` binding
+    /// `liveView`, the captured handle compared with
+    /// `liveView.surface?.unsafeCValue == surface`, and the guard's `else`
+    /// drop path as the last thing before the completion. The behavioural
+    /// seam-death test cannot discriminate this half: `cleanup()` invalidates
+    /// the context first, so a mutation that keeps the resolve but deletes the
+    /// comparison stays green there.
+    @Test
+    func testPGClipboardCompletionGateComparesTheCapturedHandle() throws {
+        let appText = Self.strippingComments(try source(Self.appSource))
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-G: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+        let taskAnchor = try #require(
+            Self.occurrences(of: "Task ", in: appText, range: confirmBody).first,
+            "P-G: the confirmation callback must dispatch its completion through a Task"
+        )
+        let taskBody = try Self.bracedBlock(after: taskAnchor, in: appText)
+
+        let resolves = Self.occurrences(of: "context.resolve()", in: appText, range: taskBody)
+        #expect(
+            resolves.count == 1,
+            "P-G: the completion Task must resolve the captured context exactly once; found \(resolves.count)"
+        )
+        let comparisons = Self.occurrences(
+            of: "liveView.surface?.unsafeCValue == surface",
+            in: appText,
+            range: taskBody
+        )
+        #expect(
+            comparisons.count == 1,
+            "P-G: the completion gate must compare the captured surface handle exactly once, not merely resolve the view; found \(comparisons.count)"
+        )
+        let completions = Self.occurrences(of: "complete(", in: appText, range: taskBody)
+        #expect(
+            completions.count == 1,
+            "P-G: the completion Task must complete the request exactly once; found \(completions.count)"
+        )
+        guard let resolve = resolves.first, let comparison = comparisons.first, let completion = completions.first else {
+            return
+        }
+        #expect(
+            resolve.lowerBound < comparison.lowerBound,
+            "P-G: the resolve must bind the view the handle comparison reads"
+        )
+        #expect(
+            comparison.lowerBound < completion.lowerBound,
+            "P-G: the handle comparison must precede the completion"
+        )
+
+        // "Immediately before": the only code between the comparison and the
+        // completion is the guard's `else` drop path (its log line and its
+        // `return`), so a gate moved earlier — or reduced to a bare resolve —
+        // cannot satisfy this pin.
+        let between = String(appText[comparison.upperBound..<completion.lowerBound])
+        #expect(
+            Self.occurrences(of: "else {", in: between).count == 1,
+            "P-G: the handle comparison must own a guard else-branch before the completion"
+        )
+        #expect(
+            Self.occurrences(
+                of: "clipboard confirmation completion skipped: surface no longer live",
+                in: between
+            ).count == 1,
+            "P-G: the gate's drop path must sit between the comparison and the completion"
+        )
+        #expect(
+            Self.occurrences(of: "context.resolve()", in: between).isEmpty,
+            "P-G: no further resolve may sit between the handle comparison and the completion"
         )
     }
 

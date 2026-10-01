@@ -90,6 +90,7 @@ struct GhosttyIsolatedDeinitPinsTests {
         Pin(file: "VVTerm/GhosttyTerminal/TerminalNativeTextSelection.swift", anchor: "final class TerminalNativeTextRange", control: "let startPosition"),
         Pin(file: "VVTerm/GhosttyTerminal/TerminalNativeTextSelection.swift", anchor: "final class TerminalNativeSelectionRect", control: "private let storedRect"),
         Pin(file: "VVTerm/GhosttyTerminal/TerminalNativeTextSelection.swift", anchor: "final class TerminalNativeFindOverlayView", control: "var highlights"),
+        Pin(file: "VVTerm/GhosttyTerminal/Ghostty.App+ClipboardConfirmation+iOS.swift", anchor: "final class ClipboardConfirmationResumeState", control: "private var didResume"),
     ]
 
     /// The sweep's file census: one entry per swept file, `count` = the number
@@ -107,18 +108,19 @@ struct GhosttyIsolatedDeinitPinsTests {
         (file: "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift", count: 4),
         (file: "VVTerm/GhosttyTerminal/GhosttyTerminalView+macOS.swift", count: 2),
         (file: "VVTerm/GhosttyTerminal/TerminalNativeTextSelection.swift", count: 4),
+        (file: "VVTerm/GhosttyTerminal/Ghostty.App+ClipboardConfirmation+iOS.swift", count: 1),
     ]
 
     // MARK: - Tests
 
     /// Table completeness: every other test in this suite iterates `Self.pins`,
-    /// so an emptied or shortened table would be silently vacuous. 18
+    /// so an emptied or shortened table would be silently vacuous. 19
     /// is the sweep's recorded class count for this area (one marker per class).
     @Test
     func testGhosttyPinTableIsComplete() {
         #expect(
-            Self.pins.count == 18,
-            "the Ghostty pin table must stay complete: expected 18 rows, found \(Self.pins.count)"
+            Self.pins.count == 19,
+            "the Ghostty pin table must stay complete: expected 19 rows, found \(Self.pins.count)"
         )
     }
 
