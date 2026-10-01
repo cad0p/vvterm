@@ -135,8 +135,9 @@ struct GhosttySurfaceCallbackRoutingTests {
 
     /// Minimal invocation counter for callbacks whose only observable effect is
     /// "it ran" (e.g. `onProcessExit`). The close callback dispatches through a
-    /// main-queue block, which a bare run-loop pump does not run, so the tests
-    /// wait on this counter through the bounded `waitUntil` helper.
+    /// main-queue block; this suite measured that a bare run-loop pump does not
+    /// run queued main-queue blocks, so the tests wait on this counter through
+    /// the bounded `waitUntil` helper, which yields before pumping.
     private final class InvocationSpy {
         private let lock = NSLock()
         private var invocations = 0
@@ -613,6 +614,9 @@ struct GhosttySurfaceCallbackRoutingTests {
         let deadContextView = Ghostty.SurfaceCallbackContext.fromOpaque(userdata)?.resolve()
         #expect(deadContextView == nil, "the dead view must resolve to nil")
 
+        // `perform` also returns false on a nil C handle (`Ghostty.Surface.swift:199-201`),
+        // so pin the handle: the only remaining cause of `false` is the dead context.
+        #expect(heldSurface?.unsafeCValue != nil, "the held wrapper must still own the surface")
         let handled = heldSurface?.perform(action: "paste_from_clipboard")
         #expect(handled == false, "the dead-window paste binding must report false")
 
@@ -725,9 +729,14 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// invalidated — suppression from invalidation, not from the weak view
     /// going nil.
     ///
-    /// The direct `readClipboard` probe runs against a non-empty clipboard so
-    /// its `false` cannot be the empty-clipboard `false`. No deferred-free
-    /// drain here: `cleanup()` frees synchronously.
+    /// The direct `readClipboard` probe below is a refusal check, not the
+    /// invalidation oracle: after `cleanup()` the view's `surface` is nil
+    /// (`GhosttyTerminalView+iOS.swift:1825-1826`), so the probe returns
+    /// `false` whether or not the context was invalidated. The oracle is
+    /// `context.resolve() == nil` above, while the view is still alive; the
+    /// probe runs with a non-empty clipboard so the refusal is against
+    /// readable content. No deferred-free drain here: `cleanup()` frees
+    /// synchronously.
     @Test
     func freeInvalidatesTheContextWhileTheViewIsStillAlive() throws {
         let app = Ghostty.App()
@@ -761,7 +770,7 @@ struct GhosttySurfaceCallbackRoutingTests {
             )
             #expect(
                 handled == false,
-                "an invalidated context must refuse the clipboard read even with a non-empty clipboard"
+                "the clipboard probe must refuse once cleanup() has run"
             )
         }
     }
