@@ -754,6 +754,15 @@ actor RemoteTmuxManager {
         return parts.joined(separator: " ")
     }
 
+    /// Builds the non-login tmux availability probe. It goes through
+    /// `wrapPOSIXProbeCommand` rather than inlining `"sh -c …"`, so the
+    /// non-login wrapper is the single construction point every capability
+    /// probe shares (a new probe cannot pick up `-l` by copying this builder).
+    /// The marker is `shellQuoted` instead of being interpolated into the
+    /// body's own single quotes: a marker containing `'` would otherwise close
+    /// that literal and change the command sequence (the marker is a constant
+    /// today, and the builder is internal, so reachability is nil — but the
+    /// builder takes a caller-supplied string, and quoting it is one line).
     nonisolated func tmuxAvailabilityProbeCommand(okMarker: String) -> String {
         let body = """
         \(RemoteTerminalBootstrap.shellPathExport());
@@ -770,12 +779,12 @@ actor RemoteTmuxManager {
           done;
         fi;
         if [ -n "$VVTERM_TMUX_BIN" ] && "$VVTERM_TMUX_BIN" -V >/dev/null 2>&1; then
-          printf '\(okMarker)';
+          printf '%s' \(RemoteTerminalBootstrap.shellQuoted(okMarker));
         else
           printf '__VVTERM_TMUX_NO__';
         fi
         """
-        return "sh -c \(RemoteTerminalBootstrap.shellQuoted(body))"
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(body)
     }
 
     private func windowsPsmuxAvailability(
