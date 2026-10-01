@@ -34,11 +34,38 @@
 //  spelling tripwire; (c) the last test fails closed when the job blocks stop
 //  parsing in the canonical shape.
 //
-//  Provenance: the `JobBlock` parser idiom (`repositoryRoot()` honouring
-//  `VVTERM_PINS_SOURCE_ROOT`, YAML comment stripping, `jobBlocks(in:)`,
-//  `jobBlock(named:)`, `stepBlocks(in:)`) is duplicated from
-//  `WorkflowArtifactDependencyPinsTests` — as `WorkflowXcodebuildFlagPinsTests`
-//  does — because each pin file is self-contained so it reverts independently.
+//  Defeat list, stated honestly (the #319 idiom): the pin recognizes the gate
+//  only as the literal compound clause at job indent 4.
+//   - a `${{ }}`-wrapped expression, a quoted `"if":` key, reordered operands,
+//     a two-line plain scalar, and a step-level, matrix-level or hoisted
+//     (`vars.…` / `env.…`) gate all RED by design on the per-PR jobs: the
+//     literal clause must appear, so an indirect spelling is a visible tripwire
+//     rather than a silent pass. On `build` a step-level `if:` is allowed by
+//     design — that pin asserts the absence of any *job-level* gate.
+//   - a YAML anchor on a job key (`  lint-headers: &lint`) is now sliced as
+//     its own block, so the canonical-shape test rejects it and the class pin
+//     cannot miss it (measured GREEN before that guard — lens 2 MINOR-4). A
+//     YAML alias standing in for the gate value REDs: the literal clause must
+//     appear.
+//   - a quoted job key (`  "lint-headers":`) or a job without a `steps:` line
+//     REDs the canonical-shape test.
+//   - no pin here reads `on:` or `uses:`, so a gate introduced by a second
+//     workflow file or a reusable-workflow call is out of scope by
+//     construction. It cannot silently weaken these pins, because the file
+//     parsed here is the one the PR trigger runs.
+//
+//  The executed count this suite reports is the Swift Testing line (`Test run
+//  with N tests in M suites …`). The XCTest wrapper's `Executed 0 tests` line
+//  is bundle bookkeeping for a bundle that contains only Swift Testing suites,
+//  not the suite's signal.
+//
+//  Provenance: this is the THIRD copy of the `JobBlock` parser idiom
+//  (`repositoryRoot()` honouring `VVTERM_PINS_SOURCE_ROOT`, YAML comment
+//  stripping, `jobBlocks(in:)`, `jobBlock(named:)`, `jobName(of:)`) — after
+//  `WorkflowArtifactDependencyPinsTests` and `WorkflowXcodebuildFlagPinsTests`
+//  — because each pin file is self-contained so it reverts independently. A
+//  parser fix must be applied to all three copies until a fourth pin file
+//  justifies extracting a shared helper.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree (measured per pin in the #315 PR report). The variable must
@@ -116,19 +143,24 @@ struct WorkflowPerPREventGatePinsTests {
         }
     }
 
-    /// `build` must stay ungated: `debug-test` consumes its artifact on every
-    /// dispatch (issue #313).
+    /// `build` must stay ungated — **no job-level `if:` at all**, not merely
+    /// none naming the pull_request event: `debug-test` consumes its artifact
+    /// on every dispatch (issue #313), and any job-level gate on `build` skips
+    /// it on some path (`github.event.inputs.debug_test == ''` skips it on a
+    /// debug dispatch and fails the #313 guard; `if: false` breaks every
+    /// path). Lens 2 measured the narrower assertion green for all of those.
     @Test
-    func testBuildJobIsNotGatedOnThePullRequestEvent() throws {
+    func testBuildJobHasNoJobLevelGate() throws {
         let source = try Self.workflowSource()
         let stripped = Self.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "build", in: stripped)
 
         // Anchored at job indent 4, so an unrelated step-level `if:` inside the
-        // block does not false-red this pin.
+        // block (e.g. `if: failure()` on an upload step) does not false-red
+        // this pin.
         #expect(
-            job.text.range(of: #"(?m)^    if:.*github\.event_name == 'pull_request'"#, options: .regularExpression) == nil,
-            "the `build` job must not be gated on `pull_request` (issue #315): `debug-test` downloads the `vvterm-build` artifact from this job on every dispatch (issue #313)"
+            job.text.range(of: #"(?m)^    if:"#, options: .regularExpression) == nil,
+            "the `build` job must carry no job-level `if:` at all (issue #315): `debug-test` downloads the `vvterm-build` artifact from this job on every dispatch (issue #313), so any job-level gate skips `build` on some path and breaks the run. Step-level conditionals inside the job are fine; only the job-level key is forbidden."
         )
         #expect(
             job.text.contains("Build for iOS Simulator (build-for-testing)"),
@@ -176,6 +208,51 @@ struct WorkflowPerPREventGatePinsTests {
                 "the workflow's job syntax changed — re-derive this pin"
             )
         }
+    }
+
+    /// The `wait-for-ota-publish` script must exit before its first lookup
+    /// when `HEAD_SHA` is empty. A dispatch carries no PR head, and
+    /// `gh run list --commit ""` ignores the empty filter and returns
+    /// repo-wide PR-event runs — measured on the #313 acceptance dispatch
+    /// (run 36776953839, log lines 105-108), which resolved an unrelated PR's
+    /// `OTA archive run: 36770666977` + `Publish run: 36771788878` and
+    /// released in 10 s only because that foreign publish had already started
+    /// 38 minutes earlier. Had it been in flight, `unit-tests` would have
+    /// waited on it (worst case the gate job's 45-minute timeout). The guard
+    /// is a no-op on the PR path, where the head SHA is always set.
+    @Test
+    func testOTAPublishGateSkipsImmediatelyWhenHeadSHAIsEmpty() throws {
+        let source = try Self.workflowSource()
+        let stripped = Self.strippingYAMLComments(source)
+        let job = try Self.jobBlock(named: "wait-for-ota-publish", in: stripped)
+
+        let guardRange = job.text.range(
+            of: #"if \[\[ -z "\$HEAD_SHA" \]\]"#,
+            options: .regularExpression
+        )
+        #expect(
+            guardRange != nil,
+            "the `wait-for-ota-publish` script must guard an empty `HEAD_SHA` (`if [[ -z \"$HEAD_SHA\" ]]`) at the top of its step script: a dispatch has no PR head and `gh run list --commit \"\"` ignores the empty filter, so the gate would bind to an unrelated PR's OTA run (measured on run 36776953839)"
+        )
+        let firstLookup = job.text.range(of: "gh run list")
+        #expect(
+            firstLookup != nil,
+            "the `wait-for-ota-publish` script must still resolve its OTA run with `gh run list`"
+        )
+        if let guardRange, let firstLookup {
+            #expect(
+                guardRange.upperBound <= firstLookup.lowerBound,
+                "the empty-`HEAD_SHA` guard must run before the first `gh run list` in the `wait-for-ota-publish` script, otherwise the empty `--commit` filter still returns repo-wide OTA runs"
+            )
+        }
+        #expect(
+            job.text.contains("::notice::workflow_dispatch has no PR head"),
+            "the empty-`HEAD_SHA` guard must emit its skip notice so the dispatch log says why the gate did not wait"
+        )
+        #expect(
+            job.text.contains("Wait for the OTA publish to start"),
+            "the pin resolved the real `wait-for-ota-publish` job, not an empty or shifted slice"
+        )
     }
 
     // MARK: - Fixtures
@@ -247,11 +324,12 @@ struct WorkflowPerPREventGatePinsTests {
 
     /// Slices the jobs region into one block per job. A block starts at any
     /// line indented two spaces and ending in `:` — including a quoted key
-    /// (`  "tail-job":`), so a malformed key becomes its own block and the
-    /// shape guard sees it, instead of silently merging into its neighbour.
+    /// (`  "tail-job":`) or an anchored key (`  lint-headers: &lint`), so a
+    /// malformed key becomes its own block and the shape guard sees it,
+    /// instead of silently merging into its neighbour (lens 2 MINOR-4).
     private static func jobBlocks(in workflow: String) throws -> [JobBlock] {
         let region = try jobsRegion(in: workflow)
-        let delimiter = #"^  \S.*:\s*$"#
+        let delimiter = #"^  \S.*:\s*(?:&[^\s]+)?\s*$"#
         var starts: [Int] = []
         for (index, line) in region.enumerated() {
             if line.range(of: delimiter, options: .regularExpression) != nil {
@@ -277,7 +355,7 @@ struct WorkflowPerPREventGatePinsTests {
 
     private static func jobBlock(named name: String, in workflow: String) throws -> JobBlock {
         let blocks = try jobBlocks(in: workflow)
-        let matches = blocks.filter { $0.key.trimmingCharacters(in: .whitespaces) == "\(name):" }
+        let matches = blocks.filter { Self.jobName(of: $0) == name }
         #expect(
             matches.count == 1,
             "the workflow must contain exactly one `\(name):` job block (found \(matches.count) of \(blocks.count) blocks)"
@@ -288,34 +366,20 @@ struct WorkflowPerPREventGatePinsTests {
         )
     }
 
-    /// The job's bare name, e.g. `wait-for-ota-publish`.
+    /// The job's bare name, e.g. `wait-for-ota-publish`. Splits at the first
+    /// colon so an anchored key (`lint-headers: &lint`) still yields the name
+    /// the class pin's exempt list compares against; the canonical-shape
+    /// guard is what rejects the anchor itself.
     private static func jobName(of block: JobBlock) -> String {
-        var name = block.key.trimmingCharacters(in: .whitespaces)
-        if name.hasSuffix(":") { name.removeLast() }
-        return name
+        let key = block.key.trimmingCharacters(in: .whitespaces)
+        if let colon = key.firstIndex(of: ":") {
+            return String(key[..<colon])
+        }
+        return key
     }
 
     private static func isCanonicalJobKey(_ line: String) -> Bool {
         line.range(of: #"^  [A-Za-z0-9_-]+:\s*$"#, options: .regularExpression) != nil
-    }
-
-    /// Slices a job block into its steps. A step starts at a line indented six
-    /// spaces followed by `- `; job-level keys before the first step are not
-    /// part of any step.
-    private static func stepBlocks(in job: JobBlock) -> [[String]] {
-        let stepStart = #"^      -\s"#
-        var steps: [[String]] = []
-        var current: [String] = []
-        for line in job.lines {
-            if line.range(of: stepStart, options: .regularExpression) != nil {
-                if !current.isEmpty { steps.append(current) }
-                current = [line]
-            } else if !current.isEmpty {
-                current.append(line)
-            }
-        }
-        if !current.isEmpty { steps.append(current) }
-        return steps
     }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
