@@ -12,22 +12,51 @@
 import OSLog
 import UIKit
 
+/// One-shot resume guard for the confirmation continuation.
+///
+/// Three paths can resume it — the paste action, the cancel action, and the
+/// presentation-completion deny — and the actions can legitimately fire
+/// around the same time as the completion (a dismissal race). A
+/// `CheckedContinuation` double-resume traps, so every path claims the
+/// continuation through this lock first.
+private final class ClipboardConfirmationResumeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ continuation: CheckedContinuation<Bool, Never>, returning value: Bool) {
+        lock.lock()
+        let shouldResume = !didResume
+        didResume = true
+        lock.unlock()
+        guard shouldResume else { return }
+        continuation.resume(returning: value)
+    }
+}
+
 extension Ghostty.App {
     /// Presents the unsafe-paste confirmation from the top-most presented view
-    /// controller. Fail-safe: without a key window, while an alert is already
+    /// controller. Fail-safe: without a window, while an alert is already
     /// presented, or with a presenter that is not in the window hierarchy the
     /// request is denied without prompting (the caller completes it as a deny).
     static func presentClipboardConfirmation(
         _ request: ClipboardConfirmationRequest,
         on view: GhosttyTerminalView
     ) async -> Bool {
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap({ $0.windows })
-            .first(where: { $0.isKeyWindow }),
-            let rootViewController = window.rootViewController
-        else {
-            Ghostty.logger.warning("clipboard confirmation dropped: no key window")
+        // Prefer the window that hosts the terminal so a multi-scene iPad
+        // (Stage Manager) prompts on the terminal's own scene; the global key
+        // window stays the fallback for a view that is not in a window yet.
+        let sceneWindow = view.window
+        let window: UIWindow?
+        if let sceneWindow, sceneWindow.rootViewController != nil {
+            window = sceneWindow
+        } else {
+            window = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .flatMap({ $0.windows })
+                .first(where: { $0.isKeyWindow })
+        }
+        guard let window, let rootViewController = window.rootViewController else {
+            Ghostty.logger.warning("clipboard confirmation dropped: no window")
             return false
         }
 
@@ -50,23 +79,33 @@ extension Ghostty.App {
         }
 
         return await withCheckedContinuation { continuation in
+            let resumeState = ClipboardConfirmationResumeState()
             let alert = UIAlertController(
-                title: "Paste Unsafe Text?",
+                title: ClipboardConfirmationRequest.promptTitle,
                 message: request.promptBody,
                 preferredStyle: .alert
             )
             // Upstream parity: "Paste" is the default action; "Cancel" is the
             // cancel action.
             let pasteAction = UIAlertAction(title: "Paste", style: .default) { _ in
-                continuation.resume(returning: true)
+                resumeState.resume(continuation, returning: true)
             }
             let cancelAction = UIAlertAction(title: "Cancel", style: .cancel) { _ in
-                continuation.resume(returning: false)
+                resumeState.resume(continuation, returning: false)
             }
             alert.addAction(pasteAction)
             alert.addAction(cancelAction)
             alert.preferredAction = pasteAction
-            presenter.present(alert, animated: true)
+            // The presentation completion is the third resume site: a
+            // silently-failed presentation never fires an action, so a deny
+            // here is the only thing that keeps the continuation (and the
+            // core's request state) from being retained forever.
+            presenter.present(alert, animated: true) {
+                if presenter.presentedViewController !== alert {
+                    Ghostty.logger.warning("clipboard confirmation dropped: presentation did not take")
+                    resumeState.resume(continuation, returning: false)
+                }
+            }
         }
     }
 }

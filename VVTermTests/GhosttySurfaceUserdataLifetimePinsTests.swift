@@ -8,6 +8,9 @@
 //  `Ghostty.SurfaceCallbackContext`; every callback resolves the view through
 //  it, and both `ghostty_surface_free` paths invalidate it first.
 //
+//  #327 extends this file with P-E (the clipboard-confirmation resolve guards)
+//  and P-F (prompt title + default-button parity).
+//
 //  WHAT THESE PINS ASSERT
 //    P-A  repo-wide: no `Unmanaged<GhosttyTerminalView>` cast remains anywhere
 //         under `VVTerm/` (the scan fails closed when it enumerates no files
@@ -27,12 +30,21 @@
 //    P-D  both `setupWriteCallback` bodies pass `callbackContext.userdata` to
 //         `ghostty_surface_set_write_callback`, unwrap the context, and carry
 //         no `Unmanaged.passUnretained(self)` view cast.
+//    P-E  (#327) `confirmReadClipboard`'s two `complete(surface:` call sites
+//         are each preceded by their own `fromOpaque` resolve guard — the
+//         ordering test 8 cannot observe with `state: nil`.
+//    P-F  (#327 tripwire) both platform presenters take the prompt title from
+//         `ClipboardConfirmationRequest.promptTitle` (no inlined literal) and
+//         designate the paste action as the default button.
 //
 //  WHAT THEY DO NOT SEE. A renamed helper, an aliased userdata pointer, a
 //  callback that unwraps the context and then casts the view through a new
 //  spelling, or a behavioural regression in the context itself. Comments are
 //  stripped before every scan, so a commented-out cast cannot satisfy a pin,
-//  but a string literal containing the pinned text could.
+//  but a string literal containing the pinned text could. P-E sees the
+//  presence and order of the resolve tokens, not the semantics of the guards
+//  they sit in; P-F is a parity tripwire, not a behaviour test — a default
+//  button set by another mechanism would escape it.
 //
 //  MEASURED COUNTERFACTUALS (each pin red under a targeted mutation, run with
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>`):
@@ -45,6 +57,11 @@
 //         the invalidate-before-free order assertion fails.
 //    P-D  revert the iOS write callback to `passUnretained(self)` →
 //         `callbackContext.userdata` count 0 / `passUnretained(self)` present.
+//    P-E  route the paste-branch resolve through a renamed helper (the scan is
+//         exact-token: `fromOpaque(` must appear) → `routes.count → 1` and the
+//         second `complete(surface:` site fails `precedingRoutes > index`.
+//    P-F  inline `"Paste Unsafe Text?"` in the iOS presenter → the iOS
+//         literal-absence assertion fails.
 
 import Foundation
 import Testing
@@ -86,6 +103,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     private static let renderingSetupSource = "VVTerm/GhosttyTerminal/GhosttyRenderingSetup.swift"
     private static let iOSViewSource = "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift"
     private static let macOSViewSource = "VVTerm/GhosttyTerminal/GhosttyTerminalView+macOS.swift"
+    private static let iOSClipboardConfirmationSource = "VVTerm/GhosttyTerminal/Ghostty.App+ClipboardConfirmation+iOS.swift"
+    private static let macOSClipboardConfirmationSource = "VVTerm/GhosttyTerminal/Ghostty.App+ClipboardConfirmation+macOS.swift"
 
     /// The exact helper every routed callback must use.
     private static let contextRoute = "Ghostty.SurfaceCallbackContext.fromOpaque("
@@ -369,6 +388,94 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
                 "P-D: \(file) must not cast the write-callback userdata to the view"
             )
         }
+    }
+
+    // MARK: - P-E: resolve-before-complete ordering in confirmReadClipboard
+
+    /// The ordering the #327 dead-surface routing test cannot observe with
+    /// `state: nil`: every `complete(surface:` call site in
+    /// `confirmReadClipboard` must be preceded by its own `fromOpaque` resolve
+    /// guard. The k-th completion site needs at least k preceding routes, so
+    /// deleting either the deny-branch resolve or the paste-branch resolve reds
+    /// this pin (the callback may only be completed on a resolved live
+    /// surface handle).
+    @Test
+    func testPEConfirmReadClipboardResolvesBeforeEveryCompletion() throws {
+        let appText = Self.strippingComments(try source(Self.appSource))
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-E: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+
+        let routes = Self.flexibleOccurrences(
+            of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            routes.count == 2,
+            "P-E: confirmReadClipboard must resolve through the context in both branches; found \(routes.count)"
+        )
+        let completionSites = Self.flexibleOccurrences(
+            of: "complete( surface:",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            completionSites.count == 2,
+            "P-E: confirmReadClipboard must route its two completions through complete(surface:); found \(completionSites.count)"
+        )
+        for (index, site) in completionSites.enumerated() {
+            let precedingRoutes = routes.filter { $0.lowerBound < site.lowerBound }.count
+            #expect(
+                precedingRoutes > index,
+                "P-E: completion site \(index + 1) in confirmReadClipboard must be preceded by its own fromOpaque resolve guard; found \(precedingRoutes) preceding route(s)"
+            )
+        }
+    }
+
+    // MARK: - P-F: prompt title and default-button parity
+
+    /// #327 tripwire: the prompt title lives in one shared constant and each
+    /// platform presenter designates the paste action as the default button.
+    /// This freezes the parity contract the unit seam cannot observe (the
+    /// presenters are never instantiated in tests).
+    @Test
+    func testPFPlatformPresentersShareTheTitleAndDefaultButton() throws {
+        let iOS = Self.strippingComments(try source(Self.iOSClipboardConfirmationSource))
+        let macOS = Self.strippingComments(try source(Self.macOSClipboardConfirmationSource))
+
+        #expect(
+            Self.occurrences(of: "title: ClipboardConfirmationRequest.promptTitle", in: iOS).count == 1,
+            "P-F: the iOS presenter must take its alert title from the shared constant"
+        )
+        #expect(
+            Self.occurrences(of: "alert.messageText = ClipboardConfirmationRequest.promptTitle", in: macOS).count == 1,
+            "P-F: the macOS presenter must take its alert title from the shared constant"
+        )
+        for (name, text) in [("iOS", iOS), ("macOS", macOS)] {
+            #expect(
+                Self.occurrences(of: "\"Paste Unsafe Text?\"", in: text).isEmpty,
+                "P-F: the \(name) presenter must not inline the prompt title"
+            )
+        }
+
+        // Both platforms designate the paste action as the default button:
+        // iOS via `preferredAction`, macOS via the Return key equivalent on
+        // the first-added button.
+        #expect(
+            Self.occurrences(of: "preferredAction = pasteAction", in: iOS).count == 1,
+            "P-F: the iOS paste action must be the alert's preferred (default) action"
+        )
+        #expect(
+            Self.occurrences(of: "pasteButton.keyEquivalent = \"\\r\"", in: macOS).count == 1,
+            "P-F: the macOS paste button must carry the Return key equivalent"
+        )
+        #expect(
+            Self.occurrences(of: "cancelButton.keyEquivalent = \"\\u{1B}\"", in: macOS).count == 1,
+            "P-F: the macOS cancel button must keep the Escape key equivalent"
+        )
     }
 
     // MARK: - Source helpers

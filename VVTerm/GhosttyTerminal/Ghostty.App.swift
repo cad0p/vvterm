@@ -78,11 +78,21 @@ enum ClipboardConfirmationPolicy {
 struct ClipboardConfirmationRequest {
     let payload: String
 
+    /// The neutral prompt title shared by both platform presenters. One
+    /// constant, not one literal per platform, so the parity contract has a
+    /// single source of truth (source-pinned by P-F).
+    static let promptTitle = "Paste Unsafe Text?"
+
     var lineCount: Int { Self.lineCount(for: payload) }
     var promptBody: String { Self.promptBody(lineCount: lineCount) }
 
     static func lineCount(for payload: String) -> Int {
-        payload.components(separatedBy: "\n").count
+        // Count LF bytes directly. `components(separatedBy: "\n")` would
+        // materialize one substring per line for a remote-seeded payload that
+        // can be arbitrarily large, just to render a count; the byte scan is
+        // exactly equivalent for LF (0x0A can only appear as LF in UTF-8) and
+        // allocation-free.
+        1 + payload.utf8.reduce(0) { count, byte in count + (byte == 0x0A ? 1 : 0) }
     }
 
     static func promptBody(lineCount: Int) -> String {

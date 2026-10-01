@@ -901,6 +901,84 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(collector.combinedString.isEmpty)
     }
 
+    /// #327 completion-time gate: if the surface dies while the confirmation
+    /// request is in flight, the completion must be skipped. The seam runs in
+    /// the `Task` *after* the callback-frame resolve guard, so freeing the
+    /// surface there is the only place a test can invalidate the captured
+    /// handle post-capture: `cleanup()` invalidates the context and nils the
+    /// view's surface before the gate runs. Without the gate the completion
+    /// would run against the freed surface handle.
+    @Test
+    func surfaceDeathDuringTheConfirmationSeamSkipsTheCompletion() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-seam-death")
+        // `cleanup()` runs inside the seam below; this defer is the
+        // teardown-hygiene backstop (cleanup() is idempotent).
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#327-seam-death-\(UUID().uuidString)\nsecond-line"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the multi-line payload must be seeded before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { _ in
+            seamConsultations.noteInvocation()
+            // Free the surface while the request is in flight: the only window
+            // in which the captured handle can be invalidated after the
+            // callback-frame resolve guard.
+            terminal.cleanup()
+            return true
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        let consulted = await Self.waitUntil(timeout: 5.0) { seamConsultations.invocationCount == 1 }
+        #expect(consulted, "the seam must be consulted exactly once")
+        #expect(
+            surface.callbackContext.resolve() == nil,
+            "positive control: the seam must have freed the surface's context"
+        )
+
+        // The gate runs synchronously right after the seam returns, so the
+        // skip decision has already run once the seam consult is observable.
+        // Wait a bounded while anyway so a broken gate that completes on a
+        // later hop cannot escape the assertion.
+        let completed = await Self.waitUntil(timeout: 0.5) {
+            #if DEBUG
+            !GhosttyClipboardConfirmDebug.completions.isEmpty
+            #else
+            false
+            #endif
+        }
+        #expect(completed == false, "a completion into a surface freed during the prompt must be skipped")
+        #if DEBUG
+        #expect(
+            GhosttyClipboardConfirmDebug.completions.isEmpty,
+            "no completion may land after the surface died in the seam"
+        )
+        #expect(
+            GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE],
+            "the callback kind is recorded before the surface dies"
+        )
+        #endif
+        #expect(collector.combinedString.isEmpty, "no completion means nothing may be written to the terminal")
+    }
+
     /// #327 control: a safe (single-line) paste is pasted without consulting
     /// the confirmation seam at all — protection fires only on unsafe input.
     @Test
@@ -958,11 +1036,12 @@ struct GhosttySurfaceCallbackRoutingTests {
     }
 
     /// #327 copy: the prompt body is neutral, never contains the payload, and
-    /// carries the computed line count.
+    /// carries the computed line count; the shared title is the pinned value.
     @Test
     func clipboardConfirmationPromptCopyIsNeutralAndCountsLines() {
         let payload = "first-secret-line\nsecond-secret-line\n"
         let request = ClipboardConfirmationRequest(payload: payload)
+        #expect(ClipboardConfirmationRequest.promptTitle == "Paste Unsafe Text?")
         #expect(ClipboardConfirmationRequest.lineCount(for: "one") == 1)
         #expect(request.lineCount == 3)
         #expect(request.promptBody.contains("newlines or control characters"))
@@ -1051,10 +1130,15 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(directives.contains("clipboard-read = deny"))
     }
 
-    /// #327 guard ordering: a dead surface must not crash, must not consult the
-    /// seam, and must not complete anything. `state: nil` is safe here exactly
-    /// because the resolve guard returns before any state use (the accepted
-    /// dead-surface residual, tracked in the follow-up issue).
+    /// #327 dead-surface resolve path: a dead surface must not crash, must not
+    /// consult the seam, and must not complete anything; the callback kind is
+    /// recorded before the resolve guard. `state: nil` is safe here because
+    /// the production resolve guard returns before any state use. The guard
+    /// *ordering* is not observable through this test (with `state: nil`, the
+    /// `complete` helper's own nil-state guard makes the two orderings
+    /// indistinguishable); it is pinned structurally by P-E in
+    /// `GhosttySurfaceUserdataLifetimePinsTests`. Accepted dead-surface
+    /// residual, tracked in the follow-up issue.
     @Test
     func confirmReadClipboardOnADeadSurfaceSkipsWithoutCrashing() async throws {
         let app = Ghostty.App()

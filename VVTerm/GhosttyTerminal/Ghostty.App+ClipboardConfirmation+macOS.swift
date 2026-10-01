@@ -22,7 +22,7 @@ extension Ghostty.App {
         on view: GhosttyTerminalView
     ) async -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Paste Unsafe Text?"
+        alert.messageText = ClipboardConfirmationRequest.promptTitle
         alert.informativeText = request.promptBody
         alert.alertStyle = .warning
         // Upstream parity: "Paste" is the default button, "Cancel" the cancel
