@@ -32,13 +32,24 @@ struct TerminalRichPasteProbeCommandTests {
         return body.replacingOccurrences(of: "'\\''", with: "'")
     }
 
+    /// The login-shell spellings a non-login probe command must not embed.
+    /// Kept in parity with `SSHProbeShellPinsTests`' widened token family;
+    /// the primary assertion is the exact `sh -c '` wrapper prefix, and this
+    /// closes the inner-token door (e.g. a body that shells out to `sh -lc`
+    /// itself).
+    private static let loginShellSpellings = [
+        "sh -lc", "/bin/sh -lc", "sh -l -c", "sh --login",
+        "bash -lc", "zsh -lc", "dash -lc", "ksh -lc",
+        "fish -lc", "csh -lc", "tcsh -lc"
+    ]
+
     @Test
     func unixClipboardProbeRunsInANonLoginShell() {
         let command = TerminalRichPasteCoordinator.unixClipboardProbeCommand()
         let body = Self.probeBody(command)
 
         #expect(command.hasPrefix("sh -c '"))
-        #expect(!command.contains("-lc"))
+        #expect(Self.loginShellSpellings.allSatisfy { !command.contains($0) })
         #expect(body.contains("printf '%s' wayland"))
         #expect(body.contains("printf '%s' x11"))
         #expect(body.contains("printf '%s' unsupported"))
@@ -54,7 +65,7 @@ struct TerminalRichPasteProbeCommandTests {
         let body = Self.probeBody(command)
 
         #expect(command.hasPrefix("sh -c '"))
-        #expect(!command.contains("-lc"))
+        #expect(Self.loginShellSpellings.allSatisfy { !command.contains($0) })
         #expect(body.contains("printf '%s' darwin"))
         #expect(body.contains("printf '%s' unsupported"))
         #expect(command.contains("osascript"))
@@ -71,7 +82,7 @@ struct TerminalRichPasteProbeCommandTests {
         let body = Self.probeBody(command)
 
         #expect(command.hasPrefix("sh -c '"))
-        #expect(!command.contains("-lc"))
+        #expect(Self.loginShellSpellings.allSatisfy { !command.contains($0) })
         #expect(body.contains(sentinel))
         #expect(body.contains("printf '%s'"))
         #expect(body.contains(">/dev/null 2>&1"))
@@ -84,7 +95,7 @@ struct TerminalRichPasteProbeCommandTests {
         let body = Self.probeBody(command)
 
         #expect(command.hasPrefix("sh -c '"))
-        #expect(!command.contains("-lc"))
+        #expect(Self.loginShellSpellings.allSatisfy { !command.contains($0) })
         #expect(command.contains("tmp_base=\"${TMPDIR:-/tmp}\""))
         #expect(command.contains("vvterm-clipboard-XXXXXX"))
         #expect(command.contains("mktemp"))

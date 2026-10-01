@@ -10,25 +10,35 @@
 //  login-shell emitters must sit in the intentional-login allowlists below.
 //  This is the CI-enforced protection against a literal-token,
 //  login-emitter, or login-wrapper recurrence of #121 -> #323 -> #324 across
-//  the whole `VVTerm/` tree (the behavioural route cannot run on iOS).
+//  every Swift source root of the `VVTerm` app target — `VVTerm/` and
+//  `VVTermShared/` today, enumerated from `VVTerm.xcodeproj` rather than
+//  hardcoded, so a new synchronized root is swept and reddens the roots pin
+//  until it is consciously allowlisted (the behavioural route cannot run on
+//  iOS).
 //
-//  WHAT THESE PINS ASSERT (and what they do not see). Four pins, all
+//  WHAT THESE PINS ASSERT (and what they do not see). Five pins, all
 //  comment-stripping the source first:
-//    A. a recursive `.swift` scan of `VVTerm/`: the sh-family login tokens
-//       (`sh|bash|zsh|dash|ksh -lc`, whitespace-tolerant) may appear only in
-//       the Mosh 4 / Tmux 3 / Bootstrap 3 file allowlist, and the login-shell
-//       emitters (`defaultLoginShellCommand(`, `exec "${SHELL:-/bin/sh}" -l`)
-//       only in the emitter allowlist; inside the three sh-family files the
-//       token may appear only inside the enumerated function bodies, and the
-//       emitter files have a per-function/occurrence/declaration allowlist of
-//       their own.
-//    B. a recursive `.swift` scan of `VVTerm/` for the bare identifier
-//       `wrapPOSIXShellCommand`: the only files that may reference it are
-//       `RemoteEnvironmentResolver` (2 calls in `launchPlan`),
-//       `RemoteTmuxManager` (1 call in `createSessionCommand`) and
-//       `RemoteTerminalBootstrap` (the declaration); a new function or a
-//       file-scope binding inside an allowlisted file reddens, and the two
-//       clipboard files that #324 converted must stay at zero.
+//    ROOTS. the app-target scan roots themselves: the `VVTerm` native
+//       target's `fileSystemSynchronizedGroups` must be exactly `VVTerm/` +
+//       `VVTermShared/`; a new root reddens here before a probe in it can
+//       hide.
+//    A. a recursive `.swift` scan of every app-target root: the login tokens
+//       (a shell name followed by a login flag, whitespace-tolerant — this
+//       covers `sh -lc`, `sh -l -c`, `sh --login -c`, `fish -lc`, `csh -lc`)
+//       may appear only in the Mosh 4 / Tmux 3 / Bootstrap 6 file allowlist,
+//       and the login-shell emitters (`defaultLoginShellCommand(`,
+//       `exec "${SHELL:-/bin/sh}" -l`) only in the emitter allowlist; inside
+//       the three login-shell files the token may appear only inside the
+//       enumerated function bodies, and the emitter files have a
+//       per-function/occurrence/declaration allowlist of their own.
+//    B. a recursive `.swift` scan of every app-target root for the call form
+//       `wrapPOSIXShellCommand(` (whitespace-tolerant before the paren): the
+//       only files that may call it are `RemoteEnvironmentResolver` (2 calls
+//       in `launchPlan`), `RemoteTmuxManager` (1 call in
+//       `createSessionCommand`) and `RemoteTerminalBootstrap` (the
+//       declaration); a new function or a file-scope binding inside an
+//       allowlisted file reddens, and the two clipboard files that #324
+//       converted must stay at zero.
 //    C. the converted files: `wrapPOSIXProbeCommand(` occurrence counts are
 //       exact per file (this covers the five `static let` commands and
 //       multi-call functions), `wrapPOSIXShellCommand` is at zero, and every
@@ -38,6 +48,10 @@
 //    D. the wrapper itself: `wrapPOSIXProbeCommand`'s output keeps the
 //       `sh -c '` prefix and carries the curated system PATH export
 //       (`shellSystemPathExport()`), and its source body injects that export.
+//    E. the full user PATH (`shellPathExport()`, which puts
+//       `$HOME/.local/bin` first): only the enumerated pre-#324 bodies may
+//       self-export it; a body converted by #324 must not re-add it, or it
+//       would re-promote `$HOME/.local/bin` ahead of the curated system dirs.
 //
 //  A renamed function reddens the exact-name comparisons (a deliberate
 //  tripwire, not a silent pass); a token moved to a new function reddens the
@@ -46,12 +60,16 @@
 //  block walk (balanced in these files today), a default-argument closure
 //  would make the walk bind the wrong block, raw strings (`#"..."#`) are not
 //  recognized by the comment stripper, comments inside an interpolation are
-//  not stripped, a login-shell token assembled at runtime is invisible, an
-//  aliased wrapper reference (`let wrap = …wrapPOSIXShellCommand; wrap(x)`)
-//  is caught only at the binding, and a wrapper call built through a
-//  dynamically constructed identifier is invisible. A commented-out token
-//  cannot satisfy the pins (comments are stripped). Any intentional login
-//  site added later must be added to the allowlists below deliberately.
+//  not stripped, a login-shell token assembled at runtime is invisible, a
+//  wrapper reference bound without a call
+//  (`let wrap = …wrapPOSIXShellCommand; wrap(x)`) and a wrapper call whose
+//  call text is assembled from concatenated identifier pieces
+//  (`"wrapPOSIX" + "ShellCommand("`) are invisible to the call-form scan, and
+//  a dead-branch builder call (`if false { _ = wrapPOSIXProbeCommand(body) }`)
+//  satisfies pin C's builder-call assertion as long as the file-level count
+//  is preserved. A commented-out token cannot satisfy the pins (comments are
+//  stripped). Any intentional login site added later must be added to the
+//  allowlists below deliberately.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the suite at a
 //  mutated tree. Measured in `SSHExecGateLivenessPinsTests` on this runner: a
@@ -90,20 +108,97 @@ struct SSHProbeShellPinsTests {
         )
     }
 
-    /// Every `.swift` file under `VVTerm/`, as repository-relative paths,
-    /// recursively. The scan root and its subdirectories are the fail-closed
-    /// scope: a new file anywhere in the app target must be consciously
-    /// allowlisted before it can emit a login shell or reference the login
-    /// wrapper.
-    private func allSwiftFiles() -> [String] {
-        let directory = repositoryRoot().appendingPathComponent("VVTerm")
-        guard let enumerator = FileManager.default.enumerator(atPath: directory.path) else {
+    /// The Swift source roots that compile into the `VVTerm` app target,
+    /// enumerated live from `VVTerm.xcodeproj`: the root groups in the
+    /// `VVTerm` native target's `fileSystemSynchronizedGroups`. Today this is
+    /// exactly `["VVTerm", "VVTermShared"]`.
+    /// `testAppTargetSweepRootsArePinned` fails closed when the set changes,
+    /// and `allSwiftFiles()` sweeps every enumerated root, so a probe cannot
+    /// enter the module through an unwatched root — the new root is swept
+    /// before it is allowlisted.
+    private static let expectedAppTargetSourceRoots = ["VVTerm", "VVTermShared"]
+
+    /// The app target's Swift source roots, read from the Xcode project. An
+    /// empty result (project unreadable, target not found) fails the roots
+    /// pin and the sweep's missing-file checks, never a vacuous pass.
+    private func appTargetSourceRoots() -> [String] {
+        let projectURL = repositoryRoot()
+            .appendingPathComponent("VVTerm.xcodeproj/project.pbxproj")
+        guard let project = try? String(contentsOf: projectURL, encoding: .utf8) else {
             return []
         }
+
+        var pathsByGroupID: [String: String] = [:]
+        for group in Self.pbxEntries(in: project, isa: "PBXFileSystemSynchronizedRootGroup") {
+            guard let path = Self.pbxValue(forKey: "path", in: group.body) else { continue }
+            pathsByGroupID[group.id] = path
+        }
+
+        for target in Self.pbxEntries(in: project, isa: "PBXNativeTarget") {
+            guard Self.pbxValue(forKey: "name", in: target.body) == "VVTerm",
+                  let groups = Self.pbxValue(forKey: "fileSystemSynchronizedGroups", in: target.body)
+            else { continue }
+            return Self.hexIdentifiers(in: groups)
+                .compactMap { pathsByGroupID[$0] }
+                .sorted()
+        }
+        return []
+    }
+
+    /// Every `id = { … }` entry in `project` whose body declares
+    /// `isa = <isa>;`.
+    private static func pbxEntries(
+        in project: String,
+        isa: String
+    ) -> [(id: String, body: String)] {
+        let pattern = #"([0-9A-F]{24})[^=]*= \{([^}]*)\}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(project.startIndex..<project.endIndex, in: project)
+        return regex.matches(in: project, range: range).compactMap { match in
+            guard let idRange = Range(match.range(at: 1), in: project),
+                  let bodyRange = Range(match.range(at: 2), in: project)
+            else { return nil }
+            let body = String(project[bodyRange])
+            guard body.contains("isa = \(isa);") else { return nil }
+            return (String(project[idRange]), body)
+        }
+    }
+
+    /// The value of a `key = value;` assignment inside a PBX entry body.
+    private static func pbxValue(forKey key: String, in body: String) -> String? {
+        guard let start = body.range(of: "\(key) = "),
+              let end = body[start.upperBound...].firstIndex(of: ";")
+        else { return nil }
+        return String(body[start.upperBound..<end])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Every 24-hex-character PBX identifier in `text`.
+    private static func hexIdentifiers(in text: String) -> [String] {
+        let pattern = #"[0-9A-F]{24}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
+        }
+    }
+
+    /// Every `.swift` file under every app-target source root (see
+    /// `appTargetSourceRoots()`), as repository-relative paths, recursively.
+    /// The swept roots are the fail-closed scope: a new file anywhere in the
+    /// app target must be consciously allowlisted before it can emit a login
+    /// shell or reference the login wrapper.
+    private func allSwiftFiles() -> [String] {
         var result: [String] = []
-        while let relativePath = enumerator.nextObject() as? String {
-            guard relativePath.hasSuffix(".swift") else { continue }
-            result.append("VVTerm/\(relativePath)")
+        for root in appTargetSourceRoots() {
+            let directory = repositoryRoot().appendingPathComponent(root)
+            guard let enumerator = FileManager.default.enumerator(atPath: directory.path) else {
+                continue
+            }
+            while let relativePath = enumerator.nextObject() as? String {
+                guard relativePath.hasSuffix(".swift") else { continue }
+                result.append("\(root)/\(relativePath)")
+            }
         }
         return result.sorted()
     }
@@ -124,6 +219,8 @@ struct SSHProbeShellPinsTests {
     ///   `sendScript`, not an exec probe.
     /// - `cleanupLegacySessions` — fire-and-forget legacy cleanup.
     /// - `killSessionCommand` — fire-and-forget session kill.
+    /// - `defaultLoginShellCommand` — the interactive `exec bash -l` /
+    ///   `exec zsh -l` / `exec sh -l` fallback chain.
     /// - `wrapPOSIXShellCommand` — the intentional login wrapper itself.
     /// - `unwrapPOSIXShellInvocationIfNeeded` — parses those prefixes from a
     ///   user startup command; it is not an emitter.
@@ -139,18 +236,21 @@ struct SSHProbeShellPinsTests {
             "killSessionCommand"
         ],
         "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": [
+            "defaultLoginShellCommand",
             "unwrapPOSIXShellInvocationIfNeeded",
             "wrapPOSIXShellCommand"
         ]
     ]
 
-    /// Occurrence counts of the sh-family login tokens, the 9 sites of #323
-    /// plan section 4.3: Mosh 110/112/134/154; Tmux 381/416/1062; Bootstrap
-    /// 187/315 (the parser prefix array holds two tokens on one line).
+    /// Occurrence counts of the login tokens at the widened family: Mosh
+    /// 110/112/134/154; Tmux 381/416/1062; Bootstrap 156/157/158 (`exec
+    /// bash|zsh|sh -l` in `defaultLoginShellCommand`), 187 (`/bin/sh -lc` in
+    /// `wrapPOSIXShellCommand`), 315 (the parser prefix array holds two tokens
+    /// on one line).
     private static let expectedLoginShellOccurrences: [String: Int] = [
         "VVTerm/Core/SSH/RemoteMoshManager.swift": 4,
         "VVTerm/Core/SSH/RemoteTmuxManager.swift": 3,
-        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 3
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 6
     ]
 
     /// The login-shell emitters that are not `-lc` literals but still hand a
@@ -205,9 +305,9 @@ struct SSHProbeShellPinsTests {
     /// (`RemoteTerminalBootstrap.wrapPOSIXShellCommand`). A login *token*
     /// scan cannot see `wrapPOSIXShellCommand(body)`, so this is the allowlist
     /// that catches a new probe adopting the login wrapper. The scan looks for
-    /// the bare identifier (not the `(`-suffixed form), so a
-    /// `wrapPOSIXShellCommand (body)` spelling and a direct-form alias binding
-    /// are visible too.
+    /// the call form `wrapPOSIXShellCommand(` (whitespace-tolerant before the
+    /// paren), so a preserved-count string literal cannot stand in for a
+    /// call.
     ///
     /// - `RemoteTmuxManager.createSessionCommand` — builds the interactive
     ///   terminal window's login shell (the intentional login site at
@@ -240,6 +340,14 @@ struct SSHProbeShellPinsTests {
         "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 1,
         "VVTerm/Core/SSH/RemoteTmuxManager.swift": 0
     ]
+
+    /// Pin B's reference form: the call, tolerating Swift-legal whitespace
+    /// before the open paren. Scanning the call form (rather than the bare
+    /// identifier) stops a preserved-count string literal from satisfying the
+    /// occurrence pins; a reference bound without a call and a call text
+    /// assembled from concatenated identifier pieces are the remaining
+    /// defeats (see the header).
+    private static let loginWrapperCallPattern = #"wrapPOSIXShellCommand\s*\("#
 
     // MARK: - Pin C allowlists
 
@@ -294,13 +402,100 @@ struct SSHProbeShellPinsTests {
         ("VVTerm/Features/Stats/Infrastructure/Platforms/UnixProcessTelemetry.swift", "collect")
     ]
 
+    // MARK: - Pin E allowlists
+
+    /// The only functions allowed to call the *full* `shellPathExport()` — the
+    /// PATH that puts `$HOME/.local/bin` first. Since #324 the wrapper injects
+    /// only the curated *system* PATH, so a parsed-probe body that needs a
+    /// user-local binary must self-export deliberately. The policy (plan
+    /// §3.1) is that only bodies which predate the wrapper's PATH injection
+    /// may do so:
+    ///
+    /// - the #323-converted tmux/mosh probe builders that resolve
+    ///   `mosh-server`/`tmux` candidates
+    ///   (`RemoteMoshManager.availabilityProbeCommand`;
+    ///   `RemoteTmuxManager.sessionPresenceProbeCommand`,
+    ///   `tmuxAvailabilityProbeCommand`, `listSessionCommands`,
+    ///   `currentPathCommand`) plus
+    ///   `RemoteEnvironmentResolver.posixEnvironmentProbeCommand`;
+    /// - `SSHETBootstrapExecutor.remoteBootstrapCommand` (`etterminal` lives
+    ///   in `$HOME/.local/bin`);
+    /// - the interactive / install / bootstrap scripts that are not
+    ///   wrapper-built parsed probes (`RemoteMoshManager.bootstrapCommand`,
+    ///   `installScript`; `RemoteTmuxManager.installAndAttachScript`,
+    ///   `cleanupLegacySessions`, `attachExistingBody`, `killSessionCommand`;
+    ///   `RemoteTerminalTypeResolver.probeCommand`, `installCommand`).
+    ///
+    /// A body converted by #324 must not be added: re-adding the export would
+    /// re-promote `$HOME/.local/bin` ahead of the system dirs for a probe that
+    /// does not need it — the exact defect the wrapper's system-only PATH
+    /// closes.
+    private static let expectedShellPathExportSites: [String: [String]] = [
+        "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift": ["posixEnvironmentProbeCommand"],
+        "VVTerm/Core/SSH/RemoteMoshManager.swift": [
+            "availabilityProbeCommand",
+            "bootstrapCommand",
+            "installScript"
+        ],
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": [],
+        "VVTerm/Core/SSH/RemoteTerminalTypeResolver.swift": [
+            "installCommand",
+            "probeCommand"
+        ],
+        "VVTerm/Core/SSH/RemoteTmuxManager.swift": [
+            "attachExistingBody",
+            "cleanupLegacySessions",
+            "currentPathCommand",
+            "installAndAttachScript",
+            "killSessionCommand",
+            "listSessionCommands",
+            "sessionPresenceProbeCommand",
+            "tmuxAvailabilityProbeCommand"
+        ],
+        "VVTerm/Features/TerminalSessions/Infrastructure/SSHETBootstrapExecutor.swift": [
+            "remoteBootstrapCommand"
+        ]
+    ]
+
+    /// `shellPathExport(` occurrences inside the enumerated function bodies —
+    /// `listSessionCommands` builds three candidate commands, everything else
+    /// one.
+    private static let expectedShellPathExportOccurrences: [String: Int] = [
+        "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift": 1,
+        "VVTerm/Core/SSH/RemoteMoshManager.swift": 3,
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 0,
+        "VVTerm/Core/SSH/RemoteTerminalTypeResolver.swift": 2,
+        "VVTerm/Core/SSH/RemoteTmuxManager.swift": 10,
+        "VVTerm/Features/TerminalSessions/Infrastructure/SSHETBootstrapExecutor.swift": 1
+    ]
+
+    /// `shellPathExport(` references that legitimately sit *outside* a `func`
+    /// body: only the declaration itself. A computed property or file-scope
+    /// binding must redden the pin.
+    private static let expectedShellPathExportDeclarations: [String: Int] = [
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 1
+    ]
+
     // MARK: - Pins
 
+    /// The roots pin (fail-closed scan scope): the sweep must cover every
+    /// Swift root that compiles into the `VVTerm` app target. If the Xcode
+    /// project grows a synchronized root, this reddens and `allSwiftFiles()`
+    /// already sweeps it — the new root is scanned before it is trusted.
+    @Test
+    func testAppTargetSweepRootsArePinned() {
+        let roots = appTargetSourceRoots()
+        #expect(
+            roots == Self.expectedAppTargetSourceRoots,
+            "the VVTerm app target's synchronized Swift roots are \(roots); a new root must be consciously added to expectedAppTargetSourceRoots (it is already swept, this is the tripwire)"
+        )
+    }
+
     /// Pin A (#323/#324): login-shell tokens and emitters live only in the
-    /// intentional-login allowlists, recursively across `VVTerm/`.
+    /// intentional-login allowlists, recursively across every app-target root.
     @Test
     func testOnlyAllowlistedSitesEmitLoginShellTokensOrEmitters() throws {
-        let files = try allSwiftFiles()
+        let files = allSwiftFiles()
 
         // The recursive, fail-closed sweep: a new file (or a new literal in an
         // existing file) cannot adopt login semantics silently.
@@ -409,15 +604,16 @@ struct SSHProbeShellPinsTests {
         )
     }
 
-    /// Pin B (#324): the only files that may reference the *login* wrapper are
-    /// the three intentional-login files, and inside them only the enumerated
+    /// Pin B (#324): the only files that may call the *login* wrapper are the
+    /// three intentional-login files, and inside them only the enumerated
     /// functions may call it. This is the pin the literal-token scan cannot
     /// be: a new probe written as `wrapPOSIXShellCommand(body)` carries no
-    /// literal `sh -lc`. The scan uses the bare identifier, so a whitespace
-    /// variant or an alias binding is visible.
+    /// literal `sh -lc`. The scan uses the call form
+    /// `wrapPOSIXShellCommand(` (whitespace-tolerant before the paren), so a
+    /// preserved-count string literal cannot stand in for a call.
     @Test
     func testOnlyAllowlistedFilesAndFunctionsReferenceTheLoginWrapper() throws {
-        let files = try allSwiftFiles()
+        let files = allSwiftFiles()
         let knownFiles = Set(Self.expectedLoginWrapperSites.keys)
         let missing = knownFiles.subtracting(files)
         #expect(
@@ -427,10 +623,10 @@ struct SSHProbeShellPinsTests {
 
         for path in files {
             let text = Self.strippingComments(try source(path))
-            if text.range(of: "wrapPOSIXShellCommand") != nil {
+            if Self.loginWrapperCallCount(in: text) > 0 {
                 #expect(
                     Self.expectedLoginWrapperSites[path] != nil,
-                    "\(path): a login-wrapper reference must be consciously allowlisted"
+                    "\(path): a login-wrapper call must be consciously allowlisted"
                 )
             }
         }
@@ -447,7 +643,7 @@ struct SSHProbeShellPinsTests {
             }
 
             let callers = bodies
-                .filter { text.range(of: "wrapPOSIXShellCommand", range: $0.body) != nil }
+                .filter { Self.loginWrapperCallCount(in: text, range: $0.body) > 0 }
                 .map(\.name)
                 .sorted()
             #expect(
@@ -456,26 +652,19 @@ struct SSHProbeShellPinsTests {
             )
 
             let insideBodyOccurrences = bodies.reduce(0) { count, body in
-                count + Self.occurrences(
-                    of: "wrapPOSIXShellCommand",
-                    in: text,
-                    range: body.body
-                ).count
+                count + Self.loginWrapperCallCount(in: text, range: body.body)
             }
             #expect(
                 insideBodyOccurrences == Self.expectedLoginWrapperOccurrences[path],
                 "\(path): the login-wrapper call count must stay \(Self.expectedLoginWrapperOccurrences[path] ?? -1)"
             )
 
-            // The whole-file-vs-body mirror: a wrapper reference *outside* a
+            // The whole-file-vs-body mirror: a wrapper call *outside* a
             // `func` body (a computed property, a file-scope binding) would
             // otherwise pass this pin and the recursive sweep, because the
             // file is already in the known-wrapper set. The only reference
             // legitimately outside a body is the declaration itself.
-            let wholeFileOccurrences = Self.occurrences(
-                of: "wrapPOSIXShellCommand",
-                in: text
-            ).count
+            let wholeFileOccurrences = Self.loginWrapperCallCount(in: text)
             #expect(
                 wholeFileOccurrences - insideBodyOccurrences
                     == Self.expectedLoginWrapperDeclarations[path],
@@ -547,6 +736,69 @@ struct SSHProbeShellPinsTests {
             text.range(of: "shellSystemPathExport()", range: body.body) != nil,
             "\(path): wrapPOSIXProbeCommand must inject shellSystemPathExport() itself"
         )
+    }
+
+    /// Pin E (#324): the full user PATH export (`shellPathExport()`, which
+    /// puts `$HOME/.local/bin` first) is allowed only in the enumerated
+    /// pre-#324 bodies. The wrapper injects the curated system PATH; a body
+    /// converted by #324 that re-adds `shellPathExport()` would re-promote
+    /// `$HOME/.local/bin` ahead of the system dirs, which is the defect this
+    /// pin keeps closed.
+    @Test
+    func testOnlyAllowlistedBodiesSelfExportTheUserLocalPath() throws {
+        let files = allSwiftFiles()
+        let knownFiles = Set(Self.expectedShellPathExportSites.keys)
+        let missing = knownFiles.subtracting(files)
+        #expect(
+            missing.isEmpty,
+            "the recursive sweep missed known self-exporting files \(missing.sorted()) — the sweep root is wrong, or a pinned file was moved"
+        )
+
+        for path in files {
+            let text = Self.strippingComments(try source(path))
+            if text.range(of: "shellPathExport(") != nil {
+                #expect(
+                    Self.expectedShellPathExportSites[path] != nil,
+                    "\(path): only an allowlisted pre-#324 body may call shellPathExport() — it re-promotes $HOME/.local/bin ahead of the system dirs"
+                )
+            }
+        }
+
+        for (path, allowed) in Self.expectedShellPathExportSites {
+            let text = Self.strippingComments(try source(path))
+            let bodies = try Self.functionBodies(in: text)
+
+            for name in allowed {
+                #expect(
+                    bodies.filter { $0.name == name }.count == 1,
+                    "\(path): the allowlisted `\(name)` must resolve to exactly one function body"
+                )
+            }
+
+            let callers = bodies
+                .filter { Self.occurrences(of: "shellPathExport(", in: text, range: $0.body).isEmpty == false }
+                .map(\.name)
+                .sorted()
+            #expect(
+                callers == allowed.sorted(),
+                "\(path): shellPathExport() callers must be exactly \(allowed.sorted()), got \(callers)"
+            )
+
+            let insideBodyOccurrences = bodies.reduce(0) { count, body in
+                count + Self.occurrences(of: "shellPathExport(", in: text, range: body.body).count
+            }
+            #expect(
+                insideBodyOccurrences == Self.expectedShellPathExportOccurrences[path],
+                "\(path): the in-body shellPathExport() call count must stay \(Self.expectedShellPathExportOccurrences[path] ?? -1)"
+            )
+
+            let wholeFileOccurrences = Self.occurrences(of: "shellPathExport(", in: text).count
+            #expect(
+                wholeFileOccurrences - insideBodyOccurrences
+                    == (Self.expectedShellPathExportDeclarations[path] ?? 0),
+                "\(path): \(wholeFileOccurrences - insideBodyOccurrences) shellPathExport() reference(s) outside a func body; only the declaration in RemoteTerminalBootstrap.swift is allowed"
+            )
+        }
     }
 
     // MARK: - Source helpers
@@ -649,11 +901,15 @@ struct SSHProbeShellPinsTests {
         return result
     }
 
-    /// The sh-family login-token pattern. `\s+` keeps `sh  -lc` and `sh\n-lc`
-    /// caught without a whitespace-collapsed copy; `\b` is a strict superset
+    /// The login-token pattern: a shell name followed by a login flag, either
+    /// a short-flag cluster containing `l` (`-lc`, `-l`, `-il`, …) or
+    /// `--login`. `\s+` keeps `sh  -lc` and `sh\n-lc` caught without a
+    /// whitespace-collapsed copy; the widened family also catches `sh -l -c`,
+    /// `sh --login -c`, `fish -lc` and `csh -lc`; `\b` is a strict superset
     /// of the plan's `(^|[\s/])` prefix, so a token opening a string literal
     /// (`"sh -lc `) is caught as well as one after a path slash.
-    private static let loginShellTokenPattern = #"\b(sh|bash|zsh|dash|ksh)\s+-lc\b"#
+    private static let loginShellTokenPattern =
+        #"\b(sh|bash|zsh|dash|ksh|fish|csh|tcsh)\s+(?:-[A-Za-z]*l[A-Za-z]*\b|--login\b)"#
 
     /// The number of regex matches for `pattern` in `text` (optionally inside
     /// `range`), in source order.
@@ -694,6 +950,15 @@ struct SSHProbeShellPinsTests {
         Self.loginShellEmitterPatterns.reduce(0) { count, pattern in
             count + Self.patternCount(pattern, in: text, range: range)
         }
+    }
+
+    /// The number of login-wrapper calls in `text` (optionally inside
+    /// `range`): the call form, whitespace-tolerant before the open paren.
+    private static func loginWrapperCallCount(
+        in text: String,
+        range: Range<String.Index>? = nil
+    ) -> Int {
+        Self.patternCount(Self.loginWrapperCallPattern, in: text, range: range)
     }
 
     /// A `func` declaration's body span and its name.
