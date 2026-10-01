@@ -4,7 +4,7 @@
 //  VVTermTests
 //
 //  Placement pins for #323 ("run the tmux/mosh capability probes in non-login
-//  shells"): the four converted builders must call
+//  shells"): the five pinned capability-probe builders must call
 //  `RemoteTerminalBootstrap.wrapPOSIXProbeCommand`, and every remaining
 //  `sh -lc` / `/bin/sh -lc` in the three files that build remote commands must
 //  sit in the intentional-login allowlist below. This is the CI-enforced
@@ -18,7 +18,7 @@
 //    1. the set of `func` bodies emitting a login-shell token in the three
 //       pinned files equals the intentional-login allowlist, and the token
 //       count matches;
-//    2. the four converted capability-probe builders call
+//    2. the five pinned capability-probe builders call
 //       `wrapPOSIXProbeCommand`;
 //    3. the terminal-type resolver references neither a login token nor the
 //       login wrapper;
@@ -95,7 +95,7 @@ struct SSHProbeShellPinsTests {
     /// intended or required at every site:
     ///
     /// - `bootstrapCommand` — the mosh child startup deliberately launches the
-    ///   user's login shell (lines 104 and 106 of the two wrapper layers).
+    ///   user's login shell (lines 110 and 112 of the two wrapper layers).
     /// - `terminationCommand` — fire-and-forget server cleanup.
     /// - `installMoshServer` — user-initiated install action; it does
     ///   marker-parse, but keeps login semantics for package-manager
@@ -125,7 +125,7 @@ struct SSHProbeShellPinsTests {
     ]
 
     /// Occurrence counts (`sh -lc` also matches `/bin/sh -lc`), the 9 sites of
-    /// plan section 4.3: Mosh 104/106/128/148; Tmux 381/416/1053; Bootstrap
+    /// plan section 4.3: Mosh 110/112/134/154; Tmux 381/416/1062; Bootstrap
     /// 187/315 (the parser prefix array holds two tokens on one line).
     private static let expectedLoginShellOccurrences: [String: Int] = [
         "VVTerm/Core/SSH/RemoteMoshManager.swift": 4,
@@ -180,6 +180,20 @@ struct SSHProbeShellPinsTests {
         "VVTerm/Core/SSH/RemoteTmuxManager.swift": 1,
         "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 0,
         "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift": 2,
+        "VVTerm/Core/SSH/RemoteTerminalTypeResolver.swift": 0
+    ]
+
+    /// The number of `wrapPOSIXShellCommand(` references that legitimately sit
+    /// *outside* a `func` body. Only the declaration itself qualifies; a
+    /// reference anywhere else — a computed property, a file-scope binding —
+    /// must redden pin 4, because the file is already in the known-wrapper set
+    /// and the directory inventory therefore lets it through (the closure
+    /// lens measured exactly that silent pass on `2516aa4f`).
+    private static let expectedLoginWrapperDeclarations: [String: Int] = [
+        "VVTerm/Core/SSH/RemoteMoshManager.swift": 0,
+        "VVTerm/Core/SSH/RemoteTmuxManager.swift": 0,
+        "VVTerm/Core/SSH/RemoteTerminalBootstrap.swift": 1,
+        "VVTerm/Core/SSH/RemoteEnvironmentResolver.swift": 0,
         "VVTerm/Core/SSH/RemoteTerminalTypeResolver.swift": 0
     ]
 
@@ -242,7 +256,7 @@ struct SSHProbeShellPinsTests {
         }
     }
 
-    /// Pin 2 (#323): the four converted capability-probe builders must keep
+    /// Pin 2 (#323): the five pinned capability-probe builders must keep
     /// using the non-login wrapper. A re-inlined `sh -lc` also reddens Pin 1,
     /// but this pin names the builder.
     @Test
@@ -322,6 +336,22 @@ struct SSHProbeShellPinsTests {
                 insideBodyOccurrences == Self.expectedLoginWrapperOccurrences[path],
                 "\(path): the login-wrapper call count must stay \(Self.expectedLoginWrapperOccurrences[path] ?? -1)"
             )
+
+            // The whole-file-vs-body mirror of pin 1: a wrapper reference
+            // *outside* a `func` body (a computed property, a file-scope
+            // binding) would otherwise pass this pin and the directory
+            // inventory, because the file is already in the known-wrapper set.
+            // The only reference legitimately outside a body is the
+            // declaration itself.
+            let wholeFileOccurrences = Self.occurrences(
+                of: "wrapPOSIXShellCommand(",
+                in: text
+            ).count
+            #expect(
+                wholeFileOccurrences - insideBodyOccurrences
+                    == Self.expectedLoginWrapperDeclarations[path],
+                "\(path): \(wholeFileOccurrences - insideBodyOccurrences) login-wrapper reference(s) outside a func body; only the declaration in RemoteTerminalBootstrap.swift is allowed (a computed property or file-scope binding must be pinned explicitly)"
+            )
         }
     }
 
@@ -333,9 +363,21 @@ struct SSHProbeShellPinsTests {
     @Test
     func testCommandBuilderDirectoryInventoryIsExplicit() throws {
         let files = try commandBuilderFiles()
+        // The primary sweep check is that every known command-builder file is
+        // present: a bare count bound reddens a legitimate move-out with a
+        // message naming the wrong cause (the closure lens measured that with
+        // three unrelated files removed). The count stays as a secondary sanity
+        // check on the sweep root.
+        let knownFiles = Set(Self.pinnedCommandBuilderFiles)
+            .union(Self.expectedLoginWrapperSites.keys)
+        let missing = knownFiles.subtracting(files)
         #expect(
-            files.count >= 20,
-            "the directory sweep must actually enumerate VVTerm/Core/SSH (got \(files.count) files)"
+            missing.isEmpty,
+            "the directory sweep missed known command-builder files \(missing.sorted()) — the sweep root is wrong, or a pinned file was moved"
+        )
+        #expect(
+            files.count >= knownFiles.count,
+            "the sweep enumerated \(files.count) files, fewer than the \(knownFiles.count) known command-builder files — the sweep root is wrong"
         )
 
         for path in files {
