@@ -183,8 +183,23 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// A browser session whose `start()` returned false can never deliver an
     /// approval, so the ceremony must fail fast with `.safariFailed` instead
     /// of waiting out the 180 s listener deadline (A7). The run is raced
-    /// against a 2 s timer so the counterfactual (the guard reverted) fails
-    /// cleanly instead of hanging to the job's execution allowance.
+    /// against `failFastBudget` so the counterfactual (the guard reverted)
+    /// fails cleanly instead of hanging to the job's execution allowance.
+    ///
+    /// Host-state tolerance, not retry machinery: the budget is 30 s, not the
+    /// 2 s this test originally raced with. `BrowserMFACeremony` is
+    /// `@MainActor`, and on a loaded simulator runner its first MainActor hop
+    /// can be delayed far past 2 s — measured 2026-10-01 (PR #326, required
+    /// `unit-tests` job of run 36888810089): the ceremony's own logs show it
+    /// reached the challenge ~16 s after the test started, so the timer won
+    /// and `failedFast` came back false while the guard itself was intact.
+    /// 30 s still discriminates hard against the 180 s listener deadline the
+    /// guard exists to avoid, and the counterfactual still fails cleanly:
+    /// `run.cancel()` is honoured by the ceremony's listener wait, so that
+    /// failure lands at the budget, not at the job's 180 s allowance.
+    /// Escalation (recorded, not implied): if a stall ever survives 30 s, the
+    /// next step is a structural gate on the ceremony's progress, not another
+    /// increase.
     func testCeremonyFailsFastWhenTheBrowserSessionDidNotStart() async {
         let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
         let presenter = NotStartedBrowserMFAPresenter()
@@ -211,7 +226,7 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
                 }
             }
             group.addTask {
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: Self.failFastBudget)
                 run.cancel()
                 return false
             }
@@ -229,6 +244,10 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
             "the ceremony's defer must cancel the not-started session"
         )
     }
+
+    /// The host-state-tolerant budget for the fail-fast race above. See that
+    /// test's doc comment for the measurement and the escalation rule.
+    private static let failFastBudget: Duration = .seconds(30)
 
     /// A gRPC stub that answers the challenge request with a real
     /// `BrowserMFAChallenge` so the ceremony proceeds to the Safari step.

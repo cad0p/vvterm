@@ -91,7 +91,7 @@ nonisolated enum StorageHealthTargetResolver {
             printf '%s\n' '\(resolutionToolMissingMarker)'
         fi
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func parseLinuxResolution(
@@ -194,7 +194,7 @@ nonisolated enum StorageHealthTargetResolver {
             printf '%s\n' '\(resolutionToolMissingMarker)'
         fi
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func zfsDiscoveryCommand(source: String, mountPoint: String) -> String? {
@@ -220,7 +220,7 @@ nonisolated enum StorageHealthTargetResolver {
             printf '%s\n' '\(resolutionToolMissingMarker)'
         fi
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func linuxDeviceResolutionCommand(devicePath: String) -> String? {
@@ -236,7 +236,7 @@ nonisolated enum StorageHealthTargetResolver {
             printf '%s\n' '\(resolutionToolMissingMarker)'
         fi
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     private static func resolveLinuxArray(
@@ -399,7 +399,7 @@ nonisolated enum StorageHealthTargetResolver {
             printf '%s\n' '\(resolutionToolMissingMarker)'
         fi
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func parseDarwinDiskInfo(_ output: String) -> DarwinDiskInfoResolution? {
@@ -682,7 +682,7 @@ nonisolated enum StorageHealthTargetResolver {
             printf '%s\n' '\(resolutionToolMissingMarker)'
         fi
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     static func parseBSDResolution(

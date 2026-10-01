@@ -187,31 +187,39 @@ enum RemoteTerminalBootstrap {
         "/bin/sh -lc \(doubleQuotedShellArgument(script))"
     }
 
-    /// Non-login POSIX wrapper for parsed capability probes (remote
-    /// environment / terminal type detection, tmux/mosh availability, tmux
-    /// session presence/list/path). Unlike `wrapPOSIXShellCommand`, it never
-    /// sources the account's login profile (`/etc/profile` + `~/.profile`),
-    /// so a login hook (e.g. tmux/zmx auto-attach) cannot fire inside the
-    /// probe's exec channel and swallow or interleave with its parsed output.
-    /// The SSH server's outer `$SHELL -c` startup files are outside this
-    /// wrapper.
+    /// Non-login POSIX wrapper for parsed probes (remote environment /
+    /// terminal type detection, tmux/mosh availability, tmux session
+    /// presence/list/path, clipboard capability/seed/temp-path, storage-health
+    /// and stats collection, and the Eternal Terminal bootstrap check). Unlike
+    /// `wrapPOSIXShellCommand`, it never sources the account's login profile
+    /// (`/etc/profile` + `~/.profile`), so a login hook (e.g. tmux/zmx
+    /// auto-attach) cannot fire inside the probe's exec channel and swallow or
+    /// interleave with its parsed output. The SSH server's outer `$SHELL -c`
+    /// startup files are outside this wrapper.
     ///
-    /// PATH trade-off: `sh -c` keeps the body's curated `shellPathValue()`
-    /// prefix plus the inherited `$PATH` tail, but a tool installed only via
-    /// a profile-managed toolchain (nix/asdf/mise/linuxbrew) is no longer
-    /// discovered. The tmux candidate list is a detection fallback, not a
-    /// discovery mechanism, and the mosh availability probe has no candidate
-    /// fallback. No live regression is demonstrable: the tmux session probes
-    /// only run for a backend the already-non-login availability probe
-    /// resolved, every candidate directory is a subset of `shellPathValue()`,
-    /// and the mosh availability probe is unwired. Both wrappers execute the
-    /// same body, whose `export PATH=...` puts the curated prefix first, so
-    /// `-l` only contributes the profile-modified tail; switching to `-c` can
-    /// drop tail entries, never promote one ahead of the curated prefix (the
-    /// pre-existing `$HOME/.local/bin` priority is unchanged, so the
-    /// binary-hijack exposure is neutral-to-reduced).
+    /// PATH policy: the wrapper itself prepends the curated *system*
+    /// `shellSystemPathExport()` (the `shellPathValue()` list minus
+    /// `$HOME/.local/bin`), so every wrapper-built probe resolves the standard
+    /// tool locations without each body carrying a PATH edit, and a
+    /// `$HOME/.local/bin` binary can never be promoted ahead of `/usr/bin` for
+    /// a probe that does not need it. A body that genuinely needs a user-local
+    /// binary (`etterminal`, the tmux/mosh candidates) keeps its own full
+    /// `shellPathExport()`: the wrapper export runs first, the body's own
+    /// export still wins the first position, and the body's source is
+    /// unchanged — the effective PATH is the body's own prefix, then the
+    /// wrapper's system list, then the inherited tail, so the system
+    /// directories appear twice with the resolution order unchanged.
+    /// Trade-off: a tool installed only via a profile-managed
+    /// toolchain (nix/asdf/mise/linuxbrew) is no longer discovered, and a
+    /// profile-set `DISPLAY`/`WAYLAND_DISPLAY`/`TMPDIR` no longer reaches the
+    /// probe (the exec channel's environment is what the probe actually runs
+    /// in). The tmux candidate list stays a detection fallback, not a
+    /// discovery mechanism, and no live regression is demonstrable: the tmux
+    /// session probes only run for a backend the already-non-login
+    /// availability probe resolved, every candidate directory is a subset of
+    /// `shellPathValue()`, and the mosh availability probe is unwired.
     nonisolated static func wrapPOSIXProbeCommand(_ script: String) -> String {
-        "sh -c \(shellQuoted(script))"
+        "sh -c \(shellQuoted(shellSystemPathExport() + "; " + script))"
     }
 
     nonisolated static func wrapPowerShellCommand(_ script: String, executableName: String) -> String {
@@ -270,6 +278,10 @@ enum RemoteTerminalBootstrap {
 
     nonisolated static func shellPathExport() -> String {
         "export PATH=\"\(shellPathValue())\""
+    }
+
+    nonisolated static func shellSystemPathExport() -> String {
+        "export PATH=\"\(shellSystemPathValue())\""
     }
 
     nonisolated static func tmuxUpdateEnvironmentVariables(bundle: Bundle = .main) -> [String] {
@@ -337,22 +349,29 @@ enum RemoteTerminalBootstrap {
         return payload
     }
 
+    /// The system-only PATH prefix shared by `shellPathValue()` (which
+    /// prepends `$HOME/.local/bin`) and `shellSystemPathValue()` (the probe
+    /// wrapper's export). Kept as one list so the two exports cannot drift.
+    nonisolated private static let shellSystemPaths = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/opt/local/bin",
+        "/opt/local/sbin",
+        "/snap/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin"
+    ]
+
     nonisolated private static func shellPathValue() -> String {
-        let paths = [
-            "$HOME/.local/bin",
-            "/opt/homebrew/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/bin",
-            "/usr/local/sbin",
-            "/opt/local/bin",
-            "/opt/local/sbin",
-            "/snap/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin"
-        ]
-        return paths.joined(separator: ":") + ":$PATH"
+        (["$HOME/.local/bin"] + shellSystemPaths).joined(separator: ":") + ":$PATH"
+    }
+
+    nonisolated static func shellSystemPathValue() -> String {
+        shellSystemPaths.joined(separator: ":") + ":$PATH"
     }
 
     nonisolated private static func doubleQuotedShellArgument(_ value: String) -> String {

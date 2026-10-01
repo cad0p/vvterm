@@ -158,7 +158,7 @@ actor SSHETBootstrapExecutor: ETBootstrapExecutor {
         fi;
         \(command)
         """
-        return RemoteTerminalBootstrap.wrapPOSIXShellCommand(script)
+        return RemoteTerminalBootstrap.wrapPOSIXProbeCommand(script)
     }
 
     func withConnectedClient<Result: Sendable>(

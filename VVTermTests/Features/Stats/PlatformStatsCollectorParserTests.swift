@@ -9,7 +9,8 @@ final class PlatformStatsCollectorParserTests: XCTestCase {
             DarwinStatsCollector.dfCommand,
             DarwinStatsCollector.diskutilListCommand
         ] {
-            XCTAssertTrue(command.hasPrefix("/bin/sh -lc "))
+            XCTAssertTrue(command.hasPrefix("sh -c '"))
+            XCTAssertFalse(command.contains("-lc"))
             XCTAssertTrue(command.contains("export LC_ALL=C LANG=C"))
             XCTAssertFalse(command.hasPrefix("LC_ALL=C LANG=C"))
         }
