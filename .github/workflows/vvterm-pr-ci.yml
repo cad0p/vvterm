@@ -1,6 +1,7 @@
 # VVTerm PR CI — build + unit/UI tests on iOS Simulator (parallel jobs).
 #
-# Runs on every PR to main. Jobs:
+# Runs on every PR to main; also dispatchable (see the event-gating note
+# below). Jobs:
 #   1. build       — compiles the VVTerm app for iOS Simulator (no signing),
 #                    then uploads the compiled products as an artifact so the
 #                    fan-out ui-tests shards skip recompilation.
@@ -20,15 +21,27 @@
 #   shards to complete. This also retires the temporary CAP EXCEPTION:
 #   this workflow is back inside the 5-concurrent-macOS-job budget.)
 #
+# Event gating (issue #315): the per-PR jobs (wait-for-ota-publish,
+# unit-tests, ui-tests) are gated to `pull_request` (or an empty-`debug_test`
+# dispatch), so a workflow_dispatch
+# with `debug_test` set executes exactly `build` + `debug-test` — 2 macOS
+# jobs at peak 1 — instead of 7 macOS jobs against the account's
+# 5-concurrent-macOS-job cap. `build` stays ungated because `debug-test`
+# consumes its `vvterm-build` artifact (#313). An empty `debug_test` keeps
+# the documented on-demand mode: the full per-PR matrix (the LPT sampling
+# route, e.g. run 35906201179).
+#
 # Jobs 2 + 3 run in parallel and depend on job 1. This split gives faster
 # feedback (unit tests finish first) and isolates UI test failures/hangs
 # (which can be slow) from blocking unit test results.
 #
 # Concurrency-cap-aware shard count:
-#   - GitHub Actions caps this repo at 5 concurrent macOS jobs. The build
-#     job runs first alone; then unit-tests (1) + 4 ui-tests shards (4)
-#     fill the cap with zero queueing. fail-fast is disabled so a failing
-#     shard does not cancel the others.
+#   - GitHub Actions caps this repo at 5 concurrent macOS jobs. On a
+#     `pull_request` run the build job runs first alone; then unit-tests (1)
+#     + 4 ui-tests shards (4) fill the cap with zero queueing. fail-fast is
+#     disabled so a failing shard does not cancel the others. (The test jobs
+#     are gated to `pull_request` (or an empty-`debug_test` dispatch); see
+#     Event gating above.)
 #   - The 18 TeleportUITests (Phase 1/2/3 sheet matrices) run against the
 #     DEBUG-only TeleportUITestHarness + mock coordinators (no real Safari/
 #     Face ID/Teleport server) and are distributed across the 4 shards
@@ -243,8 +256,17 @@ jobs:
     #
     # Graceful degradation: a missing/failed/timed-out OTA or publish run
     # releases unit-tests immediately — tests never hang on the OTA pipeline.
+    # A dispatch carries no PR head (`HEAD_SHA` is empty), and `gh run list
+    # --commit ""` ignores the empty filter, so the script exits before its
+    # first lookup there — measured on the #313 acceptance dispatch (run
+    # 36776953839), which resolved an unrelated PR's OTA + publish runs.
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Per-PR job (issue #315): a debug dispatch (`debug_test` set) must cost only
+    # build + debug-test, not the whole per-PR matrix — 7 macOS jobs against the
+    # 5-concurrent-macOS-job cap. The second clause preserves the documented
+    # empty-input dispatch, which runs the normal per-PR matrix on demand.
+    if: github.event_name == 'pull_request' || github.event.inputs.debug_test == ''
     steps:
       - name: Wait for the OTA publish to start
         env:
@@ -253,6 +275,19 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
+
+          # On a dispatch `github.event.pull_request.head.sha` is empty, and
+          # `gh run list --commit ""` ignores the empty filter (it returns
+          # repo-wide PR-event runs) — measured on the #313 acceptance
+          # dispatch (run 36776953839, gate log lines 105-108), which bound to
+          # an unrelated PR's OTA + publish and released in 10 s only because
+          # that foreign publish had already started 38 minutes earlier. Skip
+          # outright instead of waiting on a foreign pipeline. No-op on the PR
+          # path, where HEAD_SHA is always set.
+          if [[ -z "$HEAD_SHA" ]]; then
+            echo "::notice::No pull-request head (HEAD_SHA empty) — publish gate skipped."
+            exit 0
+          fi
 
           # 1. This push's OTA archive run (vvterm-pr-ota.yml, pull_request event).
           ota_run="$(gh run list --repo "$REPO" --workflow vvterm-pr-ota.yml \
@@ -329,6 +364,11 @@ jobs:
     # correlation, three consecutive failures on PR #167).
     timeout-minutes: 30
     needs: [build, wait-for-ota-publish]
+    # Per-PR job (issue #315): a debug dispatch (`debug_test` set) must cost only
+    # build + debug-test, not the whole per-PR matrix — 7 macOS jobs against the
+    # 5-concurrent-macOS-job cap. The second clause preserves the documented
+    # empty-input dispatch, which runs the normal per-PR matrix on demand.
+    if: github.event_name == 'pull_request' || github.event.inputs.debug_test == ''
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -434,6 +474,11 @@ jobs:
     # single hanging tests.
     timeout-minutes: 45
     needs: build
+    # Per-PR job (issue #315): a debug dispatch (`debug_test` set) must cost only
+    # build + debug-test, not the whole per-PR matrix — 7 macOS jobs against the
+    # 5-concurrent-macOS-job cap. The second clause preserves the documented
+    # empty-input dispatch, which runs the normal per-PR matrix on demand.
+    if: github.event_name == 'pull_request' || github.event.inputs.debug_test == ''
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
@@ -447,8 +492,11 @@ jobs:
           #
           # Shard split is LPT bin-packing of measured per-method runtimes
           # from the five successful 2026-09-23 runs (35855154311,
-          # 35859452415, 35892455663, 35906201179, 35915626164). At
-          # measurement time 78 executing methods were distributed
+          # 35859452415, 35892455663, 35906201179, 35915626164); 35906201179
+          # is a workflow_dispatch with an empty `debug_test`, the preserved
+          # on-demand mode and the sampling route for future re-measurements
+          # (issue #315). At measurement time 78 executing methods were
+          # distributed
           # 19/19/20/20; bin sums 527.6 / 517.8 / 527.0 / 527.8s → max/min
           # ratio 1.02, well under the 1.3 rebalance threshold. #227 split
           # the push/pop test into list-position + session halves, both kept
@@ -780,7 +828,11 @@ jobs:
   # `VVTermUITests/StatsCardsLayoutUITests/testDetailedCards...`).
   #
   # This job runs OUTSIDE the normal PR CI path (only on workflow_dispatch
-  # with debug_test set). It uses `-collect-test-diagnostics on-failure` to
+  # with debug_test set). Since #315 the per-PR jobs (wait-for-ota-publish,
+  # unit-tests, ui-tests) are gated to `pull_request` (or an empty-`debug_test`
+  # dispatch), so a debug dispatch
+  # executes exactly `build` + `debug-test` — 2 macOS jobs at peak 1 — and
+  # skips the per-PR matrix. It uses `-collect-test-diagnostics on-failure` to
   # capture the full simulator diagnostics that the normal CI path skips
   # (which saves ~10m per failed shard). Use this when a flake needs
   # deeper investigation than the xcresult + test.log provide.

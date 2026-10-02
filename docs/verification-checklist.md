@@ -45,6 +45,20 @@ Documentation-only changes can skip this.
 ## 4. Let PR CI finish
 
 - `VVTerm PR CI` (`.github/workflows/vvterm-pr-ci.yml`): build → unit-tests + 4 UI shards. Wall-clock target ≤ 20m (`build` + the slowest shard; the balanced bins are ~14m/shard including setup); check per-shard runtimes with `gh run view <id> --json jobs`.
+- Event gating (issue #315): `wait-for-ota-publish`, `unit-tests` and the `ui-tests` matrix are gated to `pull_request` with the compound gate `github.event_name == 'pull_request' || github.event.inputs.debug_test == ''`. A `workflow_dispatch` with `debug_test` set therefore executes exactly `build` + `debug-test` (2 macOS jobs, peak 1, sequential); `build` stays ungated because `debug-test` consumes its `vvterm-build` artifact. An empty `debug_test` dispatch still runs the full per-PR matrix (the documented on-demand mode).
+- Dispatch verification (post-merge, on `main`; do not dispatch on a PR branch — it attaches fresh `build` check runs to the graded head):
+
+  ```sh
+  gh workflow run vvterm-pr-ci.yml --ref main \
+    -f debug_test=<test identifier> -f debug_timeout=600
+  # wait for the run to reach `completed` (needs-dependent jobs appear in the
+  # jobs API only after their dependency completes), then:
+  gh run view <id> --json jobs --jq '[.jobs[] | select(.conclusion != "skipped") | .name] | sort'
+  # must equal ["build","debug-test"]
+  gh run view <id> --json jobs --jq '[.jobs[] | select(.conclusion == "skipped") | .name] | sort'
+  # record verbatim; must contain wait-for-ota-publish, unit-tests and the
+  # ui-tests entry(ies). Skipped jobs ARE listed by the jobs API.
+  ```
 - `VVTerm PR OTA` (`.github/workflows/vvterm-pr-ota.yml`): installable build for device smoke.
 - Treat timeouts/hangs as bugs (fix or quarantine per AGENTS.md) — shards do not retry: a failed shard fails the run. A per-test execution-allowance kill is a verdict, not an infra signature. The four `ui-tests-shard-*` jobs are **not required checks** (`gh-ruleset-main` requires only `build` and `unit-tests`), so a red shard **reports without blocking the merge and needs no unblock**: classify it, record its run/job URL on the host-state flake tracker **#257**, and fix or quarantine the class. Do not re-run a shard to turn it green.
 - The one exception is a shard that fails with **zero `Test Case` lines** in its `test.log` — a pre-test runner infra wedge, not a test defect, and it produced no information at all. Re-run that job (`gh run rerun --failed`); never quarantine a healthy test for it. When a test genuinely cannot be fixed, take it out of the hot path with `XCTSkip` referencing an issue.
