@@ -223,11 +223,13 @@ keeps the exclusion only when its value is provably cross-run under
 cross-run, or a `parseInt` literal); `${{ github.run_id }}`, an empty value,
 a command substitution, `needs.*.outputs.*`, or any other unclassifiable
 value refuses. A value that is a body-local `${NAME}`/`$NAME` expansion is
-traced in program order (the last line-start `NAME=VALUE` statement at or
-before the write, at the same or a shallower indentation, with no branch
-closer between it and the write): unset-at-write, a reassignment after the
-write, `+=`, an assignment inside a nested control block, and an
-unclassifiable RHS all refuse. This is the rule that keeps the real
+traced in program order: every statement-position `NAME=VALUE` on every
+body line (`;`, `&&`, `||`, `|`, `&` separated, `export` allowed) is indexed
+with its column, and the reaching assignment is the last one at or before
+the write's (line, column) — a later same-line reassignment is visible, and
+a same-line reassignment after the write is after it. Unset-at-write, a
+reassignment after the write, `+=`, an assignment inside a nested control
+block, and an unclassifiable RHS all refuse. This is the rule that keeps the real
 `${CI_RUN_ID}` -> `${{ inputs.ci_run_id }}` dispatch branch green while
 refusing a guarded same-run local.
 
@@ -240,7 +242,17 @@ cannot resolve such as `$(…)`, `${!n}` or an unassigned expansion, an
 unextractable payload or NAME, or a read-only `cat "$GITHUB_ENV"` all
 refuse: accepted fail-closed costs of an extractor that would rather refuse
 than guess). A heredoc payload (`cat >> "$GITHUB_ENV" <<'EOF'`) is read as
-literal env-file text, so its values are not shell-expanded. The rule never
+literal env-file text, so its values are not shell-expanded. The env-file
+spelling is exact: a redirect target that is the spelling plus identifier
+characters (`$GITHUB_ENV_X`) is a different variable — the runner publishes
+the path only as `GITHUB_ENV` / `%GITHUB_ENV%` — so an unresolved target of
+that shape is `other`, not `unknown`; the same narrowing covers the
+tokenizer-joined quoted concatenation `"$GITHUB_ENV"x` (one word,
+`$GITHUB_ENVx`), likewise a different file. The alias-suffix family
+(`n="$GITHUB_ENV"; … >> "$n.bak"` / `>> "${n}_x"`) still refuses although
+the runtime target is a different file — the alias resolves to the env
+spelling before the literal suffix is considered — a documented fail-closed
+false red. The rule never
 touches the #339 token rule, the `needs:` reconciliation, the case-collision
 rule, or the trim/`parseInt` rules. Named residuals: under a `workflow_call`
 trigger a caller can pass its own `github.run_id` as an `inputs.*` value (no
@@ -298,7 +310,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 271
+EXPECTED_MANIFEST_CASES = 280
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2448,11 +2460,14 @@ _CONTROL_CLOSER_RE = re.compile(r"^(?:else|elif|fi|done|esac)\b")
 class _ShellAssignment:
     """One body-local `NAME=VALUE` statement. `value` is the first shell
     word after `=` (quotes removed), or None for an unmodelled statement
-    (`NAME+=…`) or an unreadable RHS."""
+    (`NAME+=…`) or an unreadable RHS. `(index, column)` is the statement's
+    position: the line and the 0-based byte offset of the assignment word,
+    so a later same-line reassignment is ordered after an earlier one."""
 
     name: str
     value: str | None
     index: int
+    column: int
     indent: int
 
 
@@ -2724,28 +2739,60 @@ def _env_file_alias_names(lines: list[str], skip: set[int]) -> set[str]:
 
 
 def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssignment]:
-    """Index the body's own line-start `NAME=VALUE` statements. A statement
+    """Index every statement-position `NAME=VALUE` on every body line — each
+    top-level segment (`;`, `&&`, `||`, `|`, `&`) can begin with one, and
+    `export` may prefix it — with its line, column and left-to-right order,
+    so a later same-line reassignment is visible to both traces. A statement
     the extractor cannot read (`NAME+=…`, no word after `=`) is indexed with
-    a None value so a trace that reaches it refuses rather than passes; a
-    mid-line assignment is not indexed at all, so a reference to it refuses
-    as unset."""
+    a None value so a trace that reaches it refuses rather than passes; an
+    assignment that is not at a statement position (`echo x=1`) is not
+    indexed at all, so a reference to it refuses as unset."""
     assignments: list[_ShellAssignment] = []
     for index, line in enumerate(lines):
         if index in skip:
             continue
-        match = _ENV_ALIAS_ASSIGNMENT_RE.match(line)
-        if match is None:
-            append = _ENV_APPEND_ASSIGNMENT_RE.match(line)
-            if append is not None:
-                assignments.append(
-                    _ShellAssignment(append.group(1), None, index, _indent_width(line))
+        for segment in _shell_segments(_shell_tokens(line)):
+            if not segment or segment[0][0] != "word":
+                continue
+            word_index = 0
+            if (
+                segment[0][1] == "export"
+                and len(segment) > 1
+                and segment[1][0] == "word"
+            ):
+                word_index = 1
+            _kind, _text, start, end = segment[word_index]
+            # Match the RAW word (quotes intact) so a quoted name is not
+            # promoted to an assignment the shell never makes.
+            word_text = line[start:end]
+            match = _ENV_ALIAS_ASSIGNMENT_RE.match(word_text)
+            if match is None:
+                append = _ENV_APPEND_ASSIGNMENT_RE.match(word_text)
+                if append is not None:
+                    assignments.append(
+                        _ShellAssignment(
+                            append.group(1), None, index, start, _indent_width(line)
+                        )
+                    )
+                continue
+            value, _value_end = _first_shell_word(line[start + match.end() :])
+            assignments.append(
+                _ShellAssignment(
+                    match.group(1), value, index, start, _indent_width(line)
                 )
-            continue
-        word, _end = _first_shell_word(line[match.end() :])
-        assignments.append(
-            _ShellAssignment(match.group(1), word, index, _indent_width(line))
-        )
+            )
     return assignments
+
+
+def _extends_env_file_spelling(name: str) -> bool:
+    """True when `name` is the env-file spelling plus more identifier
+    characters (`GITHUB_ENV_X`). That is a DIFFERENT variable — the runner
+    publishes the env-file path as exactly `GITHUB_ENV` / `%GITHUB_ENV%` —
+    so an unresolved target named this way is a different file, not the env
+    file (issue #342, F9). A name that merely contains the spelling is left
+    to the extractor's unknown-target refusal."""
+    lowered = name.lower()
+    return lowered.startswith("github_env") and len(lowered) > len("github_env")
 
 
 def _env_file_target_name_kind(
@@ -2754,17 +2801,19 @@ def _env_file_target_name_kind(
     assignments: list[_ShellAssignment],
     lines: list[str],
     line_index: int,
+    column_index: int,
     write_indent: int,
     seen: set[str],
 ) -> str:
     """Resolve one expanded redirect-target name to `"env"`, `"other"` or
     `"unknown"` by program order. A body-assigned name is NOT proof the
     target cannot be the env file: `n="${!x}"` is assigned and holds the env
-    path, so the reaching assignment is resolved instead. Only a provably
-    non-env literal is `"other"` (a plain word, or an env-file spelling plus
-    extra literal text — `$GITHUB_ENV.bak` is a different file); indirect,
-    computed or unmodelled RHS values are `"unknown"` (issue #342,
-    BLOCKER-2)."""
+    path, so the reaching assignment — the last one at or before the write's
+    (line, column) — is resolved instead. Only a provably non-env literal is
+    `"other"` (a plain word, an env-file spelling plus extra literal text —
+    `$GITHUB_ENV.bak` is a different file — or an unassigned name that is the
+    spelling plus identifier characters, `GITHUB_ENV_X`); indirect, computed
+    or unmodelled RHS values are `"unknown"` (issue #342, BLOCKER-2 / F9)."""
     if name in seen:
         return "unknown"
     if name in aliases:
@@ -2772,10 +2821,11 @@ def _env_file_target_name_kind(
     reaching = [
         assignment
         for assignment in assignments
-        if assignment.name == name and assignment.index <= line_index
+        if assignment.name == name
+        and (assignment.index, assignment.column) <= (line_index, column_index)
     ]
     if not reaching:
-        return "unknown"
+        return "other" if _extends_env_file_spelling(name) else "unknown"
     chosen = reaching[-1]
     if chosen.value is None or chosen.indent > write_indent:
         return "unknown"
@@ -2799,6 +2849,7 @@ def _env_file_target_name_kind(
             assignments,
             lines,
             chosen.index,
+            chosen.column,
             write_indent,
             seen | {name},
         )
@@ -2813,6 +2864,7 @@ def _env_file_target_kind(
     assignments: list[_ShellAssignment],
     lines: list[str],
     line_index: int,
+    column_index: int,
 ) -> str:
     """Classify one redirect target: `"env"` when it provably names the env
     file, `"other"` when it provably does not, `"unknown"` when the
@@ -2855,6 +2907,7 @@ def _env_file_target_kind(
             assignments,
             lines,
             line_index,
+            column_index,
             _indent_width(lines[line_index]),
             set(),
         )
@@ -2938,21 +2991,29 @@ def _local_trace_classification(
     assignments: list[_ShellAssignment],
     lines: list[str],
     limit_index: int,
+    limit_column: int,
     write_indent: int,
     scoped_env: dict[str, list[tuple[str, int]]],
     seen: set[str],
 ) -> str:
     """Classify a `${NAME}` read by program order: the last body assignment
-    at or before the read. Unset at the read, a reassignment after it, an
-    assignment in a nested control block, `+=`, or an unclassifiable RHS
-    refuses rather than guesses."""
+    at or before the read's (line, column). Unset at the read, a
+    reassignment after it, an assignment in a nested control block, `+=`, or
+    an unclassifiable RHS refuses rather than guesses."""
     if name in seen:
         return "refuse"
     reaching = [assignment for assignment in assignments if assignment.name == name]
-    before = [assignment for assignment in reaching if assignment.index <= limit_index]
+    before = [
+        assignment
+        for assignment in reaching
+        if (assignment.index, assignment.column) <= (limit_index, limit_column)
+    ]
     if not before:
         return "refuse"
-    if any(assignment.index > limit_index for assignment in reaching):
+    if any(
+        (assignment.index, assignment.column) > (limit_index, limit_column)
+        for assignment in reaching
+    ):
         return "refuse"
     chosen = before[-1]
     if chosen.value is None or chosen.indent > write_indent:
@@ -2966,6 +3027,7 @@ def _local_trace_classification(
             assignments,
             lines,
             chosen.index,
+            chosen.column,
             write_indent,
             scoped_env,
             seen | {name},
@@ -2979,6 +3041,7 @@ def _run_id_write_value_classification(
     assignments: list[_ShellAssignment],
     lines: list[str],
     write_index: int,
+    write_column: int,
     scoped_env: dict[str, list[tuple[str, int]]],
 ) -> str:
     """The `_classify_static_value` verdict for one written value. A shell
@@ -2996,6 +3059,7 @@ def _run_id_write_value_classification(
                 assignments,
                 lines,
                 write_index,
+                write_column,
                 _indent_width(lines[write_index]),
                 scoped_env,
                 set(),
@@ -3155,6 +3219,7 @@ def _refuse_github_env_run_id_write(
             if index <= skip_until:
                 continue
             for segment in _shell_segments(_shell_tokens(line)):
+                write_column = segment[0][2]
                 env_redirect: int | None = None
                 unknown_redirect = False
                 other_target_spans: list[tuple[int, int]] = []
@@ -3162,7 +3227,7 @@ def _refuse_github_env_run_id_write(
                     segment
                 ):
                     kind = _env_file_target_kind(
-                        target, aliases, assignments, lines, index
+                        target, aliases, assignments, lines, index, write_column
                     )
                     if kind == "unknown":
                         unknown_redirect = True
@@ -3191,7 +3256,13 @@ def _refuse_github_env_run_id_write(
                     if _flip_target_match(step, name, flip_targets) is None:
                         continue
                     classification = _run_id_write_value_classification(
-                        value, shell_expansion, assignments, lines, index, scoped_env
+                        value,
+                        shell_expansion,
+                        assignments,
+                        lines,
+                        index,
+                        write_column,
+                        scoped_env,
                     )
                     if classification != "cross-run":
                         raise _run_id_value_refusal(step, head, body, name)

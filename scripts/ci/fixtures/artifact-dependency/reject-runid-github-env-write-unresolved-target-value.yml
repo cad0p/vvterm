@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the redirect target name IS body-assigned, but its reaching value
+# is an unassigned local (`n="$SOMETHING"`), so "assigned in this body" must
+# not be read as "provably not the env file". Pins the F2(b) trace alone:
+# the assignment line passes the reference check, so only the target
+# resolution refuses (issue #342, F10).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "OTHER=1" >> "$GITHUB_ENV"
+          n="$SOMETHING"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

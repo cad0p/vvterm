@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 271
+    private static let expectedManifestCases = 280
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -429,6 +429,19 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-indirect-target.yml",
         "reject-runid-github-env-write-indirect-target-direct.yml",
         "accept-runid-github-env-write-env-file-backup.yml",
+        // #342 fold round 2: the same-line multi-assignment traces (F7/F8,
+        // including the (line, column) after-write fixtures), the
+        // `$GITHUB_ENV_X` spelling narrowing (F9), the F2(b)-alone trace pin
+        // (F10), and the own-line reassignment control.
+        "reject-runid-github-env-write-target-reassigned-mid-line.yml",
+        "reject-runid-github-env-write-target-reassigned-inline.yml",
+        "reject-runid-github-env-write-target-reassigned-after-write.yml",
+        "reject-runid-github-env-write-value-reassigned-mid-line.yml",
+        "reject-runid-github-env-write-value-reassigned-inline.yml",
+        "reject-runid-github-env-write-value-reassigned-after-write.yml",
+        "reject-runid-github-env-write-own-line-reassign-control.yml",
+        "reject-runid-github-env-write-unresolved-target-value.yml",
+        "accept-runid-github-env-write-identifier-suffix-target.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

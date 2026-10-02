@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: MIT
-# Fixture (control): the same `${!x}` indirection used directly as the
-# redirect target. Measured fail-open at base `81673bd5` (rc=0, the cross-run
-# exclusion kept) and refused at the impl head by the `unknown` target kind;
-# the fixture pins that the assigned-name resolution added for BLOCKER-2
-# does not flip the direct-indirect shape green (issue #342).
+# Fixture (control): the same target hijack with the reassignment on its
+# own line — refused before the multi-assignment index fix too. Pins that
+# the (line, column) trace did not change the already-covered shape
+# (issue #342, F7).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,8 +15,9 @@ jobs:
     steps:
       - name: Resolve run context
         run: |
-          x=GITHUB_ENV
-          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "${!x}"
+          n=/tmp/foo
+          n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

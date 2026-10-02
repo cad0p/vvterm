@@ -2175,4 +2175,89 @@ CASES = [
         "excluded": 1,
         "diagnostics": [],
     },
+    # fold round 2 (#342): the same-line multi-assignment traces (F7/F8) —
+    # every statement-position `NAME=VALUE` is indexed with its column, so a
+    # later same-line reassignment is visible and the reaching assignment is
+    # the last one at or before the write's (line, column). Also the F9
+    # `$GITHUB_ENV_X` narrowing, the F10 F2(b)-alone trace pin, and the
+    # own-line reassignment control.
+    {
+        "id": "reject-runid-github-env-write-target-reassigned-mid-line",
+        "files": ["reject-runid-github-env-write-target-reassigned-mid-line.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-target-reassigned-mid-line.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-target-reassigned-inline",
+        "files": ["reject-runid-github-env-write-target-reassigned-inline.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-target-reassigned-inline.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 17) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-target-reassigned-after-write",
+        "files": ["reject-runid-github-env-write-target-reassigned-after-write.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-target-reassigned-after-write.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 19) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-value-reassigned-mid-line",
+        "files": ["reject-runid-github-env-write-value-reassigned-mid-line.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-value-reassigned-mid-line.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-value-reassigned-inline",
+        "files": ["reject-runid-github-env-write-value-reassigned-inline.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-value-reassigned-inline.yml:21: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 16) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-value-reassigned-after-write",
+        "files": ["reject-runid-github-env-write-value-reassigned-after-write.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-value-reassigned-after-write.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-own-line-reassign-control",
+        "files": ["reject-runid-github-env-write-own-line-reassign-control.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-own-line-reassign-control.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 17) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-unresolved-target-value",
+        "files": ["reject-runid-github-env-write-unresolved-target-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-unresolved-target-value.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "accept-runid-github-env-write-identifier-suffix-target",
+        "files": ["accept-runid-github-env-write-identifier-suffix-target.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
 ]

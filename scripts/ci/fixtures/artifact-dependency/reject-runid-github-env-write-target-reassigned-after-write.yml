@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env path is `n`'s value at the write, then the SAME name is
+# reassigned to a literal after the write on the same line (`… >> "$n";
+# n=/tmp/foo`). The env assignment is mid-line, so only the (line, column)
+# trace reaches it — a line-only trace would take the trailing literal and
+# waive the write — and a line-start-only index would refuse as unset
+# (issue #342, F7).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"; echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"; n=/tmp/foo
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
