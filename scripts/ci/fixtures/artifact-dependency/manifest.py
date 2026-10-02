@@ -1135,4 +1135,211 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # round-9 fold (#334): a non-string tag on an in-scope `env:` value is
+    # resolved the way the runner resolves it (an empty argument is the
+    # empty string, not a present token), and the direct plain-null
+    # `with.github-token:` spellings are resolved before `decode_scalar`.
+    # Branch order in `_static_env_value` is part of the contract:
+    # `_null_tag_value` must run BEFORE the generic non-string-tag branch,
+    # or the 7 existing quoted/escaped null-tag cases regress to silent
+    # passes (measured 136/143 with the reversed order). The last four
+    # cases are the continuation controls: the guard preserves the base
+    # verdict for a tagged value whose plain scalar continues on a
+    # more-indented line instead of reding it.
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-token-env-int-empty-tag-in-scope",
+        "files": ["reject-token-env-int-empty-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-int-empty-tag-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-bool-empty-tag-in-scope",
+        "files": ["reject-token-env-bool-empty-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-bool-empty-tag-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-float-empty-tag-in-scope",
+        "files": ["reject-token-env-float-empty-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-float-empty-tag-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-int-bare-tag-in-scope",
+        "files": ["reject-token-env-int-bare-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-int-bare-tag-in-scope.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-binary-empty-tag-in-scope",
+        "files": ["reject-token-env-binary-empty-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-binary-empty-tag-in-scope.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-custom-empty-tag-in-scope",
+        "files": ["reject-token-env-custom-empty-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-custom-empty-tag-in-scope.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-tag-first-anchor-int-empty",
+        "files": ["reject-token-env-tag-first-anchor-int-empty.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-tag-first-anchor-int-empty.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-verbatim-int-empty",
+        "files": ["reject-token-env-verbatim-int-empty.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-verbatim-int-empty.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-custom-expression-tag-in-scope",
+        "files": ["reject-token-env-custom-expression-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-token-env-custom-expression-tag-in-scope.yml:22: github-token: '${{ env.GH_TOKEN }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-token-env-bare-nonspecific-tag-in-scope",
+        "files": ["reject-token-env-bare-nonspecific-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-bare-nonspecific-tag-in-scope.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-omap-empty-tag-in-scope",
+        "files": ["reject-token-env-omap-empty-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-omap-empty-tag-in-scope.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-direct-null",
+        "files": ["reject-token-direct-null.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-direct-null.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-direct-tilde",
+        "files": ["reject-token-direct-tilde.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-direct-tilde.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-direct-null-title",
+        "files": ["reject-token-direct-null-title.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-direct-null-title.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-direct-null-upper",
+        "files": ["reject-token-direct-null-upper.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-direct-null-upper.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-bare-str-tag-line",
+        "files": ["reject-bare-str-tag-line.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-bare-str-tag-line.yml:20: unconsumed line — every line in a job or step must be a mapping key the gate understands (refusing rather than skipping)',
+        ],
+    },
+    {
+        "id": "accept-token-env-int-literal-tag-in-scope",
+        "files": ["accept-token-env-int-literal-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-bool-false-tag-in-scope",
+        "files": ["accept-token-env-bool-false-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-custom-literal-tag-in-scope",
+        "files": ["accept-token-env-custom-literal-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-custom-null-tag-in-scope",
+        "files": ["accept-token-env-custom-null-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-string-null-tag-in-scope",
+        "files": ["accept-token-env-string-null-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-int-expression-tag-in-scope",
+        "files": ["accept-token-env-int-expression-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-escaped-nonnull-null-tag-in-scope",
+        "files": ["accept-token-env-escaped-nonnull-null-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-direct-string-null",
+        "files": ["accept-token-direct-string-null.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-direct-quoted-null",
+        "files": ["accept-token-direct-quoted-null.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-int-tag-continuation",
+        "files": ["accept-token-env-int-tag-continuation.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-custom-tag-continuation",
+        "files": ["accept-token-env-custom-tag-continuation.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

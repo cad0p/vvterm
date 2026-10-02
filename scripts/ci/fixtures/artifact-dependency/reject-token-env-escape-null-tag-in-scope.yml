@@ -5,8 +5,8 @@
 # handoff — the `needs:` path is required. A gate that decodes the argument
 # with a subset escape reader (the gate's shared reader leaves `\x` as
 # literal text) never sees a null spelling and silently excludes the download
-# (the round-7 rc=0). The non-null escape control is
-# `accept-token-env-escape-nonnull-null-tag-in-scope.yml`.
+# (the round-7 rc=0). The non-null quoted control is
+# `accept-token-env-quoted-nonnull-null-tag-in-scope.yml`.
 jobs:
   build:
     runs-on: ubuntu-latest

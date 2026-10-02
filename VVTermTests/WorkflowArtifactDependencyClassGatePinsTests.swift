@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 143
+    private static let expectedManifestCases = 170
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -256,6 +256,40 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-token-env-null-tag-nonempty-block-in-scope.yml",
         "accept-token-env-anchored-value-null-tag-in-scope.yml",
         "accept-token-anchored-literal-in-scope.yml",
+        // round-9 fold (#334): the non-string-tag `env:` silent passes
+        // (BLOCKER-1), the direct plain-null `github-token:` silent passes
+        // (BLOCKER-2), the bare-`!!str` crash (MINOR-1), and the tagged
+        // continuation accept controls. Branch order in `_static_env_value`
+        // is part of the contract: `_null_tag_value` before the generic
+        // non-string-tag branch, or the existing quoted/escaped null-tag
+        // rejects regress to silent passes.
+        "reject-token-env-int-empty-tag-in-scope.yml",
+        "reject-token-env-bool-empty-tag-in-scope.yml",
+        "reject-token-env-float-empty-tag-in-scope.yml",
+        "reject-token-env-int-bare-tag-in-scope.yml",
+        "reject-token-env-binary-empty-tag-in-scope.yml",
+        "reject-token-env-custom-empty-tag-in-scope.yml",
+        "reject-token-env-tag-first-anchor-int-empty.yml",
+        "reject-token-env-verbatim-int-empty.yml",
+        "reject-token-env-custom-expression-tag-in-scope.yml",
+        "reject-token-env-bare-nonspecific-tag-in-scope.yml",
+        "reject-token-env-omap-empty-tag-in-scope.yml",
+        "reject-token-direct-null.yml",
+        "reject-token-direct-tilde.yml",
+        "reject-token-direct-null-title.yml",
+        "reject-token-direct-null-upper.yml",
+        "reject-bare-str-tag-line.yml",
+        "accept-token-env-int-literal-tag-in-scope.yml",
+        "accept-token-env-bool-false-tag-in-scope.yml",
+        "accept-token-env-custom-literal-tag-in-scope.yml",
+        "accept-token-env-custom-null-tag-in-scope.yml",
+        "accept-token-env-string-null-tag-in-scope.yml",
+        "accept-token-env-int-expression-tag-in-scope.yml",
+        "accept-token-env-escaped-nonnull-null-tag-in-scope.yml",
+        "accept-token-direct-string-null.yml",
+        "accept-token-direct-quoted-null.yml",
+        "accept-token-env-int-tag-continuation.yml",
+        "accept-token-env-custom-tag-continuation.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

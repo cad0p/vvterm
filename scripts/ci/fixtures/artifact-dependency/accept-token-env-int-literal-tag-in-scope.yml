@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Control: an in-scope `env:` value spelled `!!int 5` resolves to the string
+# `"5"` at runtime, so the cross-run exclusion stands and the case is GREEN.
+# A blanket refusal of non-string tags on env values would red this control.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int 5
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

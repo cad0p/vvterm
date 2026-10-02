@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled `!!int &a ""` — the anchor comes
+# after the tag, so the tag argument is `&a ""`, whose scalar is the empty
+# string (#334 BLOCKER-1). Pins the anchor handling in the tag-argument
+# reader; a branch that drops `_strip_anchor` reads `&a ""` as text.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int &a ""
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

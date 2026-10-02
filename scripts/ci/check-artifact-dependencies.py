@@ -77,9 +77,44 @@ token there is not a refusal; a `uses:` key line or an action-ref shape the
 parser did not model (e.g. a nested `uses:` lookalike) still is.
 Multi-document streams, U+2028/U+2029 line breaks, `%YAML` directives and a
 mid-file BOM are outside the subset grammar and unverified against GitHub's
-parser. YAML tags are refused except the string tag (`!!str` /
-`!<tag:yaml.org,2002:str>`), which is resolved to the same scalar text
-actions/runner reads.
+parser. YAML tag policy is split by position: on a semantic key's value
+(`uses`, `needs`, `with.name`/`run-id`/`github-token`/`pattern`/
+`artifact-ids`) any tag other than the string tag is refused, because its
+resolution could change the graph; the string tag (`!!str` /
+`!<tag:yaml.org,2002:str>`) is resolved to the same scalar text
+actions/runner reads. On a static `env:` value the tag's argument is
+resolved to the value GitHub reads, so a non-semantic `RETRIES: !!int 3`
+stays legal and an empty resolved value (`!!int ""`, bare `!!int`) does not
+exclude the download. A value whose plain scalar continues on a following
+more-indented line reads empty (the resolution reads only the tag's own
+argument), so it is a fail-closed false red for every tag — including the
+non-string tags that used to pass: `GH_TOKEN: !!int` / `!foo` plus a
+more-indented `ghp_x` is non-empty at runtime, and the continuation guard in
+this change preserves that base verdict (without the guard it would become a
+refusal). Documented, not modelled. `blank_comments` opens a quote only at
+scalar-start positions, so after a tag the quote never opens and a `#`
+inside the quoted argument is blanked: `GH_TOKEN: !!int " #c"` /
+`!foo " #c"` is non-empty at runtime but reads empty here — a fail-closed
+false red, documented, not modelled. Runtime-invalid tagged values
+(`GH_TOKEN: !!str !!int ""`, flow-style env values such as `[!!int ""]` or
+`{a: !!int ""}`) stay accepted where GitHub's parser errors: the workflow
+cannot run, so there is no race. The whitespace-escape/BOM family is tracked
+separately as issue #335 and is explicitly unfixed here. Runtime values were
+verified offline against the published `@actions/workflow-parser` 0.3.61
+(`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
+`dist/templates/template-reader.js` `validate()`), its `yaml` 2.9.1
+dependency, `@actions/core@3.0.0` `getInput` (ECMAScript `.trim()`), and
+`actions/download-artifact@v8` (`if (inputs.token)` gates the `run-id`
+filter); no live GitHub Actions run was executed, so the hosted service's
+exact parser build is still assumed equal to the published package — the
+same proxy every earlier round used. Already covered, not re-hunted:
+`github-token: {null}` and `with: {name: x, github-token: null}` (flow
+refusal); `github-token: >-` with or without a body (block-scalar-header
+refusal); `github-token: &a null` (anchor refusal); a bare or
+whitespace-only `github-token:`; `github-token: !!int null` (non-string-tag
+refusal; the runtime value would be the text `null`); and env `!!int null`,
+which is `StringToken("null")` at runtime, so reading it as present is
+correct.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -109,7 +144,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 143
+EXPECTED_MANIFEST_CASES = 170
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -404,6 +439,13 @@ def split_key_value(s: str) -> tuple[str, str, str] | None:
     if not s:
         return None
     s = _strip_str_tag(s)
+    if not s:
+        # A line that is only a string tag (`!!str`) strips to the empty
+        # string, and `s[0]` would raise IndexError instead of letting the
+        # line fall through to the gate's own unconsumed-line refusal
+        # (#334-MINOR-1). A bare non-string tag (`!tag`) keeps its text —
+        # there is no `:` to split on — so only the string tag can empty `s`.
+        return None
     if s[0] in ("'", '"'):
         end, key = _scan_quoted(s, 0)
         i = end
@@ -1270,8 +1312,16 @@ class WorkflowParser:
                 # (actions/download-artifact only sets its run filter when the
                 # token input is non-empty), so it is a semantic key too: a
                 # block scalar here must not be mistaken for a present token.
+                # A plain null spelling is the empty string at runtime
+                # (#334-BLOCKER-2). The membership test is on the RAW text,
+                # before decoding: a quoted `"null"` / `'null'` is the
+                # literal text and stays non-empty, and `!!str null` decodes
+                # to `null` only after the raw spelling has already failed to
+                # match.
                 _refuse_block_scalar_header(index, key, value)
-                step.github_token = decode_scalar(value)
+                step.github_token = (
+                    "" if value.strip() in YAML_NULL_SPELLINGS else decode_scalar(value)
+                )
                 step.github_token_line = index + 1
                 step.has_github_token = bool(step.github_token.strip())
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
@@ -1465,13 +1515,34 @@ def _null_tag_value(text: str) -> str | None:
     return None
 
 
-def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
+def _static_env_value(
+    raw: str,
+    line: int,
+    block_bodies: dict[int, str],
+    has_continuation: bool = False,
+) -> str:
     """The runtime value of a static `env:` assignment. A block-scalar header
     — with or without a tag or anchor — is not the value: the body is, so an
     empty body is the empty string and a non-empty body is its text
     (R6-BLOCKER-1, R8-BLOCKER-1). A plain YAML null is the empty string too,
     and a null-tagged scalar with a null argument is empty as well
-    (R7-BLOCKER-1). Anything else is the decoded scalar."""
+    (R7-BLOCKER-1). A non-string tag on a value that does not continue is
+    resolved the way the runner resolves it: the runtime value is the string
+    form of the tag's resolved value (falling back to the raw argument text
+    when the tag does not resolve), and an absent argument is the empty
+    string — so `!!int ""`, `!!bool ""`, bare `!!int` and `!foo ""` are all
+    empty at runtime (#334-BLOCKER-1). A value whose plain scalar continues
+    on a following more-indented line is deliberately NOT resolved here: the
+    branch reads the raw tag text (non-empty), which preserves the base
+    verdict for the continuation shapes instead of introducing a new
+    fail-closed false red (#334 continuation guard). Anything else is the
+    decoded scalar.
+
+    Branch order is part of the contract: `_null_tag_value` must run before
+    the generic non-string-tag branch, because a null tag coerces a QUOTED or
+    escaped null spelling (`!!null 'null'`, `!!null "\\x6eull"`) to the empty
+    string, which the generic branch would read as the literal text `null`.
+    """
     text = raw.strip()
     if _static_block_header(text) is not None:
         return block_bodies.get(line, "")
@@ -1480,6 +1551,11 @@ def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
     tagged = _null_tag_value(text)
     if tagged is not None:
         return tagged
+    tag = _leading_tag(text)
+    if tag is not None and not _is_string_tag(tag):
+        if has_continuation:
+            return decode_scalar(text)
+        return _decode_scalar_argument(text[len(tag) :])
     return decode_scalar(text)
 
 
@@ -1538,12 +1614,27 @@ def _collect_static_env(
             env_columns.append(key_col)
             continue
         if env_columns:
+            # A value whose plain scalar continues on the next more-indented
+            # line is not the tag's own argument: the runtime value is the
+            # continuation text. Detect it here (the next non-blank line's
+            # indentation vs. this key's column) so `_static_env_value` can
+            # preserve the base verdict for those shapes instead of claiming
+            # the tag argument is the whole value (#334 continuation guard).
+            has_continuation = False
+            for following in lines[number:]:
+                if is_blank(following):
+                    continue
+                has_continuation = indent_of(following) > key_col
+                break
             # A bare key, a `#`-only value and an empty quoted string are all
             # the empty string at runtime, and the most specific scope must
             # still shadow an outer assignment: indexing only truthy raw
             # values let the outer literal leak through (R7-BLOCKER-2).
             index.setdefault(key, []).append(
-                (_static_env_value(value, number, block_bodies), number)
+                (
+                    _static_env_value(value, number, block_bodies, has_continuation),
+                    number,
+                )
             )
     return index
 

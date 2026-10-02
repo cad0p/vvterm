@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Control: an in-scope `env:` value spelled `!!bool false` resolves to the
+# string `"false"` at runtime, so the cross-run exclusion stands and the case
+# is GREEN. A fix that treats every non-string tag as empty would red this.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!bool false
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

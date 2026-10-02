@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Control: an in-scope `env:` value spelled with a bare `!!int` tag whose
+# plain scalar continues on the next more-indented line. The runtime value is
+# the continuation text `ghp_x`, so the cross-run exclusion is valid and the
+# case is GREEN. The continuation guard in #334 preserves this base verdict;
+# without the guard the tag branch reads the empty tag argument and reds it.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int
+            ghp_x
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled `!foo "${{ secrets.MAYBE }}"`.
+# The tag argument is an expression the gate cannot prove non-empty, so the
+# cross-run exclusion does not stand and the `needs:` path is required
+# (#334 BLOCKER-1: the base gate read the whole raw text as a present token).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !foo "${{ secrets.MAYBE }}"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
