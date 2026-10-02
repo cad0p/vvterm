@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `run-id: ${{github.run_id}}` with no spaces (recheck NEW-1/fx60).
+# Expression whitespace is insignificant, so this is the current run and the
+# needs path is required — a literal string comparison excludes it and passes
+# a missing-edge same-run downloader.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{github.run_id}}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a templated upload is not a producer and is not refused (plan M1);
+# it has no consumer, so the file is green.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ matrix.shard.name }}
+          path: results

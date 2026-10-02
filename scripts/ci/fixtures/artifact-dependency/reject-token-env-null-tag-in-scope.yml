@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through an in-scope `env:` assignment
+# spelled `!!null` (round-7 R7-BLOCKER-1). The explicit null tag is the empty
+# string at runtime — the public `@actions/workflow-parser` compiles it to
+# `StringToken("")`, and the artifact already accepts that premise for the
+# direct `github-token: !!null` spelling — so the token cannot prove a
+# cross-run handoff and the `needs:` path is required. A gate that reads the
+# tag text as a literal classifies the token present and silently excludes
+# the download (the pre-fold rc=0).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!null
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

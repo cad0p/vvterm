@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a flow-mapping step item (recheck fx13). Flow syntax at a parsed
+# position is refused rather than guessed.
+jobs:
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - {uses: actions/download-artifact@v8, with: {name: vvterm-build}}

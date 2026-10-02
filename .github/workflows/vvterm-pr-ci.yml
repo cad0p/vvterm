@@ -162,6 +162,19 @@ jobs:
         # fails before compilation; ~1s, no extra job or macOS slot.
         run: ./scripts/ci/check-license-headers.sh
 
+      # Artifact-dependency gate (issue #316): every in-workflow artifact
+      # downloader must have a `needs:` path to the job that uploads the
+      # artifact it downloads; a recognized cross-run `run-id:` handoff is the
+      # only exclusion. Fail-closed subset YAML parser (no yq/jq/PyYAML);
+      # --selftest runs the fixture manifest first. See AGENTS.md (CI
+      # Performance Budget) and docs/verification-checklist.md.
+      - name: Check artifact dependencies
+        run: |
+          set -euo pipefail
+          command -v python3 >/dev/null || { echo "::error::python3 not found — the artifact-dependency gate needs it"; exit 1; }
+          python3 scripts/ci/check-artifact-dependencies.py --selftest
+          python3 scripts/ci/check-artifact-dependencies.py
+
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
         uses: ./.github/actions/prepare-xcode-build
         with:

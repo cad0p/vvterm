@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through an in-scope `env:` assignment
+# whose value is the plain YAML null spelling `~` (round-6 R6-BLOCKER-1). The
+# env value is the empty string at runtime, so the token cannot prove a
+# cross-run handoff and the `needs:` path is required. The assignment sits on
+# the consumer's own job, so the value is in scope and the refusal is about
+# emptiness, not scope.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ~
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

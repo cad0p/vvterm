@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the string tag on structural keys (top-level `jobs:`, a job key,
+# `runs-on:`, `steps:`, `uses:`, and `with.name:`) is resolved like GitHub's
+# runner resolves it (round-4 R4-MAJOR-1 accept control). The gate must read
+# the untagged keys and find the needs path, not blanket-refuse the tag.
+!!str jobs:
+  !!str build:
+    !!str runs-on: ubuntu-latest
+    !!str steps:
+      - !!str uses: actions/upload-artifact@v7
+        with:
+          !!str name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          !!str name: vvterm-build

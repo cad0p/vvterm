@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the positive control for the empty block-scalar refusal (round-6
+# R6-BLOCKER-1): an in-scope `github-token:` whose `env:` value is a block
+# scalar with a NON-EMPTY body. The body is the runtime value and it is
+# non-empty, so the cross-run exclusion stands and the case is GREEN — a fix
+# that "just reads the header" (or that treats every block-scalar env value
+# as empty) would red this control.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: |
+            ghp_block_scalar
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

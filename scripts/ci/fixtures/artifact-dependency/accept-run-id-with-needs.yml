@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a canonical same-run `run-id: ${{ github.run_id }}` still requires
+# the needs path — and passes when it is present (recheck NEW-1 control).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

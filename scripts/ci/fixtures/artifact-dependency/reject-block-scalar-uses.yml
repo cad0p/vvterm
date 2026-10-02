@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `uses:` value written as a literal block scalar (lens-1 B2).
+# Psych resolves the step to actions/download-artifact@v8; the gate must
+# refuse the header rather than read `|` as the action ref.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: |
+          actions/download-artifact@v8
+        with:
+          name: vvterm-build

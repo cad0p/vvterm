@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Fixture: cross-file pair file A (plan lens 2 B3). This file's `build`
+# uploads `shared-artifact`; the pair's file B downloads it without a
+# same-file producer, which must refuse (artifacts are run-scoped).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shared-artifact

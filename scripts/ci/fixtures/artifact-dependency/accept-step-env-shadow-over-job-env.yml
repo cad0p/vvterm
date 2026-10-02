@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a legal step-level override of a job-level `env:` assignment
+# (round-6 R6-MINOR-1). The job sets `GH_TOKEN: ""` and the step sets
+# `GH_TOKEN: "ghp_step_wins"`; at runtime the step env wins, so the token is
+# non-empty and the cross-run exclusion is valid — the case is GREEN. A
+# lookup that unions the visible assignments classifies the token `unknown`
+# and refuses (the pre-fold false red).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ""
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: "ghp_step_wins"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

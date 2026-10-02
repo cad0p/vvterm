@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` expression the gate cannot prove non-empty
+# (round-4 R4-MINOR-1). `vars.TOKEN` may resolve empty at runtime, so the
+# cross-run exclusion cannot be proven; the gate refuses with a remedy
+# instead of excluding the download.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ vars.TOKEN }}

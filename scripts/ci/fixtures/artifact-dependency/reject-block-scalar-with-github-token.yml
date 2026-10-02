@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a block-scalar header as the value of `with.github-token:`
+# (round-4 R4-NIT-2). The body is blanked before parsing, so without the
+# call-site refusal the header text `>-` would read as a present token and
+# exclude the download.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: >-
+            ${{ secrets.GITHUB_TOKEN }}

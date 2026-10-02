@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `!!str`-tagged `uses` VALUE whose double-quoted scalar uses an
+# escape outside the gate's decoder (round-4 R4-MAJOR-1). GitHub resolves
+# `\u0061` to `a`, so this is a real downloader to GitHub; the gate must
+# strip the string tag before the escape check and refuse the escape.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: !!str "actions/download-\u0061rtifact@v8"
+        with:
+          name: vvterm-build

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: indentation is derived, not fixed; a deeply indented `with:`
+# mapping still resolves (recheck fx24).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+              name: vvterm-build
+              path: build.tar.gz
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+                name: vvterm-build
+                path: downloaded

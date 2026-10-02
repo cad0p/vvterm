@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the #313 shape — a downloader with no needs edge. A fixed-column or
+# text-window parser can miss it; the class gate must name the site.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

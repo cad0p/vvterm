@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an action-ref shape in a value that is not a `uses:` key line
+# (round-4 R4-NIT-3). Only the reconciliation's `-artifact@ref` shape can
+# catch it; the download above is otherwise properly wired, so a parser that
+# misses the nested line must refuse, never pass.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          args: actions/download-artifact@v8

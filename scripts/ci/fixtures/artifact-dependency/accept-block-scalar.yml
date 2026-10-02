@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `|-` block scalar body is opaque; artifact-looking text inside it
+# must not be parsed and must not fabricate a producer (plan m4; the real-tree
+# witnesses are ghostty-upstream-probe.yml:270 and ios-adhoc-pr.yml:842).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: canary
+          path: canary.txt
+      - name: Render canary body
+        env:
+          CANARY_BODY: |-
+            **This issue tracks an upstream probe.**
+            uses: actions/upload-artifact@v7
+            needs: build
+            name: fabricated-producer
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: canary

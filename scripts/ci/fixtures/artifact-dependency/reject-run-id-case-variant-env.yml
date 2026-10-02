@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the case-mismatch wording of the in-scope `run-id:` refusal
+# (round-7 R7-NIT-1). The job assigns `SOURCE_RUN_ID` and the step references
+# `env.source_run_id`: the reference is unset at runtime (the `env` context
+# lookup is case-sensitive on non-Windows runners), so the refusal is correct —
+# but the assignment is not "outside this step's env scope", it is in scope
+# under a different case. The diagnostic must say so and name the variant. The
+# transitive-link wording is pinned by
+# `reject-run-id-chain-out-of-scope-env.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.source_run_id }}
+          github-token: "ghp_literal"

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a job `name:` containing an action REF (round-4 R4-NIT-1). A job
+# name is a label, not a `uses:` value, so reconciliation must blank it even
+# though it carries the `-artifact@ref` shape; the real downloader below has
+# its needs path.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    name: uses actions/download-artifact@v8
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

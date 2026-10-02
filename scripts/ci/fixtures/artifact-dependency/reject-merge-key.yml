@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a YAML merge key. Anchors/aliases are unsupported on GitHub, and
+# the gate cannot prove the effective mapping — refuse (plan m4/fx19).
+jobs:
+  build:
+    <<: *defaults
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi

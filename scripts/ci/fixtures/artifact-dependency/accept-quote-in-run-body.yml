@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the quote-closure refusal runs after block-scalar blanking, so an
+# unbalanced `'` inside a `run: |` shell body is opaque text, not a YAML
+# scalar error (recheck NEW-5; six real-tree witnesses, e.g. the
+# `NEW_COMMIT="$(gh api ...` body lines in ghostty-upstream-probe.yml).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+      - run: |
+          set -euo pipefail
+          echo "don't let this unbalanced quote break the parser

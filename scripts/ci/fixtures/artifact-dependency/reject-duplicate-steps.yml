@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a job with two `steps:` keys. GitHub's duplicate-key semantics are
+# unverified, so the gate refuses rather than picking one (plan m2).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo one
+    steps:
+      - run: echo two

@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled `!!null 'null'` (round-8
+# R8-BLOCKER-1). The quoted null spelling decodes to the same null scalar as
+# the plain `!!null null` — the tag coerces AFTER YAML decodes the quotes — so
+# the token is the empty string at runtime and cannot prove a cross-run
+# handoff; the `needs:` path is required. A gate that compares the RAW
+# argument text against the null spellings reads the quotes as content,
+# classifies the token present and silently excludes the download (the
+# round-7 rc=0). The double-quoted twin is
+# `reject-token-env-quoted-tilde-null-tag-in-scope.yml` and the verbatim tag
+# spelling is `reject-token-env-verbatim-quoted-null-tag-in-scope.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!null 'null'
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

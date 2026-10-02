@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a terminated multi-line quoted scalar whose continuation lines are
+# key-shaped (recheck fx59). Psych folds them into env.BANNER; the same-line
+# closure policy is what refuses it instead of fabricating a needs edge.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  debug-test:
+    runs-on: ubuntu-latest
+    env:
+      BANNER: "line1
+    needs: build
+    name: line3"
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

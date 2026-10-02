@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the positive control for the quoted null-tag spellings (round-8
+# R8-BLOCKER-1). `GH_TOKEN: !!null 'ghp_x'` is the literal string `ghp_x` at
+# runtime — the null tag only coerces a decoded null spelling — so the token
+# is provably non-empty, the cross-run exclusion stands and the case is
+# GREEN. A fix that treats every quoted argument after a null tag as empty
+# (or that refuses the tag) would red this control.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!null 'ghp_x'
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

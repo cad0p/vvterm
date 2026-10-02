@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Fixture: no `jobs:` mapping at all. "Nothing parsed" must be a refusal, not
+# a pass, or a truncated file would silently satisfy the gate (plan m3).
+name: no-jobs
+on: push

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+#
+# The artifact-dependency gate's CRLF fixture must be stored and checked out
+# byte-exact: with core.autocrlf=input (the local default) Git would strip the
+# CRLF line endings, silently turning the normalization test into a duplicate
+# of reject-missing-edge.yml. `-text` disables all end-of-line conversion for
+# that path.
+scripts/ci/fixtures/artifact-dependency/reject-crlf-missing-edge.yml -text

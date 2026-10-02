@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a null-tagged step `env:` value (`!!null`) that shadows a
+# non-empty job-level `GH_TOKEN` (round-7 R7-BLOCKER-1). The step's own
+# assignment is the most specific scope and it is empty at runtime, so the
+# literal job value is NOT visible and the cross-run exclusion cannot be
+# proven — the `needs:` path is required. A gate that classifies the tag text
+# as present resolves the token through the job literal instead and silently
+# excludes the download. The bare-key twin is
+# `reject-step-env-bare-null-shadow-over-job-env.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: "ghp_job_literal"
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!null
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

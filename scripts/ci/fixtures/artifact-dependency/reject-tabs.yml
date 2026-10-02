@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a tab in indentation. YAML forbids tabs for indentation; the gate
+# refuses rather than skipping the line it cannot locate (plan §4.2).
+jobs:
+	build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi

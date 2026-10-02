@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an alias `needs: *producer`. Anchors/aliases are unsupported on
+# GitHub and unresolvable here — refuse rather than pass (plan m4/fx18).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+  consumer:
+    needs: *producer
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi

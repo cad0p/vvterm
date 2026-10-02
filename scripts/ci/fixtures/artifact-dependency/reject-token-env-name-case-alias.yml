@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the reverse case mismatch — `${{ env.GH_TOKEN }}` referenced while
+# the consumer's own job assigns `gh_token` (round-6 R6-BLOCKER-2). The
+# helper job's `GH_TOKEN` is out of scope, and the in-scope name differs only
+# in case, so the reference is unset at runtime: the token is empty and the
+# cross-run exclusion cannot be proven. A case-folding lookup resolves one of
+# the assignments and silently excludes the download (the pre-fold rc=0).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  helper:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: "ghp_other_case"
+    steps:
+      - run: echo hi
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      gh_token: "ghp_in_scope_lower"
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

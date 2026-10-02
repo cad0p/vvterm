@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a mapping KEY containing an action ref (round-4 R4-NIT-1). A
+# mapping key is never a step's `uses:` value, so reconciliation must exempt
+# a token that sits only in the key; the real downloader below has its needs
+# path.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          fake-upload-artifact@v7: value

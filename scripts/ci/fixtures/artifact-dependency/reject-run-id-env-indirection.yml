@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a same-run `run-id:` laundered through an in-file static `env:`
+# assignment (lens-1 B3). At runtime `env.SOURCE_RUN_ID` is `github.run_id`,
+# so the download is same-run and needs its `needs:` path — the gate must
+# resolve the assignment instead of excluding it as cross-run.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}

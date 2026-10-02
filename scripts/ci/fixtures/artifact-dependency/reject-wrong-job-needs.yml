@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the downloader needs a job that is not on any path to the producer,
+# so the transitive closure does not reach it.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  other:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo other
+  consumer:
+    needs: other
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

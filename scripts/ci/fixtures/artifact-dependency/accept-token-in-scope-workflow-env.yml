@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through the WORKFLOW-level `env:`
+# (round-5 R5-MINOR-1 positive control). Workflow env is visible to every step,
+# so the token is provably non-empty and the cross-run exclusion stands.
+env:
+  GH_TOKEN: "ghp_workflow_scope"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

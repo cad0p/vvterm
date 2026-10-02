@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the positive control for the anchored direct token (round-8
+# R8-BLOCKER-2). `github-token: !!str &a ghp_x` is the literal string `ghp_x`
+# at runtime — the string tag and the anchor are node properties, not token
+# text — so the token is non-empty, the cross-run `run-id:` is honored, the
+# exclusion stands and the case is GREEN. A fix that refuses the anchor
+# instead of reading the scalar would red this control. The empty twin is
+# `reject-token-tagged-anchor-empty-in-scope.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: !!str &a ghp_x

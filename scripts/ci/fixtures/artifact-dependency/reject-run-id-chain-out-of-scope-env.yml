@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a cross-run `run-id:` whose in-scope `env:` assignment chains to a
+# transitive `env.OTHER` that is only assigned on another job's step
+# (round-6 R6-NIT-1). `SOURCE_RUN_ID` IS in scope; it is `env.OTHER` that is
+# not visible at runtime, so the refusal must name the transitive link rather
+# than implying the referenced name is out of scope. The refusal itself is
+# the round-5 scope behavior (the pre-fold gate excluded the download).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  helper:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+        env:
+          OTHER: 12345
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ env.OTHER }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: "ghp_literal"

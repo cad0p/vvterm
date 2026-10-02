@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the quoted-job-key block-merge pair (plan §4.5). `mid` has
+# `needs: producer`; a text-window parser can merge the following quoted
+# `"tail-job":` key into `mid`'s block and let the edgeless downloader pass.
+# The gate decodes the quoted job key into a new job and reds it.
+jobs:
+  producer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  mid:
+    needs: producer
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo mid
+  "tail-job":
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a plain double-quoted action ref with a valid `needs:` edge stays
+# GREEN — the B1 refusal refuses escapes, not quotes (lens-1 B1 control).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/download-artifact@v8"
+        with:
+          name: vvterm-build

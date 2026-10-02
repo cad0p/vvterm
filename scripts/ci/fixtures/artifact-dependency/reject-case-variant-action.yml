@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a case-variant action ref with no edge (recheck NEW-2/fx34).
+# `uses:` refs are case-folded for detection, and the token reconciliation is
+# case-folded too, so this cannot hide from either mechanism.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Actions/Download-Artifact@v8
+        with:
+          name: vvterm-build

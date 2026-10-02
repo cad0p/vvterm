@@ -1,0 +1,17 @@
+﻿# SPDX-License-Identifier: MIT
+# Fixture: a UTF-8 BOM and a quoted "jobs": key still resolve (plan m3);
+# the download is compliant, so the file is green.
+"jobs":
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    "needs": build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

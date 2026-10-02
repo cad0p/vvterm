@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a non-string tag on `needs:` can coerce the job graph, so the gate
+# refuses it explicitly instead of reading the tag text as a job name
+# (round-5 R5-NIT-1 control).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: !!seq [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

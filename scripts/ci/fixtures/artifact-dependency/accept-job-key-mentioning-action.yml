@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a job whose id is literally `upload-artifact` (calculated by the
+# closure lens as round-2 C-MINOR-1). A mapping key is never a step's `uses:`
+# value, so reconciliation must not refuse it; the real downloader below has
+# its needs path.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  upload-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "the job id is a label, not a download"
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

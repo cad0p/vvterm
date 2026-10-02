@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through an in-scope `env:` assignment
+# whose value is an EMPTY block scalar (`|` with no body; round-6
+# R6-BLOCKER-1). The header is not the value — the body is, and it is empty —
+# so the token is empty at runtime, `actions/download-artifact` ignores
+# `run-id:` and falls back to the current run: the cross-run exclusion must
+# not apply and the `needs:` path is required. A gate that reads the header
+# text (`|`) as a literal classifies the token present and silently excludes
+# the download (the pre-fold rc=0).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: |
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

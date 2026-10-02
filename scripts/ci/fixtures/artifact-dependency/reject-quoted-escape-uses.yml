@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a YAML double-quoted escape inside the action ref (lens-1 B1). A
+# spec parser resolves \u006c to `l`, so GitHub runs a real download; the
+# subset decoder would read the literal text `u006c` and lose the step, so
+# the gate refuses the escape instead of misreading the action ref.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/down\u006coad-artifact@v8"
+        with:
+          name: vvterm-build

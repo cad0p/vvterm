@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through an `env:` assignment on ANOTHER
+# job (round-5 R5-MINOR-1). GitHub's step env context is the workflow env plus
+# the enclosing job's env plus the step's own env, so the consumer's token is
+# empty at runtime, `actions/download-artifact` ignores `run-id:` and falls
+# back to the current run — the cross-run exclusion must not apply.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  helper:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: "ghp_some_other_job"
+    steps:
+      - run: echo hi
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

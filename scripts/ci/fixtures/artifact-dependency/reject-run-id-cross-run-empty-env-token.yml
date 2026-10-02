@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through an in-file static `env:`
+# assignment that is empty (round-4 R4-MINOR-1). The token is empty at
+# runtime, so the cross-run exclusion must turn off and the `needs:` path is
+# required.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ""
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

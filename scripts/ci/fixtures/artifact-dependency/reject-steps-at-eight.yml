@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: indentation variant B (plan lens 2 B1/fx10) — the steps sequence is
+# indented 8 under `steps:` at 4. Valid YAML; a fixed 6-space item scan sees
+# no steps at all and passes.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/download-artifact@v8
+          with:
+            name: vvterm-build

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the escaped spelling in both the key and the value (lens-1 B1).
+# Psych resolves this step to `uses: "actions/download-artifact@v8"`; both
+# halves must be refused, not decoded by a partial escape decoder.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - "use\u0073": "actions/down\u006coad-artifact@v8"
+        "with":
+          "name": vvterm-build
