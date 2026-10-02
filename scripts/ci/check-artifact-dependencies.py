@@ -154,7 +154,13 @@ though ECMAScript keeps it, at three Python-`strip()` sites — `env:`
 predicate), a direct `github-token:` (`decode_scalar`'s `value.strip()`),
 and a block-scalar env body that is only U+0085/U+001C (`is_blank`'s
 `line.strip()`) — while the quoted shape resolves; these fail-closed false
-reds are documented rather than modelled; a Windows runner's `env` context is
+reds are documented rather than modelled, and a fourth Python-`strip()` site
+is left the same way: `_extract_expression` strips a `run-id:`/`env:` value
+with `value.strip()` before its `${{ … }}` fence check, so a plain raw
+U+0085/U+001C-prefixed EXPRESSION is resolved although ECMAScript keeps the
+prefix and a run-id's `parseInt` is then `NaN` (a 404, not a same-run
+fallback) — a fail-closed false red of the same correctness-only family; a
+Windows runner's `env` context is
 case-insensitive (`OrdinalIgnoreCase`, last-wins), so a case-variant
 reference is refused and a case-colliding `env:` mapping cannot make the
 gate exclude a same-run download: for every name a chain resolves through,
