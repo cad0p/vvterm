@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled `!!int` whose only continuation is
+# an indented comment-only line (#334 fold, lens-2 MINOR-3). The comment is
+# not the tag's argument, so the runtime value is `""`, the cross-run
+# exclusion is invalid, and the `needs:` path is required.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int
+            # no token here
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

@@ -1342,4 +1342,44 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    {
+        "id": "reject-token-env-int-empty-tag-continuation",
+        "files": ["reject-token-env-int-empty-tag-continuation.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-int-empty-tag-continuation.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-int-empty-block-continuation",
+        "files": ["reject-token-env-int-empty-block-continuation.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-int-empty-block-continuation.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-int-comment-continuation",
+        "files": ["reject-token-env-int-comment-continuation.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-int-comment-continuation.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-bare-verbatim-str-tag-line",
+        "files": ["reject-bare-verbatim-str-tag-line.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-bare-verbatim-str-tag-line.yml:20: unconsumed line — every line in a job or step must be a mapping key the gate understands (refusing rather than skipping)',
+        ],
+    },
+    {
+        "id": "reject-token-env-step-int-empty-shadow-over-job-env",
+        "files": ["reject-token-env-step-int-empty-shadow-over-job-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-step-int-empty-shadow-over-job-env.yml:19: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
 ]

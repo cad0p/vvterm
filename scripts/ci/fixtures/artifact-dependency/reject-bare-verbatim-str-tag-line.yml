@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a line containing only the verbatim string tag
+# (`!<tag:yaml.org,2002:str>`), the verbatim sibling of the bare `!!str` line
+# (#334 fold, lens-2 MINOR-3). `split_key_value` strips the string tag and the
+# empty string is not a mapping entry, so the line must reach the parser as an
+# unconsumed line instead of crashing there.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          !<tag:yaml.org,2002:str>
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

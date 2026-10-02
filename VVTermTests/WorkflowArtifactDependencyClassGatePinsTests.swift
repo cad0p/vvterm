@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 170
+    private static let expectedManifestCases = 175
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -290,6 +290,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-token-direct-quoted-null.yml",
         "accept-token-env-int-tag-continuation.yml",
         "accept-token-env-custom-tag-continuation.yml",
+        "reject-token-env-int-empty-tag-continuation.yml",
+        "reject-token-env-int-empty-block-continuation.yml",
+        "reject-token-env-int-comment-continuation.yml",
+        "reject-bare-verbatim-str-tag-line.yml",
+        "reject-token-env-step-int-empty-shadow-over-job-env.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
