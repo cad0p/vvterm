@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the folded spelling of the empty block-scalar value (`>-` with no
+# body; round-6 R6-BLOCKER-1). The value is the empty string at runtime, so
+# the token cannot prove a cross-run handoff and the `needs:` path is
+# required. Pinned separately from the `|` spelling because the block-scalar
+# header grammar has two shapes.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: >-
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

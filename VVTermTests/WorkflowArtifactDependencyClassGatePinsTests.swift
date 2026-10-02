@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 113
+    private static let expectedManifestCases = 123
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -214,6 +214,20 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-token-compound-secret.yml",
         "reject-run-id-out-of-scope-cross-run-env.yml",
         "reject-run-id-out-of-scope-same-run-env.yml",
+        // round-6 fold: YAML-empty `env:` values (R6-BLOCKER-1),
+        // case-sensitive `env:` names (R6-BLOCKER-2), step-over-job precedence
+        // (R6-MINOR-1), and the transitive link in a chained run-id refusal
+        // (R6-NIT-1)
+        "reject-token-env-empty-block-scalar-in-scope.yml",
+        "reject-token-env-empty-folded-block-scalar-in-scope.yml",
+        "reject-token-env-null-tilde-in-scope.yml",
+        "reject-token-env-null-literal-in-scope.yml",
+        "accept-token-env-nonempty-block-scalar-in-scope.yml",
+        "reject-token-env-name-case-mismatch.yml",
+        "reject-token-env-name-case-alias.yml",
+        "accept-step-env-shadow-over-job-env.yml",
+        "reject-step-env-empty-shadow-over-job-env.yml",
+        "reject-run-id-chain-out-of-scope-env.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

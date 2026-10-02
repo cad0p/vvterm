@@ -64,7 +64,12 @@ construct the subset grammar cannot model is refused, not skipped. A
 `ios-adhoc-pr.yml` shape) cannot be resolved statically and keeps the
 cross-run exclusion; static in-file `env:` assignments are resolved, and one
 the gate cannot classify (including `needs.*.outputs.*`) is refused rather
-than guessed. Reconciliation deliberately skips single-line `run:` bodies,
+than guessed. Static `env:` names are matched case-sensitively —
+actions/runner's `env` context is `StringComparer.Ordinal` on non-Windows
+runners — so a case-variant assignment is unset at runtime and does not
+resolve; a YAML-empty value (an empty block-scalar body, or a plain `~` /
+`null`) is the empty string, not the header text. Reconciliation
+deliberately skips single-line `run:` bodies,
 `env:` values, non-semantic `name:` scalars (job- and step-level), tokens
 that sit in a mapping key, and bare identifiers (a job id, a `needs:` item,
 an `if:` operand — they are data/labels, not steps), so an artifact-action
@@ -104,7 +109,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 113
+EXPECTED_MANIFEST_CASES = 123
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -646,12 +651,16 @@ def blank_non_semantic_name_values(lines: list[str]) -> list[str]:
     return out
 
 
-def blank_block_scalars(lines: list[str]) -> list[str]:
+def blank_block_scalars(lines: list[str]) -> tuple[list[str], dict[int, str]]:
     """Blank block-scalar bodies (full header grammar `[|>][+-]?\\d*` /
-    `[|>]\\d*[+-]?`). A body line is any subsequent line indented deeper than
-    the key whose value is the scalar; the scalar ends when a line dedents to
-    or above that key."""
+    `[|>]\\d*[+-]?`) and return the body text of every block scalar, keyed by
+    the header's 1-based line number. A body line is any subsequent line
+    indented deeper than the key whose value is the scalar; the scalar ends
+    when a line dedents to or above that key. The bodies are captured before
+    blanking because the static `env:` index must tell an empty body (a
+    runtime-empty value) from a non-empty one (R6-BLOCKER-1)."""
     out = list(lines)
+    bodies: dict[int, str] = {}
     for i, line in enumerate(out):
         if is_blank(line):
             continue
@@ -669,19 +678,23 @@ def blank_block_scalars(lines: list[str]) -> list[str]:
         if not BLOCK_HEADER_RE.match(value):
             continue
         key_indent = indent + prefix
+        body_lines: list[str] = []
         j = i + 1
         while j < len(out):
             body = out[j]
             if is_blank(body):
+                body_lines.append("")
                 out[j] = ""
                 j += 1
                 continue
             if indent_of(body) > key_indent:
+                body_lines.append(body)
                 out[j] = ""
                 j += 1
                 continue
             break
-    return out
+        bodies[i + 1] = "\n".join(body_lines)
+    return out, bodies
 
 
 # ---------------------------------------------------------------------------
@@ -1289,13 +1302,55 @@ def _extract_expression(value: str) -> str | None:
     return text[3:-2]
 
 
-def _collect_static_env(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
+# Plain YAML null spellings (YAML 1.2 core schema: `null`, `Null`, `NULL`,
+# `~`). An `env:` value spelled this way is the empty string at runtime, so it
+# must not classify as a present token (R6-BLOCKER-1). A quoted `"~"` /
+# `"null"` is the literal text and stays non-empty.
+YAML_NULL_SPELLINGS = ("~", "null", "Null", "NULL")
+
+
+def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
+    """The runtime value of a static `env:` assignment. A block-scalar header
+    is not the value — the body is — so an empty body is the empty string and
+    a non-empty body is its text (R6-BLOCKER-1). A plain YAML null is the
+    empty string too. Anything else is the decoded scalar."""
+    text = raw.strip()
+    if BLOCK_HEADER_RE.match(text):
+        return block_bodies.get(line, "")
+    if text in YAML_NULL_SPELLINGS:
+        return ""
+    return decode_scalar(text)
+
+
+def _static_env_has_name(
+    static_env: dict[str, list[tuple[str, int]]], name: str
+) -> bool:
+    """True when the file-wide static `env:` index has an assignment for
+    `name`: exact case first, then any case variant. Resolution uses the
+    exact-case index only (actions/runner's `env` context is
+    `StringComparer.Ordinal` on non-Windows runners, R6-BLOCKER-2); the
+    case-variant check feeds the diagnostic for a name that is empty at
+    runtime because of the mismatch (R6-NIT-1)."""
+    if name in static_env:
+        return True
+    folded = name.lower()
+    return any(candidate.lower() == folded for candidate in static_env)
+
+
+def _collect_static_env(
+    lines: list[str], block_bodies: dict[int, str]
+) -> dict[str, list[tuple[str, int]]]:
     """Index static `env:` assignments (workflow-, job- and step-level) so a
-    `run-id: ${{ env.NAME }}` can be resolved against the same file (B3).
-    Names are matched case-insensitively (fail-closed: a case variant must not
-    launder a same-run value). Values written to `$GITHUB_ENV` at runtime are
-    invisible here and stay unresolved. The index is file-wide; callers scope
-    it to a step's visible env chain with `_scoped_static_env` (R5-MINOR-1)."""
+    `run-id:`/`github-token: ${{ env.NAME }}` can be resolved against the same
+    file (B3). Names are matched **case-sensitively**: actions/runner's `env`
+    context is `CaseSensitiveDictionaryContextData` with
+    `StringComparer.Ordinal` on non-Windows runners (this repo runs
+    macOS/ubuntu), so a case-variant assignment is unset at runtime and must
+    not resolve (R6-BLOCKER-2). A block-scalar header is not the value — an
+    empty body is the empty string — and a plain YAML null is empty too
+    (R6-BLOCKER-1). Values written to `$GITHUB_ENV` at runtime are invisible
+    here and stay unresolved. The index is file-wide; callers scope it to a
+    step's visible env chain with `_scoped_static_env` (R5-MINOR-1)."""
     index: dict[str, list[tuple[str, int]]] = {}
     env_columns: list[int] = []
     for number, line in enumerate(lines, start=1):
@@ -1320,48 +1375,55 @@ def _collect_static_env(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
             env_columns.append(key_col)
             continue
         if env_columns and value:
-            index.setdefault(key.lower(), []).append((decode_scalar(value), number))
+            index.setdefault(key, []).append(
+                (_static_env_value(value, number, block_bodies), number)
+            )
     return index
 
 
 def _scoped_static_env(
     static_env: dict[str, list[tuple[str, int]]],
-    ranges: list[tuple[int, int]],
+    scopes: list[tuple[int, int]],
 ) -> dict[str, list[tuple[str, int]]]:
     """Restrict the file-wide static `env:` index to the blocks a step can
-    actually see: the workflow-level `env:`, the enclosing job's `env:`, and
-    the step's own `env:` (R5-MINOR-1). GitHub's `env` context for a step is
-    that chain plus `$GITHUB_ENV` writes, so an assignment on another job or
-    on another step is invisible at runtime and proves nothing."""
-    if not ranges:
+    actually see and apply scope precedence (R5-MINOR-1, R6-MINOR-1): `scopes`
+    is ordered most specific first (step -> job -> workflow), and the most
+    specific scope that assigns a name wins, so a legal step-level override is
+    one effective value instead of a set union. GitHub's `env` context for a
+    step is that chain plus `$GITHUB_ENV` writes, so an assignment on another
+    job or on another step is invisible at runtime and proves nothing."""
+    if not scopes:
         return {}
     scoped: dict[str, list[tuple[str, int]]] = {}
     for name, entries in static_env.items():
-        visible = [
-            (value, line)
-            for value, line in entries
-            if any(low <= line <= high for low, high in ranges)
-        ]
-        if visible:
-            scoped[name] = visible
+        for low, high in scopes:
+            visible = [
+                (value, line) for value, line in entries if low <= line <= high
+            ]
+            if visible:
+                scoped[name] = visible
+                break
     return scoped
 
 
 def _env_reference(value: str) -> str | None:
-    """The lowercased `env.NAME` a value references, or None. Used to tell
-    the documented runtime-written form (no static assignment anywhere) from
-    an assignment that exists but sits outside the step's env scope."""
+    """The `env.NAME` a value references (case preserved), or None. Used to
+    tell the documented runtime-written form (no static assignment anywhere)
+    from an assignment that exists but is not visible to this step under the
+    exact name the value references."""
     expression = _extract_expression(value)
     if expression is None:
         return None
-    normalized = _normalize_expression(expression)
-    if normalized.startswith("env."):
-        return normalized[4:]
+    compact = _compact_expression(expression)
+    if compact.lower().startswith("env."):
+        return compact[4:]
     return None
 
 
-def _normalize_expression(value: str) -> str:
-    return re.sub(r"[\s'\"]", "", value).lower()
+def _compact_expression(value: str) -> str:
+    """An expression body with whitespace and quotes removed, case preserved
+    (the `env` context lookup is case-sensitive, R6-BLOCKER-2)."""
+    return re.sub(r"[\s'\"]", "", value)
 
 
 def _classify_env_name(
@@ -1401,12 +1463,13 @@ def _classify_static_value(
     expression = _extract_expression(text)
     if expression is None:
         return "unknown"
-    normalized = _normalize_expression(expression)
+    compact = _compact_expression(expression)
+    normalized = compact.lower()
     if SAME_RUN_RE.search(normalized):
         return "same-run"
     if CROSS_RUN_RE.match(normalized):
         if normalized.startswith("env."):
-            return _classify_env_name(normalized[4:], static_env, seen)
+            return _classify_env_name(compact[4:], static_env, seen)
         return "cross-run"
     return "unknown"
 
@@ -1433,11 +1496,12 @@ def _classify_token_value(
     expression = _extract_expression(text)
     if expression is None:
         return "present"
-    normalized = _normalize_expression(expression)
+    compact = _compact_expression(expression)
+    normalized = compact.lower()
     if normalized == "github.token" or normalized == "secrets.github_token":
         return "present"
     if normalized.startswith("env."):
-        name = normalized[4:]
+        name = compact[4:]
         if name in seen:
             return "unknown"
         entries = static_env.get(name)
@@ -1453,23 +1517,57 @@ def _classify_token_value(
     return "unknown"
 
 
+def _unresolved_env_link(
+    name: str,
+    scoped_env: dict[str, list[tuple[str, int]]],
+    seen: set[str] | None = None,
+) -> str | None:
+    """The first `env.NAME` link in a static `env:` chain that this step's env
+    scope cannot resolve — its exact name has no in-scope assignment, so the
+    value is empty or runtime-written at runtime — or None when every link
+    resolves (R6-NIT-1). Names are matched exactly: actions/runner's `env`
+    context is case-sensitive on non-Windows runners, so a case-variant
+    assignment is invisible at runtime (R6-BLOCKER-2)."""
+    if seen is None:
+        seen = set()
+    if name in seen:
+        return name
+    seen = seen | {name}
+    entries = scoped_env.get(name)
+    if not entries:
+        return name
+    for assigned, _line in entries:
+        expression = _extract_expression(assigned)
+        if expression is None:
+            continue
+        compact = _compact_expression(expression)
+        if compact.lower().startswith("env."):
+            link = _unresolved_env_link(compact[4:], scoped_env, seen)
+            if link is not None:
+                return link
+    return None
+
+
 def _apply_static_env_run_id_resolution(
     jobs: list[Job],
     lines: list[str],
     workflow_env_range: tuple[int, int] | None,
+    block_bodies: dict[int, str],
 ) -> None:
     """Resolve every cross-run-classified `run-id:` against the static `env:`
     index **scoped to the step's visible env chain** (workflow + enclosing job
-    + the step's own `env:`): a same-run assignment turns the cross-run
-    exclusion off (so the rule applies), and a static value the gate cannot
-    classify is refused rather than excluded (B3). An assignment that sits
-    outside the step's chain is invisible at runtime, so it proves nothing —
-    the token is refused and a `run-id:` whose only assignments are elsewhere
-    is refused too (R5-MINOR-1). The `github-token:` that the exclusion
-    depends on is classified the same way: a statically empty in-scope token
-    is absent (the rule applies) and one the gate cannot prove non-empty is
-    refused."""
-    static_env = _collect_static_env(lines)
+    + the step's own `env:`, most specific first): a same-run assignment turns
+    the cross-run exclusion off (so the rule applies), and a static value the
+    gate cannot classify is refused rather than excluded (B3). An assignment
+    that is not visible to the step under the exact name it references (a
+    different job/step, or a name that differs only in case) is empty at
+    runtime, so it proves nothing — the token is refused and a `run-id:` whose
+    only assignments are elsewhere is refused too (R5-MINOR-1, R6-BLOCKER-2).
+    The `github-token:` that the exclusion depends on is classified the same
+    way: a statically empty in-scope token (including an empty block-scalar
+    body or a plain YAML null, R6-BLOCKER-1) is absent (the rule applies) and
+    one the gate cannot prove non-empty is refused."""
+    static_env = _collect_static_env(lines, block_bodies)
     for job in jobs:
         for step in job.artifact_steps:
             if not step.run_id_cross_run or step.run_id is None:
@@ -1478,7 +1576,7 @@ def _apply_static_env_run_id_resolution(
                 static_env,
                 [
                     entry
-                    for entry in (workflow_env_range, job.env_range, step.env_range)
+                    for entry in (step.env_range, job.env_range, workflow_env_range)
                     if entry is not None
                 ],
             )
@@ -1496,19 +1594,48 @@ def _apply_static_env_run_id_resolution(
             if resolution == "unresolved":
                 # Two cases: no static assignment anywhere (the documented
                 # runtime `$GITHUB_ENV` handoff — the real ios-adhoc-pr.yml
-                # shape — which keeps the cross-run exclusion), or
-                # assignment(s) that exist but sit outside this step's env
-                # chain. The second is an authoring error the gate must not
-                # read as a proven cross-run handoff.
+                # shape — which keeps the cross-run exclusion), or a static
+                # assignment that is not visible to this step under the exact
+                # name it references (another job/step, or a name that differs
+                # only in case). The second is an authoring error the gate
+                # must not read as a proven cross-run handoff. The diagnostic
+                # names the first unresolved link, which for a chained value is
+                # the transitive `env.NAME` and not the in-scope reference
+                # (R6-NIT-1).
                 name = _env_reference(step.run_id)
-                if name is not None and static_env.get(name):
+                link = (
+                    _unresolved_env_link(name, scoped_env)
+                    if name is not None
+                    else None
+                )
+                if link is not None and (
+                    _static_env_has_name(static_env, link)
+                    or _static_env_has_name(static_env, name)
+                ):
+                    if link == name:
+                        raise Refusal(
+                            step.run_id_line or step.uses_line,
+                            f"run-id: '{step.run_id}' resolves through a static `env:` assignment "
+                            "that is outside this step's env scope (only the workflow-level, the "
+                            "enclosing job's and the step's own `env:` are visible at runtime) — the "
+                            "value is empty or runtime-written, so a cross-run handoff cannot be "
+                            "proven (refusing rather than guessing)",
+                        )
+                    if _static_env_has_name(static_env, link):
+                        raise Refusal(
+                            step.run_id_line or step.uses_line,
+                            f"run-id: '{step.run_id}' resolves through `env.{link}`, a static "
+                            "`env:` assignment that is outside this step's env scope (only the "
+                            "workflow-level, the enclosing job's and the step's own `env:` are "
+                            "visible at runtime) — the value is empty or runtime-written, so a "
+                            "cross-run handoff cannot be proven (refusing rather than guessing)",
+                        )
                     raise Refusal(
                         step.run_id_line or step.uses_line,
-                        f"run-id: '{step.run_id}' resolves through a static `env:` assignment "
-                        "that is outside this step's env scope (only the workflow-level, the "
-                        "enclosing job's and the step's own `env:` are visible at runtime) — the "
-                        "value is empty or runtime-written, so a cross-run handoff cannot be "
-                        "proven (refusing rather than guessing)",
+                        f"run-id: '{step.run_id}' resolves through `env.{link}`, which has no "
+                        "static `env:` assignment in this file — the value is runtime-written or "
+                        "empty, so a cross-run handoff cannot be proven (refusing rather than "
+                        "guessing)",
                     )
             if step.github_token is None:
                 # No token at all: the parse-time gating already decided the
@@ -1641,7 +1768,7 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
     lines = normalize_text(raw)
     try:
         lines = blank_comments(lines)
-        lines = blank_block_scalars(lines)
+        lines, block_bodies = blank_block_scalars(lines)
         for index, line in enumerate(lines, start=1):
             if is_blank(line):
                 continue
@@ -1674,7 +1801,7 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
             result.diagnostics.extend(reconciliation)
             return result
         _apply_static_env_run_id_resolution(
-            result.jobs, lines, parser.workflow_env_range
+            result.jobs, lines, parser.workflow_env_range, block_bodies
         )
         for job in result.jobs:
             for step in job.artifact_steps:

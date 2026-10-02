@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token: ${{ env.gh_token }}` whose in-scope assignment is
+# spelled `GH_TOKEN` (round-6 R6-BLOCKER-2). actions/runner's `env` context
+# is `CaseSensitiveDictionaryContextData` with `StringComparer.Ordinal` on
+# non-Windows runners (this repo runs macOS/ubuntu), so the reference is
+# unset at runtime, the token is empty and the cross-run exclusion cannot be
+# proven. A gate that case-folds env names resolves the assignment and
+# silently excludes the download (the pre-fold rc=0).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: "ghp_in_scope_upper"
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.gh_token }}

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the `null` spelling of the plain YAML null `env:` value (round-6
+# R6-BLOCKER-1). Like `~`, the runtime value is the empty string, so the
+# token cannot prove a cross-run handoff and the `needs:` path is required.
+# Pinned separately from `~` because both spellings were measured as silent
+# passes before the fold.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: null
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
