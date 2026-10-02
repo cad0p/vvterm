@@ -39,6 +39,13 @@ import XCTest
 @MainActor
 final class TeleportRedactionTests: XCTestCase {
 
+    /// Host-state tolerance for the loopback listener's `.ready` wait: the
+    /// redaction suite drives a real loopback request through
+    /// `BrowserMFAListener`, whose product default is 15 s. Same rationale and
+    /// value as `BrowserMFAListenerLoopbackTests.listenerStartTolerance` (#260
+    /// host-state class; tolerance, not retry machinery).
+    private static let listenerStartTolerance: TimeInterval = 20
+
     /// A logging seam that emits into a unique subsystem so the test can read
     /// back exactly the payloads the subject logged.
     private final class SpySubsystemLogging: TeleportLogging, @unchecked Sendable {
@@ -336,7 +343,8 @@ final class TeleportRedactionTests: XCTestCase {
     func testBrowserMFAListener_rejectionsLogAReasonWithoutQueryValues() async throws {
         let logging = SpySubsystemLogging()
         let listener = BrowserMFAListener(
-            logger: logging.logger(category: "TeleportBrowserMFA")
+            logger: logging.logger(category: "TeleportBrowserMFA"),
+            startTimeout: Self.listenerStartTolerance
         )
         _ = try await listener.start()
         defer { listener.cancel() }
