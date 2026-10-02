@@ -973,4 +973,56 @@ CASES = [
             "reject-run-id-chain-out-of-scope-env.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.OTHER`, a static `env:` assignment that is outside this step's env scope (only the workflow-level, the enclosing job's and the step's own `env:` are visible at runtime) — the value is empty or runtime-written, so a cross-run handoff cannot be proven (refusing rather than guessing)",
         ],
     },
+    # ------------------------------------------------------------------
+    # round-7 fold: null-tagged `env:` values (R7-BLOCKER-1), bare empty
+    # `env:` values that must still shadow (R7-BLOCKER-2), comment-only
+    # block-scalar bodies (R7-MAJOR-1), and the case-mismatch run-id
+    # wording (R7-NIT-1)
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-token-env-null-tag-in-scope",
+        "files": ["reject-token-env-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-null-tag-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-verbatim-null-tag-in-scope",
+        "files": ["reject-token-env-verbatim-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-verbatim-null-tag-in-scope.yml:18: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-step-env-null-tag-shadow-over-job-env",
+        "files": ["reject-step-env-null-tag-shadow-over-job-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-step-env-null-tag-shadow-over-job-env.yml:22: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-step-env-bare-null-shadow-over-job-env",
+        "files": ["reject-step-env-bare-null-shadow-over-job-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-step-env-bare-null-shadow-over-job-env.yml:22: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "accept-token-env-comment-block-scalar-in-scope",
+        "files": ["accept-token-env-comment-block-scalar-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-run-id-case-variant-env",
+        "files": ["reject-run-id-case-variant-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-run-id-case-variant-env.yml:25: run-id: '${{ env.source_run_id }}' resolves through `env.source_run_id`, which is assigned only under a different case (`env.SOURCE_RUN_ID`) — the `env` context lookup is case-sensitive on non-Windows runners, so the value is empty at runtime and a cross-run handoff cannot be proven (refusing rather than guessing)",
+        ],
+    },
 ]

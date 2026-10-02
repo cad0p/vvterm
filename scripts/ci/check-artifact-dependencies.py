@@ -109,7 +109,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 123
+EXPECTED_MANIFEST_CASES = 129
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -651,15 +651,22 @@ def blank_non_semantic_name_values(lines: list[str]) -> list[str]:
     return out
 
 
-def blank_block_scalars(lines: list[str]) -> tuple[list[str], dict[int, str]]:
+def blank_block_scalars(
+    lines: list[str], source: list[str] | None = None
+) -> tuple[list[str], dict[int, str]]:
     """Blank block-scalar bodies (full header grammar `[|>][+-]?\\d*` /
     `[|>]\\d*[+-]?`) and return the body text of every block scalar, keyed by
     the header's 1-based line number. A body line is any subsequent line
     indented deeper than the key whose value is the scalar; the scalar ends
-    when a line dedents to or above that key. The bodies are captured before
-    blanking because the static `env:` index must tell an empty body (a
-    runtime-empty value) from a non-empty one (R6-BLOCKER-1)."""
+    when a line dedents to or above that key. `lines` (usually comment-blanked)
+    decides which headers and extents exist; the bodies are captured from
+    `source` when supplied — the pre-comment-blanking text — because a `#`
+    inside a block-scalar body is content, not a comment: a comment-only body
+    is a NON-empty runtime value (R7-MAJOR-1). The static `env:` index must
+    tell an empty body (a runtime-empty value) from a non-empty one
+    (R6-BLOCKER-1)."""
     out = list(lines)
+    body_source = lines if source is None else source
     bodies: dict[int, str] = {}
     for i, line in enumerate(out):
         if is_blank(line):
@@ -681,7 +688,7 @@ def blank_block_scalars(lines: list[str]) -> tuple[list[str], dict[int, str]]:
         body_lines: list[str] = []
         j = i + 1
         while j < len(out):
-            body = out[j]
+            body = body_source[j]
             if is_blank(body):
                 body_lines.append("")
                 out[j] = ""
@@ -1305,20 +1312,43 @@ def _extract_expression(value: str) -> str | None:
 # Plain YAML null spellings (YAML 1.2 core schema: `null`, `Null`, `NULL`,
 # `~`). An `env:` value spelled this way is the empty string at runtime, so it
 # must not classify as a present token (R6-BLOCKER-1). A quoted `"~"` /
-# `"null"` is the literal text and stays non-empty.
+# `"null"` is the literal text and stays non-empty. `NULL_TAG_SPELLINGS` are
+# the explicit null tags (`!!null`, `!<tag:yaml.org,2002:null>`): the public
+# `@actions/workflow-parser` compiles them to `StringToken("")` too, so the
+# tag text must not classify as a present token either (R7-BLOCKER-1).
 YAML_NULL_SPELLINGS = ("~", "null", "Null", "NULL")
+NULL_TAG_SPELLINGS = ("!!null", "!<tag:yaml.org,2002:null>")
+
+
+def _null_tag_value(text: str) -> str | None:
+    """The empty string when `text` is a null-tagged scalar that is empty at
+    runtime (R7-BLOCKER-1), else None. A null tag with an EMPTY argument
+    (`!!null`, `!!null ""`, `!!null ~`, `!!null null` — every null spelling)
+    is empty; a null tag with a non-null argument (`!!null foo`) is the string
+    `foo` at runtime, not empty, so it falls through to the literal reader."""
+    tag = _leading_tag(text)
+    if tag not in NULL_TAG_SPELLINGS:
+        return None
+    argument = text[len(tag) :].strip()
+    if not argument or argument in YAML_NULL_SPELLINGS or argument in ('""', "''"):
+        return ""
+    return None
 
 
 def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
     """The runtime value of a static `env:` assignment. A block-scalar header
     is not the value — the body is — so an empty body is the empty string and
     a non-empty body is its text (R6-BLOCKER-1). A plain YAML null is the
-    empty string too. Anything else is the decoded scalar."""
+    empty string too, and a null-tagged scalar with a null argument is empty
+    as well (R7-BLOCKER-1). Anything else is the decoded scalar."""
     text = raw.strip()
     if BLOCK_HEADER_RE.match(text):
         return block_bodies.get(line, "")
     if text in YAML_NULL_SPELLINGS:
         return ""
+    tagged = _null_tag_value(text)
+    if tagged is not None:
+        return tagged
     return decode_scalar(text)
 
 
@@ -1348,7 +1378,9 @@ def _collect_static_env(
     macOS/ubuntu), so a case-variant assignment is unset at runtime and must
     not resolve (R6-BLOCKER-2). A block-scalar header is not the value — an
     empty body is the empty string — and a plain YAML null is empty too
-    (R6-BLOCKER-1). Values written to `$GITHUB_ENV` at runtime are invisible
+    (R6-BLOCKER-1). A BARE key (`GH_TOKEN:`) is indexed as the empty string
+    rather than skipped so the most specific scope still shadows an outer
+    assignment (R7-BLOCKER-2). Values written to `$GITHUB_ENV` at runtime are invisible
     here and stay unresolved. The index is file-wide; callers scope it to a
     step's visible env chain with `_scoped_static_env` (R5-MINOR-1)."""
     index: dict[str, list[tuple[str, int]]] = {}
@@ -1374,11 +1406,30 @@ def _collect_static_env(
         if key == "env" and not value:
             env_columns.append(key_col)
             continue
-        if env_columns and value:
+        if env_columns:
+            # A bare key, a `#`-only value and an empty quoted string are all
+            # the empty string at runtime, and the most specific scope must
+            # still shadow an outer assignment: indexing only truthy raw
+            # values let the outer literal leak through (R7-BLOCKER-2).
             index.setdefault(key, []).append(
                 (_static_env_value(value, number, block_bodies), number)
             )
     return index
+
+
+def _static_env_case_variant(
+    static_env: dict[str, list[tuple[str, int]]], name: str
+) -> str | None:
+    """The file-wide assignment name that differs from `name` only in case,
+    or None when `name` is assigned exactly or has no case variant. Feeds the
+    case-mismatch wording of the unresolved run-id refusal (R7-NIT-1)."""
+    if name in static_env:
+        return None
+    folded = name.lower()
+    for candidate in static_env:
+        if candidate.lower() == folded:
+            return candidate
+    return None
 
 
 def _scoped_static_env(
@@ -1612,6 +1663,16 @@ def _apply_static_env_run_id_resolution(
                     _static_env_has_name(static_env, link)
                     or _static_env_has_name(static_env, name)
                 ):
+                    variant = _static_env_case_variant(static_env, link)
+                    if variant is not None:
+                        raise Refusal(
+                            step.run_id_line or step.uses_line,
+                            f"run-id: '{step.run_id}' resolves through `env.{link}`, which is "
+                            f"assigned only under a different case (`env.{variant}`) — the `env` "
+                            "context lookup is case-sensitive on non-Windows runners, so the value "
+                            "is empty at runtime and a cross-run handoff cannot be proven "
+                            "(refusing rather than guessing)",
+                        )
                     if link == name:
                         raise Refusal(
                             step.run_id_line or step.uses_line,
@@ -1765,10 +1826,10 @@ def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int
 
 def process_file(relpath: str, raw: bytes) -> FileResult:
     result = FileResult(relpath=relpath)
-    lines = normalize_text(raw)
+    raw_lines = normalize_text(raw)
     try:
-        lines = blank_comments(lines)
-        lines, block_bodies = blank_block_scalars(lines)
+        lines = blank_comments(raw_lines)
+        lines, block_bodies = blank_block_scalars(lines, raw_lines)
         for index, line in enumerate(lines, start=1):
             if is_blank(line):
                 continue

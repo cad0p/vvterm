@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the positive control for comment lines inside a block-scalar
+# `env:` body (round-7 R7-MAJOR-1). A `#` inside a block scalar is CONTENT,
+# not a comment, so the body below is the non-empty runtime value
+# `"# c\n# a\n#!/bin/sh\n"`. The token is provably non-empty, the cross-run
+# `run-id:` handoff is valid, and the case is GREEN. A gate that blanks
+# comments before capturing the body reads an empty body, classifies the
+# token empty and refuses this legal workflow (the round-6 false red).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: |
+            # c
+            # a
+            #!/bin/sh
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

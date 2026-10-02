@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a BARE step `env:` key (`GH_TOKEN:`) that shadows a non-empty
+# job-level `GH_TOKEN` (round-7 R7-BLOCKER-2). A bare key is the empty string
+# at runtime and the most specific scope wins, so the outer literal is not
+# visible and the token cannot prove a cross-run handoff — the `needs:` path
+# is required. The pre-fold collector skipped any falsy raw value, so the step
+# assignment was never indexed and the gate resolved the job literal instead,
+# silently excluding the download. The null-tag twin is
+# `reject-step-env-null-tag-shadow-over-job-env.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: "ghp_job_literal"
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN:
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
