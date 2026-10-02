@@ -2875,9 +2875,9 @@ def _run_id_value_refusal(
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' resolves through `env.{head}`, and a preceding step in "
-        f"this job writes `{name}` to `$GITHUB_ENV` (line {body.line}) with a value that is "
-        "not provably cross-run — that write can change the value at runtime, so the "
-        "cross-run exclusion cannot be proven (refusing rather than guessing)",
+        f"this job writes `{name}` to `$GITHUB_ENV` (line {body.line}) "
+        "with a value that is not provably cross-run — that write can change the value at "
+        "runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
     )
 
 
@@ -2893,9 +2893,9 @@ def _run_id_payload_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
 def _run_id_name_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
-        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job writes an "
-        f"unextractable name to `$GITHUB_ENV` (line {body.line}) (refusing rather than "
-        "guessing)",
+        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job "
+        f"writes an unextractable name to `$GITHUB_ENV` (line {body.line}) "
+        "(refusing rather than guessing)",
     )
 
 
