@@ -1710,4 +1710,44 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #341 (case-colliding env): the winning-assignment predicate. The
+    # rejects close the Windows last-wins fail-open on the token chain
+    # (direct and transitive); the accepts are E8 (exact key last), E7 (a
+    # step-scope exact shadow) and E2 (an unrelated in-scope collision).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-env-case-collision-token",
+        "files": ["reject-env-case-collision-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-token.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.GH_TOKEN`, and the case-variant assignment `env.gh_token` (line 18) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-env-case-collision-exact-last",
+        "files": ["accept-env-case-collision-exact-last.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-env-case-variant-step-shadow",
+        "files": ["accept-env-case-variant-step-shadow.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-env-case-collision-transitive",
+        "files": ["reject-env-case-collision-transitive.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-transitive.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.TOKEN`, and the case-variant assignment `env.token` (line 18) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-env-case-variant-unrelated",
+        "files": ["accept-env-case-variant-unrelated.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

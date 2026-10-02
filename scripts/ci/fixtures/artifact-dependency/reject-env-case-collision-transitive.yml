@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the collision is on a TRANSITIVE link. The token resolves
+# GH_TOKEN -> env.TOKEN, and `TOKEN`/`token` collide so the Windows winner
+# for the link is `token` (empty): the winning-assignment predicate walks
+# the chain and refuses (issue #341, E4).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ env.TOKEN }}
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      token: ""
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

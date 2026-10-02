@@ -151,10 +151,17 @@ though ECMAScript keeps it, at three Python-`strip()` sites — `env:`
 predicate), a direct `github-token:` (`decode_scalar`'s `value.strip()`),
 and a block-scalar env body that is only U+0085/U+001C (`is_blank`'s
 `line.strip()`) — while the quoted shape resolves; these fail-closed false
-reds are documented rather than modelled; a Windows runner's `env` context is case-insensitive and a
-case-colliding `env:` mapping can resolve a different assignment than the
-exact-case lookup here (Windows-only, not verifiable from this repository);
-and a preceding `run:` step in the same job whose body contains the
+reds are documented rather than modelled; a Windows runner's `env` context is
+case-insensitive (`OrdinalIgnoreCase`, last-wins), so a case-variant
+reference is refused and a case-colliding `env:` mapping cannot make the
+gate exclude a same-run download: for every name a chain resolves through,
+the first visible scope (step, then job, then workflow) containing any
+case-variant decides, the LAST assignment among the variants in it wins
+under `OrdinalIgnoreCase`, and the download is refused when that winner is
+not the exact-case name the value references (issue #341); a name whose
+chain has a non-ASCII candidate refuses too, because the exact
+`OrdinalIgnoreCase` folding is not modelled (`lower()`/`upper()` each miss a
+pair); and a preceding `run:` step in the same job whose body contains the
 `GITHUB_ENV` substring makes any `github-token:` that resolves through the
 static `env:` chain unprovable, so the download is refused (issue #339):
 actions/runner merges `$GITHUB_ENV` writes into the job environment before a
@@ -211,7 +218,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 217
+EXPECTED_MANIFEST_CASES = 222
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2097,6 +2104,114 @@ def _classify_token_value(
     return "unknown"
 
 
+def _env_chain_names(
+    value: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    seen: set[str] | None = None,
+) -> list[str]:
+    """Every `env.NAME` link a value's static chain references, in walk
+    order. Mirrors the classifiers' transitive walk so the #341 case check
+    sees the same names; a chain cycle stops at the repeated name."""
+    if seen is None:
+        seen = set()
+    expression = _extract_expression(js_trim(value))
+    if expression is None:
+        return []
+    compact = _compact_expression(expression)
+    if not compact.lower().startswith("env."):
+        return []
+    name = compact[4:]
+    if name in seen:
+        return [name]
+    seen = seen | {name}
+    names = [name]
+    for assigned, _line in static_env.get(name, []):
+        names.extend(_env_chain_names(assigned, static_env, seen))
+    return names
+
+
+def _env_case_candidates(
+    name: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    scopes: list[tuple[int, int]],
+) -> list[tuple[str, int, int]]:
+    """Every visible case-variant of `name` (including `name` itself) as
+    `(key, assignment_line, scope_index)`, discovered with BOTH Python folds
+    so the pairs neither fold alone sees stay visible (`'\u017f'.upper() ==
+    'S'` but `'\u017f'.lower() == '\u017f'`; `'\u212a'.lower() == 'k'` but
+    `'\u212a'.upper() == '\u212a'`). `scope_index` is most-specific first."""
+    found: list[tuple[str, int, int]] = []
+    for scope_index, (low, high) in enumerate(scopes):
+        for key, entries in static_env.items():
+            if key != name and not (
+                key.upper() == name.upper() or key.lower() == name.lower()
+            ):
+                continue
+            for _assigned, line in entries:
+                if low <= line <= high:
+                    found.append((key, line, scope_index))
+    return found
+
+
+def _refuse_env_case_collision(
+    label: str,
+    value: str,
+    source_line: int,
+    name: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    scopes: list[tuple[int, int]],
+) -> None:
+    """#341: refuse when a Windows runner would resolve `name` to a different
+    assignment than the exact-case lookup here. A Windows runner's `env`
+    context is `OrdinalIgnoreCase` (last-wins), so a case-colliding mapping
+    can leave the runtime token empty (or the run-id same-run) while the gate
+    keeps the cross-run exclusion. The predicate is the winning assignment:
+    the first visible scope (step, then job, then workflow) that contains any
+    case-variant of `name` decides, and within it the LAST assignment among
+    the variants wins; the download is refused when that winner is not
+    `name`. A name the gate cannot prove non-ASCII-safe refuses with its own
+    diagnostic, because the exact `OrdinalIgnoreCase` folding is not modelled
+    (`lower()`/`upper()` each miss a pair). The exact-case name must be
+    assigned in that first scope — when only a case-variant exists, the
+    pre-existing case-mismatch/unresolved diagnostics own the shape."""
+    candidates = _env_case_candidates(name, static_env, scopes)
+    if not candidates:
+        return
+    first_scope = min(candidate[2] for candidate in candidates)
+    in_first_scope = [c for c in candidates if c[2] == first_scope]
+    if not any(candidate[0] == name for candidate in in_first_scope):
+        return
+    if not name.isascii():
+        raise Refusal(
+            source_line,
+            f"{label}: '{value}' resolves through `env.{name}`, a non-ASCII env name whose "
+            "Windows `OrdinalIgnoreCase` folding is not modelled — the runtime may resolve a "
+            "different value, so the cross-run exclusion cannot be proven (refusing rather "
+            "than guessing)",
+        )
+    non_ascii = [c for c in candidates if not c[0].isascii()]
+    if non_ascii:
+        variant, variant_line, _scope = non_ascii[0]
+        raise Refusal(
+            source_line,
+            f"{label}: '{value}' resolves through `env.{name}`, which has a non-ASCII case-"
+            f"variant `env.{variant}` (line {variant_line}) whose Windows `OrdinalIgnoreCase` "
+            "folding is not modelled — the runtime may resolve a different value, so the "
+            "cross-run exclusion cannot be proven (refusing rather than guessing)",
+        )
+    winner_key, winner_line, _scope = max(in_first_scope, key=lambda c: c[1])
+    if winner_key == name:
+        return
+    raise Refusal(
+        source_line,
+        f"{label}: '{value}' resolves through `env.{name}`, and the case-variant assignment "
+        f"`env.{winner_key}` (line {winner_line}) wins under a Windows runner's case-"
+        "insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a "
+        "different value, so the cross-run exclusion cannot be proven (refusing rather than "
+        "guessing)",
+    )
+
+
 def _refuse_github_env_token_mention(job: Job, step: ArtifactStep) -> None:
     """#339: a preceding `run:` step in the same job whose body mentions
     `$GITHUB_ENV` can change or empty any token that resolves through the
@@ -2190,14 +2305,31 @@ def _apply_static_env_run_id_resolution(
         for step in job.artifact_steps:
             if not step.run_id_cross_run or step.run_id is None:
                 continue
-            scoped_env = _scoped_static_env(
-                static_env,
-                [
-                    entry
-                    for entry in (step.env_range, job.env_range, workflow_env_range)
-                    if entry is not None
-                ],
-            )
+            scopes = [
+                entry
+                for entry in (step.env_range, job.env_range, workflow_env_range)
+                if entry is not None
+            ]
+            scoped_env = _scoped_static_env(static_env, scopes)
+            for name in _env_chain_names(step.run_id, scoped_env):
+                _refuse_env_case_collision(
+                    "run-id",
+                    step.run_id,
+                    step.run_id_line or step.uses_line,
+                    name,
+                    static_env,
+                    scopes,
+                )
+            if step.github_token is not None:
+                for name in _env_chain_names(step.github_token, scoped_env):
+                    _refuse_env_case_collision(
+                        "github-token",
+                        step.github_token,
+                        step.github_token_line or step.uses_line,
+                        name,
+                        static_env,
+                        scopes,
+                    )
             resolution = _classify_static_value(step.run_id, scoped_env, set())
             if resolution == "same-run":
                 step.run_id_cross_run = False

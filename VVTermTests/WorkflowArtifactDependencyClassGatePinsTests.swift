@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 217
+    private static let expectedManifestCases = 222
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -352,6 +352,15 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-github-env-write-dynamic-name.yml",
         "reject-github-env-write-same-value.yml",
         "accept-github-env-write-after-download.yml",
+        // #341: the case-collision winning-assignment predicate. The two
+        // rejects pin the Windows last-wins fail-open on the token chain
+        // (direct and transitive); the accepts pin E8 (exact key last), E7
+        // (step-scope exact shadow) and E2 (an unrelated in-scope collision).
+        "reject-env-case-collision-token.yml",
+        "accept-env-case-collision-exact-last.yml",
+        "accept-env-case-variant-step-shadow.yml",
+        "reject-env-case-collision-transitive.yml",
+        "accept-env-case-variant-unrelated.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
