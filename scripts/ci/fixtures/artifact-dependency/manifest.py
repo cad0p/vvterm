@@ -1665,6 +1665,23 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # #338 fold round 1: `parseInt`'s hex radix. A `0x`/`0X` prefix needs at
+    # least one hex digit or the value is `NaN` (refuse); `0x10` is 16 and is
+    # a genuine handoff (accept).
+    {
+        "id": "reject-run-id-hex-prefix-no-digits",
+        "files": ["reject-run-id-hex-prefix-no-digits.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-hex-prefix-no-digits.yml:20: unrecognized \'run-id:\' value (\'0xg\') — recognized forms are a literal integer, ${{ env.NAME }}, ${{ github.event.workflow_run.id }}, or the same-run ${{ github.run_id }} (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-run-id-hex-literal",
+        "files": ["accept-run-id-hex-literal.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
     # ------------------------------------------------------------------
     # #339 ($GITHUB_ENV token overwrite): a preceding same-job `run:` body
     # that MENTIONS `GITHUB_ENV` makes a statically env-resolved

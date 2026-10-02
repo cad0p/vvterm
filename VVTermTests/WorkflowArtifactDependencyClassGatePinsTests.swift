@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 229
+    private static let expectedManifestCases = 231
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -343,6 +343,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-run-id-nel-tail-literal.yml",
         "reject-run-id-env-nel.yml",
         "accept-run-id-env-bom.yml",
+        // #338 fold round 1: `parseInt`'s hex radix. `0xg` is `NaN` (refuse)
+        // while `0x10` is 16, a genuine handoff (the over-refusal control).
+        "reject-run-id-hex-prefix-no-digits.yml",
+        "accept-run-id-hex-literal.yml",
         // #339: a preceding same-job `run:` body that mentions `GITHUB_ENV`
         // makes a statically env-resolved `github-token:` unprovable. The
         // four rejects pin the closed write shapes; the accept is the

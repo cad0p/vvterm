@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `parseInt('0xg')` is NaN. A `0x`/`0X` prefix switches the radix
+# to base 16 and then needs at least one hex digit, so `0xg` is not a
+# run-id handoff and the download is same-run with no `needs:` edge. The
+# digit-only prefix predicate read the `0` as a literal and kept the
+# cross-run exclusion; the hex-aware predicate refuses (issue #338).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: 0xg
+          github-token: "ghp_literal"

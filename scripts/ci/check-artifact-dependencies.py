@@ -136,7 +136,10 @@ accepted
 (`"\\q"`, `"\\x4"`, `"\\xZZ"`, `"\\u12"`, `"\\U00110000"` — GitHub's parser
 errors on each, so the workflow cannot run); the run-id literal predicate is
 `parseInt`'s — an ECMAScript trim (`js_trim`) followed by the longest
-leading run of ASCII digits (`PARSEINT_PREFIX_RE`) — so a `run-id:` literal
+leading run of ASCII digits (`PARSEINT_PREFIX_RE`), with a `0x`/`0X` prefix
+requiring at least one hex digit (`[0-9a-fA-F]`) because a bare prefix is
+`NaN`, not `0` (so `0x10` stays a genuine handoff and `0x`/`0xg` are
+refused) — so a `run-id:` literal
 prefixed with U+0085 or U+001C–U+001F is refused (its runtime value is
 `<U+0085><digits>`, `parseInt` yields `NaN`, and a `NaN` run-id requests
 `/runs/NaN/artifacts` — a 404, not a same-run download, so this is a
@@ -227,7 +230,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 229
+EXPECTED_MANIFEST_CASES = 231
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -250,6 +253,11 @@ BLOCK_HEADER_RE = re.compile(r"^(?:[|>][+-]?\d*|[|>]\d*[+-]?)$")
 # digits `parseInt` rejects) and `.match` (not `.fullmatch`, because
 # `parseInt('123abc')` is 123, so trailing junk does not change the handoff).
 PARSEINT_PREFIX_RE = re.compile(r"[0-9]+")
+# `parseInt`'s radix detection: a leading `0x`/`0X` switches to base 16 and
+# then needs at least one hex digit. A bare prefix (or a non-hex character
+# after it) is `NaN`, not `0`, so `[0-9]+` alone would read the `0` of `0xg`
+# as a literal handoff while the runtime requests `/runs/NaN/artifacts`.
+PARSEINT_HEX_PREFIX_RE = re.compile(r"0[xX][0-9a-fA-F]")
 SAME_RUN_RE = re.compile(r"github\.run_id|github\[run_id\]")
 CROSS_RUN_RE = re.compile(
     r"^(?:env\.[A-Za-z_][A-Za-z0-9_]*"
@@ -1653,7 +1661,7 @@ class WorkflowParser:
                 step.run_id_line or step.uses_line,
                 "empty 'run-id:' — a download with a run-id must name a run",
             )
-        if PARSEINT_PREFIX_RE.match(stripped):
+        if _is_parseint_literal(stripped):
             # A cross-run run-id is only honored with a non-empty
             # github-token; without it the action downloads from the current
             # run, so the exclusion must not apply.
@@ -1709,6 +1717,17 @@ _JS_TRIM_CHARS = (
 def js_trim(value: str) -> str:
     """`value` as `@actions/core`'s `getInput` sees it (ECMAScript trim)."""
     return value.strip(_JS_TRIM_CHARS)
+
+
+def _is_parseint_literal(value: str) -> bool:
+    """True when `parseInt(value)` yields a number from a literal integer
+    prefix (the caller has already applied `js_trim`). A `0x`/`0X` prefix
+    selects base 16 and needs at least one hex digit, otherwise the value is
+    `NaN` and the cross-run handoff cannot be honored; without the prefix,
+    the longest leading run of ASCII digits is the `parseInt` result."""
+    if value[:2] in ("0x", "0X"):
+        return PARSEINT_HEX_PREFIX_RE.match(value) is not None
+    return PARSEINT_PREFIX_RE.match(value) is not None
 
 
 # The #339 shell-assembly window: a `run:` body can build the env-file name
@@ -2083,7 +2102,7 @@ def _classify_static_value(
     text = js_trim(value)
     if not text:
         return "unknown"
-    if PARSEINT_PREFIX_RE.match(text):
+    if _is_parseint_literal(text):
         return "cross-run"
     expression = _extract_expression(text)
     if expression is None:
