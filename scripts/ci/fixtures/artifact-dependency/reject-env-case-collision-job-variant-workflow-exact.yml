@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the WORKFLOW scope assigns the exact-case `GH_TOKEN` and the JOB
+# scope — merged after it under `OrdinalIgnoreCase` — assigns `gh_token: ""`.
+# The Windows last-wins winner is the job variant, so the runtime token is
+# empty and the action ignores `run-id:`. The merged-winner predicate refuses
+# (issue #341, the job-over-workflow variant shadow).
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      gh_token: ""
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

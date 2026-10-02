@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a case-variant collision at the JOB level, shadowed by the
+# step's own exact-case GH_TOKEN. The merged winner is decided by the
+# most-specific scope containing candidates — here the step's exact-case
+# assignment, which merges last on Windows too: the exclusion stands
+# (issue #341, E7).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      gh_token: ""
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

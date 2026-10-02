@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the same shell-level assembly passed as a `bash -c` argv. The
+# name is only joined inside the child shell, so the raw text never holds
+# `GITHUB_ENV`; the `GITHUB`/`ENV` window conjunction catches it (issue
+# #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token through a bash -c argv
+        run: bash -c 'echo "GH_TOKEN=" >> "${!1}"' _ "GITHUB_""ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

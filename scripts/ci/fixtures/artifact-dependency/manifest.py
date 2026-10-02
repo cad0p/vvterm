@@ -1617,4 +1617,218 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #338 (run-id parseInt predicate): the leading NEL/C0 refusals, the
+    # leading-BOM false-red removal, the trailing-NEL control that pins
+    # parseInt's LEADING-prefix semantics, and the env-chain pair that
+    # exercises the static-assignment site (`_classify_static_value`).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-run-id-nel-literal",
+        "files": ["reject-run-id-nel-literal.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-nel-literal.yml:20: unrecognized \'run-id:\' value (\'\u0085123\') — recognized forms are a literal integer, ${{ env.NAME }}, ${{ github.event.workflow_run.id }}, or the same-run ${{ github.run_id }} (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-run-id-1c-literal",
+        "files": ["reject-run-id-1c-literal.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-1c-literal.yml:18: unrecognized \'run-id:\' value (\'\u001c\u001d\u001e\u001f123\') — recognized forms are a literal integer, ${{ env.NAME }}, ${{ github.event.workflow_run.id }}, or the same-run ${{ github.run_id }} (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-run-id-bom-literal",
+        "files": ["accept-run-id-bom-literal.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-run-id-nel-tail-literal",
+        "files": ["accept-run-id-nel-tail-literal.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-run-id-env-nel",
+        "files": ["reject-run-id-env-nel.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-env-nel.yml:21: run-id: \'${{ env.SOURCE_RUN_ID }}\' resolves through a static assignment in this file to a value that is neither the current run nor a recognized cross-run handoff (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-run-id-env-bom",
+        "files": ["accept-run-id-env-bom.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    # #338 fold round 1: `parseInt`'s hex radix. A `0x`/`0X` prefix needs at
+    # least one hex digit or the value is `NaN` (refuse); `0x10` is 16 and is
+    # a genuine handoff (accept).
+    {
+        "id": "reject-run-id-hex-prefix-no-digits",
+        "files": ["reject-run-id-hex-prefix-no-digits.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-hex-prefix-no-digits.yml:20: unrecognized \'run-id:\' value (\'0xg\') — recognized forms are a literal integer, ${{ env.NAME }}, ${{ github.event.workflow_run.id }}, or the same-run ${{ github.run_id }} (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-run-id-hex-literal",
+        "files": ["accept-run-id-hex-literal.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    # ------------------------------------------------------------------
+    # #339 ($GITHUB_ENV token overwrite): a preceding same-job `run:` body
+    # that MENTIONS `GITHUB_ENV` makes a statically env-resolved
+    # `github-token:` unprovable. The four rejects pin the closed shapes
+    # (`>>`, single `>`, a dynamic name, a same-value rewrite); the accept
+    # is the position control and deliberately writes the chain name. The
+    # fold-round-1 rejects pin the decoded/indirect spellings.
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-github-env-write-empties-token",
+        "files": ["reject-github-env-write-empties-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-empties-token.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-single-redirect",
+        "files": ["reject-github-env-write-single-redirect.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-single-redirect.yml:23: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 18) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-dynamic-name",
+        "files": ["reject-github-env-write-dynamic-name.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-dynamic-name.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-same-value",
+        "files": ["reject-github-env-write-same-value.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-same-value.yml:23: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 18) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-github-env-write-after-download",
+        "files": ["accept-github-env-write-after-download.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    # #339 fold round 1: the detector decodes the run scalar's YAML escapes
+    # and closes the indirect spellings (a `\x5f`-escaped name, shell-level
+    # `"GITHUB_""ENV"` assembly inline and through a `bash -c` argv, and a
+    # Windows `%github_env%` whose lookup is case-insensitive).
+    {
+        "id": "reject-github-env-write-yaml-escape",
+        "files": ["reject-github-env-write-yaml-escape.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-yaml-escape.yml:25: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 20) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-shell-assembled",
+        "files": ["reject-github-env-write-shell-assembled.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-shell-assembled.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-bash-c-argv",
+        "files": ["reject-github-env-write-bash-c-argv.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-bash-c-argv.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-windows-lowercase",
+        "files": ["reject-github-env-write-windows-lowercase.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-windows-lowercase.yml:25: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 20) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    # ------------------------------------------------------------------
+    # #341 (case-colliding env): the winning-assignment predicate. The
+    # rejects close the Windows last-wins fail-open on the token chain
+    # (direct and transitive) and across scopes (a case-variant inner scope
+    # shadowing an exact-case outer assignment: step-over-job token,
+    # job-over-workflow token, step-over-job run-id); the accepts are E8
+    # (exact key last), E7 (a step-scope exact shadow) and E2 (an unrelated
+    # in-scope collision).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-env-case-collision-token",
+        "files": ["reject-env-case-collision-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-token.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.GH_TOKEN`, and the case-variant assignment `env.gh_token` (line 18) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-env-case-collision-exact-last",
+        "files": ["accept-env-case-collision-exact-last.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-env-case-variant-step-shadow",
+        "files": ["accept-env-case-variant-step-shadow.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-env-case-collision-transitive",
+        "files": ["reject-env-case-collision-transitive.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-transitive.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.TOKEN`, and the case-variant assignment `env.token` (line 18) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-env-case-variant-unrelated",
+        "files": ["accept-env-case-variant-unrelated.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-env-case-collision-step-variant-token",
+        "files": ["reject-env-case-collision-step-variant-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-step-variant-token.yml:27: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.GH_TOKEN`, and the case-variant assignment `env.gh_token` (line 23) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-env-case-collision-job-variant-workflow-exact",
+        "files": ["reject-env-case-collision-job-variant-workflow-exact.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-job-variant-workflow-exact.yml:25: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.GH_TOKEN`, and the case-variant assignment `env.gh_token` (line 19) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-env-case-collision-runid-step-variant",
+        "files": ["reject-env-case-collision-runid-step-variant.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-runid-step-variant.yml:24: run-id: \'${{ env.SOURCE_RUN_ID }}\' resolves through `env.SOURCE_RUN_ID`, and the case-variant assignment `env.source_run_id` (line 21) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
 ]

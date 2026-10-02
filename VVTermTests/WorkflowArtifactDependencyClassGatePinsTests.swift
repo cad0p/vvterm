@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 206
+    private static let expectedManifestCases = 231
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -332,6 +332,53 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-token-env-esc-lf-in-scope.yml",
         "reject-needs-flow-swallow.yml",
         "accept-needs-flow-quoted.yml",
+        // #338: the run-id predicate is parseInt's (ECMAScript trim + the
+        // longest leading ASCII-digit run). The leading NEL/C0 rejects and
+        // the BOM accept pin the predicate; the trailing-NEL accept is the
+        // control that pins the LEADING-prefix semantics; the env pair
+        // exercises the static-assignment site (`_classify_static_value`).
+        "reject-run-id-nel-literal.yml",
+        "reject-run-id-1c-literal.yml",
+        "accept-run-id-bom-literal.yml",
+        "accept-run-id-nel-tail-literal.yml",
+        "reject-run-id-env-nel.yml",
+        "accept-run-id-env-bom.yml",
+        // #338 fold round 1: `parseInt`'s hex radix. `0xg` is `NaN` (refuse)
+        // while `0x10` is 16, a genuine handoff (the over-refusal control).
+        "reject-run-id-hex-prefix-no-digits.yml",
+        "accept-run-id-hex-literal.yml",
+        // #339: a preceding same-job `run:` body that mentions `GITHUB_ENV`
+        // makes a statically env-resolved `github-token:` unprovable. The
+        // four rejects pin the closed write shapes; the accept is the
+        // position control (the same chain-name write, after the download).
+        "reject-github-env-write-empties-token.yml",
+        "reject-github-env-write-single-redirect.yml",
+        "reject-github-env-write-dynamic-name.yml",
+        "reject-github-env-write-same-value.yml",
+        "accept-github-env-write-after-download.yml",
+        // #339 fold round 1: the decoded/indirect spellings the raw-text scan
+        // missed (a YAML-escaped name, shell-level assembly inline and via a
+        // `bash -c` argv, and the case-insensitive Windows `%github_env%`).
+        "reject-github-env-write-yaml-escape.yml",
+        "reject-github-env-write-shell-assembled.yml",
+        "reject-github-env-write-bash-c-argv.yml",
+        "reject-github-env-write-windows-lowercase.yml",
+        // #341: the case-collision winning-assignment predicate. The two
+        // rejects pin the Windows last-wins fail-open on the token chain
+        // (direct and transitive); the accepts pin E8 (exact key last), E7
+        // (step-scope exact shadow) and E2 (an unrelated in-scope collision).
+        "reject-env-case-collision-token.yml",
+        "accept-env-case-collision-exact-last.yml",
+        "accept-env-case-variant-step-shadow.yml",
+        "reject-env-case-collision-transitive.yml",
+        "accept-env-case-variant-unrelated.yml",
+        // #341 fold round 1: the merged-winner rule. The exact-case name is
+        // assigned in an OUTER scope while the inner scope holds only a
+        // case-variant; the runner merges the inner scope last, so the
+        // variant wins and the download must refuse (the lens-1 BLOCKER).
+        "reject-env-case-collision-step-variant-token.yml",
+        "reject-env-case-collision-job-variant-workflow-exact.yml",
+        "reject-env-case-collision-runid-step-variant.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

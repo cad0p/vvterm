@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the write spells the env file with a YAML escape inside a
+# double-quoted run scalar (`\x5f`), which the runner's YAML decoder resolves
+# to `$GITHUB_ENV`. The raw-text substring scan sees `GITHUB\x5fENV` and
+# passes; the detector decodes the scalar with the full decoder first
+# (issue #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token
+        run: "echo GH_TOKEN= >> \"$GITHUB\x5fENV\""
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

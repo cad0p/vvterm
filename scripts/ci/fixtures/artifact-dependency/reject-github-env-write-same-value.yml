@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a same-value rewrite. The runtime token stays non-empty, but a
+# mention scan cannot prove that, so this is a documented fail-closed
+# false red (issue #339, lens-1 MINOR 4).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: rewrite the token
+        run: echo "GH_TOKEN=${{ github.token }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

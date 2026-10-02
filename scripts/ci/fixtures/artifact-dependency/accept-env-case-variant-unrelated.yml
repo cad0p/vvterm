@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an unrelated case collision INSIDE the download's visible env
+# scope. No variant of the chain name GH_TOKEN collides, so the winner is
+# exact and the exclusion stands (issue #341, E2 control).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FOO: "x"
+      foo: "y"
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

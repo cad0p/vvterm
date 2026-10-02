@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a preceding same-job `run:` writes GH_TOKEN= to $GITHUB_ENV, so
+# the statically present `github-token: ${{ env.GH_TOKEN }}` can be empty
+# at runtime and the action then ignores `run-id:` — the cross-run
+# exclusion must be refused (issue #339, the measured D shape).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token
+        run: echo "GH_TOKEN=" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

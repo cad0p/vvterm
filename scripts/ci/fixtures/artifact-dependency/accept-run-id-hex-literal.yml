@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the hex control. `parseInt('0x10')` is 16 — a genuine cross-run
+# run-id handoff — so with a literal token the cross-run exclusion stands
+# and the download exits 0 (issue #338). This is what pins the rule to
+# "prefix plus at least one hex digit" rather than "refuse every 0x".
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: 0x10
+          github-token: "ghp_literal"

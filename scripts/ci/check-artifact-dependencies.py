@@ -64,7 +64,10 @@ construct the subset grammar cannot model is refused, not skipped. A
 `run-id: ${{ env.NAME }}` whose NAME is only ever written at runtime (e.g.
 `echo "NAME=…" >> "$GITHUB_ENV"` from a `run:` step, the real
 `ios-adhoc-pr.yml` shape) cannot be resolved statically and keeps the
-cross-run exclusion; static in-file `env:` assignments are resolved, and one
+cross-run exclusion — the #339 `$GITHUB_ENV` mention rule below is
+deliberately token-chain-only, because the run-id value chain is the real
+`workflow_run.id` handoff and this repository's own publish workflow depends
+on it; static in-file `env:` assignments are resolved, and one
 the gate cannot classify (including `needs.*.outputs.*`) is refused rather
 than guessed. Static `env:` names are matched case-sensitively —
 actions/runner's `env` context is `StringComparer.Ordinal` on non-Windows
@@ -131,26 +134,71 @@ is the intended policy since the scalar form was already refused. Remaining
 fail-closed limits, kept honestly: an INVALID escape in an env value stays
 accepted
 (`"\\q"`, `"\\x4"`, `"\\xZZ"`, `"\\u12"`, `"\\U00110000"` — GitHub's parser
-errors on each, so the workflow cannot run); the run-id emptiness predicate
-still uses Python `strip()`, so a `run-id:` literal prefixed with U+0085 or
-U+001C–U+001F is accepted although `parseInt(getInput('run-id'))` yields
-`NaN` (the action gates its cross-run behavior solely on the trimmed token,
-and a `NaN` run-id requests `/runs/NaN/artifacts` — a 404, not a same-run
-download, so this is a correctness divergence, not a fail-open; the mirror
-image is the BOM-prefixed literal, a false red, since `parseInt` skips
-U+FEFF); a PLAIN (unquoted) raw U+0085/U+001C value is still refused even
+errors on each, so the workflow cannot run); the run-id literal predicate is
+`parseInt`'s — an ECMAScript trim (`js_trim`) followed by the longest
+leading run of ASCII digits (`PARSEINT_PREFIX_RE`), with a `0x`/`0X` prefix
+requiring at least one hex digit (`[0-9a-fA-F]`) because a bare prefix is
+`NaN`, not `0` (so `0x10` stays a genuine handoff and `0x`/`0xg` are
+refused) — so a `run-id:` literal
+prefixed with U+0085 or U+001C–U+001F is refused (its runtime value is
+`<U+0085><digits>`, `parseInt` yields `NaN`, and a `NaN` run-id requests
+`/runs/NaN/artifacts` — a 404, not a same-run download, so this is a
+correctness divergence, not a fail-open) while a BOM-prefixed literal (and
+any digit-led literal with trailing junk, including U+0085/U+001C–U+001F
+that Python `strip()` removes but ECMAScript keeps) is accepted; `+123`
+and `-123` stay refused although `parseInt` honors them (fail-closed false
+reds, documented rather than modelled); a PLAIN (unquoted) raw U+0085/U+001C
+value is still refused even
 though ECMAScript keeps it, at three Python-`strip()` sites — `env:`
 (`_static_env_value`'s leading strip collapses it before the token
 predicate), a direct `github-token:` (`decode_scalar`'s `value.strip()`),
 and a block-scalar env body that is only U+0085/U+001C (`is_blank`'s
 `line.strip()`) — while the quoted shape resolves; these fail-closed false
-reds are documented rather than modelled; a Windows runner's `env` context is case-insensitive and a
-case-colliding `env:` mapping can resolve a different assignment than the
-exact-case lookup here (Windows-only, not verifiable from this repository);
-and a `run:` step that appends `NAME=` to `$GITHUB_ENV` can overwrite a
-statically assigned `env:` value, so a statically present token can be empty
-at runtime (a pre-existing hole filed as a follow-up; the gate cannot see
-runtime writes). Runtime values were
+reds are documented rather than modelled, and a fourth Python-`strip()` site
+is left the same way: `_extract_expression` strips a `run-id:`/`env:` value
+with `value.strip()` before its `${{ … }}` fence check, so a plain raw
+U+0085/U+001C-prefixed EXPRESSION is resolved as if unprefixed although
+ECMAScript keeps the prefix: a same-run expression then refuses without a
+`needs:` edge, while a cross-run expression keeps the exclusion and the
+runtime `parseInt` is `NaN` (a 404, not a same-run fallback) —
+correctness-only either way, not a fail-open; a
+Windows runner's `env` context is
+case-insensitive (`OrdinalIgnoreCase`, last-wins), so a case-variant
+reference is refused and a case-colliding `env:` mapping cannot make the
+gate exclude a same-run download: for every name a chain resolves through,
+the visible chain is merged in the runner's order (workflow, then job, then
+step) and the LAST assignment among the case-variants wins under
+`OrdinalIgnoreCase`, so the download is refused when the merged winner is
+not the exact-case name the value references (issue #341), while a chain
+whose exact-case name is assigned nowhere visible is left to the
+pre-existing case-mismatch/unresolved diagnostics; a name whose
+chain has a non-ASCII candidate refuses too, because the exact
+`OrdinalIgnoreCase` folding is not modelled (`lower()`/`upper()` each miss a
+pair); and a preceding `run:` step in the same job that mentions
+`GITHUB_ENV` makes any `github-token:` that resolves through the static
+`env:` chain unprovable, so the download is refused (issue #339):
+actions/runner merges `$GITHUB_ENV` writes into the job environment before a
+later step's `with:` is evaluated, so the write can change or empty the
+token. The detector decodes the run scalar's YAML escapes with the same full
+double-quoted decoder the static `env:` values use, then treats as a mention
+the case-insensitive `github_env` substring (which also catches a Windows
+`%github_env%`) and a case-sensitive `GITHUB`/`ENV` conjunction inside a
+64-character window (which closes shell-level name assembly: the
+`n="GITHUB_""ENV"` pair, a `bash -c` argv), so single `>`, `tee`, heredocs,
+indirection and related spellings are all covered. It is still a deliberate
+text-level fail-closed over-approximation: a read-only `cat "$GITHUB_ENV"`,
+an unrelated-name write, a same-value rewrite, a write shadowed by the
+download step's own `env:` and a body that only places `GITHUB` and `ENV`
+within 64 characters without writing the env file
+(`echo "$GITHUB_ACTIONS" > "$ENV_FILE"`) all refuse (accepted costs, each
+pinned or named); in the last case the "writes to `$GITHUB_ENV`" diagnostic
+is an unobserved assertion, which is accepted rather than narrowing the
+detector — softening the diagnostic is deferred. A `uses:`/composite action
+that writes `$GITHUB_ENV` stays invisible, and a name assembled from pieces not both present in the body's
+text (shell-level hex/base64 assembly, read from a file, or produced by a
+called script) is not detected — the documented boundary of a text-based
+detector.
+Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
 `dist/templates/template-reader.js` `validate()`), its `yaml` 2.9.1
@@ -195,7 +243,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 206
+EXPECTED_MANIFEST_CASES = 231
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -210,7 +258,19 @@ ACTION_REF_RE = re.compile(
     re.IGNORECASE,
 )
 BLOCK_HEADER_RE = re.compile(r"^(?:[|>][+-]?\d*|[|>]\d*[+-]?)$")
-LITERAL_INT_RE = re.compile(r"^\d+$")
+# `actions/download-artifact@v8` parses `run-id:` with
+# `parseInt(core.getInput(Inputs.RunID, {required: false}))`
+# (`download-artifact.ts:24`): an ECMAScript trim of the input the action
+# reads, then the longest LEADING run of ASCII digits. `[0-9]+` (not
+# Python's `\d`, which also matches `'\u0661\u0662\u0663'`-style Unicode
+# digits `parseInt` rejects) and `.match` (not `.fullmatch`, because
+# `parseInt('123abc')` is 123, so trailing junk does not change the handoff).
+PARSEINT_PREFIX_RE = re.compile(r"[0-9]+")
+# `parseInt`'s radix detection: a leading `0x`/`0X` switches to base 16 and
+# then needs at least one hex digit. A bare prefix (or a non-hex character
+# after it) is `NaN`, not `0`, so `[0-9]+` alone would read the `0` of `0xg`
+# as a literal handoff while the runtime requests `/runs/NaN/artifacts`.
+PARSEINT_HEX_PREFIX_RE = re.compile(r"0[xX][0-9a-fA-F]")
 SAME_RUN_RE = re.compile(r"github\.run_id|github\[run_id\]")
 CROSS_RUN_RE = re.compile(
     r"^(?:env\.[A-Za-z_][A-Za-z0-9_]*"
@@ -250,6 +310,9 @@ class Refusal(Exception):
 class ArtifactStep:
     kind: str  # "upload" | "download" | ""
     uses_line: int
+    # The step's first line, used for the #339 position check (a write can
+    # only affect steps that start after it).
+    step_line: int = 0
     name: str | None = None
     name_line: int | None = None
     name_is_literal: bool = False
@@ -268,6 +331,24 @@ class ArtifactStep:
     # range (plus the workflow's and the enclosing job's) is visible to
     # `${{ env.NAME }}` at runtime (R5-MINOR-1).
     env_range: tuple[int, int] | None = None
+    # The `run:` key line and the #339 mention flag (a non-empty decoded
+    # body that mentions `GITHUB_ENV`; the predicate is `_mentions_github_env`).
+    run_line: int | None = None
+    run_mentions_github_env: bool = False
+
+
+@dataclass
+class RunBody:
+    """A parsed `run:` step's location and whether its body mentions
+    `$GITHUB_ENV`. The gate does not model run bodies otherwise; this is the
+    #339 mention scan (`_mentions_github_env`: the decoded text's
+    case-insensitive `github_env` substring plus a `GITHUB`/`ENV` window
+    conjunction, because a name extraction is measurably leaky and the raw
+    substring missed YAML-escaped/shell-assembled spellings)."""
+
+    line: int  # the `run:` key line
+    step_line: int  # the enclosing step's first line
+    mentions_github_env: bool
 
 
 @dataclass
@@ -284,6 +365,9 @@ class Job:
     keys_seen: dict[str, int] = field(default_factory=dict)
     # The job's own `env:` block, as an inclusive line range (R5-MINOR-1).
     env_range: tuple[int, int] | None = None
+    # Every parsed `run:` step's location/mention record, in step order
+    # (the #339 same-job, preceding-position scan).
+    run_bodies: list[RunBody] = field(default_factory=list)
 
 
 @dataclass
@@ -1009,9 +1093,15 @@ def _refuse_non_string_value_tag(index: int, key: str, value: str) -> None:
 
 
 class WorkflowParser:
-    def __init__(self, relpath: str, lines: list[str]) -> None:
+    def __init__(
+        self, relpath: str, lines: list[str], block_bodies: dict[int, str]
+    ) -> None:
         self.relpath = relpath
         self.lines = lines
+        # Block-scalar bodies by header line (`blank_block_scalars`), needed
+        # for the #339 mention scan: a `run: |` body is blanked out of
+        # `self.lines` and only the captured body still holds it.
+        self.block_bodies = block_bodies
         self.jobs: list[Job] = []
         self.artifact_step_lines: set[int] = set()
         # The top-level `env:` block, as an inclusive line range: workflow
@@ -1336,7 +1426,7 @@ class WorkflowParser:
         return j
 
     def _parse_step(self, job: Job, body: list[int], item_pos: int, item_col: int) -> int:
-        step = ArtifactStep(kind="", uses_line=0)
+        step = ArtifactStep(kind="", uses_line=0, step_line=body[item_pos] + 1)
         seen: dict[str, int] = {}
         rest = self.lines[body[item_pos]][item_col + 1 :]
         offset = 0
@@ -1386,6 +1476,14 @@ class WorkflowParser:
             if indent != step_key_col:
                 raise Refusal(index + 1, UNCONSUMED_REFUSAL)
             j = self._step_key(job, step, body, j, step_key_col, text, seen)
+        if step.run_line is not None:
+            job.run_bodies.append(
+                RunBody(
+                    line=step.run_line,
+                    step_line=step.step_line,
+                    mentions_github_env=step.run_mentions_github_env,
+                )
+            )
         if step.kind:
             job.artifact_steps.append(step)
             self.artifact_step_lines.add(step.uses_line)
@@ -1430,7 +1528,37 @@ class WorkflowParser:
         if key == "env":
             end, step.env_range = self._consume_env_block(body, pos, col)
             return end
+        if key == "run":
+            step.run_line = index + 1
+            end = pos + 1 if value else self._consume_opaque(body, pos, col)
+            step.run_mentions_github_env = self._run_mentions_github_env(
+                index, value, body, pos, end
+            )
+            return end
         return pos + 1 if value else self._consume_opaque(body, pos, col)
+
+    def _run_mentions_github_env(
+        self, index: int, value: str, body: list[int], pos: int, end: int
+    ) -> bool:
+        """The #339 scan for one `run:` step: a YAML-escape-decoded inline
+        value, a block-scalar body (literal text, so not decoded), or the
+        consumed continuation lines. A block-scalar header's body lives in
+        `self.block_bodies` (the blanked lines no longer hold it); a bare
+        `run:` with an indented plain scalar is (the raw lines of) the range
+        `_consume_opaque` consumed. `_mentions_github_env` owns the mention
+        predicate (the case-insensitive `github_env` substring plus the
+        `GITHUB`/`ENV` window conjunction), so a YAML-escaped or
+        shell-assembled name is caught."""
+        if value:
+            if _static_block_header(value) is not None:
+                return _mentions_github_env(self.block_bodies.get(index + 1, ""))
+            return _mentions_github_env(_decode_env_scalar(value))
+        block_text = self.block_bodies.get(index + 1)
+        if block_text is not None:
+            return _mentions_github_env(block_text)
+        return any(
+            _mentions_github_env(self.lines[body[j]]) for j in range(pos + 1, end)
+        )
 
     def _parse_with(self, body: list[int], pos: int, with_col: int, step: ArtifactStep) -> int:
         step.has_with = True
@@ -1541,13 +1669,13 @@ class WorkflowParser:
             )
         if step.run_id is None:
             return
-        stripped = step.run_id.strip()
+        stripped = js_trim(step.run_id)
         if not stripped:
             raise Refusal(
                 step.run_id_line or step.uses_line,
                 "empty 'run-id:' — a download with a run-id must name a run",
             )
-        if LITERAL_INT_RE.match(stripped):
+        if _is_parseint_literal(stripped):
             # A cross-run run-id is only honored with a non-empty
             # github-token; without it the action downloads from the current
             # run, so the exclusion must not apply.
@@ -1603,6 +1731,44 @@ _JS_TRIM_CHARS = (
 def js_trim(value: str) -> str:
     """`value` as `@actions/core`'s `getInput` sees it (ECMAScript trim)."""
     return value.strip(_JS_TRIM_CHARS)
+
+
+def _is_parseint_literal(value: str) -> bool:
+    """True when `parseInt(value)` yields a number from a literal integer
+    prefix (the caller has already applied `js_trim`). A `0x`/`0X` prefix
+    selects base 16 and needs at least one hex digit, otherwise the value is
+    `NaN` and the cross-run handoff cannot be honored; without the prefix,
+    the longest leading run of ASCII digits is the `parseInt` result."""
+    if value[:2] in ("0x", "0X"):
+        return PARSEINT_HEX_PREFIX_RE.match(value) is not None
+    return PARSEINT_PREFIX_RE.match(value) is not None
+
+
+# The #339 shell-assembly window: a `run:` body can build the env-file name
+# from pieces (`n="GITHUB_""ENV"`, a `bash -c` argv), so a case-sensitive
+# `GITHUB`/`ENV` conjunction inside this many characters counts as a mention
+# even without the literal `GITHUB_ENV` substring.
+GITHUB_ENV_WINDOW = 64
+
+
+def _mentions_github_env(text: str) -> bool:
+    """The #339 mention test for one decoded `run:` scalar or block body.
+    The case-insensitive `github_env` substring closes `$GITHUB_ENV`,
+    `${GITHUB_ENV}`, a Windows `%github_env%` and every spelling whose text
+    carries the joined name; the case-sensitive `GITHUB`/`ENV` conjunction
+    inside a 64-character window closes shell-level name assembly
+    (`n="GITHUB_""ENV"`, `bash -c ... "GITHUB_""ENV"`). A name whose pieces
+    are not both present in the text (base64/hex-encoded, read from a file,
+    or produced by a called script) is the documented boundary of a
+    text-based detector."""
+    if "github_env" in text.lower():
+        return True
+    start = text.find("GITHUB")
+    while start != -1:
+        if "ENV" in text[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
+            return True
+        start = text.find("GITHUB", start + 1)
+    return False
 
 
 # Plain YAML null spellings (YAML 1.2 core schema: `null`, `Null`, `NULL`,
@@ -1947,10 +2113,10 @@ def _classify_static_value(
 ) -> str:
     """Classify a statically assigned value: 'same-run', 'cross-run',
     'unresolved' (no static assignment) or 'unknown' (static, but neither)."""
-    text = value.strip()
+    text = js_trim(value)
     if not text:
         return "unknown"
-    if LITERAL_INT_RE.match(text):
+    if _is_parseint_literal(text):
         return "cross-run"
     expression = _extract_expression(text)
     if expression is None:
@@ -2009,6 +2175,155 @@ def _classify_token_value(
     return "unknown"
 
 
+def _env_chain_names(
+    value: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    seen: set[str] | None = None,
+) -> list[str]:
+    """Every `env.NAME` link a value's static chain references, in walk
+    order. Mirrors the classifiers' transitive walk so the #341 case check
+    sees the same names; a chain cycle stops at the repeated name."""
+    if seen is None:
+        seen = set()
+    expression = _extract_expression(js_trim(value))
+    if expression is None:
+        return []
+    compact = _compact_expression(expression)
+    if not compact.lower().startswith("env."):
+        return []
+    name = compact[4:]
+    if name in seen:
+        return [name]
+    seen = seen | {name}
+    names = [name]
+    for assigned, _line in static_env.get(name, []):
+        names.extend(_env_chain_names(assigned, static_env, seen))
+    return names
+
+
+def _env_case_candidates(
+    name: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    scopes: list[tuple[int, int]],
+) -> list[tuple[str, int, int]]:
+    """Every visible case-variant of `name` (including `name` itself) as
+    `(key, assignment_line, scope_index)`, discovered with BOTH Python folds
+    so the pairs neither fold alone sees stay visible (`'\u017f'.upper() ==
+    'S'` but `'\u017f'.lower() == '\u017f'`; `'\u212a'.lower() == 'k'` but
+    `'\u212a'.upper() == '\u212a'`). `scope_index` is most-specific first."""
+    found: list[tuple[str, int, int]] = []
+    for scope_index, (low, high) in enumerate(scopes):
+        for key, entries in static_env.items():
+            if key != name and not (
+                key.upper() == name.upper() or key.lower() == name.lower()
+            ):
+                continue
+            for _assigned, line in entries:
+                if low <= line <= high:
+                    found.append((key, line, scope_index))
+    return found
+
+
+def _refuse_env_case_collision(
+    label: str,
+    value: str,
+    source_line: int,
+    name: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    scopes: list[tuple[int, int]],
+) -> None:
+    """#341: refuse when a Windows runner would resolve `name` to a different
+    assignment than the exact-case lookup here. A Windows runner's `env`
+    context is `OrdinalIgnoreCase` (last-wins), so a case-colliding mapping
+    can leave the runtime token empty (or the run-id same-run) while the gate
+    keeps the cross-run exclusion. The predicate is the winning assignment of
+    the merged visible chain: actions/runner seeds the job environment with
+    the workflow then the job `env:` mapping and merges the step's own `env:`
+    LAST, all under one `OrdinalIgnoreCase` comparer, so the winner is the
+    assignment from the most-specific scope, and the last line within a
+    scope; the download is refused when that winner is not `name`. A name the
+    gate cannot prove non-ASCII-safe refuses with its own diagnostic, because
+    the exact `OrdinalIgnoreCase` folding is not modelled (`lower()`/`upper()`
+    each miss a pair). The exact-case name must be assigned somewhere in the
+    visible chain — when only a case-variant exists, the pre-existing
+    case-mismatch/unresolved diagnostics own the shape."""
+    candidates = _env_case_candidates(name, static_env, scopes)
+    if not candidates:
+        return
+    if not any(candidate[0] == name for candidate in candidates):
+        return
+    if not name.isascii():
+        raise Refusal(
+            source_line,
+            f"{label}: '{value}' resolves through `env.{name}`, a non-ASCII env name whose "
+            "Windows `OrdinalIgnoreCase` folding is not modelled — the runtime may resolve a "
+            "different value, so the cross-run exclusion cannot be proven (refusing rather "
+            "than guessing)",
+        )
+    non_ascii = [c for c in candidates if not c[0].isascii()]
+    if non_ascii:
+        variant, variant_line, _scope = non_ascii[0]
+        raise Refusal(
+            source_line,
+            f"{label}: '{value}' resolves through `env.{name}`, which has a non-ASCII case-"
+            f"variant `env.{variant}` (line {variant_line}) whose Windows `OrdinalIgnoreCase` "
+            "folding is not modelled — the runtime may resolve a different value, so the "
+            "cross-run exclusion cannot be proven (refusing rather than guessing)",
+        )
+    # `scopes` is most-specific first (step, job, workflow); the runner merges
+    # them least-specific first (workflow, then job, then step), so the merged
+    # winner is the candidate in the most-specific scope with the last line.
+    winner_key, winner_line, _scope = max(candidates, key=lambda c: (-c[2], c[1]))
+    if winner_key == name:
+        return
+    raise Refusal(
+        source_line,
+        f"{label}: '{value}' resolves through `env.{name}`, and the case-variant assignment "
+        f"`env.{winner_key}` (line {winner_line}) wins under a Windows runner's case-"
+        "insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a "
+        "different value, so the cross-run exclusion cannot be proven (refusing rather than "
+        "guessing)",
+    )
+
+
+def _refuse_github_env_token_mention(job: Job, step: ArtifactStep) -> None:
+    """#339: a preceding `run:` step in the same job whose body mentions
+    `$GITHUB_ENV` can change or empty any token that resolves through the
+    static `env:` chain — actions/runner merges `$GITHUB_ENV` writes into the
+    job's environment before a later step's `with:` is evaluated — so the
+    cross-run exclusion cannot be proven and the download is refused. The
+    detector (`_mentions_github_env`) is the decoded run text's
+    case-insensitive `github_env` substring plus a case-sensitive
+    `GITHUB`/`ENV` conjunction inside a 64-character window, not a name
+    extraction (measured leaky: single `>`, `tee`, heredocs, indirect
+    names, a YAML-escaped or shell-assembled name): a
+    read-only `cat "$GITHUB_ENV"`, an unrelated-name write, a same-value
+    rewrite and a write shadowed by the step's own `env:` all refuse too
+    (accepted fail-closed costs, documented in the header). Position is the
+    step's START line, so a write in the download's own step or in a later
+    step proves nothing, and the scan is per job because `$GITHUB_ENV`
+    writes live in the job's global environment."""
+    if step.github_token is None or _env_reference(step.github_token) is None:
+        return
+    mention = next(
+        (
+            body
+            for body in job.run_bodies
+            if body.mentions_github_env and body.step_line < step.uses_line
+        ),
+        None,
+    )
+    if mention is None:
+        return
+    raise Refusal(
+        step.github_token_line or step.uses_line,
+        f"github-token: '{step.github_token}' resolves through the `env` context, and a "
+        f"preceding step in this job writes to `$GITHUB_ENV` (line {mention.line}) — that "
+        "write can change or empty the value at runtime, so the cross-run exclusion cannot "
+        "be proven (refusing rather than guessing)",
+    )
+
+
 def _unresolved_env_link(
     name: str,
     scoped_env: dict[str, list[tuple[str, int]]],
@@ -2058,20 +2373,40 @@ def _apply_static_env_run_id_resolution(
     The `github-token:` that the exclusion depends on is classified the same
     way: a statically empty in-scope token (including an empty block-scalar
     body or a plain YAML null, R6-BLOCKER-1) is absent (the rule applies) and
-    one the gate cannot prove non-empty is refused."""
+    one the gate cannot prove non-empty is refused. A token that resolves
+    through the `env` context is additionally refused when a preceding step
+    in the same job mentions `$GITHUB_ENV` (#339): that write can change or
+    empty the token before the action reads it."""
     static_env = _collect_static_env(lines, block_bodies)
     for job in jobs:
         for step in job.artifact_steps:
             if not step.run_id_cross_run or step.run_id is None:
                 continue
-            scoped_env = _scoped_static_env(
-                static_env,
-                [
-                    entry
-                    for entry in (step.env_range, job.env_range, workflow_env_range)
-                    if entry is not None
-                ],
-            )
+            scopes = [
+                entry
+                for entry in (step.env_range, job.env_range, workflow_env_range)
+                if entry is not None
+            ]
+            scoped_env = _scoped_static_env(static_env, scopes)
+            for name in _env_chain_names(step.run_id, scoped_env):
+                _refuse_env_case_collision(
+                    "run-id",
+                    step.run_id,
+                    step.run_id_line or step.uses_line,
+                    name,
+                    static_env,
+                    scopes,
+                )
+            if step.github_token is not None:
+                for name in _env_chain_names(step.github_token, scoped_env):
+                    _refuse_env_case_collision(
+                        "github-token",
+                        step.github_token,
+                        step.github_token_line or step.uses_line,
+                        name,
+                        static_env,
+                        scopes,
+                    )
             resolution = _classify_static_value(step.run_id, scoped_env, set())
             if resolution == "same-run":
                 step.run_id_cross_run = False
@@ -2150,6 +2485,7 @@ def _apply_static_env_run_id_resolution(
                 continue
             token = _classify_token_value(step.github_token, scoped_env, set())
             if token == "present":
+                _refuse_github_env_token_mention(job, step)
                 continue
             if token == "empty":
                 step.has_github_token = False
@@ -2293,7 +2629,7 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
             message = scalar_construct_violation(line)
             if message:
                 raise Refusal(index, message)
-        parser = WorkflowParser(relpath, lines)
+        parser = WorkflowParser(relpath, lines, block_bodies)
         result.jobs = parser.parse()
         reconciliation = reconcile(
             blank_non_semantic_name_values(blank_run_and_env_values(lines)),

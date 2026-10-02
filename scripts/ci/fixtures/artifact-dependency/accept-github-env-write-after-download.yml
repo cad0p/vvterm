@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the position control. The SAME chain-name write (`GH_TOKEN=`, a
+# strengthened control per lens 3 MAJOR 4) sits in a step AFTER the
+# download, so it cannot affect the download's `with:` evaluation and the
+# cross-run exclusion stands (issue #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
+      - name: blank the token afterwards
+        run: echo "GH_TOKEN=" >> "$GITHUB_ENV"

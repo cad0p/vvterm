@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: single-quoted raw U+001C-U+001F concatenated (all four are
+# Python-strip-removed and ECMAScript-kept, so one fixture pins the whole
+# C0 family). parseInt sees a NaN run-id (issue #338).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: '123'
+          github-token: "ghp_literal"

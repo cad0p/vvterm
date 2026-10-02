@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the tail control. A trailing U+0085 after the digits is
+# Python-strip-removed but ECMAScript-kept, and parseInt('123<NEL>') is
+# 123: the handoff is real and stays excluded. This fixture is what pins
+# parseInt's LEADING-prefix semantics (a js_trim + ^\\d+$ predicate
+# would newly refuse it).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: '123'
+          github-token: "ghp_literal"
