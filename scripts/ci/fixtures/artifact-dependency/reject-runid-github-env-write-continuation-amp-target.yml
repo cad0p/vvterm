@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the line ends in an unescaped backslash, so the shell joins the
+# next physical line (`"$n"`) into the `>&` redirect. The per-line scan saw
+# a `>&` with the backslash as its word and a bare `"$n"` on the next line,
+# so the env-file target was invisible (issue #342, R3; fail-open at base
+# `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >& \
+          "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

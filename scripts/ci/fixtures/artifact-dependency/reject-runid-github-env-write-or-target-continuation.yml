@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the `||` ends the physical line, so the next line's assignment is
+# part of the same conditional list and may not execute. The shell-level
+# continuation was invisible to the per-line index, which read `n=/tmp/foo`
+# as an unconditional new statement and kept the exclusion (issue #342, R1;
+# fail-open at every revision before the fold-4 head).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV" ||
+          n=/tmp/foo
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

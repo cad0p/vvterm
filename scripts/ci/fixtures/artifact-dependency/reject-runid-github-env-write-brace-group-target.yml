@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the assignment `n="$m"` sits inside a `{ }` group, so it is not
+# at a statement position and the index never saw it; the trace read the
+# stale `n=/tmp/foo` and kept the exclusion even though the runtime target is
+# the env path (issue #342, R4; fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          x=1; m="$GITHUB_ENV"
+          n=/tmp/foo
+          { n="$m"; }
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

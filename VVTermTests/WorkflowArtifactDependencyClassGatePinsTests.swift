@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 292
+    private static let expectedManifestCases = 316
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -459,6 +459,35 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-identifier-suffix-chain.yml",
         "reject-runid-github-env-write-identifier-suffix-concat-chain.yml",
         "reject-runid-github-env-write-identifier-suffix-target.yml",
+        // #342 fold round 4: the `&&`/`||` short-circuit ambiguity (R1,
+        // including the cross-line continuation), the `<>` read-write
+        // redirect targets and the line-continuation split (R2/R3), the
+        // unmodelled variable-writing mechanisms and carriers (R4), and the
+        // two accept controls (bare fd-0 `<>`; an unrelated `read` operand).
+        "reject-runid-github-env-write-or-target-oneline.yml",
+        "reject-runid-github-env-write-and-or-target-oneline.yml",
+        "reject-runid-github-env-write-or-target-continuation.yml",
+        "reject-runid-github-env-write-or-value-oneline.yml",
+        "reject-runid-github-env-write-rw-target.yml",
+        "reject-runid-github-env-write-rw-exec.yml",
+        "reject-runid-github-env-write-continuation-amp-target.yml",
+        "reject-runid-github-env-write-continuation-noclobber-target.yml",
+        "reject-runid-github-env-write-trap-target.yml",
+        "reject-runid-github-env-write-eval-target.yml",
+        "reject-runid-github-env-write-bash-c-export-target.yml",
+        "reject-runid-github-env-write-bash-c-export-unset-target.yml",
+        "reject-runid-github-env-write-brace-group-target.yml",
+        "reject-runid-github-env-write-read-value.yml",
+        "reject-runid-github-env-write-read-target.yml",
+        "reject-runid-github-env-write-printf-v-value.yml",
+        "reject-runid-github-env-write-declare-value.yml",
+        "reject-runid-github-env-write-declare-target.yml",
+        "reject-runid-github-env-write-readonly-value.yml",
+        "reject-runid-github-env-write-readonly-target.yml",
+        "reject-runid-github-env-write-typeset-value.yml",
+        "reject-runid-github-env-write-declare-g-value.yml",
+        "accept-runid-github-env-write-rw-plain.yml",
+        "accept-runid-github-env-write-unrelated-mechanism.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -737,6 +766,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "with a payload the gate cannot extract",
             "writes an unextractable name to `$GITHUB_ENV`",
             "without an extractable write",
+            // #342 fold round 4: the R1 short-circuit, R2 `<>`, R3
+            // continuation and R4 unmodelled-mechanism refusals, plus the
+            // distinct unresolved-redirect-target message (NIT-2).
+            "a target the extractor cannot resolve to the env file or prove harmless",
+            "with an unescaped backslash continuation",
+            "with a command string that names the value the download",
+            "which the extractor does not model",
+            "an out-of-statement assignment",
             // The `_flip_target_match` non-ASCII raise was dead code (only
             // `[A-Za-z_][A-Za-z0-9_]*` names reach it; the unextractable-name
             // refusal above owns the non-ASCII case), so its fragment is no

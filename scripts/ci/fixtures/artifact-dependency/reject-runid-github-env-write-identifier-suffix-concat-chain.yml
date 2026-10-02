@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: MIT
-# Fixture: the tokenizer-joined quoted-concatenation variant of the
-# cross-step suffix chain — the redirect target `"$GITHUB_ENV"x` is one word
-# (`$GITHUB_ENVx`) and the `resolve` step publishes the env path under
-# `GITHUB_ENVx`. The joined suffix target must be `unknown` (refuse): no
-# assignment in the flip step can prove it is not the env path (issue #342,
-# BLOCKER-4; measured fail-open at base `81673bd5` and at fold-2
-# `d5429892`).
+# Fixture: the tokenizer joins the quoted concatenation `"$GITHUB_ENV"x`
+# into one word (`$GITHUB_ENVx`), so the redirect target is read as the
+# identifier-suffix spelling and refuses. The genuine risk is the
+# unquoted/braced NAME `$GITHUB_ENVx` / `${GITHUB_ENVx}`: a preceding step
+# can publish the env path under that name and the runner merges it before
+# the flip. In bash the quoted concatenation expands to `<env-path>x` — a
+# different file — and the measured runtime env file is unchanged, so this
+# fixture pins a benign fail-closed false red of the tokenizer, not a
+# runtime exploit (issue #342, BLOCKER-4 / MINOR-1; measured fail-open at
+# base `81673bd5` and at fold-2 `d5429892`).
 jobs:
   build:
     runs-on: ubuntu-latest

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `printf -v CI_RUN_ID` writes the current run id into the value
+# variable; only statement-position `NAME=VALUE` was modelled, so the stale
+# cross-run assignment kept the exclusion (issue #342, R4; fail-open at base
+# `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          printf -v CI_RUN_ID %s 42424242
+          echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

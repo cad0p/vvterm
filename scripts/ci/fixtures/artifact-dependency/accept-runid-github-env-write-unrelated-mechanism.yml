@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Accept control: an unmodelled write mechanism (`read`) is only refused
+# when its operand names a variable the rule traces; `UNRELATED_VAR` is
+# neither a flip target, an alias, an assignment, nor a redirect target, so
+# the cross-run write to `$GITHUB_ENV` keeps the exclusion (issue #342, R4;
+# non-vacuous: the download keeps `excluded: 1`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          read -r UNRELATED_VAR <<< "hello"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an assignment in an `||` list may not execute. The first
+# assignment succeeds, so the right-hand `n=/tmp/foo` is dead code and
+# the redirect target at runtime is the env path from `n="$GITHUB_ENV"`.
+# The old trace took the syntactically last indexed assignment, so it
+# classified the target `other` and kept the exclusion (issue #342, R1;
+# fail-open at base `81673bd5` and at fold-2 `d5429892`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV" || n=/tmp/foo
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

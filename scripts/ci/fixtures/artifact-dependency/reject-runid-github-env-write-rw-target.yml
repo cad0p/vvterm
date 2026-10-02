@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `1<>"$n"` is a read-write open of the env file on fd 1, so the
+# same-run payload is written there. The redirect grammar only emitted `>`,
+# `>>` and `>|`, so the target never reached `_env_file_target_kind` and the
+# exclusion was kept (issue #342, R2; fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" 1<>"$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
