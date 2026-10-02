@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a !!str-tagged env value spelled "\uFEFF" is the JS-trimmed BOM at runtime — node properties are stripped before the decoder
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!str "\uFEFF"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

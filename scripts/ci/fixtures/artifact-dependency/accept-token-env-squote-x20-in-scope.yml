@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a single-quoted env value has no escapes: the runtime text is the literal backslash-x-2-0, non-empty
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: '\x20'
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

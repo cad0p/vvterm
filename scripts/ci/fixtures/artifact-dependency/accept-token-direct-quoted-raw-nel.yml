@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a direct quoted raw U+0085 github-token: value is non-empty at runtime — the direct-site false red the trim predicate removes
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ""

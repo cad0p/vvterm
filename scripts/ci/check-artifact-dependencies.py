@@ -9,8 +9,9 @@ that uploads the artifact it downloads. Artifacts are run-scoped, so the
 producer must be in the same workflow file; the only exclusion is a
 recognized cross-run `run-id:` handoff (e.g. `${{ env.SOURCE_RUN_ID }}`)
 carrying a `github-token:` that is provably non-empty (a literal, `secrets.*`
-or `github.token`; a whitespace-only, statically empty, or unprovable
-expression token does not exclude). actions/download-artifact ignores
+or `github.token`; a token that ECMAScript `trim()` empties, a statically
+empty, or an unprovable expression token does not exclude).
+actions/download-artifact ignores
 `run-id:` when no token is set, so such a download is same-run and the rule
 applies. A `run-id:` that the same file statically assigns the current run's
 id is NOT a cross-run handoff either: it is same-run, so the rule still
@@ -44,8 +45,9 @@ mechanisms are:
 
 Refusals include: tabs in indentation; an unterminated quoted scalar; a
 backslash escape in a double-quoted scalar that only YAML's full decoder
-resolves (`\\uXXXX`, `\\xXX`, …); a block-scalar header as the value of a
-semantic key (step `uses`; job `needs`; `with.name`, `with.run-id`,
+resolves (`\\uXXXX`, `\\xXX`, …), including behind a string tag or anchor
+and inside an inline-flow item at a semantic position; a block-scalar header
+as the value of a semantic key (step `uses`; job `needs`; `with.name`, `with.run-id`,
 `with.pattern`, `with.artifact-ids`, `with.github-token`); a non-string YAML tag on a parsed mapping key or on a
 value that decides the graph; a `github-token:` expression that cannot be
 proven non-empty; `{`/`&`/`*`/`<<` in a
@@ -108,13 +110,41 @@ and the flow-sequence env value `[!!int ""]` stay accepted, while
 `GH_TOKEN: !!int !!str ""` resolves to the empty string and is refused by the
 missing-edge rule — the
 workflow cannot run, so there is no race, and the tag-order asymmetry is
-deliberate rather than modelled. The Python-only strip set is a new
-fail-closed false red on the tagged path: `GH_TOKEN: !!int "\x1c"`,
-`!foo "\x1f"` and `!!int "\x85"` are non-empty at runtime (ECMAScript
-`.trim()` keeps U+001C–U+001F and U+0085) but `_classify_token_value`'s
-Python `.strip()` removes them, so they are refused; that predicate
-divergence belongs to issue #335. The whitespace-escape/BOM family is tracked
-separately as issue #335 and is explicitly unfixed here. Runtime values were
+deliberate rather than modelled. The whitespace-escape and BOM
+families (#335) are fixed here, and the invariants are: a static `env:`
+value's double-quoted scalar is decoded with the FULL YAML escape set
+(`GH_TOKEN: "\\x20"`, `"\\u0020"`, `"\\_"` are the whitespace strings the
+runner reads, so they cannot look non-empty); the token presence predicate
+mirrors ECMAScript `String.prototype.trim()` — 25 code points (WhiteSpace +
+LineTerminator, including U+FEFF, and NOT Python's `str.strip()`, which
+keeps U+FEFF and additionally removes U+001C–U+001F/U+0085) — so a BOM-only
+or otherwise JS-empty token never carries the cross-run exclusion; and a
+semantic value (`uses`, `needs`, `with:` keys) is escape-checked past a
+string tag or anchor and inside an inline-flow sequence (a leading
+non-string tag is refused by the tag policy with its own diagnostic), so
+`uses: !!str &a "…\\x61…"`, a tagged/anchored `github-token:` value and
+`needs: ["\\x61"]` are refused
+instead of being read through the subset decoder. Remaining fail-closed
+limits, kept honestly: an INVALID escape in an env value stays accepted
+(`"\\q"`, `"\\x4"`, `"\\xZZ"`, `"\\u12"`, `"\\U00110000"` — GitHub's parser
+errors on each, so the workflow cannot run); the run-id emptiness predicate
+still uses Python `strip()`, so a `run-id:` literal prefixed with U+0085 or
+U+001C–U+001F is accepted although `parseInt(getInput('run-id'))` yields
+`NaN` (the action gates its cross-run behavior solely on the trimmed token,
+and a `NaN` run-id requests `/runs/NaN/artifacts` — a 404, not a same-run
+download, so this is a correctness divergence, not a fail-open; the mirror
+image is the BOM-prefixed literal, a false red, since `parseInt` skips
+U+FEFF); a PLAIN (unquoted) raw U+0085/U+001C env value is still refused
+even though ECMAScript keeps it (`_static_env_value`'s leading Python
+`strip()` collapses it before the token predicate — the quoted shape is the
+one that resolves, and this fail-closed false red is documented rather than
+modelled); a Windows runner's `env` context is case-insensitive and a
+case-colliding `env:` mapping can resolve a different assignment than the
+exact-case lookup here (Windows-only, not verifiable from this repository);
+and a `run:` step that appends `NAME=` to `$GITHUB_ENV` can overwrite a
+statically assigned `env:` value, so a statically present token can be empty
+at runtime (a pre-existing hole filed as a follow-up; the gate cannot see
+runtime writes). Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
 `dist/templates/template-reader.js` `validate()`), its `yaml` 2.9.1
@@ -159,7 +189,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 175
+EXPECTED_MANIFEST_CASES = 203
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -606,6 +636,71 @@ def _escaped_quoted_scalar_violation(text: str, start: int) -> str | None:
     return None
 
 
+def _flow_item_texts(body: str) -> list[str]:
+    """The items of an inline-flow sequence body, split on commas outside
+    quoted scalars. A plain scalar's embedded quote is literal text and is
+    left to the caller's start-of-scalar test."""
+    items: list[str] = []
+    start = 0
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c == '"':
+            end, _ = _scan_quoted(body, i)
+            i = max(end, i + 1)
+            continue
+        if c == "'":
+            i += 1
+            while i < len(body):
+                if body[i] == "'":
+                    if i + 1 < len(body) and body[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == ",":
+            items.append(body[start:i])
+            start = i + 1
+        i += 1
+    items.append(body[start:])
+    return items
+
+
+def _semantic_value_escape_violation(value: str) -> str | None:
+    """Refuse an unsupported escape in any double-quoted scalar a semantic
+    value resolves to. The value can carry node properties (`uses: !!str &a
+    "…"`), and `needs:` accepts an inline-flow sequence (`needs: ["…"]`):
+    both routes reach the subset decoder, so an escape YAML resolves
+    differently could hide the action step or fabricate a `needs:` edge
+    (#335 lens-1 BLOCKERs 1-3). Only a scalar that STARTS with `"` after its
+    node properties is a YAML double-quoted scalar; a `"` inside a plain
+    scalar is literal text and is not scanned, which is why this is not a
+    blind segment scan. A leading non-string tag is left to the tag policy
+    refusals (which already reject it) so the escape check does not change
+    which refusal fires for a value both rules reject."""
+    text = value.strip()
+    tag = _leading_tag(text)
+    if tag is not None and not _is_string_tag(tag):
+        return None
+    stripped_value = _strip_node_properties(text)
+    if stripped_value.startswith('"'):
+        return _escaped_quoted_scalar_violation(stripped_value, 0)
+    if stripped_value.startswith("["):
+        for raw_item in _flow_item_texts(stripped_value[1:]):
+            item = raw_item.strip()
+            item_tag = _leading_tag(item)
+            if item_tag is not None and not _is_string_tag(item_tag):
+                continue
+            item = _strip_node_properties(item)
+            if item.startswith('"'):
+                message = _escaped_quoted_scalar_violation(item, 0)
+                if message:
+                    return message
+    return None
+
+
 def quoted_escape_violation(line: str, check_value: bool) -> str | None:
     """Refuse a double-quoted scalar that uses an escape outside the
     decoder's set. A double-quoted *key* is always checked (it can name the
@@ -613,7 +708,11 @@ def quoted_escape_violation(line: str, check_value: bool) -> str | None:
     `check_value` is set, i.e. when the line's key is `uses`/`needs` or the
     line belongs to a `with:` mapping: only those positions decide the
     artifact graph, so legal YAML escapes elsewhere (`name: "caf\\u00e9"`,
-    `run: "printf '\\x1b[0m'"`) are data the gate never reads. Runs after the
+    `run: "printf '\\x1b[0m'"`) are data the gate never reads. At a semantic
+    position the value is resolved past a string tag or anchor and through an
+    inline-flow sequence before the check, so a tag/anchor or a flow item
+    cannot smuggle the escape past it (#335 lens-1); a leading non-string tag
+    is left to the tag policy refusal. Runs after the
     unterminated-quote check (which names an unclosed scalar more precisely)
     and after block-scalar blanking (so shell bodies stay opaque)."""
     stripped = line.lstrip(" ")
@@ -630,16 +729,16 @@ def quoted_escape_violation(line: str, check_value: bool) -> str | None:
         rest = stripped[end:].lstrip(" ")
         if rest.startswith(":"):
             value = rest[1:].lstrip(" ")
-            if value.startswith('"') and check_value:
-                return _escaped_quoted_scalar_violation(value, 0)
+            if check_value:
+                return _semantic_value_escape_violation(value)
         return None
     kv = split_key_value(stripped)
     if kv is None:
         return None
     _, value, _ = kv
     value = _strip_str_tag(value)
-    if value.startswith('"') and check_value:
-        return _escaped_quoted_scalar_violation(value, 0)
+    if check_value:
+        return _semantic_value_escape_violation(value)
     return None
 
 
@@ -1381,7 +1480,7 @@ class WorkflowParser:
                     "" if value.strip() in YAML_NULL_SPELLINGS else decode_scalar(value)
                 )
                 step.github_token_line = index + 1
-                step.has_github_token = bool(step.github_token.strip())
+                step.has_github_token = bool(js_trim(step.github_token))
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
                 continue
             if key == "pattern":
@@ -1469,6 +1568,25 @@ def _extract_expression(value: str) -> str | None:
     if not text.startswith("${{") or not text.endswith("}}"):
         return None
     return text[3:-2]
+
+
+# ECMAScript String.prototype.trim removes WhiteSpace + LineTerminator — the
+# 25 code points below, measured by a full code-point sweep against the
+# runner's own engine (node). This is NOT Python's str.strip(), which keeps
+# U+FEFF and additionally removes U+001C-U+001F/U+0085. The token predicate
+# must mirror what `@actions/core`'s `getInput` does to the value, because
+# `actions/download-artifact` honors `run-id:` only when the trimmed token
+# is non-empty (#335 Family B).
+_JS_TRIM_CHARS = (
+    "\t\n\v\f\r "
+    "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
+def js_trim(value: str) -> str:
+    """`value` as `@actions/core`'s `getInput` sees it (ECMAScript trim)."""
+    return value.strip(_JS_TRIM_CHARS)
 
 
 # Plain YAML null spellings (YAML 1.2 core schema: `null`, `Null`, `NULL`,
@@ -1573,6 +1691,21 @@ def _null_tag_value(text: str) -> str | None:
     return None
 
 
+def _decode_env_scalar(text: str) -> str:
+    """The runtime string of a static `env:` value's scalar. Node properties
+    (a `!!str` tag, an anchor) do not change the value, so they are skipped;
+    a double-quoted scalar is decoded with the FULL YAML escape set — the
+    same `_decode_double_quoted` the tag-argument path already uses — because
+    `"\\x20"`, `"\\u0020"` and `"\\_"` are whitespace at runtime, and reading
+    them as literal text made an empty token look present (#335 Family A).
+    A plain or single-quoted scalar has no escapes, so `decode_scalar`'s
+    subset reader is exact for it."""
+    stripped = _strip_node_properties(text)
+    if stripped.startswith('"'):
+        return _decode_double_quoted(stripped)
+    return decode_scalar(text)
+
+
 def _static_env_value(
     raw: str,
     line: int,
@@ -1624,7 +1757,7 @@ def _static_env_value(
         if _static_block_header(cont_text) is not None:
             return block_bodies.get(continuation_line, "")
         return _decode_scalar_argument(cont_text)
-    return decode_scalar(text)
+    return _decode_env_scalar(text)
 
 
 def _static_env_has_name(
@@ -1833,7 +1966,7 @@ def _classify_token_value(
     an unset secret, and any expression carrying an operator (`&&`, `||`,
     `??`) may evaluate to the empty string, so both are 'unknown' (refused
     rather than excluded)."""
-    text = value.strip()
+    text = js_trim(value)
     if not text:
         return "empty"
     expression = _extract_expression(text)

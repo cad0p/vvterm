@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: U+0085 (NEL) is NOT in the ECMAScript trim set, so this token is non-empty at runtime and the cross-run exclusion stands
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: "\N"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

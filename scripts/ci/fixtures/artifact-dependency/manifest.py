@@ -1382,4 +1382,217 @@ CASES = [
             'reject-token-env-step-int-empty-shadow-over-job-env.yml:19: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
+
+    {
+        "id": "reject-token-env-esc-x20-in-scope",
+        "files": ["reject-token-env-esc-x20-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-x20-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-u0020-in-scope",
+        "files": ["reject-token-env-esc-u0020-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-u0020-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-v-in-scope",
+        "files": ["reject-token-env-esc-v-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-v-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-f-in-scope",
+        "files": ["reject-token-env-esc-f-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-f-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-nbsp-in-scope",
+        "files": ["reject-token-env-esc-nbsp-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-nbsp-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-ls-in-scope",
+        "files": ["reject-token-env-esc-ls-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-ls-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-ps-in-scope",
+        "files": ["reject-token-env-esc-ps-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-ps-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-tab-in-scope",
+        "files": ["reject-token-env-esc-tab-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-tab-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-cr-in-scope",
+        "files": ["reject-token-env-esc-cr-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-cr-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-feff-in-scope",
+        "files": ["reject-token-env-esc-feff-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-feff-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-str-tag-esc-x20-in-scope",
+        "files": ["reject-token-env-str-tag-esc-x20-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-str-tag-esc-x20-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-str-tag-esc-feff-in-scope",
+        "files": ["reject-token-env-str-tag-esc-feff-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-str-tag-esc-feff-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-str-tag-anchor-esc-x20-in-scope",
+        "files": ["reject-token-env-str-tag-anchor-esc-x20-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-str-tag-anchor-esc-x20-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-int-esc-feff-in-scope",
+        "files": ["reject-token-env-int-esc-feff-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-int-esc-feff-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-raw-bom-in-scope",
+        "files": ["reject-token-env-raw-bom-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-raw-bom-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-quoted-raw-bom-in-scope",
+        "files": ["reject-token-env-quoted-raw-bom-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-quoted-raw-bom-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-direct-raw-bom",
+        "files": ["reject-token-direct-raw-bom.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-direct-raw-bom.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-direct-quoted-raw-bom",
+        "files": ["reject-token-direct-quoted-raw-bom.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-direct-quoted-raw-bom.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-esc-jstrim-nonascii-in-scope",
+        "files": ["reject-token-env-esc-jstrim-nonascii-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-jstrim-nonascii-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-tagged-anchored-escaped-uses",
+        "files": ["reject-tagged-anchored-escaped-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-tagged-anchored-escaped-uses.yml:13: unsupported backslash escape \'\\x\' in a double-quoted scalar — the gate decodes only \\n, \\t, \\" and \\\\ (refusing rather than guessing YAML\'s full escape set)',
+        ],
+    },
+    {
+        "id": "reject-tagged-anchored-esc-token",
+        "files": ["reject-tagged-anchored-esc-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-tagged-anchored-esc-token.yml:17: unsupported backslash escape \'\\x\' in a double-quoted scalar — the gate decodes only \\n, \\t, \\" and \\\\ (refusing rather than guessing YAML\'s full escape set)',
+        ],
+    },
+    {
+        "id": "reject-needs-flow-escape",
+        "files": ["reject-needs-flow-escape.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-needs-flow-escape.yml:17: unsupported backslash escape \'\\x\' in a double-quoted scalar — the gate decodes only \\n, \\t, \\" and \\\\ (refusing rather than guessing YAML\'s full escape set)',
+        ],
+    },
+    {
+        "id": "accept-token-env-esc-nel-in-scope",
+        "files": ["accept-token-env-esc-nel-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-esc-fs-in-scope",
+        "files": ["accept-token-env-esc-fs-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-squote-x20-in-scope",
+        "files": ["accept-token-env-squote-x20-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-raw-nel-in-scope",
+        "files": ["accept-token-env-raw-nel-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-int-esc-fs-in-scope",
+        "files": ["accept-token-env-int-esc-fs-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-direct-quoted-raw-nel",
+        "files": ["accept-token-direct-quoted-raw-nel.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

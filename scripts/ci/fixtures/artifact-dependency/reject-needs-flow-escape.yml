@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an inline-flow needs: item with an escape: the published parser resolves the item to `a`, not to the gate's subset-decoded `x61`, so the fabricated edge x61->build must be refused
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  x61:
+    needs: build
+    runs-on: ubuntu-latest
+  a:
+    runs-on: ubuntu-latest
+  consumer:
+    runs-on: ubuntu-latest
+    needs: ["\x61"]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
