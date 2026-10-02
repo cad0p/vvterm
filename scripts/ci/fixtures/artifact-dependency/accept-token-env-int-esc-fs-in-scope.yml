@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the tagged-path U+001C false red is removed: !!int resolves through the full decoder and U+001C survives ECMAScript trim
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int "\x1c"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

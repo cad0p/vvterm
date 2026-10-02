@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a "\v" single-letter escape is U+000B, which ECMAScript trims — an empty token at runtime
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: "\v"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

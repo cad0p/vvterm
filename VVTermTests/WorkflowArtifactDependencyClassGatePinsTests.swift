@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 175
+    private static let expectedManifestCases = 206
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -295,6 +295,43 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-token-env-int-comment-continuation.yml",
         "reject-bare-verbatim-str-tag-line.yml",
         "reject-token-env-step-int-empty-shadow-over-job-env.yml",
+        // round-10 fold (#335): the whitespace-escape and BOM silent passes.
+        // Family A: the full escape decoder on static `env:` values; Family B:
+        // the ECMAScript-trim token predicate at the direct and env sites;
+        // the trim-set literal pin; and the lens-1 semantic-value widening
+        // (node properties and inline-flow items). The six accepts split into
+        // three one-sided over-trim controls and three false-red removals.
+        "reject-token-env-esc-x20-in-scope.yml",
+        "reject-token-env-esc-u0020-in-scope.yml",
+        "reject-token-env-esc-v-in-scope.yml",
+        "reject-token-env-esc-f-in-scope.yml",
+        "reject-token-env-esc-nbsp-in-scope.yml",
+        "reject-token-env-esc-ls-in-scope.yml",
+        "reject-token-env-esc-ps-in-scope.yml",
+        "reject-token-env-esc-tab-in-scope.yml",
+        "reject-token-env-esc-cr-in-scope.yml",
+        "reject-token-env-esc-feff-in-scope.yml",
+        "reject-token-env-str-tag-esc-x20-in-scope.yml",
+        "reject-token-env-str-tag-esc-feff-in-scope.yml",
+        "reject-token-env-str-tag-anchor-esc-x20-in-scope.yml",
+        "reject-token-env-int-esc-feff-in-scope.yml",
+        "reject-token-env-raw-bom-in-scope.yml",
+        "reject-token-env-quoted-raw-bom-in-scope.yml",
+        "reject-token-direct-raw-bom.yml",
+        "reject-token-direct-quoted-raw-bom.yml",
+        "reject-token-env-esc-jstrim-nonascii-in-scope.yml",
+        "reject-tagged-anchored-escaped-uses.yml",
+        "reject-tagged-anchored-esc-token.yml",
+        "reject-needs-flow-escape.yml",
+        "accept-token-env-esc-nel-in-scope.yml",
+        "accept-token-env-esc-fs-in-scope.yml",
+        "accept-token-env-squote-x20-in-scope.yml",
+        "accept-token-env-raw-nel-in-scope.yml",
+        "accept-token-env-int-esc-fs-in-scope.yml",
+        "accept-token-direct-quoted-raw-nel.yml",
+        "reject-token-env-esc-lf-in-scope.yml",
+        "reject-needs-flow-swallow.yml",
+        "accept-needs-flow-quoted.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

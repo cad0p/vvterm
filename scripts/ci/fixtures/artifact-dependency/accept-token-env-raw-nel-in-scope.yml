@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a QUOTED raw U+0085 env value is non-empty at runtime (ECMAScript keeps NEL) — the shape that removes the current fail-closed false red; the plain raw form stays a false red and is documented
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: ""
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

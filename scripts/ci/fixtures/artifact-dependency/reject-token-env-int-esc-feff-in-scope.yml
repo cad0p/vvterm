@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: family B (not the env decoder): !!int already resolves through the full decoder, but only the ECMAScript-trim predicate makes the BOM-empty token refuse instead of excluding the download
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int "\uFEFF"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
