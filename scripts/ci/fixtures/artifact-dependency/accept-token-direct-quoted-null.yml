@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Control: the direct `with.github-token:` spelled `"null"` is the literal
+# text `null` (a quoted scalar is not a YAML null), so the token is
+# non-empty and the case is GREEN. Pins the raw-string membership test: a
+# decode-first implementation reads the decoded `null` and reds this case.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: "null"

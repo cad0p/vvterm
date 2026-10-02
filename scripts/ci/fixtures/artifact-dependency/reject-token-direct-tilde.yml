@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the direct `with.github-token:` spelled `~` — the plain YAML tilde
+# null is the empty string at runtime (#334 BLOCKER-2). A fix that only
+# resolves the `null` spelling leaves this silent.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ~

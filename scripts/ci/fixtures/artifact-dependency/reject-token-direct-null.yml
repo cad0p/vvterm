@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the direct `with.github-token:` spelled `null` — a plain YAML null
+# is the empty string at runtime, so the cross-run `run-id:` is not honored
+# and the `needs:` path is required (#334 BLOCKER-2). The env path already
+# resolved this spelling; only the direct assignment missed it.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: null

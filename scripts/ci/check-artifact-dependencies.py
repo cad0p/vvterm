@@ -77,9 +77,59 @@ token there is not a refusal; a `uses:` key line or an action-ref shape the
 parser did not model (e.g. a nested `uses:` lookalike) still is.
 Multi-document streams, U+2028/U+2029 line breaks, `%YAML` directives and a
 mid-file BOM are outside the subset grammar and unverified against GitHub's
-parser. YAML tags are refused except the string tag (`!!str` /
-`!<tag:yaml.org,2002:str>`), which is resolved to the same scalar text
-actions/runner reads.
+parser. YAML tag policy is split by position: on a semantic key's value
+(`uses`, `needs`, `with.name`/`run-id`/`github-token`/`pattern`/
+`artifact-ids`) any tag other than the string tag is refused, because its
+resolution could change the graph; the string tag (`!!str` /
+`!<tag:yaml.org,2002:str>`) is resolved to the same scalar text
+actions/runner reads. On a static `env:` value the tag's argument is
+resolved to the value GitHub reads, so a non-semantic `RETRIES: !!int 3`
+stays legal and an empty resolved value (`!!int ""`, bare `!!int`) does not
+exclude the download. A non-string-tagged value whose plain scalar continues
+on a following more-indented line is resolved through that continuation:
+`GH_TOKEN: !!int` / `!foo` plus a more-indented `ghp_x` is non-empty at
+runtime and stays excluded, while a continuation that is empty at runtime
+(`""`, `''`, a `|`/`>` header with an empty body, or a comment-only line)
+does not exclude the download. A continuation that is itself tagged
+(`GH_TOKEN: !!int` plus a more-indented `!!str ""`) is read by its text and
+stays accepted, matching the runtime-invalid stance below; an untagged bare
+key or a `!!str`/`!!null` continuation keeps its pre-existing reading — only
+the header line is read — so a NON-EMPTY continuation (`ghp_x`) is refused
+even though the runtime value is non-empty (a fail-closed false red,
+documented, not modelled), while an empty continuation refuses for the right
+reason. `blank_comments` opens a
+quote only at scalar-start positions, so after a tag the quote never opens
+and a `#` inside the quoted argument is blanked: `GH_TOKEN: !!int " #c"` /
+`!!int ' #c'` / `!foo " #c"` is non-empty at runtime but reads empty here —
+a fail-closed false red, documented, not modelled. Runtime-invalid tagged
+values are accepted where GitHub's parser errors: `GH_TOKEN: !!str !!int ""`
+and the flow-sequence env value `[!!int ""]` stay accepted, while
+`{a: !!int ""}` is refused by the flow-mapping rule and the reversed
+`GH_TOKEN: !!int !!str ""` resolves to the empty string and is refused by the
+missing-edge rule — the
+workflow cannot run, so there is no race, and the tag-order asymmetry is
+deliberate rather than modelled. The Python-only strip set is a new
+fail-closed false red on the tagged path: `GH_TOKEN: !!int "\x1c"`,
+`!foo "\x1f"` and `!!int "\x85"` are non-empty at runtime (ECMAScript
+`.trim()` keeps U+001C–U+001F and U+0085) but `_classify_token_value`'s
+Python `.strip()` removes them, so they are refused; that predicate
+divergence belongs to issue #335. The whitespace-escape/BOM family is tracked
+separately as issue #335 and is explicitly unfixed here. Runtime values were
+verified offline against the published `@actions/workflow-parser` 0.3.61
+(`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
+`dist/templates/template-reader.js` `validate()`), its `yaml` 2.9.1
+dependency, `@actions/core@3.0.0` `getInput` (ECMAScript `.trim()`), and
+`actions/download-artifact@v8` (`if (inputs.token)` gates the `run-id`
+filter); no live GitHub Actions run was executed, so the hosted service's
+exact parser build is still assumed equal to the published package — the
+same proxy every earlier round used. Already covered, not re-hunted:
+`github-token: {null}` and `with: {name: x, github-token: null}` (flow
+refusal); `github-token: >-` with or without a body (block-scalar-header
+refusal); `github-token: &a null` (anchor refusal); a bare or
+whitespace-only `github-token:`; `github-token: !!int null` (non-string-tag
+refusal; the runtime value would be the text `null`); and env `!!int null`,
+which is `StringToken("null")` at runtime, so reading it as present is
+correct.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -109,7 +159,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 143
+EXPECTED_MANIFEST_CASES = 175
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -376,13 +426,11 @@ def _strip_anchor(s: str) -> str:
     return s[end:].lstrip()
 
 
-def _static_block_header(value: str) -> str | None:
-    """The block-scalar header text of a static value after any leading node
-    properties (tags and anchors), or None. `GH_TOKEN: !!null |` and
-    `!!str &a |` are block scalars exactly like `|`: the tag and anchor do not
-    change the body, which is the value at runtime, so a tagged header is
-    resolved through the captured body and refused where a semantic key
-    expects an inline scalar (R8-BLOCKER-1, R8-BLOCKER-2)."""
+def _strip_node_properties(value: str) -> str:
+    """A static scalar's text after every leading node property (a `!` tag, a
+    verbatim `!<...>` tag, an `&name` anchor) is removed. Neither changes the
+    string the runner reads for a static `env:` value, and a property-only
+    value (`!!int`, `!foo &a`) has no inline scalar text of its own."""
     text = value.strip()
     while True:
         tag = _leading_tag(text)
@@ -393,6 +441,17 @@ def _static_block_header(value: str) -> str | None:
             text = _strip_anchor(text)
             continue
         break
+    return text
+
+
+def _static_block_header(value: str) -> str | None:
+    """The block-scalar header text of a static value after any leading node
+    properties (tags and anchors), or None. `GH_TOKEN: !!null |` and
+    `!!str &a |` are block scalars exactly like `|`: the tag and anchor do not
+    change the body, which is the value at runtime, so a tagged header is
+    resolved through the captured body and refused where a semantic key
+    expects an inline scalar (R8-BLOCKER-1, R8-BLOCKER-2)."""
+    text = _strip_node_properties(value)
     return text if BLOCK_HEADER_RE.match(text) else None
 
 
@@ -404,6 +463,13 @@ def split_key_value(s: str) -> tuple[str, str, str] | None:
     if not s:
         return None
     s = _strip_str_tag(s)
+    if not s:
+        # A line that is only a string tag (`!!str`) strips to the empty
+        # string, and `s[0]` would raise IndexError instead of letting the
+        # line fall through to the gate's own unconsumed-line refusal
+        # (#334-MINOR-1). A bare non-string tag (`!tag`) keeps its text —
+        # there is no `:` to split on — so only the string tag can empty `s`.
+        return None
     if s[0] in ("'", '"'):
         end, key = _scan_quoted(s, 0)
         i = end
@@ -714,7 +780,11 @@ def blank_block_scalars(
     inside a block-scalar body is content, not a comment: a comment-only body
     is a NON-empty runtime value (R7-MAJOR-1). The static `env:` index must
     tell an empty body (a runtime-empty value) from a non-empty one
-    (R6-BLOCKER-1)."""
+    (R6-BLOCKER-1). A property-only value (`GH_TOKEN: !!int`, `!foo &a`) can
+    take its scalar from a following more-indented line, and that scalar can
+    itself be a block header; such a header is captured the same way, keyed
+    by its own line, so `_static_env_value` can resolve the continuation
+    (#334 continuation resolution)."""
     out = list(lines)
     body_source = lines if source is None else source
     bodies: dict[int, str] = {}
@@ -732,11 +802,41 @@ def blank_block_scalars(
         if kv is None:
             continue
         _, value, _ = kv
-        if _static_block_header(value) is None:
-            continue
         key_indent = indent + prefix
+        header_index = i
+        if _static_block_header(value) is None:
+            # A property-only value (`GH_TOKEN: !!int`, `!foo &a`) can take
+            # its scalar from a following more-indented line, and that scalar
+            # can itself be a block header (`GH_TOKEN: !!int` followed by an
+            # indented `|` and a body). The body is still the runtime value,
+            # and a comment-only body is content, not a comment, so the
+            # next-line header is captured exactly like the same-line one,
+            # keyed by the header's own line — the key `_static_env_value`
+            # looks up when it resolves a non-string-tag continuation
+            # (#334 continuation resolution). Only a leading non-string tag
+            # is followed: an untagged bare key and the string tag keep their
+            # pre-existing (fail-closed) reading.
+            tag = _leading_tag(value.strip())
+            if tag is None or _is_string_tag(tag):
+                continue
+            if _strip_node_properties(value):
+                continue
+            j = i + 1
+            while j < len(out) and is_blank(out[j]):
+                j += 1
+            if j >= len(out) or indent_of(out[j]) <= key_indent:
+                continue
+            next_indent = indent_of(out[j])
+            next_stripped = out[j][next_indent:]
+            next_prefix = 0
+            next_item = re.match(r"^-\s+", next_stripped)
+            if next_item:
+                next_prefix = next_item.end()
+            if _static_block_header(next_stripped[next_prefix:]) is None:
+                continue
+            header_index = j
         body_lines: list[str] = []
-        j = i + 1
+        j = header_index + 1
         while j < len(out):
             body = body_source[j]
             if is_blank(body):
@@ -750,7 +850,7 @@ def blank_block_scalars(
                 j += 1
                 continue
             break
-        bodies[i + 1] = "\n".join(body_lines)
+        bodies[header_index + 1] = "\n".join(body_lines)
     return out, bodies
 
 
@@ -1270,8 +1370,16 @@ class WorkflowParser:
                 # (actions/download-artifact only sets its run filter when the
                 # token input is non-empty), so it is a semantic key too: a
                 # block scalar here must not be mistaken for a present token.
+                # A plain null spelling is the empty string at runtime
+                # (#334-BLOCKER-2). The membership test is on the RAW text,
+                # before decoding: a quoted `"null"` / `'null'` is the
+                # literal text and stays non-empty, and `!!str null` decodes
+                # to `null` only after the raw spelling has already failed to
+                # match.
                 _refuse_block_scalar_header(index, key, value)
-                step.github_token = decode_scalar(value)
+                step.github_token = (
+                    "" if value.strip() in YAML_NULL_SPELLINGS else decode_scalar(value)
+                )
                 step.github_token_line = index + 1
                 step.has_github_token = bool(step.github_token.strip())
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
@@ -1465,13 +1573,35 @@ def _null_tag_value(text: str) -> str | None:
     return None
 
 
-def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
+def _static_env_value(
+    raw: str,
+    line: int,
+    block_bodies: dict[int, str],
+    continuation: tuple[int, str] | None,
+) -> str:
     """The runtime value of a static `env:` assignment. A block-scalar header
     — with or without a tag or anchor — is not the value: the body is, so an
     empty body is the empty string and a non-empty body is its text
     (R6-BLOCKER-1, R8-BLOCKER-1). A plain YAML null is the empty string too,
     and a null-tagged scalar with a null argument is empty as well
-    (R7-BLOCKER-1). Anything else is the decoded scalar."""
+    (R7-BLOCKER-1). A non-string tag is resolved the way the runner resolves
+    it: the runtime value is the string form of the tag's resolved value
+    (falling back to the raw argument text when the tag does not resolve), and
+    an absent argument is the empty string — so `!!int ""`, `!!bool ""`, bare
+    `!!int` and `!foo ""` are all empty at runtime (#334-BLOCKER-1). When the
+    tag's value continues on a following more-indented line the continuation
+    is the value (`continuation` is its 1-based line and text): a block
+    header resolves through its captured body (an empty body is `""`), a
+    quoted or plain scalar is decoded, and a continuation that is itself
+    tagged (`!!int` + `!!str ""`) is runtime-invalid ("A node can have at
+    most one tag") so it is read by its text and stays accepted
+    (#334 continuation resolution). Anything else is the decoded scalar.
+
+    Branch order is part of the contract: `_null_tag_value` must run before
+    the generic non-string-tag branch, because a null tag coerces a QUOTED or
+    escaped null spelling (`!!null 'null'`, `!!null "\\x6eull"`) to the empty
+    string, which the generic branch would read as the literal text `null`.
+    """
     text = raw.strip()
     if _static_block_header(text) is not None:
         return block_bodies.get(line, "")
@@ -1480,6 +1610,20 @@ def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
     tagged = _null_tag_value(text)
     if tagged is not None:
         return tagged
+    tag = _leading_tag(text)
+    if tag is not None and not _is_string_tag(tag):
+        if continuation is None:
+            return _decode_scalar_argument(text[len(tag) :])
+        continuation_line, continuation_text = continuation
+        cont_text = continuation_text.strip()
+        if _leading_tag(cont_text) is not None:
+            # A continuation that is itself tagged is runtime-invalid ("A
+            # node can have at most one tag"); read it by its text and stay
+            # accepted, matching the runtime-invalid-tagged-values stance.
+            return cont_text
+        if _static_block_header(cont_text) is not None:
+            return block_bodies.get(continuation_line, "")
+        return _decode_scalar_argument(cont_text)
     return decode_scalar(text)
 
 
@@ -1538,12 +1682,29 @@ def _collect_static_env(
             env_columns.append(key_col)
             continue
         if env_columns:
+            # A value whose plain scalar continues on the next more-indented
+            # line is not the tag's own argument: the runtime value is the
+            # continuation. Detect it here (the next non-blank line's
+            # indentation vs. this key's column) and pass its 1-based line and
+            # text so `_static_env_value` resolves a block header through its
+            # captured body and any other continuation through its decoded
+            # text (#334 continuation resolution).
+            continuation: tuple[int, str] | None = None
+            for offset, following in enumerate(lines[number:], start=number + 1):
+                if is_blank(following):
+                    continue
+                if indent_of(following) > key_col:
+                    continuation = (offset, following)
+                break
             # A bare key, a `#`-only value and an empty quoted string are all
             # the empty string at runtime, and the most specific scope must
             # still shadow an outer assignment: indexing only truthy raw
             # values let the outer literal leak through (R7-BLOCKER-2).
             index.setdefault(key, []).append(
-                (_static_env_value(value, number, block_bodies), number)
+                (
+                    _static_env_value(value, number, block_bodies, continuation),
+                    number,
+                )
             )
     return index
 

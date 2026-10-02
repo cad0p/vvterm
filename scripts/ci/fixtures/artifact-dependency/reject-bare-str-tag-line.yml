@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a bare `!!str` line inside a `with:` mapping (#334 MINOR-1).
+# `split_key_value` used to index the empty string left after
+# `_strip_str_tag` stripped the tag, so the gate died with an IndexError
+# traceback instead of its promised `file:line` refusal. The line is not a
+# mapping entry, so it must reach the parser as an unconsumed line.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          !!str
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

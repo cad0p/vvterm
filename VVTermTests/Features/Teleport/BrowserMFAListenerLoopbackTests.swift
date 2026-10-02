@@ -26,8 +26,21 @@ import XCTest
 @MainActor
 final class BrowserMFAListenerLoopbackTests: XCTestCase {
 
+    /// Host-state tolerance for the loopback listener's `.ready` wait.
+    ///
+    /// The product default is 15 s (`BrowserMFAListener.defaultStartTimeout`).
+    /// On a loaded CI runner the simulator's network stack has been starved
+    /// long enough that four consecutive 15 s waits all expired inside
+    /// `testIPv6BindFailureStillAdvertisesLocalhost` (65.0 s, run 37005102450,
+    /// required `unit-tests`), while the very next test bound in 0.444 s — the
+    /// #260 host-state class, in a listener whose bound was not covered by that
+    /// fix. The suite injects a generous bound instead of the product default;
+    /// the product constant is unchanged. Tolerance, not retry machinery: a
+    /// listener that never becomes ready still fails the test.
+    private static let listenerStartTolerance: TimeInterval = 20
+
     func testListenerReachableOnBothLoopbackFamilies() async throws {
-        let listener = BrowserMFAListener()
+        let listener = BrowserMFAListener(startTimeout: Self.listenerStartTolerance)
         let callbackURL = try await listener.start()
         defer { listener.cancel() }
 
@@ -61,7 +74,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// IPv4 listener serves the callback.
     func testIPv6BindFailureStillAdvertisesLocalhost() async throws {
         let v6Attempts = OSAllocatedUnfairLock(initialState: 0)
-        let listener = BrowserMFAListener(listenerFactory: { host, port in
+        let listener = BrowserMFAListener(startTimeout: Self.listenerStartTolerance, listenerFactory: { host, port in
             if case .ipv6 = host {
                 v6Attempts.withLock { $0 += 1 }
                 throw BrowserMFAListenerError.listenerFailed("forced ::1 bind failure")
@@ -91,7 +104,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// callback path; a later callback must be discarded instead of resuming
     /// the continuation twice.
     func testTimeoutResolvesOnceThroughTheSerializedResumePath() async throws {
-        let listener = BrowserMFAListener(timeout: 0.1)
+        let listener = BrowserMFAListener(timeout: 0.1, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -119,7 +132,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// `RunLoop.current` is never pumped; drive the wait from a detached task
     /// and require the executor-independent deadline to fire.
     func testDeadlineFiresOffTheMainExecutor() async throws {
-        let listener = BrowserMFAListener(timeout: 0.2)
+        let listener = BrowserMFAListener(timeout: 0.2, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -158,7 +171,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// Cancelling the awaiting task must resolve the wait promptly through
     /// the serialized `resume` path instead of running out the deadline.
     func testCancelledWaiterResolvesPromptly() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -202,7 +215,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// callback and no deadline left. A later wait must also fail fast
     /// rather than arm a new deadline on a torn-down listener.
     func testCancelWithInstalledWaiterResolvesPromptly() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
 
         let clock = ContinuousClock()
@@ -241,7 +254,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// A cancellation that races a buffered result must win: a cancelled
     /// login must not complete from a result that arrived before the wait.
     func testCancellationWinsOverABufferedResult() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         var buffered = Proto_CredentialAssertionResponse()
@@ -272,7 +285,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// listener timeout far below the required job's per-test allowance.
     /// No socket is needed: the guard is reached without `start()`.
     func testSecondConcurrentWaitFailsFastInsteadOfOrphaningTheFirst() async throws {
-        let listener = BrowserMFAListener(timeout: 30)
+        let listener = BrowserMFAListener(timeout: 30, startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         var expected = Proto_CredentialAssertionResponse()
@@ -322,7 +335,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// `didResume`), which would otherwise run to the job's execution
     /// allowance instead of failing.
     func testWaitAfterResolutionFailsWithAlreadyResolvedWithNoBufferedResult() async throws {
-        let listener = BrowserMFAListener(timeout: 30)
+        let listener = BrowserMFAListener(timeout: 30, startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         var expected = Proto_CredentialAssertionResponse()
@@ -376,7 +389,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// would call `resume(.failure(CancellationError()))` and abort the first
     /// waiter.
     func testCancelledRejectedSecondWaitDoesNotCancelTheFirst() async throws {
-        let listener = BrowserMFAListener(timeout: 30)
+        let listener = BrowserMFAListener(timeout: 30, startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         var expected = Proto_CredentialAssertionResponse()
@@ -410,7 +423,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// connections over the admission cap are answered 503 after the bounded
     /// header drain and do not resolve the login.
     func testAdmissionCapRejectsExcessConnections() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, startTimeout: Self.listenerStartTolerance, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -460,7 +473,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// `NWConnection.receive` is issued and the partial-then-terminator send
     /// completes it.
     func testOverCapConnectionWaitsForTheRequestBeforeAnswering() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, startTimeout: Self.listenerStartTolerance, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -530,7 +543,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// broken tail join fails cleanly and bounded instead of waiting out
     /// the fallback.
     func testOverCapConnectionDrainsASplitTerminator() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, startTimeout: Self.listenerStartTolerance, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -581,7 +594,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// An over-cap connection's drain must not take or release an admission
     /// slot: after the 503 the silent holder still holds the only slot.
     func testOverCapConnectionDoesNotTakeAnAdmissionSlot() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, startTimeout: Self.listenerStartTolerance, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -615,7 +628,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// before `readTimeout` (not 413 — the admitted path's answer — and not at
     /// the deadline).
     func testOverCapConnectionDrainStopsAtTheSizeBound() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, maxConcurrentConnections: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 30, startTimeout: Self.listenerStartTolerance, maxConcurrentConnections: 1)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -658,7 +671,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// A request that exceeds the buffered ceiling is answered 413 instead of
     /// accumulating unboundedly.
     func testOversizedRequestIsAnswered413() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -683,7 +696,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// port, so the listener answers 400 and keeps waiting for the genuine
     /// callback (or the deadline).
     func testCallbackWithoutResponseParamDoesNotResolveTheListener() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -713,7 +726,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// it. The listener answers 400, keeps waiting, and the genuine callback
     /// still resolves the wait.
     func testCallbackWithUnauthenticatedResponseDoesNotResolveTheListener() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -745,7 +758,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// still unauthenticated: it cannot contain a valid GCM tag. Same policy
     /// as the other pre-authentication failures.
     func testCallbackWithMalformedCiphertextDoesNotResolveTheListener() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -766,7 +779,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// under our per-run key but that does not decode is a malformed server
     /// response, so it stays terminal (a retry cannot fix it).
     func testAuthenticatedButMalformedPlaintextResolvesTerminally() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -824,7 +837,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     }
 
     private func assertTerminalDecodeFailure(plaintext: Data, missingField: String) async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -861,7 +874,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// cannot be decoded becomes empty, and the callback still answers 200
     /// (A3). Contrast `testMissingRequiredAssertionFieldIsTerminal`.
     func testUnparseableBase64FieldDegradesToEmpty() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -897,7 +910,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// wait returns it instead of hanging on a resolution that already
     /// happened.
     func testResolutionBeforeWaitIsBufferedAndDelivered() async throws {
-        let listener = BrowserMFAListener()
+        let listener = BrowserMFAListener(startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         listener.resume(.failure(BrowserMFAListenerError.decodeFailed("buffered")))
@@ -916,7 +929,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// the deadline, a success after an early failure) are discarded rather
     /// than resolving the same wait twice.
     func testFirstResolutionWinsAndLaterResultsAreDiscarded() async throws {
-        let listener = BrowserMFAListener()
+        let listener = BrowserMFAListener(startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         listener.resume(.failure(BrowserMFAListenerError.decodeFailed("first")))
@@ -937,7 +950,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// The buffered path carries a successful callback too: the wait returns
     /// the payload exactly once when later results arrive.
     func testBufferedSuccessResolvesExactlyOnce() async throws {
-        let listener = BrowserMFAListener()
+        let listener = BrowserMFAListener(startTimeout: Self.listenerStartTolerance)
         defer { listener.cancel() }
 
         var expected = Proto_CredentialAssertionResponse()
@@ -954,7 +967,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// listener pending instead of latching it terminally; the later wait
     /// resolves once a genuine callback arrives.
     func testSocketCallbackBeforeWaitKeepsWaiting() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -979,7 +992,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// terminator arrives and parses only then, instead of parsing the first
     /// fragment as a truncated (and therefore unauthenticated) payload.
     func testCallbackSplitAcrossWritesResolvesSuccessfully() async throws {
-        let listener = BrowserMFAListener(timeout: 2)
+        let listener = BrowserMFAListener(timeout: 2, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1008,7 +1021,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// read must resolve: the listener accumulates the full request instead
     /// of parsing a truncated (and therefore unauthenticated) payload.
     func testOversizedAuthenticatedCallbackIsNotMisclassified() async throws {
-        let listener = BrowserMFAListener(timeout: 2)
+        let listener = BrowserMFAListener(timeout: 2, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1042,7 +1055,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// listener parsed as soon as it saw `\r\n\r\n`; the rewrite kept
     /// reading for a parseable line and answered 408 after `readTimeout`.
     func testMalformedCompleteRequestIsAnswered400Immediately() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 120, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1067,7 +1080,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// A client that connects and never sends must not pin the connection:
     /// the bounded idle deadline answers 408 without resolving the login.
     func testSilentConnectionIsAnsweredAndDoesNotResolveTheListener() async throws {
-        let listener = BrowserMFAListener(timeout: 60, readTimeout: 1)
+        let listener = BrowserMFAListener(timeout: 60, readTimeout: 1, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1091,7 +1104,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// listener's per-run key is the proof the payload came from the server,
     /// and a local process that never saw it must not resolve the login.
     func testCallbackSealedUnderADifferentKeyIsRejected() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1122,7 +1135,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// device sees, and it is the regression test for issue #241 — restoring
     /// the removed equality guard makes this test fail.
     func testCallbackWithoutASecretKeyStillResolves() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1157,7 +1170,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// differ from `listener.secretKeyHex`, otherwise the test would pass
     /// even with the removed equality guard restored.
     func testCallbackWithAMismatchedSecretKeyStillResolves() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1193,7 +1206,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// Only the browser's GET/POST are callback methods; anything else must be
     /// answered 405 without touching the query or the envelope.
     func testCallbackWithAnUnsupportedMethodIsRejected() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1222,7 +1235,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// vector a refactor could construct the sealed box without opening it and
     /// keep every other callback test green.
     func testCallbackWithATagBitFlipIsRejected() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1250,7 +1263,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// `ciphertext‖tag` must carry at least one plaintext byte: exactly the
     /// 16 tag bytes is the boundary the listener rejects before opening.
     func testCiphertextOfExactlyTheTagLengthIsRejected() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 
@@ -1279,7 +1292,7 @@ final class BrowserMFAListenerLoopbackTests: XCTestCase {
     /// (URL-safe alphabet, no padding). The listener must decode that form,
     /// not only the padded standard alphabet.
     func testUrlSafeUnpaddedBase64FieldsDecode() async throws {
-        let listener = BrowserMFAListener(timeout: 60)
+        let listener = BrowserMFAListener(timeout: 60, startTimeout: Self.listenerStartTolerance)
         _ = try await listener.start()
         defer { listener.cancel() }
 

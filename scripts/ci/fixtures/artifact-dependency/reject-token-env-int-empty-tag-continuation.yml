@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled `!!int` whose scalar continues on
+# the next more-indented line as an empty double-quoted string (#334 fold F1
+# BLOCKER). The runtime value is `""`, so the cross-run exclusion is invalid
+# and the `needs:` path is required.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int
+            ""
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

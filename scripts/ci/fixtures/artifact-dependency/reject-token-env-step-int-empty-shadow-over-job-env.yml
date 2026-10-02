@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: scope precedence for a tagged empty value (#334 fold, lens-2
+# MINOR-3): the job assigns a non-empty `GH_TOKEN` and the step shadows it
+# with `!!int ""`. The most specific scope wins, so the runtime token is
+# empty and the cross-run exclusion must not apply — the `needs:` path is
+# required. A fix that picks the job over the step would accept this.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: "ghp_job_literal"
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!int ""
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Control: an in-scope `env:` value spelled `!foo "ghp_x"` resolves to the
+# string `ghp_x` at runtime, so the cross-run exclusion stands and the case
+# is GREEN. A blanket refusal of application tags would red this control.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !foo "ghp_x"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

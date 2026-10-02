@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Control: the direct `with.github-token:` spelled `!!str null` decodes to
+# the literal string `null`, so the token is non-empty and the case is
+# GREEN. This is the falsifier for a decode-first null test
+# (`decode_scalar(value) in YAML_NULL_SPELLINGS`), which would read it as a
+# null spelling and red the case.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: !!str null

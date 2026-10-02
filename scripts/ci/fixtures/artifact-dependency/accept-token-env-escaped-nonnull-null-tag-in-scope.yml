@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Control: an in-scope `env:` value spelled `!!null "\x67hp_x"` decodes to
+# `ghp_x` through the full escape set, and the null tag only coerces a null
+# spelling, so the token is non-empty and the case is GREEN. Pins the
+# double-quoted non-null branch of the null-tag reader; the comment in
+# `reject-token-env-escape-null-tag-in-scope.yml` used to name a control that
+# did not exist (#334 NIT-1).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!null "\x67hp_x"
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
