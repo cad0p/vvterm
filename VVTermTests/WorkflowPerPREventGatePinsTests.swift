@@ -157,9 +157,12 @@ struct WorkflowPerPREventGatePinsTests {
 
         // Anchored at job indent 4, so an unrelated step-level `if:` inside the
         // block (e.g. `if: failure()` on an upload step) does not false-red
-        // this pin.
+        // this pin. The key itself is matched permissively — `if:`, `if :`,
+        // `"if":`, `'if':` — because this is a NEGATIVE assertion: any
+        // job-level gate at all must red it, and the closure lens measured the
+        // bare `^    if:` form green for the quoted and spaced respellings.
         #expect(
-            job.text.range(of: #"(?m)^    if:"#, options: .regularExpression) == nil,
+            job.text.range(of: #"(?m)^    ["']?if["']?[ \t]*:"#, options: .regularExpression) == nil,
             "the `build` job must carry no job-level `if:` at all (issue #315): `debug-test` downloads the `vvterm-build` artifact from this job on every dispatch (issue #313), so any job-level gate skips `build` on some path and breaks the run. Step-level conditionals inside the job are fine; only the job-level key is forbidden."
         )
         #expect(
@@ -245,8 +248,39 @@ struct WorkflowPerPREventGatePinsTests {
                 "the empty-`HEAD_SHA` guard must run before the first `gh run list` in the `wait-for-ota-publish` script, otherwise the empty `--commit` filter still returns repo-wide OTA runs"
             )
         }
+
+        // Same-step requirement (closure lens MINOR-2): the job-level checks
+        // above are satisfied by a decoy guard in a sibling step while the
+        // real lookup stays unguarded — measured all-green. The guard must sit
+        // in the same step as the first `gh run list`, and precede it there.
+        let guardPattern = #"if \[\[ -z "\$HEAD_SHA" \]\]"#
+        let guardedSteps = Self.stepBlocks(in: job).filter { step in
+            step.contains { line in
+                line.range(of: guardPattern, options: .regularExpression) != nil
+            }
+        }
         #expect(
-            job.text.contains("::notice::workflow_dispatch has no PR head"),
+            guardedSteps.count == 1,
+            "exactly one `wait-for-ota-publish` step must carry the empty-`HEAD_SHA` guard (found \(guardedSteps.count))"
+        )
+        let guardStep = try #require(
+            guardedSteps.first,
+            "the `wait-for-ota-publish` script must carry the empty-`HEAD_SHA` guard inside its step script"
+        )
+        let guardStepText = guardStep.joined(separator: "\n")
+        #expect(
+            guardStepText.contains("gh run list"),
+            "the empty-`HEAD_SHA` guard and the first `gh run list` must be in the SAME step: a guard in a sibling step cannot protect this lookup (closure lens MINOR-2)"
+        )
+        if let stepGuard = guardStepText.range(of: guardPattern, options: .regularExpression),
+           let stepLookup = guardStepText.range(of: "gh run list") {
+            #expect(
+                stepGuard.upperBound <= stepLookup.lowerBound,
+                "within its own step the guard must precede the first `gh run list`, otherwise the empty `--commit` filter still returns repo-wide OTA runs"
+            )
+        }
+        #expect(
+            job.text.contains("::notice::No pull-request head"),
             "the empty-`HEAD_SHA` guard must emit its skip notice so the dispatch log says why the gate did not wait"
         )
         #expect(
@@ -376,6 +410,26 @@ struct WorkflowPerPREventGatePinsTests {
             return String(key[..<colon])
         }
         return key
+    }
+
+    /// The job's step blocks, split at the `      - ` step markers (indent 6).
+    /// Same idiom as `WorkflowArtifactDependencyPinsTests.stepBlocks(in:)`;
+    /// used by the empty-`HEAD_SHA` guard pin to require the guard and the
+    /// first lookup to share one step (closure lens MINOR-2).
+    private static func stepBlocks(in job: JobBlock) -> [[String]] {
+        let stepStart = #"^      -\s"#
+        var steps: [[String]] = []
+        var current: [String] = []
+        for line in job.lines {
+            if line.range(of: stepStart, options: .regularExpression) != nil {
+                if !current.isEmpty { steps.append(current) }
+                current = [line]
+            } else if !current.isEmpty {
+                current.append(line)
+            }
+        }
+        if !current.isEmpty { steps.append(current) }
+        return steps
     }
 
     private static func isCanonicalJobKey(_ line: String) -> Bool {

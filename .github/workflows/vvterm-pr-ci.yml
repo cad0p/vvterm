@@ -285,7 +285,7 @@ jobs:
           # outright instead of waiting on a foreign pipeline. No-op on the PR
           # path, where HEAD_SHA is always set.
           if [[ -z "$HEAD_SHA" ]]; then
-            echo "::notice::workflow_dispatch has no PR head — publish gate skipped."
+            echo "::notice::No pull-request head (HEAD_SHA empty) — publish gate skipped."
             exit 0
           fi
 
