@@ -1595,4 +1595,26 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    {
+        "id": "reject-token-env-esc-lf-in-scope",
+        "files": ["reject-token-env-esc-lf-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-esc-lf-in-scope.yml:13: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-needs-flow-swallow",
+        "files": ["reject-needs-flow-swallow.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-needs-flow-swallow.yml:17: unsupported backslash escape \'\\x\' in a double-quoted scalar — the gate decodes only \\n, \\t, \\" and \\\\ (refusing rather than guessing YAML\'s full escape set)',
+        ],
+    },
+    {
+        "id": "accept-needs-flow-quoted",
+        "files": ["accept-needs-flow-quoted.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

@@ -124,8 +124,12 @@ string tag or anchor and inside an inline-flow sequence (a leading
 non-string tag is refused by the tag policy with its own diagnostic), so
 `uses: !!str &a "…\\x61…"`, a tagged/anchored `github-token:` value and
 `needs: ["\\x61"]` are refused
-instead of being read through the subset decoder. Remaining fail-closed
-limits, kept honestly: an INVALID escape in an env value stays accepted
+instead of being read through the subset decoder; one unsupported escape
+anywhere in a semantic flow sequence refuses the whole file even when
+another item already proves the edge (`needs: [build, "b\\u0075ild"]`), which
+is the intended policy since the scalar form was already refused. Remaining
+fail-closed limits, kept honestly: an INVALID escape in an env value stays
+accepted
 (`"\\q"`, `"\\x4"`, `"\\xZZ"`, `"\\u12"`, `"\\U00110000"` — GitHub's parser
 errors on each, so the workflow cannot run); the run-id emptiness predicate
 still uses Python `strip()`, so a `run-id:` literal prefixed with U+0085 or
@@ -134,11 +138,13 @@ U+001C–U+001F is accepted although `parseInt(getInput('run-id'))` yields
 and a `NaN` run-id requests `/runs/NaN/artifacts` — a 404, not a same-run
 download, so this is a correctness divergence, not a fail-open; the mirror
 image is the BOM-prefixed literal, a false red, since `parseInt` skips
-U+FEFF); a PLAIN (unquoted) raw U+0085/U+001C env value is still refused
-even though ECMAScript keeps it (`_static_env_value`'s leading Python
-`strip()` collapses it before the token predicate — the quoted shape is the
-one that resolves, and this fail-closed false red is documented rather than
-modelled); a Windows runner's `env` context is case-insensitive and a
+U+FEFF); a PLAIN (unquoted) raw U+0085/U+001C value is still refused even
+though ECMAScript keeps it, at three Python-`strip()` sites — `env:`
+(`_static_env_value`'s leading strip collapses it before the token
+predicate), a direct `github-token:` (`decode_scalar`'s `value.strip()`),
+and a block-scalar env body that is only U+0085/U+001C (`is_blank`'s
+`line.strip()`) — while the quoted shape resolves; these fail-closed false
+reds are documented rather than modelled; a Windows runner's `env` context is case-insensitive and a
 case-colliding `env:` mapping can resolve a different assignment than the
 exact-case lookup here (Windows-only, not verifiable from this repository);
 and a `run:` step that appends `NAME=` to `$GITHUB_ENV` can overwrite a
@@ -189,7 +195,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 203
+EXPECTED_MANIFEST_CASES = 206
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -638,18 +644,23 @@ def _escaped_quoted_scalar_violation(text: str, start: int) -> str | None:
 
 def _flow_item_texts(body: str) -> list[str]:
     """The items of an inline-flow sequence body, split on commas outside
-    quoted scalars. A plain scalar's embedded quote is literal text and is
-    left to the caller's start-of-scalar test."""
+    quoted scalars. A quote opens a scalar only at an item boundary: the text
+    between the item's start and the quote must be nothing but node properties
+    (`needs: [!!str &a "…"]`). A `"` inside a plain scalar is literal text,
+    and treating it as an opener would swallow the following item and skip its
+    escape check (#335 impl lens-1 MINOR 1: `needs: [build, a"b, "\\x61"]`
+    must still refuse the escaped item, since a plain item containing `"` is
+    not a valid job id and cannot be relied on to make the file unrunnable)."""
     items: list[str] = []
     start = 0
     i = 0
     while i < len(body):
         c = body[i]
-        if c == '"':
-            end, _ = _scan_quoted(body, i)
-            i = max(end, i + 1)
-            continue
-        if c == "'":
+        if c in ('"', "'") and _strip_node_properties(body[start:i]) == "":
+            if c == '"':
+                end, _ = _scan_quoted(body, i)
+                i = max(end, i + 1)
+                continue
             i += 1
             while i < len(body):
                 if body[i] == "'":
@@ -679,7 +690,12 @@ def _semantic_value_escape_violation(value: str) -> str | None:
     scalar is literal text and is not scanned, which is why this is not a
     blind segment scan. A leading non-string tag is left to the tag policy
     refusals (which already reject it) so the escape check does not change
-    which refusal fires for a value both rules reject."""
+    which refusal fires for a value both rules reject. One unsupported escape
+    anywhere in a semantic flow sequence refuses the file even when another
+    item already proves the edge (`needs: [build, "b\\u0075ild"]`): the scalar
+    form was already refused, so that is the intended policy. A leading anchor
+    plus an escape changes which refusal fires (anchor policy -> escape) with
+    the exit code unchanged (impl lens-1 NITs 1-2)."""
     text = value.strip()
     tag = _leading_tag(text)
     if tag is not None and not _is_string_tag(tag):
