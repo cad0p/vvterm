@@ -7,9 +7,12 @@ RULE
 Every in-workflow artifact downloader must have a `needs:` path to the job
 that uploads the artifact it downloads. Artifacts are run-scoped, so the
 producer must be in the same workflow file; the only exclusion is a
-recognized cross-run `run-id:` handoff (e.g. `${{ env.SOURCE_RUN_ID }}`).
-A `run-id:` that the same file statically assigns the current run's id is
-NOT a cross-run handoff: it is same-run, so the rule still applies.
+recognized cross-run `run-id:` handoff (e.g. `${{ env.SOURCE_RUN_ID }}`)
+carrying a non-empty `github-token:`. actions/download-artifact ignores
+`run-id:` when no token is set, so such a download is same-run and the rule
+applies. A `run-id:` that the same file statically assigns the current run's
+id is NOT a cross-run handoff either: it is same-run, so the rule still
+applies.
 
 THE RULE CLAIMS ORDERING, NOT EXISTENCE
 ---------------------------------------
@@ -38,9 +41,9 @@ Refusals include: tabs in indentation; an unterminated quoted scalar; a
 backslash escape in a double-quoted scalar that only YAML's full decoder
 resolves (`\\uXXXX`, `\\xXX`, …); a block-scalar header as the value of a
 semantic key (step `uses`; job `needs`; `with.name`, `with.run-id`,
-`with.pattern`, `with.artifact-ids`); `{`/`&`/`*`/`<<` in a parsed position;
-duplicate mapping keys; duplicate `steps:`; duplicate `with.name`; a `uses:`
-job that also has `steps:`; `pattern:`/`artifact-ids:`; a download without a
+`with.pattern`, `with.artifact-ids`, `with.github-token`); `{`/`&`/`*`/`<<` in a
+parsed position; duplicate mapping keys; duplicate `steps:`; duplicate
+`with.name`; a `uses:` job that also has `steps:`; `pattern:`/`artifact-ids:`; a download without a
 literal `name:`; duplicate literal artifact names; absent/empty `jobs:`; an
 unrecognized `run-id:` expression; a same-job download that precedes its own
 upload; and any unconsumed line.
@@ -53,12 +56,15 @@ construct the subset grammar cannot model is refused, not skipped. A
 `echo "NAME=…" >> "$GITHUB_ENV"` from a `run:` step, the real
 `ios-adhoc-pr.yml` shape) cannot be resolved statically and keeps the
 cross-run exclusion; static in-file `env:` assignments are resolved, and one
-the gate cannot classify is refused. Reconciliation deliberately skips
-single-line `run:` bodies and `env:` values (they are data, not steps), so
-an artifact-action token there is not a refusal; in any other scalar (e.g. a
-step `name:`) it still is. Multi-document streams, U+2028/U+2029 line
-breaks, `%YAML` directives, a mid-file BOM and `!!` tags are outside the
-subset grammar and unverified against GitHub's parser.
+the gate cannot classify (including `needs.*.outputs.*`) is refused rather
+than guessed. Reconciliation deliberately skips single-line `run:` bodies,
+`env:` values, non-semantic `name:` scalars (job- and step-level), and
+tokens that sit in a mapping key (they are data/labels, not steps), so an
+artifact-action token there is not a refusal; a token in any other
+unmodelled scalar (e.g. a nested `uses:` lookalike) still is. Multi-document
+streams, U+2028/U+2029 line breaks, `%YAML` directives, a mid-file BOM and
+`!!` tags are outside the subset grammar and unverified against GitHub's
+parser.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -88,7 +94,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 73
+EXPECTED_MANIFEST_CASES = 79
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -145,6 +151,7 @@ class ArtifactStep:
     run_id: str | None = None
     run_id_line: int | None = None
     run_id_cross_run: bool = False
+    has_github_token: bool = False
     has_pattern: bool = False
     pattern_line: int | None = None
     has_artifact_ids: bool = False
@@ -406,11 +413,16 @@ def _escaped_quoted_scalar_violation(text: str, start: int) -> str | None:
     return None
 
 
-def quoted_escape_violation(line: str) -> str | None:
-    """Refuse a double-quoted scalar at a key or value position that uses an
-    escape outside the decoder's set. Runs after the unterminated-quote check
-    (which names an unclosed scalar more precisely) and after block-scalar
-    blanking (so shell bodies stay opaque)."""
+def quoted_escape_violation(line: str, check_value: bool) -> str | None:
+    """Refuse a double-quoted scalar that uses an escape outside the
+    decoder's set. A double-quoted *key* is always checked (it can name the
+    semantic key itself). A double-quoted *value* is checked only when
+    `check_value` is set, i.e. when the line's key is `uses`/`needs` or the
+    line belongs to a `with:` mapping: only those positions decide the
+    artifact graph, so legal YAML escapes elsewhere (`name: "caf\\u00e9"`,
+    `run: "printf '\\x1b[0m'"`) are data the gate never reads. Runs after the
+    unterminated-quote check (which names an unclosed scalar more precisely)
+    and after block-scalar blanking (so shell bodies stay opaque)."""
     stripped = line.lstrip(" ")
     if starts_item(stripped):
         stripped = stripped[1:].lstrip(" ")
@@ -424,16 +436,49 @@ def quoted_escape_violation(line: str) -> str | None:
         rest = stripped[end:].lstrip(" ")
         if rest.startswith(":"):
             value = rest[1:].lstrip(" ")
-            if value.startswith('"'):
+            if value.startswith('"') and check_value:
                 return _escaped_quoted_scalar_violation(value, 0)
         return None
     kv = split_key_value(stripped)
     if kv is None:
         return None
     _, value, _ = kv
-    if value.startswith('"'):
+    if value.startswith('"') and check_value:
         return _escaped_quoted_scalar_violation(value, 0)
     return None
+
+
+def semantic_value_lines(lines: list[str]) -> set[int]:
+    """Line numbers whose double-quoted value decides the artifact graph:
+    step `uses`, job `needs`, and every key of a `with:` mapping. The escape
+    refusal is scoped to these positions (C-MINOR-2), so a legal escape in a
+    label or a `run:` body is not a false red."""
+    semantic: set[int] = set()
+    with_columns: list[int] = []
+    for index, line in enumerate(lines, start=1):
+        if is_blank(line):
+            continue
+        indent = indent_of(line)
+        stripped = line[indent:]
+        prefix = 0
+        item = re.match(r"^-\s+", stripped)
+        if item:
+            prefix = item.end()
+        rest = stripped[prefix:]
+        key_col = indent + prefix
+        while with_columns and key_col <= with_columns[-1]:
+            with_columns.pop()
+        kv = split_key_value(rest)
+        if kv is None:
+            continue
+        key, value, _ = kv
+        key = decode_scalar(key)
+        if key == "with" and not value:
+            with_columns.append(key_col)
+            continue
+        if key in ("uses", "needs") or with_columns:
+            semantic.add(index)
+    return semantic
 
 
 def scalar_construct_violation(line: str) -> str | None:
@@ -489,6 +534,40 @@ def blank_run_and_env_values(lines: list[str]) -> list[str]:
             env_columns.append(key_col)
             continue
         if key == "run" or (env_columns and value):
+            out[index] = " " * len(line)
+    return out
+
+
+def blank_non_semantic_name_values(lines: list[str]) -> list[str]:
+    """Blank non-semantic `name:` scalars (job- and step-level) for the
+    reconciliation scan (m1). A step `name:` may mention a tool without being
+    a step, and a job `name:` is a label; neither can be a `uses:` value. A
+    `name:` inside a `with:` mapping is semantic (`with.name` is the artifact
+    name) and is never blanked."""
+    out = list(lines)
+    with_columns: list[int] = []
+    for index, line in enumerate(out):
+        if is_blank(line):
+            continue
+        indent = indent_of(line)
+        stripped = line[indent:]
+        prefix = 0
+        item = re.match(r"^-\s+", stripped)
+        if item:
+            prefix = item.end()
+        rest = stripped[prefix:]
+        key_col = indent + prefix
+        while with_columns and key_col <= with_columns[-1]:
+            with_columns.pop()
+        kv = split_key_value(rest)
+        if kv is None:
+            continue
+        key, value, _ = kv
+        key = decode_scalar(key)
+        if key == "with" and not value:
+            with_columns.append(key_col)
+            continue
+        if key == "name" and not with_columns:
             out[index] = " " * len(line)
     return out
 
@@ -959,6 +1038,15 @@ class WorkflowParser:
                 step.run_id_line = index + 1
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
                 continue
+            if key == "github-token":
+                # The token decides whether `run-id:` is honored at all
+                # (actions/download-artifact only sets its run filter when the
+                # token input is non-empty), so it is a semantic key too: a
+                # block scalar here must not be mistaken for a present token.
+                _refuse_block_scalar_header(index, key, value)
+                step.has_github_token = bool(decode_scalar(value))
+                j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
+                continue
             if key == "pattern":
                 _refuse_block_scalar_header(index, key, value)
                 step.has_pattern = True
@@ -1008,7 +1096,10 @@ class WorkflowParser:
                 "empty 'run-id:' — a download with a run-id must name a run",
             )
         if LITERAL_INT_RE.match(stripped):
-            step.run_id_cross_run = True
+            # A cross-run run-id is only honored with a non-empty
+            # github-token; without it the action downloads from the current
+            # run, so the exclusion must not apply.
+            step.run_id_cross_run = step.has_github_token
             return
         expression = _extract_expression(stripped)
         if expression is not None:
@@ -1016,7 +1107,7 @@ class WorkflowParser:
             if SAME_RUN_RE.search(normalized):
                 return  # same run: the rule applies
             if CROSS_RUN_RE.match(normalized):
-                step.run_id_cross_run = True
+                step.run_id_cross_run = step.has_github_token
                 return
         raise Refusal(
             step.run_id_line or step.uses_line,
@@ -1179,12 +1270,34 @@ def _parse_inline_needs(line: int, value: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _token_only_in_mapping_key(line: str) -> bool:
+    """True when every artifact-action token on the line sits in a mapping
+    key (`upload-artifact:` / `"upload-artifact":`). A mapping key is never a
+    step's `uses:` value and steps are sequence entries, so such a line cannot
+    be an unmodelled artifact step (m1). A token in a value keeps the line
+    reconciled."""
+    stripped = line.lstrip(" ")
+    if starts_item(stripped):
+        stripped = stripped[1:].lstrip(" ")
+    if not stripped:
+        return False
+    kv = split_key_value(stripped)
+    if kv is None:
+        return False
+    key, value, _ = kv
+    if not ARTIFACT_TOKEN_RE.search(decode_scalar(key)):
+        return False
+    return not ARTIFACT_TOKEN_RE.search(decode_scalar(value))
+
+
 def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int, str]]:
     diagnostics: list[tuple[int, str]] = []
     for index, line in enumerate(lines, start=1):
         if is_blank(line):
             continue
         if ARTIFACT_TOKEN_RE.search(line) and index not in artifact_step_lines:
+            if _token_only_in_mapping_key(line):
+                continue
             diagnostics.append(
                 (
                     index,
@@ -1215,13 +1328,14 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
                     index,
                     "tab in indentation — YAML forbids tabs for indentation; use spaces",
                 )
+        semantic_lines = semantic_value_lines(lines)
         for index, line in enumerate(lines, start=1):
             if is_blank(line):
                 continue
             message = unterminated_quote_violation(line)
             if message:
                 raise Refusal(index, message)
-            message = quoted_escape_violation(line)
+            message = quoted_escape_violation(line, index in semantic_lines)
             if message:
                 raise Refusal(index, message)
             message = scalar_construct_violation(line)
@@ -1229,7 +1343,10 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
                 raise Refusal(index, message)
         parser = WorkflowParser(relpath, lines)
         result.jobs = parser.parse()
-        reconciliation = reconcile(blank_run_and_env_values(lines), parser.artifact_step_lines)
+        reconciliation = reconcile(
+            blank_non_semantic_name_values(blank_run_and_env_values(lines)),
+            parser.artifact_step_lines,
+        )
         if reconciliation:
             result.diagnostics.extend(reconciliation)
             return result

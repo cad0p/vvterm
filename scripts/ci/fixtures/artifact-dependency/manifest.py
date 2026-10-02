@@ -452,14 +452,6 @@ CASES = [
         ],
     },
     {
-        "id": "reject-token-in-step-name",
-        "files": ["reject-token-in-step-name.yml"],
-        "exit": 1,
-        "diagnostics": [
-            "reject-token-in-step-name.yml:9: artifact action token not parsed as an artifact step — a construct the parser cannot fully model must not pass (reconciliation failed)",
-        ],
-    },
-    {
         "id": "reject-nested-with-lookalike",
         "files": ["reject-nested-with-lookalike.yml"],
         "exit": 1,
@@ -576,6 +568,63 @@ CASES = [
         "exit": 1,
         "diagnostics": [
             'reject-orphan-download.yml:8: consumer downloads artifact "never-uploaded" but no job in this workflow uploads that literal name (artifacts are run-scoped; use `run-id:` for a cross-run handoff)',
+        ],
+    },
+    # ------------------------------------------------------------------
+    # Round-2 fold: the closure lens's silent pass (C-MAJOR-1), the m1
+    # job-key/step-name false reds (C-MINOR-1), the escape-refusal scope
+    # (C-MINOR-2) and the with-key block-scalar class (C-NIT-2).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-run-id-cross-run-without-token",
+        "files": ["reject-run-id-cross-run-without-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-cross-run-without-token.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "accept-run-id-cross-run-with-token",
+        "files": ["accept-run-id-cross-run-with-token.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-job-key-mentioning-action",
+        "files": ["accept-job-key-mentioning-action.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-step-name-mentioning-action",
+        "files": ["accept-step-name-mentioning-action.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-legal-escape-in-name",
+        "files": ["accept-legal-escape-in-name.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-legal-escape-in-run",
+        "files": ["accept-legal-escape-in-run.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-block-scalar-with-keys",
+        "files": [
+            "reject-block-scalar-with-artifact-ids.yml",
+            "reject-block-scalar-with-pattern.yml",
+            "reject-block-scalar-with-run-id.yml",
+        ],
+        "exit": 1,
+        "diagnostics": [
+            "reject-block-scalar-with-artifact-ids.yml:19: block scalar header '>-' as the value of 'artifact-ids:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+            "reject-block-scalar-with-pattern.yml:19: block scalar header '>-' as the value of 'pattern:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+            "reject-block-scalar-with-run-id.yml:19: block scalar header '>-' as the value of 'run-id:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
         ],
     },
 ]

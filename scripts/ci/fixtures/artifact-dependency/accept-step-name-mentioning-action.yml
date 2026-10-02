@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a step `name:` mentioning download-artifact (measured by the
+# closure lens as a round-2 C-MINOR-1 false red). A step name is a label,
+# not a `uses:` value, so it is blanked before reconciliation; the real
+# downloader below has its needs path.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: download-artifact helper
+        run: echo hi
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

@@ -71,8 +71,20 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 73
+    private static let expectedManifestCases = 79
     private static let expectedWorkflowFloor = 12
+
+    /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
+    /// job-level condition on the required job can skip the gate while
+    /// GitHub still reports success; asserting the whole key set closes the
+    /// class for every spelling (`if:`, `if :`, `"if":`, `continue-on-error`,
+    /// or a new key) in one comparison instead of a regex per spelling.
+    private static let expectedBuildJobKeys: Set<String> = [
+        "runs-on",
+        "timeout-minutes",
+        "env",
+        "steps",
+    ]
 
     /// Every fixture the plan requires (accept controls, measured holes, and
     /// refusal controls). The manifest must reference each one, and each file
@@ -98,6 +110,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-quoted-plain-uses.yml",
         "accept-run-id-static-cross-run-env.yml",
         "accept-run-line-mentioning-action.yml",
+        "accept-run-id-cross-run-with-token.yml",
+        "accept-job-key-mentioning-action.yml",
+        "accept-step-name-mentioning-action.yml",
+        "accept-legal-escape-in-name.yml",
+        "accept-legal-escape-in-run.yml",
         // rule violations
         "reject-missing-edge.yml",
         "reject-shadow-downloader.yml",
@@ -124,6 +141,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-block-scalar-with-name.yml",
         "reject-block-scalar-needs.yml",
         "reject-run-id-env-indirection.yml",
+        "reject-run-id-cross-run-without-token.yml",
+        "reject-block-scalar-with-run-id.yml",
+        "reject-block-scalar-with-pattern.yml",
+        "reject-block-scalar-with-artifact-ids.yml",
         "reject-producer-is-consumer-download-first.yml",
         "reject-orphan-download.yml",
         // refusals
@@ -151,7 +172,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-flow-step.yml",
         "reject-flow-with.yml",
         "reject-uses-job-with-steps.yml",
-        "reject-token-in-step-name.yml",
         "reject-nested-with-lookalike.yml",
         "reject-unconsumed-line.yml",
         "reject-scan-floor.yml",
@@ -243,18 +263,29 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "the gate step must not declare a step-level `if:` — it must run on every `build` (issue #316)"
         )
 
-        // Job-level guard (lens-2 MINOR 1): a job-level `if:` or
-        // `continue-on-error:` on the required `build` job makes GitHub report
-        // a successful check while the gate never runs, and no step-level
-        // assertion can see it.
+        // Job-level guard (lens-2 MINOR 1; round-2 C-NIT-1): assert the
+        // `build` job's exact job-level key set after trimming. A job-level
+        // `if:` or `continue-on-error:` on the required `build` job makes
+        // GitHub report a successful check while the gate never runs, and no
+        // step-level assertion can see it. Comparing the whole key set closes
+        // every spelling (`if:`, `if :`, `"if":`) at once: any unexpected
+        // key reds until this pin is re-derived.
         let jobLevelKeyLines = job.lines.filter { line in
             line.range(of: #"^    \S"#, options: .regularExpression) != nil
         }
+        let jobLevelKeys = Set(jobLevelKeyLines.map { line -> String in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let colon = trimmed.firstIndex(of: ":") else { return trimmed }
+            return String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces)
+        })
         #expect(
-            !jobLevelKeyLines.contains { line in
-                line.range(of: #"^    (if|continue-on-error):"#, options: .regularExpression) != nil
-            },
-            "the `build` job must not declare a job-level `if:` or `continue-on-error:` — a skipped required job reports success, so the gate could be disabled without any step-level pin noticing (issue #316)"
+            jobLevelKeys == Self.expectedBuildJobKeys,
+            """
+            the `build` job must declare exactly the pinned job-level keys (issue #316): \
+            \(Self.expectedBuildJobKeys.sorted()) — found \(jobLevelKeys.sorted()). A job-level \
+            `if:` or `continue-on-error:` (in any spelling) can skip the required job and report \
+            success, so any unexpected key must red this pin.
+            """
         )
         #expect(
             job.lines.first?.trimmingCharacters(in: .whitespaces) == "build:",

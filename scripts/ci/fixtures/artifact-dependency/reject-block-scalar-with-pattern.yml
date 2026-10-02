@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a block-scalar header as the value of `with.pattern` (round-2
+# C-NIT-2). The header is not an inline pattern and its body is blanked, so
+# the gate must refuse the construct at the with-key line instead of
+# reading `>-` as the pattern.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          pattern: >-
+            vvterm-*

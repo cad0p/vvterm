@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a recognized cross-run `run-id:` WITHOUT `github-token:`
+# (round-2 C-MAJOR-1 decoy). actions/download-artifact ignores `run-id:`
+# when the token input is empty, so this download is same-run and its
+# `needs:` path is required.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: legal YAML double-quoted escapes in a `run:` body (round-2
+# C-MINOR-2 accept control). The ANSI idiom below is common and Psych-valid;
+# a run body cannot decide the artifact graph, so the escape refusal is
+# scoped away from it. The downloader has its needs path.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: "printf '\x1b[0m'"
+      - run: "caf\u00e9 a\rb a\/b"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
