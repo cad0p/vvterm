@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a flow `with:` mapping (recheck fx56 / plan §4.5 flow with). The
+# gate refuses flow syntax at a parsed position rather than guessing at the
+# artifact input.
+jobs:
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: vvterm-build}

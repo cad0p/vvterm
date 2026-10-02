@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a nested `uses:` lookalike under `with.args` (recheck fx35). The
+# nested line is consumed as a value, but the reconciliation sees the artifact
+# token on a line that is not a parsed artifact step and refuses.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          args:
+            uses: actions/download-artifact@v8

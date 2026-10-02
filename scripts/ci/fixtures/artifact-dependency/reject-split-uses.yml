@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `uses:` value split across lines with a backslash continuation
+# (recheck fx64). Psych resolves it to actions/download-artifact@v8; the
+# same-line quoted-scalar policy refuses it instead of missing the download.
+jobs:
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/download-\
+          artifact@v8"

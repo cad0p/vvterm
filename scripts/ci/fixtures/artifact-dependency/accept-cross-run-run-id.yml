@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a recognized cross-run `run-id:` handoff is the only exclusion
+# (the real `ios-adhoc-pr.yml` shape, from another workflow's run).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

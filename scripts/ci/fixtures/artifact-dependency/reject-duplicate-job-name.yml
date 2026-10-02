@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Fixture: two jobs with the same key. Psych is last-wins and GitHub's
+# semantics are unverified, so a first-wins parser could read the wrong job —
+# refuse with both sites named (plan m2/fx20).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo one
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo two

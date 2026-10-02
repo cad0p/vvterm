@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a compliant control file for the scan-floor case (`floor: true` in
+# the manifest). Alone in a tree it must be refused by the floor, proving a
+# typo'd/truncated --root cannot masquerade as a pass (plan §4.1.8).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: cross-file pair file B (plan lens 2 B3). `consumer` needs this
+# file's `build`, which uploads nothing; the only producer of
+# `shared-artifact` is in reject-cross-file-a.yml, so a global producer map
+# would pass while the run-scoped workflow fails. Must refuse.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "b build uploads nothing"
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: shared-artifact

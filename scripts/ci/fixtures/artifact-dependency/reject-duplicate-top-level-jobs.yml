@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a second top-level `jobs:` mapping (recheck NEW-6). A first-wins
+# finder would parse the compliant first mapping while GitHub may use the
+# broken second one — refuse with both sites named.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+jobs:
+  consumer:
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

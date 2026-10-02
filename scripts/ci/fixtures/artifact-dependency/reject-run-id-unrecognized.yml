@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an unrecognized `run-id:` expression. Recognizing only literal
+# integers, `${{ env.NAME }}`, `${{ github.event.workflow_run.id }}` and the
+# same-run `${{ github.run_id }}` means anything else is refused, not excluded
+# (plan §4.3).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.inputs.source_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

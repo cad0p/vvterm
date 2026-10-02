@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a newly added shadow downloader job with no needs edge (CF-2); the
+# class rule must red it even though the pre-existing pair is compliant.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  shadow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

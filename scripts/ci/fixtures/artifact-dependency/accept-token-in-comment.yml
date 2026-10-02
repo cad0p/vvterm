@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: reconciliation counts the text after comment blanking, so an
+# artifact token in a comment is prose, not a step (recheck NEW-3).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # The tarball is uploaded here; actions/upload-artifact does not preserve
+      # symlinks, so we tar first (same as vvterm-pr-ci.yml:572).
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

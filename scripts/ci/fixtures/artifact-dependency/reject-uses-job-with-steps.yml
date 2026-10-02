@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `uses:` job that also declares `steps:` (recheck fx63). GitHub
+# rejects the shape; the gate refuses rather than parsing a job whose artifact
+# semantics are undefined.
+jobs:
+  caller:
+    uses: ./.github/workflows/reusable.yml
+    steps:
+      - run: echo hi

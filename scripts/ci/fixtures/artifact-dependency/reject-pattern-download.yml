@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `pattern:` selects potentially many artifacts, so no single literal
+# producer can be resolved (plan m5). Refuse.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: vvterm-*

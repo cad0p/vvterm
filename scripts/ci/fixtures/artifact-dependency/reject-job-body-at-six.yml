@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture: indentation variant C (plan lens 2 B1/fx11) — the job body sits at
+# 6, the steps items at 6. Valid YAML; a fixed 2/4/6 scan derives the wrong
+# columns and sees nothing.
+jobs:
+  build:
+      runs-on: ubuntu-latest
+      steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+      runs-on: ubuntu-latest
+      steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

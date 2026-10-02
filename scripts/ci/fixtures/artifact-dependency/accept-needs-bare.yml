@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Fixture: bare `needs: build` is a real edge (issue #316 acceptance).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

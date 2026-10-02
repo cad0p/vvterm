@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a download step with no `with:` at all (recheck fx43). No literal
+# name can be resolved, so the gate refuses.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an empty `jobs:` mapping. Refuse rather than passing a workflow
+# with no jobs (plan §4.2).
+jobs:
+name: after
