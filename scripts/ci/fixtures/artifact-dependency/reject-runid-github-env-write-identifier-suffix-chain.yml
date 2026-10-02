@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the cross-step suffix chain. The `resolve` step writes
+# `GITHUB_ENV_X=$GITHUB_ENV` into the env file, so the runner publishes the
+# env-file PATH under `GITHUB_ENV_X` before the `flip` step; the flip then
+# writes the same-run payload through that suffix name. The suffix target
+# must be `unknown` (refuse), not `other`: no assignment in the flip step can
+# prove the name is not the env path (issue #342, BLOCKER-4; measured
+# fail-open at base `81673bd5` and at fold-2 `d5429892`, refused at impl
+# `8f01b0d1`/fold-1 `084dd0f9`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: resolve
+        run: |
+          echo "GITHUB_ENV_X=$GITHUB_ENV" >> "$GITHUB_ENV"
+      - name: flip
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV_X"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

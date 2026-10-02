@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the write command's OWN prefix assignment (`n=/tmp/foo`) is not
+# reaching — bash expands the command's words and redirections with the
+# previous value, so the redirect target is the env path from
+# `n="$GITHUB_ENV"` earlier on the same line. The old trace treated the
+# prefix as reaching and waived the same-run write; this one-line form was
+# refused at impl `8f01b0d1` and fold-1 `084dd0f9`, so it must not regress
+# (issue #342, BLOCKER-3; fail-open at base `81673bd5` and at fold-2
+# `d5429892`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"; n=/tmp/foo echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

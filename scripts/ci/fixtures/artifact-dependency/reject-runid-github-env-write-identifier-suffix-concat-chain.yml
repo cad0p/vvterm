@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the tokenizer-joined quoted-concatenation variant of the
+# cross-step suffix chain — the redirect target `"$GITHUB_ENV"x` is one word
+# (`$GITHUB_ENVx`) and the `resolve` step publishes the env path under
+# `GITHUB_ENVx`. The joined suffix target must be `unknown` (refuse): no
+# assignment in the flip step can prove it is not the env path (issue #342,
+# BLOCKER-4; measured fail-open at base `81673bd5` and at fold-2
+# `d5429892`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: resolve
+        run: |
+          echo "GITHUB_ENVx=$GITHUB_ENV" >> "$GITHUB_ENV"
+      - name: flip
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV"x
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

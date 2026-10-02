@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 280
+    private static let expectedManifestCases = 292
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -441,7 +441,24 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-value-reassigned-after-write.yml",
         "reject-runid-github-env-write-own-line-reassign-control.yml",
         "reject-runid-github-env-write-unresolved-target-value.yml",
-        "accept-runid-github-env-write-identifier-suffix-target.yml",
+        // #342 fold round 3: the `>&word`/`>|word` redirect targets
+        // (BLOCKER-1), the branch-closer boundary (BLOCKER-2), the
+        // command-prefix assignment in the write's own segment (BLOCKER-3),
+        // and the cross-step `GITHUB_ENV_X` suffix chain (BLOCKER-4: the
+        // suffix target is `unknown`, so the old accept became a reject).
+        "reject-runid-github-env-write-amp-target.yml",
+        "reject-runid-github-env-write-noclobber-target.yml",
+        "reject-runid-github-env-write-exec-amp-target.yml",
+        "reject-runid-github-env-write-ifelse-branch-target.yml",
+        "reject-runid-github-env-write-case-branch-target.yml",
+        "reject-runid-github-env-write-branch-residual.yml",
+        "reject-runid-github-env-write-prefix-target-oneline.yml",
+        "reject-runid-github-env-write-prefix-target.yml",
+        "reject-runid-github-env-write-prefix-value-oneline.yml",
+        "reject-runid-github-env-write-prefix-value.yml",
+        "reject-runid-github-env-write-identifier-suffix-chain.yml",
+        "reject-runid-github-env-write-identifier-suffix-concat-chain.yml",
+        "reject-runid-github-env-write-identifier-suffix-target.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

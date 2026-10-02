@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env-file target is assigned in `case` branch `a` (mid-line)
+# and the stale literal in branch `b` is later in program order, so the
+# trace read the literal as reaching and waived the same-run write after
+# `esac`. The `;;` branch terminator and `esac` are now fail-closed
+# boundaries (issue #342, BLOCKER-2; measured fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          case "$X" in
+          a)
+          m=1; n="$GITHUB_ENV"
+          ;;
+          b)
+          n=/tmp/foo
+          ;;
+          esac
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

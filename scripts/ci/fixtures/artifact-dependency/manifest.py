@@ -2253,11 +2253,129 @@ CASES = [
             "reject-runid-github-env-write-unresolved-target-value.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
         ],
     },
+    # fold round 3 (#342): four closed fail-open families. `>&word`/`>|word`
+    # are redirect targets (BLOCKER-1), a branch closer between the traced
+    # assignment and the write is a fail-closed boundary (BLOCKER-2), a
+    # command-prefix assignment in the write's own segment is NOT reaching
+    # because bash expands the command's words with the previous value
+    # (BLOCKER-3), and the cross-step `GITHUB_ENV_X` chain makes the suffix
+    # target `unknown` (BLOCKER-4: the old accept was valid only under the
+    # unprovable "never set" assumption and is now a reject).
     {
-        "id": "accept-runid-github-env-write-identifier-suffix-target",
-        "files": ["accept-runid-github-env-write-identifier-suffix-target.yml"],
-        "exit": 0,
-        "excluded": 1,
-        "diagnostics": [],
+        "id": "reject-runid-github-env-write-amp-target",
+        "files": ["reject-runid-github-env-write-amp-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-amp-target.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 19) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-noclobber-target",
+        "files": ["reject-runid-github-env-write-noclobber-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-noclobber-target.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-exec-amp-target",
+        "files": ["reject-runid-github-env-write-exec-amp-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-exec-amp-target.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes to `$GITHUB_ENV` (line 18) with a payload the gate cannot extract (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-ifelse-branch-target",
+        "files": ["reject-runid-github-env-write-ifelse-branch-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-ifelse-branch-target.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 19) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-case-branch-target",
+        "files": ["reject-runid-github-env-write-case-branch-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-case-branch-target.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-branch-residual",
+        "files": ["reject-runid-github-env-write-branch-residual.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-branch-residual.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 20) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-prefix-target-oneline",
+        "files": ["reject-runid-github-env-write-prefix-target-oneline.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-prefix-target-oneline.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 21) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-prefix-target",
+        "files": ["reject-runid-github-env-write-prefix-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-prefix-target.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-prefix-value-oneline",
+        "files": ["reject-runid-github-env-write-prefix-value-oneline.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-prefix-value-oneline.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 20) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-prefix-value",
+        "files": ["reject-runid-github-env-write-prefix-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-prefix-value.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-identifier-suffix-chain",
+        "files": ["reject-runid-github-env-write-identifier-suffix-chain.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-identifier-suffix-chain.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 24) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-identifier-suffix-concat-chain",
+        "files": ["reject-runid-github-env-write-identifier-suffix-concat-chain.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-identifier-suffix-concat-chain.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 23) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-identifier-suffix-target",
+        "files": ["reject-runid-github-env-write-identifier-suffix-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-identifier-suffix-target.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 20) without an extractable write (refusing rather than guessing)",
+        ],
     },
 ]

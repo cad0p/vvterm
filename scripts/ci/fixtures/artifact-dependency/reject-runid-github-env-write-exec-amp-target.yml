@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `exec >&"$n"` permanently redirects the shell's stdout+stderr to
+# the env file, so the LATER `echo` (no redirect of its own) writes the
+# same-run payload there. The old redirect grammar skipped the `>&` word and
+# never saw the env-file target (issue #342, BLOCKER-1; measured fail-open
+# at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          exec >&"$n"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

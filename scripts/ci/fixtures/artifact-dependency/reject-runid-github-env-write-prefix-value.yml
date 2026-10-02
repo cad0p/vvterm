@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the two-line form of the command-prefix value. The write argument
+# expands `${CI_RUN_ID}` with the previous (same-run) value, not the prefix
+# literal `1234`, so the payload is same-run while the old trace classified
+# the prefix as cross-run and kept the exclusion (issue #342, BLOCKER-3;
+# measured fail-open at base `81673bd5` and every later revision).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.run_id }}"
+          CI_RUN_ID=1234 echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

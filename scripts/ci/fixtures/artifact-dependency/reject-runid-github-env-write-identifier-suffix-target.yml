@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
-# Fixture: a same-run payload written to `"$GITHUB_ENV_X"` — a DIFFERENT
-# variable name, and the runner publishes the env-file path only as
-# `GITHUB_ENV` / `%GITHUB_ENV%`, so the redirect cannot reach the env file
-# and the cross-run exclusion stands. The env-file spelling is narrowed to
-# the exact name (plus identifier characters is a different variable),
-# issue #342, F9.
+# Fixture: a same-run payload written directly to `$GITHUB_ENV_X`. The
+# runner publishes the env-file path only as `GITHUB_ENV` / `%GITHUB_ENV%`,
+# but this name can be made the env path by a PRECEDING step
+# (`GITHUB_ENV_X=$GITHUB_ENV`), and the flip step cannot prove it is not, so
+# the unresolved suffix target is `unknown` and refuses (issue #342,
+# BLOCKER-4; the fixture was an accept under the unprovable "never set"
+# assumption). Measured fail-open at base `81673bd5`.
 jobs:
   build:
     runs-on: ubuntu-latest

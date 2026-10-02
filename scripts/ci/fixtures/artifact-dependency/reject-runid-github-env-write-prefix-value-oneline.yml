@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the written value's command-prefix assignment (`CI_RUN_ID=1234`)
+# does not govern the command's own `${CI_RUN_ID}` expansion — bash expands
+# it with the previous value, which here is the same-run
+# `${{ github.run_id }}`. The old trace picked the prefix literal and kept
+# the exclusion; this one-line form was refused at impl `8f01b0d1` and
+# fold-1 `084dd0f9`, so it must not regress (issue #342, BLOCKER-3;
+# fail-open at base `81673bd5` and at fold-2 `d5429892`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.run_id }}"; CI_RUN_ID=1234 echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the two-line form of the command-prefix target. The prefix
+# `n=/tmp/foo` on the write's own segment is expanded with the previous value
+# (the env path), so the same-run write lands in the env file; the trace must
+# not let the prefix assignment reach the redirect target (issue #342,
+# BLOCKER-3; measured fail-open at base `81673bd5` and every later revision).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          n=/tmp/foo echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

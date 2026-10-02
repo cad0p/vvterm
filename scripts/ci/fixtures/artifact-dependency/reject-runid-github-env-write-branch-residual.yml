@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the residual shape the gate header used to document as benign —
+# an assignment in a `then` branch and the write in the matching `else` at
+# the same indentation. Measured, the `else` branch runs with the env value
+# (the `m=1; n="$GITHUB_ENV"` assignment before the `if`), so the same-run
+# write lands in the env file; the header's "the empty runtime value then
+# fails the action with a NaN/404" claim was false. The `else` boundary now
+# refuses (issue #342, BLOCKER-2; measured fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          if false; then
+          n=/tmp/foo
+          else
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

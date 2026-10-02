@@ -202,12 +202,16 @@ detector.
 
 THE RUN-ID `$GITHUB_ENV` WRITE RULE (#342)
 -------------------------------------------
-The #339 rule above is token-chain-only, because a name-blind rule is
-measurably wrong: it refuses the real `ios-adhoc-pr.yml` `workflow_run.id`
-handoff at the writing step's `run:` line. The run-id chain therefore gets a
-VALUE-AWARE rule (`_refuse_github_env_run_id_write`), gated on
-`_env_reference(step.run_id)`: a direct `run-id:` expression cannot be
-affected by an env-file write and is a no-op here.
+The invariant that closes this class rather than its instances: any
+construct the extractor cannot fully model, which could name or carry the
+env file, must refuse — never "the last assignment wins" when the
+resolution is ambiguous (branch-dependent, prefix-position, multi-assignment,
+unset, or cross-step). The #339 rule above is token-chain-only, because a
+name-blind rule is measurably wrong: it refuses the real `ios-adhoc-pr.yml`
+`workflow_run.id` handoff at the writing step's `run:` line. The run-id
+chain therefore gets a VALUE-AWARE rule (`_refuse_github_env_run_id_write`),
+gated on `_env_reference(step.run_id)`: a direct `run-id:` expression cannot
+be affected by an env-file write and is a no-op here.
 
 Flip-target names are the chain head plus every `env.` link, minus any name
 the download step's own `env:` assigns (a step's own `env:` wins over a
@@ -225,11 +229,13 @@ a command substitution, `needs.*.outputs.*`, or any other unclassifiable
 value refuses. A value that is a body-local `${NAME}`/`$NAME` expansion is
 traced in program order: every statement-position `NAME=VALUE` on every
 body line (`;`, `&&`, `||`, `|`, `&` separated, `export` allowed) is indexed
-with its column, and the reaching assignment is the last one at or before
-the write's (line, column) — a later same-line reassignment is visible, and
-a same-line reassignment after the write is after it. Unset-at-write, a
-reassignment after the write, `+=`, an assignment inside a nested control
-block, and an unclassifiable RHS all refuse. This is the rule that keeps the real
+with its column, and the reaching assignment is the last one STRICTLY
+before the write's expansion position — a command-prefix assignment in the
+write's own segment (`n=/tmp/foo echo … >> "$n"`) is expanded with the
+previous value, so it does not count; a later same-line reassignment is
+visible, and a same-line reassignment after the write is after it.
+Unset-at-write, a reassignment after the write, `+=`, an assignment inside
+a nested control block, and an unclassifiable RHS all refuse. This is the rule that keeps the real
 `${CI_RUN_ID}` -> `${{ inputs.ci_run_id }}` dispatch branch green while
 refusing a guarded same-run local.
 
@@ -241,30 +247,36 @@ without a heredoc payload, a `bash -c` argv, a redirect target the extractor
 cannot resolve such as `$(…)`, `${!n}` or an unassigned expansion, an
 unextractable payload or NAME, or a read-only `cat "$GITHUB_ENV"` all
 refuse: accepted fail-closed costs of an extractor that would rather refuse
-than guess). A heredoc payload (`cat >> "$GITHUB_ENV" <<'EOF'`) is read as
+than guess). The redirect grammar models `>&word` (with a non-digit,
+non-`-` word this is bash's omitted-fd stdout+stderr file redirect, so the
+word is a redirect target; `>&1`/`>&-` stay fd duplications/closures) and
+`>|word` (a plain file redirect), so neither spelling can hide an env-file
+target. A heredoc payload (`cat >> "$GITHUB_ENV" <<'EOF'`) is read as
 literal env-file text, so its values are not shell-expanded. The env-file
-spelling is exact: a redirect target that is the spelling plus identifier
-characters (`$GITHUB_ENV_X`) is a different variable — the runner publishes
-the path only as `GITHUB_ENV` / `%GITHUB_ENV%` — so an unresolved target of
-that shape is `other`, not `unknown`; the same narrowing covers the
-tokenizer-joined quoted concatenation `"$GITHUB_ENV"x` (one word,
-`$GITHUB_ENVx`), likewise a different file. The alias-suffix family
-(`n="$GITHUB_ENV"; … >> "$n.bak"` / `>> "${n}_x"`) still refuses although
-the runtime target is a different file — the alias resolves to the env
-spelling before the literal suffix is considered — a documented fail-closed
-false red. The rule never
+spelling is exact, AND an unresolved target that extends it with identifier
+characters (`$GITHUB_ENV_X`, the tokenizer-joined quoted concatenation
+`"$GITHUB_ENV"x` / `$GITHUB_ENVx`) is `unknown`, not `other`, so it
+refuses: a preceding same-job step can write `GITHUB_ENV_X=$GITHUB_ENV` into
+`$GITHUB_ENV`, and the runner merges that into the job environment before
+the write, making the suffix name the env-file path. The alias-suffix
+family (`n="$GITHUB_ENV"; … >> "$n.bak"` / `>> "${n}_x"`) refuses too —
+the alias resolves to the env spelling before the literal suffix — a
+documented fail-closed false red, as is the direct `$GITHUB_ENV_X`
+same-run shape (the runner publishes the path only as `GITHUB_ENV` /
+`%GITHUB_ENV%`, so the direct shape is a false red accepted because the
+cross-step assignment cannot be ruled out). Branch identity is not
+modelled: any control-flow closer between the traced assignment and the
+write (`fi`, `else`, `elif`, `esac`, `;;`, `done`, `}`) is a boundary, so a
+stale assignment in a non-executing branch refuses rather than being read
+as reaching. The rule never
 touches the #339 token rule, the `needs:` reconciliation, the case-collision
-rule, or the trim/`parseInt` rules. Named residuals: under a `workflow_call`
-trigger a caller can pass its own `github.run_id` as an `inputs.*` value (no
-`workflow_call` exists in this repo, and trigger parsing is deliberately not
-modelled); a `$GITHUB_ENV` write whose name pieces never appear in the body
-text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a name split past the
-64-character window) is not detected, the inherited text-detector boundary;
-and the extractor does not model `if`/`else`-branch identity beyond
-indentation, so an assignment in a `then` branch and a write in the
-matching `else` at the same indentation are read as a straight line (the
-empty runtime value then fails the action with a NaN/404 rather than
-becoming a same-run download).
+rule, or the trim/`parseInt` rules. Named residuals: a caller
+(`workflow_call`) or dispatcher (`workflow_dispatch`) can pass its own
+`github.run_id` as an `inputs.*` value (no `workflow_call` exists in this
+repo, and trigger parsing is deliberately not modelled); and a `$GITHUB_ENV`
+write whose name pieces never appear in the body text
+(`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a name split past the
+64-character window) is not detected, the inherited text-detector boundary.
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
@@ -310,7 +322,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 280
+EXPECTED_MANIFEST_CASES = 292
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2451,8 +2463,8 @@ _ENV_FILE_SPELLING_RE = re.compile(
 # spelling: `x=$(echo … >> "$GITHUB_ENV")` performs the write and must not
 # be skipped as "the target-resolution mechanism" (issue #342).
 _ALIAS_RHS_UNMODELLED_CHARS = ("$(", "`", ">", "<", ";", "|", "&")
-# A control-flow branch/closer at a shallower indent than a traced local's
-# assignment changes whether that assignment executed before the write.
+# A control-flow branch/closer between a traced local's assignment and the
+# write means the assignment may not have executed first (fail-closed).
 _CONTROL_CLOSER_RE = re.compile(r"^(?:else|elif|fi|done|esac)\b")
 
 
@@ -2508,6 +2520,9 @@ def _shell_tokens(text: str) -> list[tuple[str, str, int, int]]:
                 i += 2
             elif c == "<" and i + 1 < n and text[i + 1] == ">":
                 tokens.append(("op", "<>", i, i + 2))
+                i += 2
+            elif c == ">" and i + 1 < n and text[i + 1] == "|":
+                tokens.append(("op", ">|", i, i + 2))
                 i += 2
             else:
                 tokens.append(("op", c, i, i + 1))
@@ -2613,6 +2628,7 @@ def _shell_segments(
             previous_is_redirect = previous[0] == "op" and previous[1] in (
                 ">",
                 ">>",
+                ">|",
                 "<",
                 "<<",
                 "<>",
@@ -2635,13 +2651,15 @@ def _segment_redirects(
     segment: list[tuple[str, str, int, int]],
 ) -> list[tuple[str, str, int, tuple[int, int] | None]]:
     """Every redirection in one segment as `(op, target_word, op_start,
-    target_span)`. A file-descriptor duplication (`>&1`) has the
-    pseudo-target `&` and no span."""
+    target_span)`. A file-descriptor duplication/closure (`>&1`, `>&-`) has
+    the pseudo-target `&` and no span; `>&word` with any other word is
+    bash's omitted-fd stdout+stderr file redirect, so the word is a real
+    target, and `>|word` is a plain file redirect (issue #342, BLOCKER-1)."""
     redirects: list[tuple[str, str, int, tuple[int, int] | None]] = []
     index = 0
     while index < len(segment):
         kind, text, start, _end = segment[index]
-        if kind == "op" and text in (">", ">>"):
+        if kind == "op" and text in (">", ">>", ">|"):
             if index + 1 < len(segment):
                 next_kind, next_text, next_start, next_end = segment[index + 1]
                 if next_kind == "word":
@@ -2649,6 +2667,18 @@ def _segment_redirects(
                     index += 2
                     continue
                 if next_kind == "op" and next_text == "&":
+                    after = segment[index + 2] if index + 2 < len(segment) else None
+                    if after is not None and after[0] == "word":
+                        if after[1] == "-" or (
+                            after[1].isascii() and after[1].isdigit()
+                        ):
+                            redirects.append((text, "&", start, None))
+                        else:
+                            redirects.append(
+                                (text, after[1], start, (after[2], after[3]))
+                            )
+                        index += 3
+                        continue
                     redirects.append((text, "&", start, None))
                     index += 2
                     continue
@@ -2784,17 +2814,6 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
     return assignments
 
 
-def _extends_env_file_spelling(name: str) -> bool:
-    """True when `name` is the env-file spelling plus more identifier
-    characters (`GITHUB_ENV_X`). That is a DIFFERENT variable — the runner
-    publishes the env-file path as exactly `GITHUB_ENV` / `%GITHUB_ENV%` —
-    so an unresolved target named this way is a different file, not the env
-    file (issue #342, F9). A name that merely contains the spelling is left
-    to the extractor's unknown-target refusal."""
-    lowered = name.lower()
-    return lowered.startswith("github_env") and len(lowered) > len("github_env")
-
-
 def _env_file_target_name_kind(
     name: str,
     aliases: set[str],
@@ -2808,12 +2827,16 @@ def _env_file_target_name_kind(
     """Resolve one expanded redirect-target name to `"env"`, `"other"` or
     `"unknown"` by program order. A body-assigned name is NOT proof the
     target cannot be the env file: `n="${!x}"` is assigned and holds the env
-    path, so the reaching assignment — the last one at or before the write's
-    (line, column) — is resolved instead. Only a provably non-env literal is
-    `"other"` (a plain word, an env-file spelling plus extra literal text —
-    `$GITHUB_ENV.bak` is a different file — or an unassigned name that is the
-    spelling plus identifier characters, `GITHUB_ENV_X`); indirect, computed
-    or unmodelled RHS values are `"unknown"` (issue #342, BLOCKER-2 / F9)."""
+    path, so the reaching assignment — the last one STRICTLY before the
+    write's expansion position (a command-prefix assignment in the write's
+    own segment is expanded with the previous value, so it is not reaching)
+    — is resolved instead. Only a provably non-env literal is `"other"` (a
+    plain word, or an env-file spelling plus extra literal text —
+    `$GITHUB_ENV.bak` is a different file); an unassigned name is
+    `"unknown"` even when it extends the spelling (`GITHUB_ENV_X`), because
+    a preceding step can publish the env path under that name, and indirect,
+    computed or unmodelled RHS values are `"unknown"` (issue #342,
+    BLOCKER-2 / BLOCKER-3 / BLOCKER-4)."""
     if name in seen:
         return "unknown"
     if name in aliases:
@@ -2822,10 +2845,10 @@ def _env_file_target_name_kind(
         assignment
         for assignment in assignments
         if assignment.name == name
-        and (assignment.index, assignment.column) <= (line_index, column_index)
+        and (assignment.index, assignment.column) < (line_index, column_index)
     ]
     if not reaching:
-        return "other" if _extends_env_file_spelling(name) else "unknown"
+        return "unknown"
     chosen = reaching[-1]
     if chosen.value is None or chosen.indent > write_indent:
         return "unknown"
@@ -2971,17 +2994,24 @@ def _parse_env_payload_line(text: str) -> tuple[str, str] | None:
 def _control_boundary_between(
     lines: list[str], start: int, end: int, indent: int
 ) -> bool:
-    """True when a control-flow branch or closer at a shallower indent than
-    the traced assignment sits between it and the write (a `then`/`else`/
-    `fi`/loop/function boundary), so the assignment may not have executed."""
+    """True when a control-flow branch or closer sits between the traced
+    assignment and the write (a `then`/`else`/`fi`/`case`/loop/function
+    boundary), so the assignment may not have executed. The pre-fold-3 rule
+    only saw a closer SHALLOWER than the assignment, so a same-indent stale
+    assignment in a non-executing branch was read as reaching; the boundary
+    is now fail-closed at any indentation, and `;;` closes a `case` branch
+    (issue #342, BLOCKER-2). The `indent` parameter is kept for the
+    call-site signature; the boundary no longer depends on it."""
     for index in range(start + 1, end):
         line = lines[index]
         if not line.strip():
             continue
-        if _indent_width(line) >= indent:
-            continue
         stripped = line.strip()
-        if _CONTROL_CLOSER_RE.match(stripped) or stripped.startswith("}"):
+        if (
+            stripped == ";;"
+            or _CONTROL_CLOSER_RE.match(stripped)
+            or stripped.startswith("}")
+        ):
             return True
     return False
 
@@ -2997,16 +3027,18 @@ def _local_trace_classification(
     seen: set[str],
 ) -> str:
     """Classify a `${NAME}` read by program order: the last body assignment
-    at or before the read's (line, column). Unset at the read, a
-    reassignment after it, an assignment in a nested control block, `+=`, or
-    an unclassifiable RHS refuses rather than guesses."""
+    STRICTLY before the read's expansion position (a command-prefix
+    assignment in the reading segment is expanded with the previous value).
+    Unset at the read, a reassignment after it, an assignment in a nested
+    control block, `+=`, or an unclassifiable RHS refuses rather than
+    guesses."""
     if name in seen:
         return "refuse"
     reaching = [assignment for assignment in assignments if assignment.name == name]
     before = [
         assignment
         for assignment in reaching
-        if (assignment.index, assignment.column) <= (limit_index, limit_column)
+        if (assignment.index, assignment.column) < (limit_index, limit_column)
     ]
     if not before:
         return "refuse"
