@@ -93,8 +93,11 @@ runtime and stays excluded, while a continuation that is empty at runtime
 does not exclude the download. A continuation that is itself tagged
 (`GH_TOKEN: !!int` plus a more-indented `!!str ""`) is read by its text and
 stays accepted, matching the runtime-invalid stance below; an untagged bare
-key or a `!!str`/`!!null` continuation keeps its pre-existing reading (a
-fail-closed false red, documented, not modelled). `blank_comments` opens a
+key or a `!!str`/`!!null` continuation keeps its pre-existing reading — only
+the header line is read — so a NON-EMPTY continuation (`ghp_x`) is refused
+even though the runtime value is non-empty (a fail-closed false red,
+documented, not modelled), while an empty continuation refuses for the right
+reason. `blank_comments` opens a
 quote only at scalar-start positions, so after a tag the quote never opens
 and a `#` inside the quoted argument is blanked: `GH_TOKEN: !!int " #c"` /
 `!!int ' #c'` / `!foo " #c"` is non-empty at runtime but reads empty here —
@@ -102,7 +105,8 @@ a fail-closed false red, documented, not modelled. Runtime-invalid tagged
 values are accepted where GitHub's parser errors: `GH_TOKEN: !!str !!int ""`
 and the flow-sequence env value `[!!int ""]` stay accepted, while
 `{a: !!int ""}` is refused by the flow-mapping rule and the reversed
-`GH_TOKEN: !!int !!str ""` is refused by the non-string-tag rule — the
+`GH_TOKEN: !!int !!str ""` resolves to the empty string and is refused by the
+missing-edge rule — the
 workflow cannot run, so there is no race, and the tag-order asymmetry is
 deliberate rather than modelled. The Python-only strip set is a new
 fail-closed false red on the tagged path: `GH_TOKEN: !!int "\x1c"`,
