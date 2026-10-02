@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 79
+    private static let expectedManifestCases = 82
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -113,6 +113,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-run-id-cross-run-with-token.yml",
         "accept-job-key-mentioning-action.yml",
         "accept-step-name-mentioning-action.yml",
+        "accept-job-id-containing-token-needs-flow.yml",
+        "accept-job-id-containing-token-needs-block.yml",
+        "accept-job-id-containing-token-if-expr.yml",
         "accept-legal-escape-in-name.yml",
         "accept-legal-escape-in-run.yml",
         // rule violations

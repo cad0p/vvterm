@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a job id that merely CONTAINS the artifact-action token
+# (`upload-artifacts`), referenced from a block `needs:` sequence (round-3
+# fold, issue #316). A bare token is a job id / `needs:` item, not a step's
+# `uses:` value, so reconciliation must not refuse it. The real downloader
+# below has its needs path.
+jobs:
+  upload-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "a job id is a label, not a download"
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs:
+      - build
+      - upload-artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

@@ -627,4 +627,29 @@ CASES = [
             "reject-block-scalar-with-run-id.yml:19: block scalar header '>-' as the value of 'run-id:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
         ],
     },
+    # ------------------------------------------------------------------
+    # Round-3 fold: reconciliation fires only on a `uses:` key line whose
+    # value carries an artifact token or on the `-artifact@ref` action-ref
+    # shape. A job id that merely CONTAINS the token is a label, not a step,
+    # and must not red when referenced (needs: flow list, needs: block list,
+    # an `if:` expression).
+    # ------------------------------------------------------------------
+    {
+        "id": "accept-job-id-containing-token-needs-flow",
+        "files": ["accept-job-id-containing-token-needs-flow.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-job-id-containing-token-needs-block",
+        "files": ["accept-job-id-containing-token-needs-block.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-job-id-containing-token-if-expr",
+        "files": ["accept-job-id-containing-token-if-expr.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

@@ -32,9 +32,12 @@ mechanisms are:
     non-blank line in the `jobs:` region is consumed by exactly one
     recognized construct, and a key's value (scalar, flow, nested mapping,
     block sequence, or block scalar) is consumed generically until dedent;
-  * reconciliation: every line in the blanked text matching an artifact
-    action token must be a parsed artifact step, so a construct the parser
-    failed to model can never pass;
+  * reconciliation: every artifact action reference in the blanked text —
+    a `uses:` key line whose value carries an artifact token, or a line
+    carrying the `-artifact@ref` action-ref shape — must be a parsed
+    artifact step, so a step the parser failed to model can never pass; a
+    bare token (a job id, a `needs:` item, an `if:` operand) is a label,
+    not a step;
   * a scan floor so a typo'd `--root` cannot masquerade as a pass.
 
 Refusals include: tabs in indentation; an unterminated quoted scalar; a
@@ -58,13 +61,14 @@ construct the subset grammar cannot model is refused, not skipped. A
 cross-run exclusion; static in-file `env:` assignments are resolved, and one
 the gate cannot classify (including `needs.*.outputs.*`) is refused rather
 than guessed. Reconciliation deliberately skips single-line `run:` bodies,
-`env:` values, non-semantic `name:` scalars (job- and step-level), and
-tokens that sit in a mapping key (they are data/labels, not steps), so an
-artifact-action token there is not a refusal; a token in any other
-unmodelled scalar (e.g. a nested `uses:` lookalike) still is. Multi-document
-streams, U+2028/U+2029 line breaks, `%YAML` directives, a mid-file BOM and
-`!!` tags are outside the subset grammar and unverified against GitHub's
-parser.
+`env:` values, non-semantic `name:` scalars (job- and step-level), tokens
+that sit in a mapping key, and bare identifiers (a job id, a `needs:` item,
+an `if:` operand — they are data/labels, not steps), so an artifact-action
+token there is not a refusal; a `uses:` key line or an action-ref shape the
+parser did not model (e.g. a nested `uses:` lookalike) still is.
+Multi-document streams, U+2028/U+2029 line breaks, `%YAML` directives, a
+mid-file BOM and `!!` tags are outside the subset grammar and unverified
+against GitHub's parser.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -94,7 +98,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 79
+EXPECTED_MANIFEST_CASES = 82
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -104,6 +108,10 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 UPLOAD_ACTION = "actions/upload-artifact"
 DOWNLOAD_ACTION = "actions/download-artifact"
 ARTIFACT_TOKEN_RE = re.compile(r"(?:upload|download)-artifact", re.IGNORECASE)
+ACTION_REF_RE = re.compile(
+    r"(?:[A-Za-z0-9_.-]+/)?(?:upload|download)-artifact@[A-Za-z0-9_.-]+",
+    re.IGNORECASE,
+)
 BLOCK_HEADER_RE = re.compile(r"^(?:[|>][+-]?\d*|[|>]\d*[+-]?)$")
 LITERAL_INT_RE = re.compile(r"^\d+$")
 SAME_RUN_RE = re.compile(r"github\.run_id|github\[run_id\]")
@@ -1290,21 +1298,47 @@ def _token_only_in_mapping_key(line: str) -> bool:
     return not ARTIFACT_TOKEN_RE.search(decode_scalar(value))
 
 
+def _is_action_reference_line(line: str) -> bool:
+    """True when the line can be an artifact action reference the parser did
+    not model: a `uses:` key line whose value carries an artifact token (the
+    key is case-folded and any spelling counts: `uses:`, `"uses":`,
+    `uses :`), or any line carrying the action-ref shape (`-artifact@ref`).
+    A bare token — a job id, a `needs:` item, an `if:` operand — is a label,
+    not a step, and is exempt (round-3 fold)."""
+    if ACTION_REF_RE.search(line):
+        return True
+    stripped = line.lstrip(" ")
+    if starts_item(stripped):
+        stripped = stripped[1:].lstrip(" ")
+    if not stripped:
+        return False
+    kv = split_key_value(stripped)
+    if kv is None:
+        return False
+    key, value, _ = kv
+    if decode_scalar(key).lower() != "uses":
+        return False
+    return bool(ARTIFACT_TOKEN_RE.search(decode_scalar(value)))
+
+
 def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int, str]]:
     diagnostics: list[tuple[int, str]] = []
     for index, line in enumerate(lines, start=1):
         if is_blank(line):
             continue
-        if ARTIFACT_TOKEN_RE.search(line) and index not in artifact_step_lines:
-            if _token_only_in_mapping_key(line):
-                continue
-            diagnostics.append(
-                (
-                    index,
-                    "artifact action token not parsed as an artifact step — a construct the parser "
-                    "cannot fully model must not pass (reconciliation failed)",
-                )
+        if index in artifact_step_lines:
+            continue
+        if not _is_action_reference_line(line):
+            continue
+        if _token_only_in_mapping_key(line):
+            continue
+        diagnostics.append(
+            (
+                index,
+                "artifact action token not parsed as an artifact step — a construct the parser "
+                "cannot fully model must not pass (reconciliation failed)",
             )
+        )
     return diagnostics
 
 
