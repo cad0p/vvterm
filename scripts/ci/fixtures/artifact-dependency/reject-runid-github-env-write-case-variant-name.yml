@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the written name differs only in case (`source_run_id`). A
+# Windows runner's `env` context is `OrdinalIgnoreCase` (the #341
+# stance), so the write is classified, not ignored (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "source_run_id=${{ github.run_id }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

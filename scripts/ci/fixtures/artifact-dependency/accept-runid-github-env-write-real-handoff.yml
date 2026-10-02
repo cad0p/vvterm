@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the full ios-adhoc-pr.yml `Resolve run context` shape, both
+# branches, including the `HEAD_SHA=$SHA` unextractable NON-chain write —
+# the rule is name-scoped by construction (issue #342 acceptance).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            CI_RUN_ID="${{ inputs.ci_run_id }}"
+            [[ -n "$CI_RUN_ID" ]] || { echo "::error::mode=publish requires ci_run_id"; exit 1; }
+            echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+            SHA="$(gh api "repos/${{ github.repository }}/actions/runs/${CI_RUN_ID}" --jq '.head_sha')"
+            echo "HEAD_SHA=$SHA" >> "$GITHUB_ENV"
+          else
+            echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+            echo "HEAD_SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

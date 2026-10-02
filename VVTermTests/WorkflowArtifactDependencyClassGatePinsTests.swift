@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 231
+    private static let expectedManifestCases = 263
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -379,6 +379,45 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-env-case-collision-step-variant-token.yml",
         "reject-env-case-collision-job-variant-workflow-exact.yml",
         "reject-env-case-collision-runid-step-variant.yml",
+        // #342: the run-id `$GITHUB_ENV` write class. The rejects cover the
+        // same-run flip (direct, guarded-local, static and step-level chain),
+        // the unmodelled write verbs and redirect targets (per-line
+        // accounting), the unextractable payload/name shapes, the case-variant
+        // and non-ASCII name stances, and the Windows `%GITHUB_ENV%` spelling;
+        // the accepts cover the real handoff, the `inputs.*` local trace, the
+        // position/scope controls and the step-`env:` shadow.
+        "reject-runid-github-env-write-same-run.yml",
+        "reject-runid-github-env-write-guarded-local.yml",
+        "reject-runid-github-env-write-static-cross-run-flip.yml",
+        "reject-runid-github-env-write-step-chain-flip.yml",
+        "reject-runid-github-env-write-job-chain-write.yml",
+        "reject-runid-github-env-write-vars-flip.yml",
+        "reject-runid-github-env-write-empty.yml",
+        "reject-runid-github-env-write-command-substitution.yml",
+        "reject-runid-github-env-write-dynamic-name.yml",
+        "reject-runid-github-env-write-shell-assembled-name.yml",
+        "reject-runid-github-env-write-heredoc.yml",
+        "reject-runid-github-env-write-read-only-mention.yml",
+        "reject-runid-github-env-write-payload-unknown.yml",
+        "reject-runid-github-env-write-tee-unmodelled.yml",
+        "reject-runid-github-env-write-dd-unmodelled.yml",
+        "reject-runid-github-env-write-sed-append-unmodelled.yml",
+        "reject-runid-github-env-write-case-variant-name.yml",
+        "reject-runid-github-env-write-bash-c-indirect.yml",
+        "reject-runid-github-env-write-mixed-unmodelled-launder.yml",
+        "reject-runid-github-env-write-windows-spelling.yml",
+        "accept-runid-github-env-write-cross-run.yml",
+        "accept-runid-github-env-write-inputs-local.yml",
+        "accept-runid-github-env-write-real-handoff.yml",
+        "accept-runid-github-env-write-unrelated-name.yml",
+        "accept-runid-github-env-write-after-download.yml",
+        "accept-runid-github-env-write-direct-expression.yml",
+        "accept-runid-github-env-write-vars-cross-run.yml",
+        "accept-runid-github-env-write-other-job.yml",
+        "accept-runid-github-env-write-step-env-shadow.yml",
+        "accept-runid-github-env-write-single-line-body.yml",
+        "accept-runid-github-env-write-yaml-escaped.yml",
+        "accept-runid-github-env-write-tagged-body.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -574,9 +613,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             atPath: root.appendingPathComponent(Self.fixturesDirectory).path
         )) ?? []
         let fixtureFiles = onDisk.filter { $0.hasSuffix(".yml") || $0.hasSuffix(".yaml") }
+        // Exact agreement, not a lower bound: `--selftest` already refuses an
+        // unreferenced fixture file, and this pins the same invariant where a
+        // build-time red is visible (issue #342, lens-3 MINOR 8).
         #expect(
-            fixtureFiles.count >= Self.requiredFixtures.count,
-            "the fixture directory holds \(fixtureFiles.count) YAML file(s), fewer than the \(Self.requiredFixtures.count) required — a deleted fixture file must red this pin (issue #316)"
+            Set(fixtureFiles) == Set(Self.requiredFixtures),
+            "the fixture directory's YAML files must equal `requiredFixtures` exactly — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count); extra: \(Set(fixtureFiles).subtracting(Self.requiredFixtures).sorted()); missing: \(Set(Self.requiredFixtures).subtracting(fixtureFiles).sorted()) (issue #316)"
         )
 
         // The script must reference the manifest, and carry the stated
@@ -641,6 +683,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "YAML tag",
             "only the string tag",
             "cannot be proven non-empty at runtime",
+            "with a value that is not provably cross-run",
+            "with a payload the gate cannot extract",
+            "writes an unextractable name to `$GITHUB_ENV`",
+            "without an extractable write",
+            "whose case folding is not modelled",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(

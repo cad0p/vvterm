@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env-file name is assembled at shell level
+# (`n="GITHUB_""ENV"`) and the write's payload is a same-run value; the
+# target resolves through the body-local alias, so the refusal comes from
+# the value classification, not the zero-write catch-all (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          n="GITHUB_""ENV"; echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

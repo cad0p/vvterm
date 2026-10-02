@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a same-run write of the chain name in a DIFFERENT job must not
+# refuse — `$GITHUB_ENV` writes are per job (issue #342).
+jobs:
+  writer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context in the writer job
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV"
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

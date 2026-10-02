@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the position control — the same same-run write sits in a step
+# AFTER the download, so it cannot affect the download's `with:`
+# evaluation and the cross-run exclusion stands (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve run context afterwards
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV"

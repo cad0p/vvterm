@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the write's payload is an expression the extractor cannot
+# classify (`needs.*.outputs.*`), so the runtime value cannot be proven
+# cross-run — the write-payload-unknown variant (lens-3 BLOCKER-1; issue
+# #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=${{ needs.build.outputs.run_id }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
