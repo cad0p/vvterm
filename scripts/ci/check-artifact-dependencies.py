@@ -324,8 +324,8 @@ class ArtifactStep:
     # range (plus the workflow's and the enclosing job's) is visible to
     # `${{ env.NAME }}` at runtime (R5-MINOR-1).
     env_range: tuple[int, int] | None = None
-    # The `run:` key line and the #339 mention flag (a non-empty body that
-    # contains the `GITHUB_ENV` substring).
+    # The `run:` key line and the #339 mention flag (a non-empty decoded
+    # body that mentions `GITHUB_ENV`; the predicate is `_mentions_github_env`).
     run_line: int | None = None
     run_mentions_github_env: bool = False
 
@@ -334,9 +334,10 @@ class ArtifactStep:
 class RunBody:
     """A parsed `run:` step's location and whether its body mentions
     `$GITHUB_ENV`. The gate does not model run bodies otherwise; this is the
-    #339 mention scan (a name extraction is measurably leaky, so the detector
-    is the raw substring: redirects, `tee`, heredocs and indirection all
-    count)."""
+    #339 mention scan (`_mentions_github_env`: the decoded text's
+    case-insensitive `github_env` substring plus a `GITHUB`/`ENV` window
+    conjunction, because a name extraction is measurably leaky and the raw
+    substring missed YAML-escaped/shell-assembled spellings)."""
 
     line: int  # the `run:` key line
     step_line: int  # the enclosing step's first line
@@ -2284,8 +2285,11 @@ def _refuse_github_env_token_mention(job: Job, step: ArtifactStep) -> None:
     static `env:` chain — actions/runner merges `$GITHUB_ENV` writes into the
     job's environment before a later step's `with:` is evaluated — so the
     cross-run exclusion cannot be proven and the download is refused. The
-    detector is the raw `GITHUB_ENV` substring, not a name extraction
-    (measured leaky: single `>`, `tee`, heredocs, indirect names): a
+    detector (`_mentions_github_env`) is the decoded run text's
+    case-insensitive `github_env` substring plus a case-sensitive
+    `GITHUB`/`ENV` conjunction inside a 64-character window, not a name
+    extraction (measured leaky: single `>`, `tee`, heredocs, indirect
+    names, a YAML-escaped or shell-assembled name): a
     read-only `cat "$GITHUB_ENV"`, an unrelated-name write, a same-value
     rewrite and a write shadowed by the step's own `env:` all refuse too
     (accepted fail-closed costs, documented in the header). Position is the
