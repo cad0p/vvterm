@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `github-token:` resolved through an `env:` assignment on ANOTHER
+# step (round-5 R5-MINOR-1). The assignment is not in the consumer step's env
+# chain, so the token is empty at runtime and the cross-run exclusion must not
+# apply — the same class as the other-job variant, pinned separately because
+# the scope walk differs.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  helper:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: "ghp_some_other_step"
+        run: echo hi
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

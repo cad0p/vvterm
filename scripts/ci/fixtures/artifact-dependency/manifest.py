@@ -721,7 +721,7 @@ CASES = [
         "files": ["reject-tagged-non-string-uses.yml"],
         "exit": 1,
         "diagnostics": [
-            "reject-tagged-non-string-uses.yml:16: YAML tag '!!int' on a mapping key — only the string tag ('!!str') is resolved to the scalar GitHub reads; any other tag can coerce the key, so the gate refuses rather than guessing",
+            "reject-tagged-non-string-uses.yml:16: YAML tag '!!int' on a mapping key — only a single leading string tag ('!!str') is resolved to the scalar GitHub reads; a second tag or any other tag can coerce the key, so the gate refuses rather than guessing",
         ],
     },
     {
@@ -759,7 +759,7 @@ CASES = [
         "files": ["reject-run-id-cross-run-unresolved-token.yml"],
         "exit": 1,
         "diagnostics": [
-            "reject-run-id-cross-run-unresolved-token.yml:20: github-token: '${{ vars.TOKEN }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.* }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+            "reject-run-id-cross-run-unresolved-token.yml:20: github-token: '${{ vars.TOKEN }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
         ],
     },
     {
@@ -810,6 +810,86 @@ CASES = [
         "exit": 1,
         "diagnostics": [
             "reject-action-ref-value.yml:20: artifact action token not parsed as an artifact step — a construct the parser cannot fully model must not pass (reconciliation failed)",
+        ],
+    },
+    # ------------------------------------------------------------------
+    # Round 5 (R5-MINOR-1 scoped env, R5-MINOR-2 exact token, R5-NIT-1
+    # tagged needs flow). The two cases above whose diagnostics changed are
+    # reject-tagged-non-string-uses (R5-NIT-2 wording) and
+    # reject-run-id-cross-run-unresolved-token (the remedy text).
+    # ------------------------------------------------------------------
+    {
+        "id": "accept-tagged-needs-flow",
+        "files": ["accept-tagged-needs-flow.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-tagged-non-string-needs",
+        "files": ["reject-tagged-non-string-needs.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-tagged-non-string-needs.yml:13: YAML tag '!!seq' on the value of 'needs:' — only the string tag ('!!str') is resolved to the scalar GitHub reads; any other tag can coerce this value, so the gate refuses rather than guessing",
+        ],
+    },
+    {
+        "id": "accept-token-in-scope-job-env",
+        "files": ["accept-token-in-scope-job-env.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-in-scope-workflow-env",
+        "files": ["accept-token-in-scope-workflow-env.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-token-out-of-scope-job-env",
+        "files": ["reject-token-out-of-scope-job-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-token-out-of-scope-job-env.yml:27: github-token: '${{ env.GH_TOKEN }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-token-out-of-scope-step-env",
+        "files": ["reject-token-out-of-scope-step-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-token-out-of-scope-step-env.yml:27: github-token: '${{ env.GH_TOKEN }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-token-unset-secret",
+        "files": ["reject-token-unset-secret.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-token-unset-secret.yml:20: github-token: '${{ secrets.SOME_UNSET }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-token-compound-secret",
+        "files": ["reject-token-compound-secret.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-token-compound-secret.yml:20: github-token: '${{ secrets.GITHUB_TOKEN && '' }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-run-id-out-of-scope-cross-run-env",
+        "files": ["reject-run-id-out-of-scope-cross-run-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-run-id-out-of-scope-cross-run-env.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through a static `env:` assignment that is outside this step's env scope (only the workflow-level, the enclosing job's and the step's own `env:` are visible at runtime) — the value is empty or runtime-written, so a cross-run handoff cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-run-id-out-of-scope-same-run-env",
+        "files": ["reject-run-id-out-of-scope-same-run-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-run-id-out-of-scope-same-run-env.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through a static `env:` assignment that is outside this step's env scope (only the workflow-level, the enclosing job's and the step's own `env:` are visible at runtime) — the value is empty or runtime-written, so a cross-run handoff cannot be proven (refusing rather than guessing)",
         ],
     },
 ]

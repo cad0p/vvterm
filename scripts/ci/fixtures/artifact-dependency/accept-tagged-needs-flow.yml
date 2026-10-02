@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the string tag on a flow collection is inert for actions/runner
+# (YamlObjectReader never inspects a collection's tag), so
+# `needs: !!str [build]` is a real edge and must be GREEN (round-5 R5-NIT-1).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: !!str [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

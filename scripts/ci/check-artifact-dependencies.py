@@ -104,7 +104,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 103
+EXPECTED_MANIFEST_CASES = 113
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -173,6 +173,10 @@ class ArtifactStep:
     has_artifact_ids: bool = False
     artifact_ids_line: int | None = None
     has_with: bool = False
+    # The step's own `env:` block, as an inclusive line range. Only this
+    # range (plus the workflow's and the enclosing job's) is visible to
+    # `${{ env.NAME }}` at runtime (R5-MINOR-1).
+    env_range: tuple[int, int] | None = None
 
 
 @dataclass
@@ -187,6 +191,8 @@ class Job:
     steps_line: int | None = None
     artifact_steps: list[ArtifactStep] = field(default_factory=list)
     keys_seen: dict[str, int] = field(default_factory=dict)
+    # The job's own `env:` block, as an inclusive line range (R5-MINOR-1).
+    env_range: tuple[int, int] | None = None
 
 
 @dataclass
@@ -719,6 +725,9 @@ class WorkflowParser:
         self.lines = lines
         self.jobs: list[Job] = []
         self.artifact_step_lines: set[int] = set()
+        # The top-level `env:` block, as an inclusive line range: workflow
+        # env is visible to every step, so it stays in scope everywhere.
+        self.workflow_env_range: tuple[int, int] | None = None
 
     # -- small helpers -----------------------------------------------------
 
@@ -738,9 +747,9 @@ class WorkflowParser:
             if tag is not None:
                 raise Refusal(
                     index + 1,
-                    f"YAML tag '{tag}' on a mapping key — only the string tag ('!!str') is "
-                    "resolved to the scalar GitHub reads; any other tag can coerce the key, so "
-                    "the gate refuses rather than guessing",
+                    f"YAML tag '{tag}' on a mapping key — only a single leading string tag "
+                    "('!!str') is resolved to the scalar GitHub reads; a second tag or any other "
+                    "tag can coerce the key, so the gate refuses rather than guessing",
                 )
         return _decode_key(key, kind), value
 
@@ -754,10 +763,38 @@ class WorkflowParser:
 
     def parse(self) -> list[Job]:
         self._scan_top_level_duplicates()
+        self.workflow_env_range = self._find_workflow_env_range()
         jobs_index = self._find_jobs_key()
         end = self._jobs_region_end(jobs_index)
         self._parse_job_region(list(range(jobs_index + 1, end)), jobs_index + 1)
         return self.jobs
+
+    def _top_level_block_end(self, index: int) -> int:
+        """The first line index after `index` that is non-blank and back at
+        column 0 — a top-level block's end (the jobs region uses the same
+        rule)."""
+        for i in range(index + 1, len(self.lines)):
+            if is_blank(self.lines[i]):
+                continue
+            if indent_of(self.lines[i]) == 0:
+                return i
+        return len(self.lines)
+
+    def _find_workflow_env_range(self) -> tuple[int, int] | None:
+        """The top-level `env:` block's inclusive line range, or None when
+        there is no block-mapping workflow env (R5-MINOR-1)."""
+        for key, line in self._top_level_keys():
+            if key != "env":
+                continue
+            index = line - 1
+            kv = split_key_value(self._body(index))
+            if kv is None or kv[1].strip():
+                return None
+            end = self._top_level_block_end(index)
+            if end <= index + 1:
+                return None
+            return (index + 1, end)
+        return None
 
     def _top_level_keys(self) -> list[tuple[str, int]]:
         keys: list[tuple[str, int]] = []
@@ -907,8 +944,12 @@ class WorkflowParser:
                     )
                 i = self._parse_steps(job, body, i, body_col)
                 continue
+            if key == "env":
+                i, job.env_range = self._consume_env_block(body, i, body_col)
+                continue
             if key == "needs":
                 _refuse_block_scalar_header(index, key, value)
+                _refuse_non_string_value_tag(index, key, value)
                 if value:
                     for entry in _parse_inline_needs(index + 1, value):
                         job.needs.append(entry)
@@ -945,6 +986,17 @@ class WorkflowParser:
                 continue
             break
         return j
+
+    def _consume_env_block(
+        self, body: list[int], pos: int, col: int
+    ) -> tuple[int, tuple[int, int] | None]:
+        """Consume an `env:` value block and return `(next body index, line
+        range)`. The range is what the static-env index is scoped by, so it
+        must cover exactly the lines the block owns (R5-MINOR-1)."""
+        end = self._consume_opaque(body, pos, col)
+        if end <= pos + 1:
+            return end, None
+        return end, (body[pos] + 1, body[end - 1] + 1)
 
     def _parse_block_needs(self, job: Job, body: list[int], i: int, needs_col: int) -> int:
         j = i + 1
@@ -1086,6 +1138,9 @@ class WorkflowParser:
                     "'with:' must be a block mapping of input keys — refusing rather than guessing",
                 )
             return self._parse_with(body, pos, col, step)
+        if key == "env":
+            end, step.env_range = self._consume_env_block(body, pos, col)
+            return end
         return pos + 1 if value else self._consume_opaque(body, pos, col)
 
     def _parse_with(self, body: list[int], pos: int, with_col: int, step: ArtifactStep) -> int:
@@ -1239,7 +1294,8 @@ def _collect_static_env(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
     `run-id: ${{ env.NAME }}` can be resolved against the same file (B3).
     Names are matched case-insensitively (fail-closed: a case variant must not
     launder a same-run value). Values written to `$GITHUB_ENV` at runtime are
-    invisible here and stay unresolved."""
+    invisible here and stay unresolved. The index is file-wide; callers scope
+    it to a step's visible env chain with `_scoped_static_env` (R5-MINOR-1)."""
     index: dict[str, list[tuple[str, int]]] = {}
     env_columns: list[int] = []
     for number, line in enumerate(lines, start=1):
@@ -1266,6 +1322,42 @@ def _collect_static_env(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
         if env_columns and value:
             index.setdefault(key.lower(), []).append((decode_scalar(value), number))
     return index
+
+
+def _scoped_static_env(
+    static_env: dict[str, list[tuple[str, int]]],
+    ranges: list[tuple[int, int]],
+) -> dict[str, list[tuple[str, int]]]:
+    """Restrict the file-wide static `env:` index to the blocks a step can
+    actually see: the workflow-level `env:`, the enclosing job's `env:`, and
+    the step's own `env:` (R5-MINOR-1). GitHub's `env` context for a step is
+    that chain plus `$GITHUB_ENV` writes, so an assignment on another job or
+    on another step is invisible at runtime and proves nothing."""
+    if not ranges:
+        return {}
+    scoped: dict[str, list[tuple[str, int]]] = {}
+    for name, entries in static_env.items():
+        visible = [
+            (value, line)
+            for value, line in entries
+            if any(low <= line <= high for low, high in ranges)
+        ]
+        if visible:
+            scoped[name] = visible
+    return scoped
+
+
+def _env_reference(value: str) -> str | None:
+    """The lowercased `env.NAME` a value references, or None. Used to tell
+    the documented runtime-written form (no static assignment anywhere) from
+    an assignment that exists but sits outside the step's env scope."""
+    expression = _extract_expression(value)
+    if expression is None:
+        return None
+    normalized = _normalize_expression(expression)
+    if normalized.startswith("env."):
+        return normalized[4:]
+    return None
 
 
 def _normalize_expression(value: str) -> str:
@@ -1328,7 +1420,13 @@ def _classify_token_value(
     'present' (provably non-empty), 'empty' (statically empty), or 'unknown'
     (an expression the gate cannot prove non-empty). `@actions/core` trims
     the input and actions/download-artifact honors `run-id:` only when the
-    token is set, so anything not provably non-empty must not exclude."""
+    token is set, so anything not provably non-empty must not exclude.
+
+    Only two expression forms are provably non-empty: `github.token` and the
+    exact `secrets.GITHUB_TOKEN` (R5-MINOR-2). Any other `secrets.*` may name
+    an unset secret, and any expression carrying an operator (`&&`, `||`,
+    `??`) may evaluate to the empty string, so both are 'unknown' (refused
+    rather than excluded)."""
     text = value.strip()
     if not text:
         return "empty"
@@ -1336,7 +1434,7 @@ def _classify_token_value(
     if expression is None:
         return "present"
     normalized = _normalize_expression(expression)
-    if normalized.startswith("secrets.") or normalized == "github.token":
+    if normalized == "github.token" or normalized == "secrets.github_token":
         return "present"
     if normalized.startswith("env."):
         name = normalized[4:]
@@ -1355,19 +1453,36 @@ def _classify_token_value(
     return "unknown"
 
 
-def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> None:
-    """Resolve every cross-run-classified `run-id:` against the file's static
-    `env:` index: a same-run assignment turns the cross-run exclusion off (so
-    the rule applies), and a static value the gate cannot classify is refused
-    rather than excluded (B3). The `github-token:` that the exclusion depends
-    on is classified the same way: a statically empty token is absent (the
-    rule applies) and one the gate cannot prove non-empty is refused."""
+def _apply_static_env_run_id_resolution(
+    jobs: list[Job],
+    lines: list[str],
+    workflow_env_range: tuple[int, int] | None,
+) -> None:
+    """Resolve every cross-run-classified `run-id:` against the static `env:`
+    index **scoped to the step's visible env chain** (workflow + enclosing job
+    + the step's own `env:`): a same-run assignment turns the cross-run
+    exclusion off (so the rule applies), and a static value the gate cannot
+    classify is refused rather than excluded (B3). An assignment that sits
+    outside the step's chain is invisible at runtime, so it proves nothing —
+    the token is refused and a `run-id:` whose only assignments are elsewhere
+    is refused too (R5-MINOR-1). The `github-token:` that the exclusion
+    depends on is classified the same way: a statically empty in-scope token
+    is absent (the rule applies) and one the gate cannot prove non-empty is
+    refused."""
     static_env = _collect_static_env(lines)
     for job in jobs:
         for step in job.artifact_steps:
             if not step.run_id_cross_run or step.run_id is None:
                 continue
-            resolution = _classify_static_value(step.run_id, static_env, set())
+            scoped_env = _scoped_static_env(
+                static_env,
+                [
+                    entry
+                    for entry in (workflow_env_range, job.env_range, step.env_range)
+                    if entry is not None
+                ],
+            )
+            resolution = _classify_static_value(step.run_id, scoped_env, set())
             if resolution == "same-run":
                 step.run_id_cross_run = False
                 continue
@@ -1378,6 +1493,23 @@ def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> No
                     "a value that is neither the current run nor a recognized cross-run handoff "
                     "(refusing rather than guessing)",
                 )
+            if resolution == "unresolved":
+                # Two cases: no static assignment anywhere (the documented
+                # runtime `$GITHUB_ENV` handoff — the real ios-adhoc-pr.yml
+                # shape — which keeps the cross-run exclusion), or
+                # assignment(s) that exist but sit outside this step's env
+                # chain. The second is an authoring error the gate must not
+                # read as a proven cross-run handoff.
+                name = _env_reference(step.run_id)
+                if name is not None and static_env.get(name):
+                    raise Refusal(
+                        step.run_id_line or step.uses_line,
+                        f"run-id: '{step.run_id}' resolves through a static `env:` assignment "
+                        "that is outside this step's env scope (only the workflow-level, the "
+                        "enclosing job's and the step's own `env:` are visible at runtime) — the "
+                        "value is empty or runtime-written, so a cross-run handoff cannot be "
+                        "proven (refusing rather than guessing)",
+                    )
             if step.github_token is None:
                 # No token at all: the parse-time gating already decided the
                 # exclusion, and there is nothing to classify.
@@ -1387,7 +1519,7 @@ def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> No
                 # (whitespace-only is absent); only an expression can resolve
                 # to an empty or unprovable runtime value.
                 continue
-            token = _classify_token_value(step.github_token, static_env, set())
+            token = _classify_token_value(step.github_token, scoped_env, set())
             if token == "present":
                 continue
             if token == "empty":
@@ -1398,13 +1530,17 @@ def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> No
                 step.github_token_line or step.uses_line,
                 f"github-token: '{step.github_token}' cannot be proven non-empty at runtime — "
                 "actions/download-artifact honors `run-id:` only when the token input is set; use "
-                "a literal, ${{ secrets.* }} or ${{ github.token }}, or drop `run-id:` and add the "
-                "`needs:` edge (refusing rather than guessing)",
+                "a literal, ${{ secrets.GITHUB_TOKEN }} or ${{ github.token }}, or drop `run-id:` "
+                "and add the `needs:` edge (refusing rather than guessing)",
             )
 
 
 def _parse_inline_needs(line: int, value: str) -> list[str]:
-    text = value.strip()
+    # The string tag resolves to the same scalar GitHub reads, so a tagged
+    # flow collection (`needs: !!str [build]`) is a valid edge and must be
+    # parsed as a collection (R5-NIT-1). A non-string tag is refused by the
+    # caller rather than read as part of the name.
+    text = _strip_str_tag(value.strip())
     if text.startswith("["):
         if not text.endswith("]"):
             raise Refusal(
@@ -1537,7 +1673,9 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
         if reconciliation:
             result.diagnostics.extend(reconciliation)
             return result
-        _apply_static_env_run_id_resolution(result.jobs, lines)
+        _apply_static_env_run_id_resolution(
+            result.jobs, lines, parser.workflow_env_range
+        )
         for job in result.jobs:
             for step in job.artifact_steps:
                 if step.kind == "upload":
