@@ -1670,7 +1670,8 @@ CASES = [
     # that MENTIONS `GITHUB_ENV` makes a statically env-resolved
     # `github-token:` unprovable. The four rejects pin the closed shapes
     # (`>>`, single `>`, a dynamic name, a same-value rewrite); the accept
-    # is the position control and deliberately writes the chain name.
+    # is the position control and deliberately writes the chain name. The
+    # fold-round-1 rejects pin the decoded/indirect spellings.
     # ------------------------------------------------------------------
     {
         "id": "reject-github-env-write-empties-token",
@@ -1709,6 +1710,42 @@ CASES = [
         "files": ["accept-github-env-write-after-download.yml"],
         "exit": 0,
         "diagnostics": [],
+    },
+    # #339 fold round 1: the detector decodes the run scalar's YAML escapes
+    # and closes the indirect spellings (a `\x5f`-escaped name, shell-level
+    # `"GITHUB_""ENV"` assembly inline and through a `bash -c` argv, and a
+    # Windows `%github_env%` whose lookup is case-insensitive).
+    {
+        "id": "reject-github-env-write-yaml-escape",
+        "files": ["reject-github-env-write-yaml-escape.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-yaml-escape.yml:25: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 20) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-shell-assembled",
+        "files": ["reject-github-env-write-shell-assembled.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-shell-assembled.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-bash-c-argv",
+        "files": ["reject-github-env-write-bash-c-argv.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-bash-c-argv.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-windows-lowercase",
+        "files": ["reject-github-env-write-windows-lowercase.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-windows-lowercase.yml:25: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 20) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
     },
     # ------------------------------------------------------------------
     # #341 (case-colliding env): the winning-assignment predicate. The

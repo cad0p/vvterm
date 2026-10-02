@@ -163,18 +163,25 @@ whose exact-case name is assigned nowhere visible is left to the
 pre-existing case-mismatch/unresolved diagnostics; a name whose
 chain has a non-ASCII candidate refuses too, because the exact
 `OrdinalIgnoreCase` folding is not modelled (`lower()`/`upper()` each miss a
-pair); and a preceding `run:` step in the same job whose body contains the
-`GITHUB_ENV` substring makes any `github-token:` that resolves through the
-static `env:` chain unprovable, so the download is refused (issue #339):
+pair); and a preceding `run:` step in the same job that mentions
+`GITHUB_ENV` makes any `github-token:` that resolves through the static
+`env:` chain unprovable, so the download is refused (issue #339):
 actions/runner merges `$GITHUB_ENV` writes into the job environment before a
 later step's `with:` is evaluated, so the write can change or empty the
-token. The detector is the raw substring, not a name extraction (a single
-`>`, `tee`, heredocs, indirection and related spellings are all covered),
-which is a deliberate fail-closed over-approximation: a read-only
-`cat "$GITHUB_ENV"`, an unrelated-name write, a same-value rewrite and a
-write shadowed by the download step's own `env:` all refuse (accepted
-costs, each pinned or named), while a `uses:`/composite action that writes
-`$GITHUB_ENV` stays invisible because the gate sees workflow files only.
+token. The detector decodes the run scalar's YAML escapes with the same full
+double-quoted decoder the static `env:` values use, then treats as a mention
+the case-insensitive `github_env` substring (which also catches a Windows
+`%github_env%`) and a case-sensitive `GITHUB`/`ENV` conjunction inside a
+64-character window (which closes shell-level name assembly: the
+`n="GITHUB_""ENV"` pair, a `bash -c` argv), so single `>`, `tee`, heredocs,
+indirection and related spellings are all covered. It is still a deliberate
+text-level fail-closed over-approximation: a read-only `cat "$GITHUB_ENV"`,
+an unrelated-name write, a same-value rewrite and a write shadowed by the
+download step's own `env:` all refuse (accepted costs, each pinned or
+named), while a `uses:`/composite action that writes `$GITHUB_ENV` stays
+invisible, and a name assembled from pieces not both present in the body's
+text (base64/hex-encoded, read from a file, or produced by a called script)
+is not detected — the documented boundary of a text-based detector.
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
@@ -220,7 +227,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 225
+EXPECTED_MANIFEST_CASES = 229
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1511,22 +1518,24 @@ class WorkflowParser:
     def _run_mentions_github_env(
         self, index: int, value: str, body: list[int], pos: int, end: int
     ) -> bool:
-        """The #339 scan for one `run:` step: the literal substring
-        `GITHUB_ENV` anywhere in its inline value or block body. A block-scalar
-        header's body lives in `self.block_bodies` (the blanked lines no
-        longer hold it); a bare `run:` with an indented plain scalar is
-        scanned from the range `_consume_opaque` consumed. The body is text,
-        not a name list: `$GITHUB_ENV`, `${GITHUB_ENV}`, a single `>`, `tee`,
-        a heredoc and an indirect write all contain the substring."""
+        """The #339 scan for one `run:` step: a YAML-escape-decoded inline
+        value, a block-scalar body (literal text, so not decoded), or the
+        consumed continuation lines. A block-scalar header's body lives in
+        `self.block_bodies` (the blanked lines no longer hold it); a bare
+        `run:` with an indented plain scalar is (the raw lines of) the range
+        `_consume_opaque` consumed. `_mentions_github_env` owns the mention
+        predicate (the case-insensitive `github_env` substring plus the
+        `GITHUB`/`ENV` window conjunction), so a YAML-escaped or
+        shell-assembled name is caught."""
         if value:
             if _static_block_header(value) is not None:
-                return "GITHUB_ENV" in self.block_bodies.get(index + 1, "")
-            return "GITHUB_ENV" in value
+                return _mentions_github_env(self.block_bodies.get(index + 1, ""))
+            return _mentions_github_env(_decode_env_scalar(value))
         block_text = self.block_bodies.get(index + 1)
         if block_text is not None:
-            return "GITHUB_ENV" in block_text
+            return _mentions_github_env(block_text)
         return any(
-            "GITHUB_ENV" in self.lines[body[j]] for j in range(pos + 1, end)
+            _mentions_github_env(self.lines[body[j]]) for j in range(pos + 1, end)
         )
 
     def _parse_with(self, body: list[int], pos: int, with_col: int, step: ArtifactStep) -> int:
@@ -1700,6 +1709,33 @@ _JS_TRIM_CHARS = (
 def js_trim(value: str) -> str:
     """`value` as `@actions/core`'s `getInput` sees it (ECMAScript trim)."""
     return value.strip(_JS_TRIM_CHARS)
+
+
+# The #339 shell-assembly window: a `run:` body can build the env-file name
+# from pieces (`n="GITHUB_""ENV"`, a `bash -c` argv), so a case-sensitive
+# `GITHUB`/`ENV` conjunction inside this many characters counts as a mention
+# even without the literal `GITHUB_ENV` substring.
+GITHUB_ENV_WINDOW = 64
+
+
+def _mentions_github_env(text: str) -> bool:
+    """The #339 mention test for one decoded `run:` scalar or block body.
+    The case-insensitive `github_env` substring closes `$GITHUB_ENV`,
+    `${GITHUB_ENV}`, a Windows `%github_env%` and every spelling whose text
+    carries the joined name; the case-sensitive `GITHUB`/`ENV` conjunction
+    inside a 64-character window closes shell-level name assembly
+    (`n="GITHUB_""ENV"`, `bash -c ... "GITHUB_""ENV"`). A name whose pieces
+    are not both present in the text (base64/hex-encoded, read from a file,
+    or produced by a called script) is the documented boundary of a
+    text-based detector."""
+    if "github_env" in text.lower():
+        return True
+    start = text.find("GITHUB")
+    while start != -1:
+        if "ENV" in text[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
+            return True
+        start = text.find("GITHUB", start + 1)
+    return False
 
 
 # Plain YAML null spellings (YAML 1.2 core schema: `null`, `Null`, `NULL`,

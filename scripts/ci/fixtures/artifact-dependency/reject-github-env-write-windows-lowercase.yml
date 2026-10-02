@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a Windows `cmd` step writes the env file through `%github_env%`.
+# Windows environment lookup is case-insensitive, so this is an ordinary
+# spelling; the raw-text scan was case-sensitive and passed it. The
+# case-insensitive `github_env` substring catches it (issue #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token
+        shell: cmd
+        run: echo GH_TOKEN= >> "%github_env%"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

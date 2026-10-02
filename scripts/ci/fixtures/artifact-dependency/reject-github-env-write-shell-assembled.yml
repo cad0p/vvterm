@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env-file name is assembled at shell level (`"GITHUB_""ENV"`
+# concatenates to `GITHUB_ENV`) and expanded through `${!n}`. The raw text
+# has no `GITHUB_ENV` substring; the `GITHUB`/`ENV` 64-character window
+# conjunction catches it (issue #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token indirectly
+        run: n="GITHUB_""ENV"; echo "GH_TOKEN=" >> "${!n}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
