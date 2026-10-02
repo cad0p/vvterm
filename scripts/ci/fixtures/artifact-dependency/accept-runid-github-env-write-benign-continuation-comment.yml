@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a comment line ending in `\` is not a shell continuation at all, so
+# it is not a redirect split (issue #342, F1; non-vacuous, the
+# download keeps the exclusion).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          # a comment ending in a backslash \
+          echo done
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

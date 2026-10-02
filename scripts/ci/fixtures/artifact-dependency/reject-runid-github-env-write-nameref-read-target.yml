@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `declare -n ref=CI_RUN_ID` binds the nameref to the traced name; a
+# `read -r ref` then writes through it (issue #342, F3/MAJOR-4;
+# fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          declare -n ref=CI_RUN_ID
+          read -r ref <<< 42424242
+          echo "SOURCE_RUN_ID=$CI_RUN_ID" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 316
+    private static let expectedManifestCases = 338
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -488,6 +488,30 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-declare-g-value.yml",
         "accept-runid-github-env-write-rw-plain.yml",
         "accept-runid-github-env-write-unrelated-mechanism.yml",
+        // #342 fold round 5: the F1 benign continuations, the F2
+        // subshell shapes, and the F3 detection-completeness fixtures.
+        "accept-runid-github-env-write-benign-continuation.yml",
+        "accept-runid-github-env-write-benign-continuation-heredoc.yml",
+        "accept-runid-github-env-write-benign-continuation-comment.yml",
+        "reject-runid-github-env-write-amp-background-target.yml",
+        "reject-runid-github-env-write-pipe-left-target.yml",
+        "reject-runid-github-env-write-pipe-left-or-target.yml",
+        "reject-runid-github-env-write-subshell-group-target.yml",
+        "reject-runid-github-env-write-cmdsub-multiline-target.yml",
+        "reject-runid-github-env-write-mapfile-t-value.yml",
+        "reject-runid-github-env-write-readarray-t-value.yml",
+        "reject-runid-github-env-write-mapfile-n-t-value.yml",
+        "reject-runid-github-env-write-mapfile-t-target.yml",
+        "reject-runid-github-env-write-eval-read-value.yml",
+        "reject-runid-github-env-write-eval-read-target.yml",
+        "reject-runid-github-env-write-eval-printf-v-value.yml",
+        "reject-runid-github-env-write-nameref-read-target.yml",
+        "reject-runid-github-env-write-nameref-eval-target.yml",
+        "reject-runid-github-env-write-read-subscript-value.yml",
+        "reject-runid-github-env-write-let-value.yml",
+        "reject-runid-github-env-write-arith-value.yml",
+        "reject-runid-github-env-write-array-element-value.yml",
+        "reject-runid-github-env-write-expansion-read-value.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -774,6 +798,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "with a command string that names the value the download",
             "which the extractor does not model",
             "an out-of-statement assignment",
+            // #342 fold round 5: the F3 detection-completeness refusal.
+            "an occurrence the extractor cannot account for",
             // The `_flip_target_match` non-ASCII raise was dead code (only
             // `[A-Za-z_][A-Za-z0-9_]*` names reach it; the unextractable-name
             // refusal above owns the non-ASCII case), so its fragment is no

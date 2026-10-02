@@ -2590,4 +2590,203 @@ CASES = [
         "excluded": 1,
         "diagnostics": [],
     },
+    # #342 fold round 5: the F1 narrowings (benign continuations), the
+    # F2 subshell-context exclusions (`&` background, `|`/`|&` left, a
+    # `( … )` group, and a cross-line `$( … )`), and the F3
+    # detection-completeness rule (mapfile/readarray `-t`, carrier
+    # bare-name writes, namerefs, bracketed `read` operands, `let`,
+    # `(( ))`, array-element assignment, and the pinned fail-closed
+    # expansion-read cost).
+    {
+        "id": "accept-runid-github-env-write-benign-continuation",
+        "files": ["accept-runid-github-env-write-benign-continuation.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-benign-continuation-heredoc",
+        "files": ["accept-runid-github-env-write-benign-continuation-heredoc.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-benign-continuation-comment",
+        "files": ["accept-runid-github-env-write-benign-continuation-comment.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-runid-github-env-write-amp-background-target",
+        "files": ["reject-runid-github-env-write-amp-background-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-amp-background-target.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job redirects to `$n`, a target the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-pipe-left-target",
+        "files": ["reject-runid-github-env-write-pipe-left-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-pipe-left-target.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job redirects to `$n`, a target the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-pipe-left-or-target",
+        "files": ["reject-runid-github-env-write-pipe-left-or-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-pipe-left-or-target.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job redirects to `$n`, a target the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subshell-group-target",
+        "files": ["reject-runid-github-env-write-subshell-group-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subshell-group-target.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `n` through `an out-of-statement assignment`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-multiline-target",
+        "files": ["reject-runid-github-env-write-cmdsub-multiline-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-multiline-target.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job redirects to `$n`, a target the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-mapfile-t-value",
+        "files": ["reject-runid-github-env-write-mapfile-t-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mapfile-t-value.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-readarray-t-value",
+        "files": ["reject-runid-github-env-write-readarray-t-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-readarray-t-value.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-mapfile-n-t-value",
+        "files": ["reject-runid-github-env-write-mapfile-n-t-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mapfile-n-t-value.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-mapfile-t-target",
+        "files": ["reject-runid-github-env-write-mapfile-t-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mapfile-t-target.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `n`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-eval-read-value",
+        "files": ["reject-runid-github-env-write-eval-read-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-eval-read-value.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-eval-read-target",
+        "files": ["reject-runid-github-env-write-eval-read-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-eval-read-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `n`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-eval-printf-v-value",
+        "files": ["reject-runid-github-env-write-eval-printf-v-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-eval-printf-v-value.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-nameref-read-target",
+        "files": ["reject-runid-github-env-write-nameref-read-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-nameref-read-target.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-nameref-eval-target",
+        "files": ["reject-runid-github-env-write-nameref-eval-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-nameref-eval-target.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-read-subscript-value",
+        "files": ["reject-runid-github-env-write-read-subscript-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-read-subscript-value.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-let-value",
+        "files": ["reject-runid-github-env-write-let-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-let-value.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `CI_RUN_ID` through `an out-of-statement assignment`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-arith-value",
+        "files": ["reject-runid-github-env-write-arith-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-arith-value.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-array-element-value",
+        "files": ["reject-runid-github-env-write-array-element-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-array-element-value.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-expansion-read-value",
+        "files": ["reject-runid-github-env-write-expansion-read-value.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-expansion-read-value.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
 ]

@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a carrier command string that writes the env-file alias through
+# a bare-name operand (`eval 'read -r n'`): without the
+# detection-completeness rule the carrier predicates do not see `n`, the
+# stale `n=/tmp/foo` pins the target trace, and the runtime env file gets
+# the current run id (issue #342, F3/BLOCKER-2; fail-open at base
+# `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          x=1; m="$GITHUB_ENV"
+          n=/tmp/foo
+          eval 'read -r n' <<< "$m"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

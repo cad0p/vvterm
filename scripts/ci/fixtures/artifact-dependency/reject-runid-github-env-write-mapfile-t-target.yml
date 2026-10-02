@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `mapfile -t n` destination that is the redirect target's local
+# (issue #342, F3/BLOCKER-1; fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; target="$GITHUB_ENV"
+          n=/tmp/foo
+          mapfile -t n <<< "$target"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

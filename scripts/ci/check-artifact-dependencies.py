@@ -202,10 +202,21 @@ detector.
 
 THE RUN-ID `$GITHUB_ENV` WRITE RULE (#342)
 -------------------------------------------
-The invariant that closes this class rather than its instances: every
-shell construct the run-id write depends on must be fully modelled, and
-anything the extractor cannot model refuses rather than guessing — never
-"the last assignment wins" when the resolution is ambiguous. The refusals
+The invariant that closes this class rather than its instances has two
+halves. The first: every shell construct the run-id write depends on must
+be fully modelled, and anything the extractor cannot model refuses rather
+than guessing — never "the last assignment wins" when the resolution is
+ambiguous. The second is DETECTION COMPLETENESS: for every traced name (a
+flip target, an alias, a body assignment, or a redirect-target variable),
+every occurrence of that name as a shell word in a preceding same-job body
+must be accounted for by the model — a modelled assignment, a classified
+redirect target, an extracted env-write payload, an `export NAME` marker,
+or a test command's read operand. An occurrence the model cannot account
+for refuses, so a write mechanism whose spelling no mechanism table lists
+still refuses because it names the variable (`mapfile -t n`, `readarray -t
+n`, `read 'NAME[0]'`, `eval 'read NAME'`, `eval 'printf -v NAME …'`,
+`declare -n ref=NAME`, `let NAME=…`, `(( NAME=… ))`, `NAME[0]=…`, and an
+assembled carrier string). The refusals
 cover the branch-dependent (`&&`/`||`/`|` lists, including a `||` that
 continues across a physical line), prefix-position, multi-assignment,
 unset, indirect, nested/group-assignment, cross-step, and
@@ -250,6 +261,13 @@ on a physical line that continues one — is indexed as conditional and a
 trace that reaches it refuses: the assignment may never execute, so the
 value is ambiguous (`m=1; n="$GITHUB_ENV" || n=/tmp/foo` then `>> "$n"`
 writes the env file at runtime while the dead-code trace reads `other`).
+A statement that runs in a subshell is indexed the same way: the left side
+of a `|`/`|&` pipeline, the command of a `&` background list, and an
+assignment inside a `$( … )` command substitution carried across physical
+lines never propagate to the parent shell that runs the write, so a trace
+that reaches one refuses rather than reading the dead assignment (issue
+#342, F2; a single-line `( … )` group is refused by the out-of-statement
+detector instead).
 Unset-at-write, a reassignment after the write, `+=`, an assignment inside
 a nested control block, and an unclassifiable RHS all refuse. This is the rule that keeps the real
 `${CI_RUN_ID}` -> `${{ inputs.ci_run_id }}` dispatch branch green while
@@ -271,9 +289,12 @@ immediately prefixing it (or bash's `{name}<>` dynamic allocation, which
 picks a fd above 10): an explicit fd > 0 is a read-write payload
 target that must resolve, while a bare `<>` (fd 0) opens stdin read-write
 and provably does not write the payload, so it stays accepted. A physical
-line that ends in an unescaped backslash continuation refuses, because the
-shell joins the next line into that command and a redirect target
-(`>& \\` + newline + `"$n"`) can sit there outside the per-line view. A
+line that ends in an unescaped backslash continuation after a redirection
+operator refuses, because the shell joins the next line into that command
+and the redirect target (`>& \\` + newline + `"$n"`) can sit there outside
+the per-line view; a continuation after a plain word (a `printf … \\`
+argument split), after a `#` comment, or inside a quoted-heredoc payload is
+not a redirect split and stays accepted (issue #342, F1). A
 heredoc payload (`cat >> "$GITHUB_ENV" <<'EOF'`) is read as
 literal env-file text, so its values are not shell-expanded. The env-file
 spelling is exact, AND an unresolved target that extends it with identifier
@@ -301,10 +322,16 @@ the body does not define (`>&"$LOGFILE"`, `>| "$LOGFILE"` with `LOGFILE`
 in the job `env:`), an `if … fi` boundary between the traced assignment
 and the write, `exec 3>&"$n"` (an ambiguous-redirect error in bash), any
 assignment reached through an `&&`/`||`/`|` list even when the list
-provably executes, a mechanism that names a traced variable even when the
-body cannot reach it (a never-called function's `declare -g`), and a
-dynamic mechanism target (`read -r "$name"`, `declare "$name=…"`,
-`printf -v "$name"`) — all fail-closed costs, as is the distinct
+provably executes, an assignment in a subshell context (`n=… &`,
+`n=… | cat`, a cross-line `$( … )`), a mechanism that names a traced
+variable even when the body cannot reach it (a never-called function's
+`declare -g`), a dynamic mechanism target (`read -r "$name"`, `declare
+"$name=…"`, `printf -v "$name"`), a `for NAME in …`/`select NAME in …`
+loop whose control variable is traced, and a traced-name occurrence the
+detection-completeness walk cannot account for (`echo "$n"`, a bare
+`NAME` argument, a `NAME=VALUE`-shaped word in an unmodelled command, or a
+carrier string that names the variable; an `export NAME` marker is
+accounted and does not refuse) — all fail-closed costs, as is the distinct
 unresolved-redirect-target refusal, which names the target it cannot
 resolve. The rule never
 touches the #339 token rule, the `needs:` reconciliation, the case-collision
@@ -315,12 +342,15 @@ repo, and trigger parsing is deliberately not modelled); a `$GITHUB_ENV`
 write whose name pieces never appear in the body text
 (`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a name split past the
 64-character window) is not detected, the inherited text-detector boundary;
-and the write mechanisms the extractor does not model at all — `let`/`(( ))`
-arithmetic assignment, array-element assignment (`n[0]=…`), a `source`d or
-`.`-sourced script's body, a `bash script.sh` path (only the `-c` string is
-inspected), and a carrier whose command string is assembled at runtime
-(`eval "$cmd"`: the carrier is seen, but a string that never mentions the
-env file or a traced name is the inherited textual boundary).
+and the write mechanisms the extractor still does not see at all — a
+`source`d or `.`-sourced script's body, a `bash script.sh` path (only the
+`-c` string is inspected), and a carrier whose command string is assembled
+at runtime (`eval "$cmd"`: the carrier is seen, but a string that never
+mentions the env file or a traced name is the inherited textual boundary).
+The detection-completeness walk therefore closes the naming family the
+mechanism tables enumerate, at the cost of refusing benign occurrences the
+model does not place (see the accepted-costs paragraph); a construct whose
+name text is absent or assembled at runtime stays outside it.
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
@@ -366,7 +396,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 316
+EXPECTED_MANIFEST_CASES = 338
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2570,6 +2600,35 @@ def _indent_width(line: str) -> int:
     return len(line) - len(line.lstrip(" \t"))
 
 
+def _consume_command_substitution(text: str, start: int) -> int:
+    """The index just past the `$(…)` opened at `text[start:start + 2]`,
+    with quotes, escapes and nested parentheses honoured; `len(text)` when
+    the substitution is unclosed on the line (the caller's per-line scan
+    refuses rather than guesses)."""
+    n = len(text)
+    depth = 1
+    j = start + 2
+    while j < n and depth:
+        cj = text[j]
+        if cj in "'\"":
+            quote = cj
+            j += 1
+            while j < n and text[j] != quote:
+                j += 1
+            if j < n:
+                j += 1
+            continue
+        if cj == "\\" and j + 1 < n:
+            j += 2
+            continue
+        if cj == "(":
+            depth += 1
+        elif cj == ")":
+            depth -= 1
+        j += 1
+    return j
+
+
 def _shell_tokens(text: str) -> list[tuple[str, str, int, int]]:
     """Tokenise one shell command line for the #342 write extractor:
     `(kind, text, start, end)` with `kind` `"word"` or `"op"`. A word's
@@ -2637,6 +2696,24 @@ def _shell_tokens(text: str) -> list[tuple[str, str, int, int]]:
                         continue
                     if cj == '"':
                         break
+                    if cj == "`":
+                        end = text.find("`", j + 1)
+                        if end == -1:
+                            buf.append(text[j:])
+                            j = n
+                            break
+                        buf.append(text[j : end + 1])
+                        j = end + 1
+                        continue
+                    if cj == "$" and j + 1 < n and text[j + 1] == "(":
+                        # A command substitution inside a double-quoted
+                        # string carries its own quotes and spaces
+                        # (`SHA="$(gh api "repos/…" --jq '.head_sha')"`);
+                        # consuming it here keeps the word whole.
+                        end = _consume_command_substitution(text, j)
+                        buf.append(text[j:end])
+                        j = end
+                        continue
                     buf.append(cj)
                     j += 1
                 out.append("".join(buf))
@@ -2652,33 +2729,8 @@ def _shell_tokens(text: str) -> list[tuple[str, str, int, int]]:
                 i = j + 1 if j != -1 else n
                 continue
             if ch == "$" and i + 1 < n and text[i + 1] == "(":
-                depth = 1
-                j = i + 2
-                buf = [ch, "("]
-                while j < n and depth:
-                    cj = text[j]
-                    if cj in "'\"":
-                        quote = cj
-                        buf.append(cj)
-                        j += 1
-                        while j < n and text[j] != quote:
-                            buf.append(text[j])
-                            j += 1
-                        if j < n:
-                            buf.append(text[j])
-                            j += 1
-                        continue
-                    if cj == "\\" and j + 1 < n:
-                        buf.append(text[j : j + 2])
-                        j += 2
-                        continue
-                    if cj == "(":
-                        depth += 1
-                    elif cj == ")":
-                        depth -= 1
-                    buf.append(cj)
-                    j += 1
-                out.append("".join(buf))
+                j = _consume_command_substitution(text, i)
+                out.append(text[i:j])
                 i = j
                 continue
             out.append(ch)
@@ -2762,8 +2814,23 @@ def _segment_conditional_flags(
             is_separator = not previous_is_redirect
         if is_separator:
             if in_segment:
-                flags.append(next_conditional)
-            next_conditional = token[1] in ("&&", "||", "|")
+                # A segment that is the left side of a `|` pipeline or the
+                # command of a `&` background list runs in a subshell: its
+                # assignments do not propagate to the parent shell, so they
+                # can never be a reaching assignment (issue #342, F2).
+                ends_in_subshell = token[1] in ("|", "&")
+                flags.append(next_conditional or ends_in_subshell)
+            if (
+                token[1] == "&"
+                and previous is not None
+                and previous[0] == "op"
+                and previous[1] == "|"
+            ):
+                # `|&` is `2>&1 |`: the command after it still runs in the
+                # pipeline's subshell, so the pipe's conditionality stands.
+                next_conditional = True
+            else:
+                next_conditional = token[1] in ("&&", "||", "|")
             in_segment = False
             ends_with_separator = True
         else:
@@ -2785,6 +2852,96 @@ def _line_has_continuation(line: str) -> bool:
     (issue #342, R3)."""
     trailing = len(line) - len(line.rstrip("\\"))
     return trailing % 2 == 1
+
+
+def _continuation_hides_redirect_target(line: str) -> bool:
+    """True when the physical line ends in an unescaped backslash
+    continuation after a redirection operator, so the shell joins the next
+    line into that command and the redirect target can sit outside the
+    per-line view (`>& \\` + newline + `"$n"`) (issue #342, R3/F1). A line
+    ending a continuation after a plain word (a `printf … \\` argument
+    split), inside a comment, or in heredoc payload text is not a redirect
+    split and is accepted: only a trailing redirect operator can take its
+    target from the joined line."""
+    if not _line_has_continuation(line):
+        return False
+    tokens = _shell_tokens(line)
+    while tokens and tokens[-1][0] == "word" and tokens[-1][1].endswith("\\"):
+        tokens = tokens[:-1]
+    if not tokens:
+        return False
+    kind, text, _start, _end = tokens[-1]
+    if kind == "op" and text in (">", ">>", ">|", "<", "<<", "<>"):
+        return True
+    if (
+        kind == "op"
+        and text == "&"
+        and len(tokens) >= 2
+        and tokens[-2][0] == "op"
+        and tokens[-2][1] == ">"
+    ):
+        # `>& \\` tokenizes as the op `>` then the op `&` (the omitted-fd
+        # stdout+stderr file redirect), with the target on the next line.
+        return True
+    return False
+
+
+def _command_substitution_depth(line: str) -> int:
+    """A conservative count of the command substitutions the physical line
+    leaves open (unclosed `$(`, or an unmatched backtick). A positive value
+    places the assignments on following lines inside a subshell, where they
+    cannot reach the parent shell (issue #342, F2). Quotes and escapes are
+    honoured and a `#` comment ends the scan; a construct this text scan
+    cannot parse yields a positive depth, which refuses rather than
+    passes."""
+    depth = 0
+    in_backtick = False
+    quote: str | None = None
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and quote != "'" and i + 1 < n:
+            i += 2
+            continue
+        if c == "'" and quote is None:
+            quote = "'"
+            i += 1
+            continue
+        if c == '"' and quote is None:
+            quote = '"'
+            i += 1
+            continue
+        if c == '"' and quote == '"':
+            quote = None
+            i += 1
+            continue
+        if c == "#" and quote is None and (i == 0 or line[i - 1].isspace()):
+            break
+        if c == "$" and i + 1 < n and line[i + 1] == "(":
+            depth += 1
+            i += 2
+            continue
+        if c == "`":
+            if in_backtick:
+                in_backtick = False
+                depth -= 1
+            else:
+                in_backtick = True
+                depth += 1
+            i += 1
+            continue
+        if c == ")" and depth > 0 and not in_backtick:
+            depth -= 1
+            i += 1
+            continue
+        i += 1
+    return max(0, depth)
 
 
 def _segment_redirects(
@@ -2950,9 +3107,11 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
     (issue #342, R1)."""
     assignments: list[_ShellAssignment] = []
     starts_conditional = False
+    subshell_depth = 0
     for index, line in enumerate(lines):
         if index in skip:
             continue
+        in_subshell = subshell_depth > 0
         tokens = _shell_tokens(line)
         flags, next_conditional, trailing_conditional, ends_with_separator = (
             _segment_conditional_flags(tokens, starts_conditional)
@@ -2972,7 +3131,7 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
                 flags[segment_index]
                 if segment_index < len(flags)
                 else starts_conditional
-            )
+            ) or in_subshell
             # Match the RAW word (quotes intact) so a quoted name is not
             # promoted to an assignment the shell never makes.
             word_text = line[start:end]
@@ -2997,6 +3156,7 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
                     match.group(1), value, index, start, _indent_width(line), conditional
                 )
             )
+        subshell_depth += _command_substitution_depth(line)
         if not tokens:
             # A blank or comment-only line does not end a `&&`/`||` list:
             # both `a &&` + blank + `b` and `a &&` + `# x` + `b` keep `b`
@@ -3693,6 +3853,86 @@ def _extract_run_id_writes(
     return writes, -1
 
 
+def _segment_is_test_read(segment: list[tuple[str, str, int, int]]) -> bool:
+    """True when the segment is a conditional test (`[[ … ]]`, `[ … ]`,
+    `test …`, optionally behind `if`/`elif`/`while`/`until`/`!`). A test
+    command reads its operands and cannot write a variable, so every word in
+    it is a proven-benign read position (issue #342, F3)."""
+    words = [token[1] for token in segment if token[0] == "word"]
+    if not words:
+        return False
+    if words[0] in ("[[", "[", "test"):
+        return True
+    return bool(
+        words[0] in ("if", "elif", "while", "until", "!")
+        and len(words) > 1
+        and words[1] in ("[[", "[", "test")
+    )
+
+
+def _word_mentions_traced_name(
+    text: str, relevant: set[str], flip_targets: set[str]
+) -> str | None:
+    """The first traced name that appears in one shell word as a complete
+    identifier (bounded by non-identifier characters), or None. Exact names
+    are matched case-sensitively; flip targets get the same case-insensitive
+    stance as `_flip_target_match` (issue #342, F3). The longest name wins so
+    a name that is a prefix of another cannot shadow the longer occurrence."""
+    for name in sorted(relevant, key=len, reverse=True):
+        if re.search(
+            r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", text
+        ):
+            return name
+    for target in sorted(flip_targets, key=len, reverse=True):
+        if target.isascii() and re.search(
+            r"(?<![A-Za-z0-9_])" + re.escape(target) + r"(?![A-Za-z0-9_])",
+            text,
+            re.IGNORECASE,
+        ):
+            return target
+    return None
+
+
+def _unaccounted_traced_occurrence(
+    tokens: list[tuple[str, str, int, int]],
+    accounted: set[tuple[int, int]],
+    relevant: set[str],
+    flip_targets: set[str],
+) -> str | None:
+    """The first traced name that appears as a shell word the model has not
+    accounted for, or None. A word covered by an accounted span is modelled:
+    a statement-position or alias assignment, a classified redirect target,
+    an extracted env-write payload, an `echo`/`printf`/`cat` `NAME=VALUE`
+    payload in a proven-non-env segment, or a test command's read operand.
+    A word starting with `-` is an option and cannot name a variable.
+    Anything else that mentions a traced name at an identifier boundary
+    refuses — the detection-completeness backstop that closes the whole
+    naming family, including spellings no mechanism table lists (issue #342,
+    F3)."""
+    for kind, text, start, end in tokens:
+        if kind != "word" or (start, end) in accounted:
+            continue
+        if text.startswith("-"):
+            continue
+        name = _word_mentions_traced_name(text, relevant, flip_targets)
+        if name is not None:
+            return name
+    return None
+
+
+def _run_id_unaccounted_occurrence_refusal(
+    step: ArtifactStep, body: RunBody, name: str
+) -> Refusal:
+    """A traced name appears as a shell word the extractor cannot account
+    for (issue #342, F3)."""
+    return Refusal(
+        step.run_id_line or step.uses_line,
+        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job mentions "
+        f"`{name}`, an occurrence the extractor cannot account for (refusing rather than "
+        "guessing)",
+    )
+
+
 def _refuse_github_env_run_id_write(
     job: Job,
     step: ArtifactStep,
@@ -3738,7 +3978,7 @@ def _refuse_github_env_run_id_write(
         for index, line in enumerate(lines):
             if index <= skip_until:
                 continue
-            if _line_has_continuation(line):
+            if index not in payload_lines and _continuation_hides_redirect_target(line):
                 raise _run_id_continuation_refusal(step, body)
             tokens = _shell_tokens(line)
             mechanism = _unmodelled_write_match(
@@ -3746,6 +3986,7 @@ def _refuse_github_env_run_id_write(
             )
             if mechanism is not None:
                 raise _run_id_unmodelled_write_refusal(step, body, mechanism)
+            accounted: set[tuple[int, int]] = set()
             for segment in _shell_segments(tokens):
                 write_column = segment[0][2]
                 env_redirect: int | None = None
@@ -3754,6 +3995,10 @@ def _refuse_github_env_run_id_write(
                 for _op, target, redirect_start, target_span, redirect_fd in (
                     _segment_redirects(segment)
                 ):
+                    if target_span is not None:
+                        # Every classified redirect target is a modelled
+                        # occurrence (issue #342, F3).
+                        accounted.add(target_span)
                     if _op == "<>" and redirect_fd == 0:
                         # A bare `<>` (or an explicit fd 0) opens stdin
                         # read-write: it provably does not write the payload,
@@ -3776,6 +4021,11 @@ def _refuse_github_env_run_id_write(
                     raise _run_id_unresolved_target_refusal(
                         step, body, unknown_redirect
                     )
+                for token in segment:
+                    if token[0] == "word" and (index, token[2]) in modelled_positions:
+                        # A statement-position assignment the index modelled
+                        # (issue #342, F3).
+                        accounted.add((token[2], token[3]))
                 if env_redirect is None:
                     if _segment_is_env_alias_assignment(segment):
                         continue
@@ -3799,12 +4049,49 @@ def _refuse_github_env_run_id_write(
                     )
                     if _segment_references_env_file(segment_text, aliases):
                         raise _run_id_reference_refusal(step, body)
+                    first_word = (
+                        segment[0][1]
+                        if segment and segment[0][0] == "word"
+                        else ""
+                    )
+                    if first_word in ("echo", "printf", "cat"):
+                        # The segment is a modelled payload command whose
+                        # redirects are all classified and which provably
+                        # does not write the env file: a `NAME=VALUE` word
+                        # is a payload the model has seen, not an
+                        # unaccounted occurrence (issue #342, F3).
+                        for token in segment:
+                            if token[0] == "word" and _ASSIGNMENT_OPERAND_RE.match(
+                                token[1]
+                            ):
+                                accounted.add((token[2], token[3]))
+                    if _segment_is_test_read(segment):
+                        # A test command cannot write a variable, so its
+                        # operands are proven-benign read positions
+                        # (issue #342, F3).
+                        for token in segment:
+                            if token[0] == "word":
+                                accounted.add((token[2], token[3]))
+                    if first_word == "export":
+                        # A bare `export NAME` only marks an existing
+                        # variable for export; it cannot change the value, so
+                        # it is a modelled occurrence (issue #342, F3). An
+                        # `export NAME=VALUE` is a statement-position
+                        # assignment and is accounted above.
+                        for token in segment:
+                            if token[0] == "word" and _IDENTIFIER_RE.match(token[1]):
+                                accounted.add((token[2], token[3]))
                     continue
                 writes, consumed = _extract_run_id_writes(
                     segment, lines, index, env_redirect, step, body
                 )
                 if consumed >= 0:
                     skip_until = consumed
+                for token in segment:
+                    if token[0] == "word" and token[2] < env_redirect:
+                        # The verb and every payload word the write extractor
+                        # read and classified (issue #342, F3).
+                        accounted.add((token[2], token[3]))
                 for name, value, shell_expansion in writes:
                     if _flip_target_match(step, name, flip_targets) is None:
                         continue
@@ -3819,6 +4106,15 @@ def _refuse_github_env_run_id_write(
                     )
                     if classification != "cross-run":
                         raise _run_id_value_refusal(step, head, body, name)
+            if index in payload_lines:
+                # Heredoc payload lines are literal env-file text, not shell
+                # words (issue #342, F3).
+                continue
+            occurrence = _unaccounted_traced_occurrence(
+                tokens, accounted, relevant_names, flip_targets
+            )
+            if occurrence is not None:
+                raise _run_id_unaccounted_occurrence_refusal(step, body, occurrence)
 
 
 def _unresolved_env_link(

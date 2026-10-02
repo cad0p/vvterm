@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `mapfile -t CI_RUN_ID`'s destination is swallowed by the shared
+# read-option table, so the value name is never a mechanism operand;
+# the detection-completeness rule refuses the bare word (issue #342,
+# F3/BLOCKER-1; fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          mapfile -t CI_RUN_ID <<< 42424242
+          echo "SOURCE_RUN_ID=$CI_RUN_ID" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
