@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 82
+    private static let expectedManifestCases = 103
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -178,6 +178,29 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-nested-with-lookalike.yml",
         "reject-unconsumed-line.yml",
         "reject-scan-floor.yml",
+        // round-4 fold: string-tag readers, empty-at-runtime tokens, and the
+        // round-2/round-3 mechanisms the closure lens measured as unpinned
+        "reject-tagged-escaped-uses.yml",
+        "reject-tagged-value-escaped-uses.yml",
+        "reject-tagged-escaped-quoted-key.yml",
+        "reject-quoted-tag-text-runid-key.yml",
+        "reject-tagged-uses-key.yml",
+        "accept-tagged-key-uses.yml",
+        "accept-tagged-value-uses.yml",
+        "accept-tagged-structure.yml",
+        "reject-tagged-non-string-uses.yml",
+        "reject-tagged-null-token.yml",
+        "accept-if-negation.yml",
+        "reject-run-id-cross-run-empty-token.yml",
+        "reject-run-id-cross-run-empty-env-token.yml",
+        "reject-run-id-cross-run-unresolved-token.yml",
+        "reject-run-id-literal-no-token.yml",
+        "reject-block-scalar-with-github-token.yml",
+        "accept-step-name-with-ref.yml",
+        "accept-job-name-with-ref.yml",
+        "accept-mapping-key-ref.yml",
+        "reject-uses-token-no-ref.yml",
+        "reject-action-ref-value.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -437,6 +460,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "move the upload step earlier",
             "resolves through a static assignment in this file",
             "`needs: {producer}` to the `{job.name}` job",
+            "YAML tag",
+            "only the string tag",
+            "cannot be proven non-empty at runtime",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(

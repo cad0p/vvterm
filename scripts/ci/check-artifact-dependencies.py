@@ -8,7 +8,9 @@ Every in-workflow artifact downloader must have a `needs:` path to the job
 that uploads the artifact it downloads. Artifacts are run-scoped, so the
 producer must be in the same workflow file; the only exclusion is a
 recognized cross-run `run-id:` handoff (e.g. `${{ env.SOURCE_RUN_ID }}`)
-carrying a non-empty `github-token:`. actions/download-artifact ignores
+carrying a `github-token:` that is provably non-empty (a literal, `secrets.*`
+or `github.token`; a whitespace-only, statically empty, or unprovable
+expression token does not exclude). actions/download-artifact ignores
 `run-id:` when no token is set, so such a download is same-run and the rule
 applies. A `run-id:` that the same file statically assigns the current run's
 id is NOT a cross-run handoff either: it is same-run, so the rule still
@@ -44,7 +46,9 @@ Refusals include: tabs in indentation; an unterminated quoted scalar; a
 backslash escape in a double-quoted scalar that only YAML's full decoder
 resolves (`\\uXXXX`, `\\xXX`, …); a block-scalar header as the value of a
 semantic key (step `uses`; job `needs`; `with.name`, `with.run-id`,
-`with.pattern`, `with.artifact-ids`, `with.github-token`); `{`/`&`/`*`/`<<` in a
+`with.pattern`, `with.artifact-ids`, `with.github-token`); a non-string YAML tag on a parsed mapping key or on a
+value that decides the graph; a `github-token:` expression that cannot be
+proven non-empty; `{`/`&`/`*`/`<<` in a
 parsed position; duplicate mapping keys; duplicate `steps:`; duplicate
 `with.name`; a `uses:` job that also has `steps:`; `pattern:`/`artifact-ids:`; a download without a
 literal `name:`; duplicate literal artifact names; absent/empty `jobs:`; an
@@ -66,9 +70,11 @@ that sit in a mapping key, and bare identifiers (a job id, a `needs:` item,
 an `if:` operand — they are data/labels, not steps), so an artifact-action
 token there is not a refusal; a `uses:` key line or an action-ref shape the
 parser did not model (e.g. a nested `uses:` lookalike) still is.
-Multi-document streams, U+2028/U+2029 line breaks, `%YAML` directives, a
-mid-file BOM and `!!` tags are outside the subset grammar and unverified
-against GitHub's parser.
+Multi-document streams, U+2028/U+2029 line breaks, `%YAML` directives and a
+mid-file BOM are outside the subset grammar and unverified against GitHub's
+parser. YAML tags are refused except the string tag (`!!str` /
+`!<tag:yaml.org,2002:str>`), which is resolved to the same scalar text
+actions/runner reads.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -98,7 +104,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 82
+EXPECTED_MANIFEST_CASES = 103
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -160,6 +166,8 @@ class ArtifactStep:
     run_id_line: int | None = None
     run_id_cross_run: bool = False
     has_github_token: bool = False
+    github_token: str | None = None
+    github_token_line: int | None = None
     has_pattern: bool = False
     pattern_line: int | None = None
     has_artifact_ids: bool = False
@@ -303,6 +311,44 @@ def _scan_quoted(s: str, start: int) -> tuple[int, str]:
     return (len(s), "".join(buf))
 
 
+STRING_TAG = "tag:yaml.org,2002:str"
+
+
+def _leading_tag(s: str) -> str | None:
+    """The tag token at the very start of a plain scalar (`!...`), or None.
+    A plain YAML scalar cannot start with the `!` indicator, so a leading `!`
+    is necessarily a tag; the token ends at whitespace or at the quote that
+    starts the tagged scalar. `!<...>` is the verbatim-tag spelling."""
+    if not s.startswith("!"):
+        return None
+    if s.startswith("!<"):
+        end = s.find(">")
+        if end == -1:
+            return s
+        return s[: end + 1]
+    end = 1
+    while end < len(s) and not s[end].isspace() and s[end] not in ("'", '"'):
+        end += 1
+    return s[:end]
+
+
+def _is_string_tag(tag: str) -> bool:
+    return tag == "!!str" or tag == f"!<{STRING_TAG}>"
+
+
+def _strip_str_tag(s: str) -> str:
+    """Skip a leading YAML string tag (`!!str` / `!<tag:yaml.org,2002:str>`)
+    so the scalar is read the way GitHub's runner reads it: the tag resolves
+    to the same scalar text (actions/runner `YamlObjectReader` handles
+    `tag:yaml.org,2002:str`). Only the string tag is skipped — a leading `!`
+    on a plain scalar (`if: !cancelled()`) is not the string tag and is left
+    alone, and any other tag is left for the callers to refuse."""
+    tag = _leading_tag(s)
+    if tag is not None and _is_string_tag(tag):
+        return s[len(tag) :].lstrip(" ")
+    return s
+
+
 def split_key_value(s: str) -> tuple[str, str, str] | None:
     """Split `key: value` at the start of `s` (no leading whitespace).
 
@@ -310,6 +356,7 @@ def split_key_value(s: str) -> tuple[str, str, str] | None:
     `quoted`, or None when `s` is not a mapping entry."""
     if not s:
         return None
+    s = _strip_str_tag(s)
     if s[0] in ("'", '"'):
         end, key = _scan_quoted(s, 0)
         i = end
@@ -356,13 +403,23 @@ def quote_is_closed_on_line(s: str, start: int) -> bool:
 
 
 def decode_scalar(value: str) -> str:
-    value = value.strip()
+    value = _strip_str_tag(value.strip())
     if not value:
         return ""
     if value[0] in ("'", '"'):
         _, decoded = _scan_quoted(value, 0)
         return decoded
     return value
+
+
+def _decode_key(key: str, kind: str) -> str:
+    """Decode a key returned by `split_key_value`. A quoted key is already
+    decoded; re-decoding it could strip a literal leading `!!str` or nested
+    quote pair that GitHub keeps as key text (e.g. `"!!str run-id"` is not the
+    `run-id` input), so only a plain key goes through `decode_scalar`."""
+    if kind == "quoted":
+        return key
+    return decode_scalar(key)
 
 
 def unterminated_quote_violation(line: str) -> str | None:
@@ -374,6 +431,7 @@ def unterminated_quote_violation(line: str) -> str | None:
     stripped = line.lstrip(" ")
     if starts_item(stripped):
         stripped = stripped[1:].lstrip(" ")
+    stripped = _strip_str_tag(stripped)
     if not stripped:
         return None
     if stripped[0] in ("'", '"'):
@@ -434,6 +492,7 @@ def quoted_escape_violation(line: str, check_value: bool) -> str | None:
     stripped = line.lstrip(" ")
     if starts_item(stripped):
         stripped = stripped[1:].lstrip(" ")
+    stripped = _strip_str_tag(stripped)
     if not stripped:
         return None
     if stripped[0] == '"':
@@ -451,6 +510,7 @@ def quoted_escape_violation(line: str, check_value: bool) -> str | None:
     if kv is None:
         return None
     _, value, _ = kv
+    value = _strip_str_tag(value)
     if value.startswith('"') and check_value:
         return _escaped_quoted_scalar_violation(value, 0)
     return None
@@ -479,8 +539,8 @@ def semantic_value_lines(lines: list[str]) -> set[int]:
         kv = split_key_value(rest)
         if kv is None:
             continue
-        key, value, _ = kv
-        key = decode_scalar(key)
+        key, value, kind = kv
+        key = _decode_key(key, kind)
         if key == "with" and not value:
             with_columns.append(key_col)
             continue
@@ -536,8 +596,8 @@ def blank_run_and_env_values(lines: list[str]) -> list[str]:
         kv = split_key_value(rest)
         if kv is None:
             continue
-        key, value, _ = kv
-        key = decode_scalar(key)
+        key, value, kind = kv
+        key = _decode_key(key, kind)
         if key == "env" and not value:
             env_columns.append(key_col)
             continue
@@ -570,8 +630,8 @@ def blank_non_semantic_name_values(lines: list[str]) -> list[str]:
         kv = split_key_value(rest)
         if kv is None:
             continue
-        key, value, _ = kv
-        key = decode_scalar(key)
+        key, value, kind = kv
+        key = _decode_key(key, kind)
         if key == "with" and not value:
             with_columns.append(key_col)
             continue
@@ -635,6 +695,24 @@ def _refuse_block_scalar_header(index: int, key: str, value: str) -> None:
         )
 
 
+def _refuse_non_string_value_tag(index: int, key: str, value: str) -> None:
+    """Refuse a leading YAML tag other than the string tag on a value that
+    decides the artifact graph. The string tag resolves to the same scalar
+    GitHub reads; another tag can change it (`github-token: !!null` is an
+    empty input), so the gate refuses rather than guessing. Scoped to
+    semantic values, so a plain scalar condition (`if: !cancelled()`) stays
+    legal."""
+    tag = _leading_tag(value.strip())
+    if tag is None or _is_string_tag(tag):
+        return
+    raise Refusal(
+        index + 1,
+        f"YAML tag '{tag}' on the value of '{key}:' — only the string tag ('!!str') is resolved "
+        "to the scalar GitHub reads; any other tag can coerce this value, so the gate refuses "
+        "rather than guessing",
+    )
+
+
 class WorkflowParser:
     def __init__(self, relpath: str, lines: list[str]) -> None:
         self.relpath = relpath
@@ -654,8 +732,17 @@ class WorkflowParser:
         kv = split_key_value(text)
         if kv is None:
             raise Refusal(index + 1, UNCONSUMED_REFUSAL)
-        key, value, _ = kv
-        return decode_scalar(key), value
+        key, value, kind = kv
+        if kind == "plain":
+            tag = _leading_tag(key)
+            if tag is not None:
+                raise Refusal(
+                    index + 1,
+                    f"YAML tag '{tag}' on a mapping key — only the string tag ('!!str') is "
+                    "resolved to the scalar GitHub reads; any other tag can coerce the key, so "
+                    "the gate refuses rather than guessing",
+                )
+        return _decode_key(key, kind), value
 
     def _next_non_blank(self, body: list[int], start: int) -> int | None:
         for i in range(start, len(body)):
@@ -680,7 +767,7 @@ class WorkflowParser:
             kv = split_key_value(line)
             if kv is None:
                 continue
-            keys.append((decode_scalar(kv[0]), index + 1))
+            keys.append((_decode_key(kv[0], kv[2]), index + 1))
         return keys
 
     def _scan_top_level_duplicates(self) -> None:
@@ -988,6 +1075,7 @@ class WorkflowParser:
         seen[key] = index + 1
         if key == "uses":
             _refuse_block_scalar_header(index, key, value)
+            _refuse_non_string_value_tag(index, key, value)
             step.uses_line = index + 1
             step.kind = _artifact_action_kind(decode_scalar(value))
             return pos + 1 if value else self._consume_opaque(body, pos, col)
@@ -1033,6 +1121,8 @@ class WorkflowParser:
                     "remove one (GitHub's duplicate-key semantics are unverified, so the gate refuses)",
                 )
             seen[key] = index + 1
+            if key in ("name", "run-id", "github-token", "pattern", "artifact-ids"):
+                _refuse_non_string_value_tag(index, key, value)
             if key == "name":
                 _refuse_block_scalar_header(index, key, value)
                 step.name = decode_scalar(value)
@@ -1052,7 +1142,9 @@ class WorkflowParser:
                 # token input is non-empty), so it is a semantic key too: a
                 # block scalar here must not be mistaken for a present token.
                 _refuse_block_scalar_header(index, key, value)
-                step.has_github_token = bool(decode_scalar(value))
+                step.github_token = decode_scalar(value)
+                step.github_token_line = index + 1
+                step.has_github_token = bool(step.github_token.strip())
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
                 continue
             if key == "pattern":
@@ -1166,8 +1258,8 @@ def _collect_static_env(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
         kv = split_key_value(rest)
         if kv is None:
             continue
-        key, value, _ = kv
-        key = decode_scalar(key)
+        key, value, kind = kv
+        key = _decode_key(key, kind)
         if key == "env" and not value:
             env_columns.append(key_col)
             continue
@@ -1227,11 +1319,49 @@ def _classify_static_value(
     return "unknown"
 
 
+def _classify_token_value(
+    value: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    seen: set[str],
+) -> str:
+    """Classify a `github-token:` value for action runtime emptiness:
+    'present' (provably non-empty), 'empty' (statically empty), or 'unknown'
+    (an expression the gate cannot prove non-empty). `@actions/core` trims
+    the input and actions/download-artifact honors `run-id:` only when the
+    token is set, so anything not provably non-empty must not exclude."""
+    text = value.strip()
+    if not text:
+        return "empty"
+    expression = _extract_expression(text)
+    if expression is None:
+        return "present"
+    normalized = _normalize_expression(expression)
+    if normalized.startswith("secrets.") or normalized == "github.token":
+        return "present"
+    if normalized.startswith("env."):
+        name = normalized[4:]
+        if name in seen:
+            return "unknown"
+        entries = static_env.get(name)
+        if not entries:
+            return "unknown"
+        results = {
+            _classify_token_value(assigned, static_env, seen | {name})
+            for assigned, _line in entries
+        }
+        if len(results) == 1:
+            return results.pop()
+        return "unknown"
+    return "unknown"
+
+
 def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> None:
     """Resolve every cross-run-classified `run-id:` against the file's static
     `env:` index: a same-run assignment turns the cross-run exclusion off (so
     the rule applies), and a static value the gate cannot classify is refused
-    rather than excluded (B3)."""
+    rather than excluded (B3). The `github-token:` that the exclusion depends
+    on is classified the same way: a statically empty token is absent (the
+    rule applies) and one the gate cannot prove non-empty is refused."""
     static_env = _collect_static_env(lines)
     for job in jobs:
         for step in job.artifact_steps:
@@ -1248,6 +1378,29 @@ def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> No
                     "a value that is neither the current run nor a recognized cross-run handoff "
                     "(refusing rather than guessing)",
                 )
+            if step.github_token is None:
+                # No token at all: the parse-time gating already decided the
+                # exclusion, and there is nothing to classify.
+                continue
+            if _extract_expression(step.github_token) is None:
+                # A literal token's emptiness was decided when it was read
+                # (whitespace-only is absent); only an expression can resolve
+                # to an empty or unprovable runtime value.
+                continue
+            token = _classify_token_value(step.github_token, static_env, set())
+            if token == "present":
+                continue
+            if token == "empty":
+                step.has_github_token = False
+                step.run_id_cross_run = False
+                continue
+            raise Refusal(
+                step.github_token_line or step.uses_line,
+                f"github-token: '{step.github_token}' cannot be proven non-empty at runtime — "
+                "actions/download-artifact honors `run-id:` only when the token input is set; use "
+                "a literal, ${{ secrets.* }} or ${{ github.token }}, or drop `run-id:` and add the "
+                "`needs:` edge (refusing rather than guessing)",
+            )
 
 
 def _parse_inline_needs(line: int, value: str) -> list[str]:
@@ -1292,8 +1445,8 @@ def _token_only_in_mapping_key(line: str) -> bool:
     kv = split_key_value(stripped)
     if kv is None:
         return False
-    key, value, _ = kv
-    if not ARTIFACT_TOKEN_RE.search(decode_scalar(key)):
+    key, value, kind = kv
+    if not ARTIFACT_TOKEN_RE.search(_decode_key(key, kind)):
         return False
     return not ARTIFACT_TOKEN_RE.search(decode_scalar(value))
 
@@ -1315,8 +1468,8 @@ def _is_action_reference_line(line: str) -> bool:
     kv = split_key_value(stripped)
     if kv is None:
         return False
-    key, value, _ = kv
-    if decode_scalar(key).lower() != "uses":
+    key, value, kind = kv
+    if _decode_key(key, kind).lower() != "uses":
         return False
     return bool(ARTIFACT_TOKEN_RE.search(decode_scalar(value)))
 

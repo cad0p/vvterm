@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a non-string tag on the value of a semantic key (round-4
+# R4-MAJOR-1). `github-token: !!null` is an empty input at runtime, so the
+# exclusion must not apply; the gate refuses the unmodelled coercion instead
+# of reading the literal `!!null` text as a present token.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: !!null

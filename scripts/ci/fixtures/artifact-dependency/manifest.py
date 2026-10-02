@@ -652,4 +652,164 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # Round-4 fold: the string-tag scalar readers (R4-MAJOR-1), the
+    # empty-at-runtime `github-token:` forms (R4-MINOR-1), and the
+    # round-2/round-3 mechanisms the closure lens measured as unpinned
+    # (R4-NIT-1/2/3).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-tagged-escaped-uses",
+        "files": ["reject-tagged-escaped-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-tagged-escaped-uses.yml:16: unsupported backslash escape '\\u' in a double-quoted scalar — the gate decodes only \\n, \\t, \\\" and \\\\ (refusing rather than guessing YAML's full escape set)",
+        ],
+    },
+    {
+        "id": "reject-tagged-value-escaped-uses",
+        "files": ["reject-tagged-value-escaped-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-tagged-value-escaped-uses.yml:16: unsupported backslash escape '\\u' in a double-quoted scalar — the gate decodes only \\n, \\t, \\\" and \\\\ (refusing rather than guessing YAML's full escape set)",
+        ],
+    },
+    {
+        "id": "reject-tagged-escaped-quoted-key",
+        "files": ["reject-tagged-escaped-quoted-key.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-tagged-escaped-quoted-key.yml:16: unsupported backslash escape '\\u' in a double-quoted scalar — the gate decodes only \\n, \\t, \\\" and \\\\ (refusing rather than guessing YAML's full escape set)",
+        ],
+    },
+    {
+        "id": "reject-quoted-tag-text-runid-key",
+        "files": ["reject-quoted-tag-text-runid-key.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-quoted-tag-text-runid-key.yml:17: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-tagged-uses-key",
+        "files": ["reject-tagged-uses-key.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-tagged-uses-key.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "accept-tagged-key-uses",
+        "files": ["accept-tagged-key-uses.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-tagged-value-uses",
+        "files": ["accept-tagged-value-uses.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-tagged-structure",
+        "files": ["accept-tagged-structure.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-tagged-non-string-uses",
+        "files": ["reject-tagged-non-string-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-tagged-non-string-uses.yml:16: YAML tag '!!int' on a mapping key — only the string tag ('!!str') is resolved to the scalar GitHub reads; any other tag can coerce the key, so the gate refuses rather than guessing",
+        ],
+    },
+    {
+        "id": "reject-tagged-null-token",
+        "files": ["reject-tagged-null-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-tagged-null-token.yml:20: YAML tag '!!null' on the value of 'github-token:' — only the string tag ('!!str') is resolved to the scalar GitHub reads; any other tag can coerce this value, so the gate refuses rather than guessing",
+        ],
+    },
+    {
+        "id": "accept-if-negation",
+        "files": ["accept-if-negation.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-run-id-cross-run-empty-token",
+        "files": ["reject-run-id-cross-run-empty-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-cross-run-empty-token.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-run-id-cross-run-empty-env-token",
+        "files": ["reject-run-id-cross-run-empty-env-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-cross-run-empty-env-token.yml:18: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-run-id-cross-run-unresolved-token",
+        "files": ["reject-run-id-cross-run-unresolved-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-run-id-cross-run-unresolved-token.yml:20: github-token: '${{ vars.TOKEN }}' cannot be proven non-empty at runtime — actions/download-artifact honors `run-id:` only when the token input is set; use a literal, ${{ secrets.* }} or ${{ github.token }}, or drop `run-id:` and add the `needs:` edge (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-run-id-literal-no-token",
+        "files": ["reject-run-id-literal-no-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-literal-no-token.yml:17: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-block-scalar-with-github-token",
+        "files": ["reject-block-scalar-with-github-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-block-scalar-with-github-token.yml:20: block scalar header '>-' as the value of 'github-token:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+        ],
+    },
+    {
+        "id": "accept-step-name-with-ref",
+        "files": ["accept-step-name-with-ref.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-job-name-with-ref",
+        "files": ["accept-job-name-with-ref.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-mapping-key-ref",
+        "files": ["accept-mapping-key-ref.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-uses-token-no-ref",
+        "files": ["reject-uses-token-no-ref.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-uses-token-no-ref.yml:17: artifact action token not parsed as an artifact step — a construct the parser cannot fully model must not pass (reconciliation failed)",
+        ],
+    },
+    {
+        "id": "reject-action-ref-value",
+        "files": ["reject-action-ref-value.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-action-ref-value.yml:20: artifact action token not parsed as an artifact step — a construct the parser cannot fully model must not pass (reconciliation failed)",
+        ],
+    },
 ]

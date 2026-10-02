@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a step `name:` containing an action REF (round-4 R4-NIT-1). The
+# name is a label, not a `uses:` value, so reconciliation must blank it even
+# though it carries the `-artifact@ref` shape; the real downloader below has
+# its needs path.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: run actions/download-artifact@v8 helper
+        run: echo hi
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

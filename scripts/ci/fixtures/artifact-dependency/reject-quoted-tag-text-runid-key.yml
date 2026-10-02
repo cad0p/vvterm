@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a quoted with-key whose literal text starts with `!!str`
+# (round-4 R4-MAJOR-1). Quoting makes the key the literal text
+# `!!str run-id`, not the `run-id` input, so GitHub runs a same-run download
+# and the needs path is required; the quoted key must not be re-decoded as a
+# tagged scalar.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          "!!str run-id": ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a non-string tag on a semantic key (round-4 R4-MAJOR-1). Only the
+# string tag resolves to the scalar GitHub reads; a `!!int` key can coerce
+# the key text, so the gate refuses rather than guessing whether this step is
+# a downloader.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - !!int uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `!!str`-tagged `uses` key with a plain action ref (round-4
+# R4-MAJOR-1). GitHub resolves the string tag to the same scalar text, so
+# this is a real downloader; the gate must parse it as one and report the
+# missing `needs:` edge, not pass it as an unmodelled key.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - !!str uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
