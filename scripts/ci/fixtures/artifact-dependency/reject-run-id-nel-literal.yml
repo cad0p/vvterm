@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a single-quoted raw U+0085 (NEL) prefix survives the subset
+# reader (decode_scalar strips the value before the quotes open, so the
+# NEL inside them is kept). The action's parseInt does NOT skip NEL, so
+# its runtime run-id is NaN and the cross-run handoff cannot be honored:
+# the run-id must be refused, not excluded (issue #338).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: '123'
+          github-token: "ghp_literal"

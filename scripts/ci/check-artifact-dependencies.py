@@ -131,14 +131,18 @@ is the intended policy since the scalar form was already refused. Remaining
 fail-closed limits, kept honestly: an INVALID escape in an env value stays
 accepted
 (`"\\q"`, `"\\x4"`, `"\\xZZ"`, `"\\u12"`, `"\\U00110000"` — GitHub's parser
-errors on each, so the workflow cannot run); the run-id emptiness predicate
-still uses Python `strip()`, so a `run-id:` literal prefixed with U+0085 or
-U+001C–U+001F is accepted although `parseInt(getInput('run-id'))` yields
-`NaN` (the action gates its cross-run behavior solely on the trimmed token,
-and a `NaN` run-id requests `/runs/NaN/artifacts` — a 404, not a same-run
-download, so this is a correctness divergence, not a fail-open; the mirror
-image is the BOM-prefixed literal, a false red, since `parseInt` skips
-U+FEFF); a PLAIN (unquoted) raw U+0085/U+001C value is still refused even
+errors on each, so the workflow cannot run); the run-id literal predicate is
+`parseInt`'s — an ECMAScript trim (`js_trim`) followed by the longest
+leading run of ASCII digits (`PARSEINT_PREFIX_RE`) — so a `run-id:` literal
+prefixed with U+0085 or U+001C–U+001F is refused (its runtime value is
+`<U+0085><digits>`, `parseInt` yields `NaN`, and a `NaN` run-id requests
+`/runs/NaN/artifacts` — a 404, not a same-run download, so this is a
+correctness divergence, not a fail-open) while a BOM-prefixed literal (and
+any digit-led literal with trailing junk, including U+0085/U+001C–U+001F
+that Python `strip()` removes but ECMAScript keeps) is accepted; `+123`
+and `-123` stay refused although `parseInt` honors them (fail-closed false
+reds, documented rather than modelled); a PLAIN (unquoted) raw U+0085/U+001C
+value is still refused even
 though ECMAScript keeps it, at three Python-`strip()` sites — `env:`
 (`_static_env_value`'s leading strip collapses it before the token
 predicate), a direct `github-token:` (`decode_scalar`'s `value.strip()`),
@@ -195,7 +199,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 206
+EXPECTED_MANIFEST_CASES = 212
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -210,7 +214,14 @@ ACTION_REF_RE = re.compile(
     re.IGNORECASE,
 )
 BLOCK_HEADER_RE = re.compile(r"^(?:[|>][+-]?\d*|[|>]\d*[+-]?)$")
-LITERAL_INT_RE = re.compile(r"^\d+$")
+# `actions/download-artifact@v8` parses `run-id:` with
+# `parseInt(core.getInput(Inputs.RunID, {required: false}))`
+# (`download-artifact.ts:24`): an ECMAScript trim of the input the action
+# reads, then the longest LEADING run of ASCII digits. `[0-9]+` (not
+# Python's `\d`, which also matches `'\u0661\u0662\u0663'`-style Unicode
+# digits `parseInt` rejects) and `.match` (not `.fullmatch`, because
+# `parseInt('123abc')` is 123, so trailing junk does not change the handoff).
+PARSEINT_PREFIX_RE = re.compile(r"[0-9]+")
 SAME_RUN_RE = re.compile(r"github\.run_id|github\[run_id\]")
 CROSS_RUN_RE = re.compile(
     r"^(?:env\.[A-Za-z_][A-Za-z0-9_]*"
@@ -1541,13 +1552,13 @@ class WorkflowParser:
             )
         if step.run_id is None:
             return
-        stripped = step.run_id.strip()
+        stripped = js_trim(step.run_id)
         if not stripped:
             raise Refusal(
                 step.run_id_line or step.uses_line,
                 "empty 'run-id:' — a download with a run-id must name a run",
             )
-        if LITERAL_INT_RE.match(stripped):
+        if PARSEINT_PREFIX_RE.match(stripped):
             # A cross-run run-id is only honored with a non-empty
             # github-token; without it the action downloads from the current
             # run, so the exclusion must not apply.
@@ -1947,10 +1958,10 @@ def _classify_static_value(
 ) -> str:
     """Classify a statically assigned value: 'same-run', 'cross-run',
     'unresolved' (no static assignment) or 'unknown' (static, but neither)."""
-    text = value.strip()
+    text = js_trim(value)
     if not text:
         return "unknown"
-    if LITERAL_INT_RE.match(text):
+    if PARSEINT_PREFIX_RE.match(text):
         return "cross-run"
     expression = _extract_expression(text)
     if expression is None:

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the second predicate site's false-red removal. A job-level env
+# value decodes \\uFEFF to the BOM, which parseInt skips, so the resolved
+# run-id is 123 and the cross-run handoff stays excluded (issue #338).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: "\uFEFF123"
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

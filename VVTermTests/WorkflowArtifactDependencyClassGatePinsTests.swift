@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 206
+    private static let expectedManifestCases = 212
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -332,6 +332,17 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-token-env-esc-lf-in-scope.yml",
         "reject-needs-flow-swallow.yml",
         "accept-needs-flow-quoted.yml",
+        // #338: the run-id predicate is parseInt's (ECMAScript trim + the
+        // longest leading ASCII-digit run). The leading NEL/C0 rejects and
+        // the BOM accept pin the predicate; the trailing-NEL accept is the
+        // control that pins the LEADING-prefix semantics; the env pair
+        // exercises the static-assignment site (`_classify_static_value`).
+        "reject-run-id-nel-literal.yml",
+        "reject-run-id-1c-literal.yml",
+        "accept-run-id-bom-literal.yml",
+        "accept-run-id-nel-tail-literal.yml",
+        "reject-run-id-env-nel.yml",
+        "accept-run-id-env-bom.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

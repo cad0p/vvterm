@@ -1617,4 +1617,52 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #338 (run-id parseInt predicate): the leading NEL/C0 refusals, the
+    # leading-BOM false-red removal, the trailing-NEL control that pins
+    # parseInt's LEADING-prefix semantics, and the env-chain pair that
+    # exercises the static-assignment site (`_classify_static_value`).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-run-id-nel-literal",
+        "files": ["reject-run-id-nel-literal.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-nel-literal.yml:20: unrecognized \'run-id:\' value (\'\u0085123\') — recognized forms are a literal integer, ${{ env.NAME }}, ${{ github.event.workflow_run.id }}, or the same-run ${{ github.run_id }} (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-run-id-1c-literal",
+        "files": ["reject-run-id-1c-literal.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-1c-literal.yml:18: unrecognized \'run-id:\' value (\'\u001c\u001d\u001e\u001f123\') — recognized forms are a literal integer, ${{ env.NAME }}, ${{ github.event.workflow_run.id }}, or the same-run ${{ github.run_id }} (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-run-id-bom-literal",
+        "files": ["accept-run-id-bom-literal.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-run-id-nel-tail-literal",
+        "files": ["accept-run-id-nel-tail-literal.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-run-id-env-nel",
+        "files": ["reject-run-id-env-nel.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-env-nel.yml:21: run-id: \'${{ env.SOURCE_RUN_ID }}\' resolves through a static assignment in this file to a value that is neither the current run nor a recognized cross-run handoff (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-run-id-env-bom",
+        "files": ["accept-run-id-env-bom.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]
