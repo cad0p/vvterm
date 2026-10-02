@@ -157,9 +157,11 @@ and a block-scalar env body that is only U+0085/U+001C (`is_blank`'s
 reds are documented rather than modelled, and a fourth Python-`strip()` site
 is left the same way: `_extract_expression` strips a `run-id:`/`env:` value
 with `value.strip()` before its `${{ … }}` fence check, so a plain raw
-U+0085/U+001C-prefixed EXPRESSION is resolved although ECMAScript keeps the
-prefix and a run-id's `parseInt` is then `NaN` (a 404, not a same-run
-fallback) — a fail-closed false red of the same correctness-only family; a
+U+0085/U+001C-prefixed EXPRESSION is resolved as if unprefixed although
+ECMAScript keeps the prefix: a same-run expression then refuses without a
+`needs:` edge, while a cross-run expression keeps the exclusion and the
+runtime `parseInt` is `NaN` (a 404, not a same-run fallback) —
+correctness-only either way, not a fail-open; a
 Windows runner's `env` context is
 case-insensitive (`OrdinalIgnoreCase`, last-wins), so a case-variant
 reference is refused and a case-colliding `env:` mapping cannot make the
@@ -185,12 +187,17 @@ the case-insensitive `github_env` substring (which also catches a Windows
 `n="GITHUB_""ENV"` pair, a `bash -c` argv), so single `>`, `tee`, heredocs,
 indirection and related spellings are all covered. It is still a deliberate
 text-level fail-closed over-approximation: a read-only `cat "$GITHUB_ENV"`,
-an unrelated-name write, a same-value rewrite and a write shadowed by the
-download step's own `env:` all refuse (accepted costs, each pinned or
-named), while a `uses:`/composite action that writes `$GITHUB_ENV` stays
-invisible, and a name assembled from pieces not both present in the body's
-text (base64/hex-encoded, read from a file, or produced by a called script)
-is not detected — the documented boundary of a text-based detector.
+an unrelated-name write, a same-value rewrite, a write shadowed by the
+download step's own `env:` and a body that only places `GITHUB` and `ENV`
+within 64 characters without writing the env file
+(`echo "$GITHUB_ACTIONS" > "$ENV_FILE"`) all refuse (accepted costs, each
+pinned or named); in the last case the "writes to `$GITHUB_ENV`" diagnostic
+is an unobserved assertion, which is accepted rather than narrowing the
+detector — softening the diagnostic is deferred. A `uses:`/composite action
+that writes `$GITHUB_ENV` stays invisible, and a name assembled from pieces not both present in the body's
+text (shell-level hex/base64 assembly, read from a file, or produced by a
+called script) is not detected — the documented boundary of a text-based
+detector.
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
