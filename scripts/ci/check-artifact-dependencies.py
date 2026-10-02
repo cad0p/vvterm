@@ -109,7 +109,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 129
+EXPECTED_MANIFEST_CASES = 143
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -356,8 +356,44 @@ def _strip_str_tag(s: str) -> str:
     alone, and any other tag is left for the callers to refuse."""
     tag = _leading_tag(s)
     if tag is not None and _is_string_tag(tag):
-        return s[len(tag) :].lstrip(" ")
+        return s[len(tag) :].lstrip()
     return s
+
+
+def _strip_anchor(s: str) -> str:
+    """Strip a leading anchor property (`&name`) from a scalar value, or
+    return it unchanged. A plain YAML scalar cannot start with `&`, so a
+    leading `&` is necessarily a node property, and an anchor does not change
+    the value at runtime — `!!str &a foo` is the scalar `foo` (R8-BLOCKER-2).
+    An anchor with no following value (`&a`) is the empty scalar."""
+    if not s.startswith("&"):
+        return s
+    end = 1
+    while end < len(s) and not s[end].isspace():
+        end += 1
+    if end >= len(s):
+        return ""
+    return s[end:].lstrip()
+
+
+def _static_block_header(value: str) -> str | None:
+    """The block-scalar header text of a static value after any leading node
+    properties (tags and anchors), or None. `GH_TOKEN: !!null |` and
+    `!!str &a |` are block scalars exactly like `|`: the tag and anchor do not
+    change the body, which is the value at runtime, so a tagged header is
+    resolved through the captured body and refused where a semantic key
+    expects an inline scalar (R8-BLOCKER-1, R8-BLOCKER-2)."""
+    text = value.strip()
+    while True:
+        tag = _leading_tag(text)
+        if tag is not None:
+            text = text[len(tag) :].lstrip()
+            continue
+        if text.startswith("&"):
+            text = _strip_anchor(text)
+            continue
+        break
+    return text if BLOCK_HEADER_RE.match(text) else None
 
 
 def split_key_value(s: str) -> tuple[str, str, str] | None:
@@ -414,7 +450,21 @@ def quote_is_closed_on_line(s: str, start: int) -> bool:
 
 
 def decode_scalar(value: str) -> str:
-    value = _strip_str_tag(value.strip())
+    """Decode a scalar value the way the runner reads it: a leading string
+    tag and a leading anchor property are skipped (neither changes the string
+    the runner gets — `!!str &a foo` is `foo`), then a quoted scalar is
+    decoded and a plain scalar is its text (R8-BLOCKER-2)."""
+    value = value.strip()
+    while True:
+        stripped = _strip_str_tag(value)
+        if stripped != value:
+            value = stripped
+            continue
+        anchor_stripped = _strip_anchor(value)
+        if anchor_stripped != value:
+            value = anchor_stripped
+            continue
+        break
     if not value:
         return ""
     if value[0] in ("'", '"'):
@@ -682,7 +732,7 @@ def blank_block_scalars(
         if kv is None:
             continue
         _, value, _ = kv
-        if not BLOCK_HEADER_RE.match(value):
+        if _static_block_header(value) is None:
             continue
         key_indent = indent + prefix
         body_lines: list[str] = []
@@ -712,11 +762,15 @@ def blank_block_scalars(
 def _refuse_block_scalar_header(index: int, key: str, value: str) -> None:
     """A block-scalar header where a semantic key's value belongs would make
     the gate read the header as the value while the real value is blanked
-    (B2), so it is a refusal, not an opaque scalar."""
-    if BLOCK_HEADER_RE.match(value):
+    (B2), so it is a refusal, not an opaque scalar. A tag or anchor before
+    the header (`!!str |`, `!!null |`, `!!str &a |`) does not change the
+    construct, so the header is resolved through the node properties
+    (R8-BLOCKER-1, R8-BLOCKER-2)."""
+    header = _static_block_header(value)
+    if header is not None:
         raise Refusal(
             index + 1,
-            f"block scalar header '{value}' as the value of '{key}:' — this key decides the artifact "
+            f"block scalar header '{header}' as the value of '{key}:' — this key decides the artifact "
             "graph and must be an inline scalar (refusing rather than guessing the folded value)",
         )
 
@@ -1319,30 +1373,107 @@ def _extract_expression(value: str) -> str | None:
 YAML_NULL_SPELLINGS = ("~", "null", "Null", "NULL")
 NULL_TAG_SPELLINGS = ("!!null", "!<tag:yaml.org,2002:null>")
 
+# The YAML double-quoted escape set (`\0` `\a` `\b` `\t` `\n` `\v` `\f`
+# `\r` `\e` `\ ` `\"` `\/` `\\` `\N` `\_` `\L` `\P`). `\x`/`\u`/`\U`
+# are handled separately because they carry hex digits.
+_YAML_ESCAPES = {
+    "0": "\0",
+    "a": "\x07",
+    "b": "\b",
+    "t": "\t",
+    "n": "\n",
+    "v": "\v",
+    "f": "\f",
+    "r": "\r",
+    "e": "\x1b",
+    " ": " ",
+    '"': '"',
+    "/": "/",
+    "\\": "\\",
+    "N": "\x85",
+    "_": "\xa0",
+    "L": "\u2028",
+    "P": "\u2029",
+}
+_YAML_HEX_ESCAPES = {"x": 2, "u": 4, "U": 8}
+_HEX_DIGITS = "0123456789abcdefABCDEF"
+
+
+def _decode_double_quoted(text: str) -> str:
+    """Decode a YAML double-quoted scalar with the full escape set. Only the
+    null-tag argument needs this: `!!null "\\x6eull"` decodes to `null`, so
+    the tag resolves it to the empty string at runtime — the subset reader in
+    `decode_scalar` leaves the escape as literal text and would read the value
+    as present (R8-BLOCKER-1)."""
+    out: list[str] = []
+    i = 1
+    while i < len(text):
+        c = text[i]
+        if c == '"':
+            break
+        if c != "\\" or i + 1 >= len(text):
+            out.append(c)
+            i += 1
+            continue
+        escape = text[i + 1]
+        length = _YAML_HEX_ESCAPES.get(escape)
+        if length is not None:
+            digits = text[i + 2 : i + 2 + length]
+            if len(digits) == length and all(ch in _HEX_DIGITS for ch in digits):
+                code = int(digits, 16)
+                if code <= 0x10FFFF:
+                    out.append(chr(code))
+                    i += 2 + length
+                    continue
+            out.append(escape)
+            i += 2
+            continue
+        out.append(_YAML_ESCAPES.get(escape, escape))
+        i += 2
+    return "".join(out)
+
+
+def _decode_scalar_argument(argument: str) -> str:
+    """The decoded scalar content of a tag argument. A leading anchor is a
+    node property (`!!null &a 'null'` is the same node as `!!null 'null'` and
+    `!!null &a` is the empty scalar), and a double-quoted scalar is decoded
+    with the full YAML escape set so a QUOTED or ESCAPED null spelling
+    compares equal to the plain one (R8-BLOCKER-1, R8-BLOCKER-2)."""
+    text = _strip_anchor(argument.strip())
+    if not text:
+        return ""
+    if text[0] == '"':
+        return _decode_double_quoted(text)
+    return decode_scalar(text)
+
 
 def _null_tag_value(text: str) -> str | None:
     """The empty string when `text` is a null-tagged scalar that is empty at
-    runtime (R7-BLOCKER-1), else None. A null tag with an EMPTY argument
-    (`!!null`, `!!null ""`, `!!null ~`, `!!null null` — every null spelling)
-    is empty; a null tag with a non-null argument (`!!null foo`) is the string
-    `foo` at runtime, not empty, so it falls through to the literal reader."""
+    runtime (R7-BLOCKER-1, R8-BLOCKER-1), else None. A null tag with an EMPTY
+    argument (`!!null`, `!!null ""`, `!!null ~`, `!!null null` — every null
+    spelling), a QUOTED null spelling (`'null'`, `"~"`, `'Null'`), an
+    escape-decoded null spelling (`"\\x6eull"`), or an anchored null spelling
+    (`&a null`) is empty; a null tag with a non-null argument (`!!null foo`,
+    `!!null 'ghp_x'`) is that string at runtime, not empty, so it falls
+    through to the literal reader."""
     tag = _leading_tag(text)
     if tag not in NULL_TAG_SPELLINGS:
         return None
-    argument = text[len(tag) :].strip()
-    if not argument or argument in YAML_NULL_SPELLINGS or argument in ('""', "''"):
+    argument = _decode_scalar_argument(text[len(tag) :])
+    if not argument or argument in YAML_NULL_SPELLINGS:
         return ""
     return None
 
 
 def _static_env_value(raw: str, line: int, block_bodies: dict[int, str]) -> str:
     """The runtime value of a static `env:` assignment. A block-scalar header
-    is not the value — the body is — so an empty body is the empty string and
-    a non-empty body is its text (R6-BLOCKER-1). A plain YAML null is the
-    empty string too, and a null-tagged scalar with a null argument is empty
-    as well (R7-BLOCKER-1). Anything else is the decoded scalar."""
+    — with or without a tag or anchor — is not the value: the body is, so an
+    empty body is the empty string and a non-empty body is its text
+    (R6-BLOCKER-1, R8-BLOCKER-1). A plain YAML null is the empty string too,
+    and a null-tagged scalar with a null argument is empty as well
+    (R7-BLOCKER-1). Anything else is the decoded scalar."""
     text = raw.strip()
-    if BLOCK_HEADER_RE.match(text):
+    if _static_block_header(text) is not None:
         return block_bodies.get(line, "")
     if text in YAML_NULL_SPELLINGS:
         return ""

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled `!!null &a 'null'` (round-8
+# R8-BLOCKER-1 + R8-BLOCKER-2). Both the anchor and the quotes are node
+# syntax: the decoded scalar is the null spelling `null`, the tag coerces it
+# to the empty string, and the token cannot prove a cross-run handoff — the
+# `needs:` path is required. A gate that strips the tag but not the anchor, or
+# that compares the raw quoted text, silently excludes the download. The
+# unquoted-anchor twin is `reject-token-env-anchor-null-tag-in-scope.yml` and
+# the quoted twin is `reject-token-env-quoted-null-tag-in-scope.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !!null &a 'null'
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

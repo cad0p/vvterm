@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 129
+    private static let expectedManifestCases = 143
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -238,6 +238,24 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-step-env-bare-null-shadow-over-job-env.yml",
         "accept-token-env-comment-block-scalar-in-scope.yml",
         "reject-run-id-case-variant-env.yml",
+        // round-8 fold: quoted/escaped null spellings on a null-tagged
+        // `env:` value (R8-BLOCKER-1), tagged/anchored block-scalar headers
+        // (R8-BLOCKER-1/-2), and the anchor property on a tagged scalar
+        // (R8-BLOCKER-2)
+        "reject-token-env-quoted-null-tag-in-scope.yml",
+        "reject-token-env-quoted-tilde-null-tag-in-scope.yml",
+        "reject-token-env-verbatim-quoted-null-tag-in-scope.yml",
+        "reject-token-env-quoted-null-tag-shadow-over-job-env.yml",
+        "reject-token-env-empty-block-null-tag-in-scope.yml",
+        "reject-token-env-escape-null-tag-in-scope.yml",
+        "reject-token-env-anchor-null-tag-in-scope.yml",
+        "reject-token-env-anchored-quoted-null-tag-in-scope.yml",
+        "reject-token-env-string-tag-empty-block-in-scope.yml",
+        "reject-token-tagged-anchor-empty-in-scope.yml",
+        "accept-token-env-quoted-nonnull-null-tag-in-scope.yml",
+        "accept-token-env-null-tag-nonempty-block-in-scope.yml",
+        "accept-token-env-anchored-value-null-tag-in-scope.yml",
+        "accept-token-anchored-literal-in-scope.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

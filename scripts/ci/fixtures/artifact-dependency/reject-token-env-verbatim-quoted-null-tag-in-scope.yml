@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an in-scope `env:` value spelled
+# `!<tag:yaml.org,2002:null> 'Null'` (round-8 R8-BLOCKER-1). The verbatim
+# long-form null tag with a QUOTED mixed-case null spelling decodes to a null
+# scalar, so the token is the empty string at runtime and the `needs:` path is
+# required. A gate that special-cases only the short `!!null` spelling, or
+# that compares the raw quoted argument against the null spellings, silently
+# excludes the download (the round-7 rc=0). The short-tag quoted twin is
+# `reject-token-env-quoted-null-tag-in-scope.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          GH_TOKEN: !<tag:yaml.org,2002:null> 'Null'
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

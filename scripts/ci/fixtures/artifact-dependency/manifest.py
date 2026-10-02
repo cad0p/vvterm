@@ -1025,4 +1025,114 @@ CASES = [
             "reject-run-id-case-variant-env.yml:25: run-id: '${{ env.source_run_id }}' resolves through `env.source_run_id`, which is assigned only under a different case (`env.SOURCE_RUN_ID`) — the `env` context lookup is case-sensitive on non-Windows runners, so the value is empty at runtime and a cross-run handoff cannot be proven (refusing rather than guessing)",
         ],
     },
+    # ------------------------------------------------------------------
+    # round-8 fold: QUOTED/ESCAPED null spellings on a null-tagged `env:`
+    # value (R8-BLOCKER-1), tagged/anchored block-scalar headers on `env:`
+    # values and semantic keys (R8-BLOCKER-1/-2), and the anchor property on
+    # a tagged scalar (R8-BLOCKER-2)
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-token-env-quoted-null-tag-in-scope",
+        "files": ["reject-token-env-quoted-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-quoted-null-tag-in-scope.yml:22: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-quoted-tilde-null-tag-in-scope",
+        "files": ["reject-token-env-quoted-tilde-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-quoted-tilde-null-tag-in-scope.yml:19: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-verbatim-quoted-null-tag-in-scope",
+        "files": ["reject-token-env-verbatim-quoted-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-verbatim-quoted-null-tag-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-quoted-null-tag-shadow-over-job-env",
+        "files": ["reject-token-env-quoted-null-tag-shadow-over-job-env.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-quoted-null-tag-shadow-over-job-env.yml:23: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-empty-block-null-tag-in-scope",
+        "files": ["reject-token-env-empty-block-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-empty-block-null-tag-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-escape-null-tag-in-scope",
+        "files": ["reject-token-env-escape-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-escape-null-tag-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-anchor-null-tag-in-scope",
+        "files": ["reject-token-env-anchor-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-anchor-null-tag-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-anchored-quoted-null-tag-in-scope",
+        "files": ["reject-token-env-anchored-quoted-null-tag-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-anchored-quoted-null-tag-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-env-string-tag-empty-block-in-scope",
+        "files": ["reject-token-env-string-tag-empty-block-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-env-string-tag-empty-block-in-scope.yml:21: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "reject-token-tagged-anchor-empty-in-scope",
+        "files": ["reject-token-tagged-anchor-empty-in-scope.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-token-tagged-anchor-empty-in-scope.yml:20: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "accept-token-env-quoted-nonnull-null-tag-in-scope",
+        "files": ["accept-token-env-quoted-nonnull-null-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-null-tag-nonempty-block-in-scope",
+        "files": ["accept-token-env-null-tag-nonempty-block-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-env-anchored-value-null-tag-in-scope",
+        "files": ["accept-token-env-anchored-value-null-tag-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-token-anchored-literal-in-scope",
+        "files": ["accept-token-anchored-literal-in-scope.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

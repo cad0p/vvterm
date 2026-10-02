@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a DIRECT `github-token:` value spelled `!!str &a` (round-8
+# R8-BLOCKER-2). The string tag and the anchor are node properties and the
+# scalar is empty, so `actions/download-artifact` does not set its run filter
+# and the cross-run `run-id:` cannot be honored — the `needs:` path is
+# required. The pre-fold decoder stripped the string tag but then read the raw
+# anchor name as a literal token and silently excluded the download. The
+# anchored non-empty control is
+# `accept-token-anchored-literal-in-scope.yml`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: !!str &a
