@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a command substitution that only READS the env file. It still
+# mentions `$GITHUB_ENV` with no extractable write, so it refuses — the loose
+# alias skip used to hide it, and the read-only-mention cost applies
+# regardless of the substitution (issue #342, BLOCKER-1).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          x=$(cat "$GITHUB_ENV")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

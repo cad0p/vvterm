@@ -187,7 +187,9 @@ the case-insensitive `github_env` substring (which also catches a Windows
 indirection and related spellings are all covered. It is still a deliberate
 text-level fail-closed over-approximation: a read-only `cat "$GITHUB_ENV"`,
 an unrelated-name write, a same-value rewrite, a write shadowed by the
-download step's own `env:` and a body that only places `GITHUB` and `ENV`
+download step's own `env:`, a write inside a step that `if:` skips or a
+function that is never called (dead code is refused, not reasoned about),
+and a body that only places `GITHUB` and `ENV`
 within 64 characters without writing the env file
 (`echo "$GITHUB_ACTIONS" > "$ENV_FILE"`) all refuse (accepted costs, each
 pinned or named); in the last case the "writes to `$GITHUB_ENV`" diagnostic
@@ -296,7 +298,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 263
+EXPECTED_MANIFEST_CASES = 271
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2423,6 +2425,20 @@ _LOCAL_REFERENCE_RE = re.compile(
 _HEREDOC_RE = re.compile(
     r"<<-?[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))"
 )
+# The exact env-file spellings: actions/runner sets `GITHUB_ENV` (POSIX
+# shells) / `%GITHUB_ENV%` (cmd) to the env-file path. A redirect target that
+# is exactly one of these IS the env file; a spelling with extra text
+# (`$GITHUB_ENV.bak`, `pre$GITHUB_ENV`) is a different file and must not
+# count (issue #342). The `\b` after the unbraced name keeps a longer
+# variable (`$GITHUB_ENV_X`) out.
+_ENV_FILE_SPELLING_RE = re.compile(
+    r"\$(?:\{GITHUB_ENV\}|GITHUB_ENV\b)|%GITHUB_ENV%", re.IGNORECASE
+)
+# Characters that make an alias assignment's right-hand side a command (or a
+# redirection, or a compound statement) rather than a pure env-file
+# spelling: `x=$(echo … >> "$GITHUB_ENV")` performs the write and must not
+# be skipped as "the target-resolution mechanism" (issue #342).
+_ALIAS_RHS_UNMODELLED_CHARS = ("$(", "`", ">", "<", ";", "|", "&")
 # A control-flow branch/closer at a shallower indent than a traced local's
 # assignment changes whether that assignment executed before the write.
 _CONTROL_CLOSER_RE = re.compile(r"^(?:else|elif|fi|done|esac)\b")
@@ -2602,31 +2618,54 @@ def _shell_segments(
 
 def _segment_redirects(
     segment: list[tuple[str, str, int, int]],
-) -> list[tuple[str, str, int]]:
-    """Every redirection in one segment as `(op, target_word, op_start)`.
-    A file-descriptor duplication (`>&1`) has the pseudo-target `&`."""
-    redirects: list[tuple[str, str, int]] = []
+) -> list[tuple[str, str, int, tuple[int, int] | None]]:
+    """Every redirection in one segment as `(op, target_word, op_start,
+    target_span)`. A file-descriptor duplication (`>&1`) has the
+    pseudo-target `&` and no span."""
+    redirects: list[tuple[str, str, int, tuple[int, int] | None]] = []
     index = 0
     while index < len(segment):
         kind, text, start, _end = segment[index]
         if kind == "op" and text in (">", ">>"):
-            target = ""
             if index + 1 < len(segment):
-                next_kind, next_text, _ns, _ne = segment[index + 1]
+                next_kind, next_text, next_start, next_end = segment[index + 1]
                 if next_kind == "word":
-                    target = next_text
+                    redirects.append((text, next_text, start, (next_start, next_end)))
                     index += 2
-                    redirects.append((text, target, start))
                     continue
                 if next_kind == "op" and next_text == "&":
-                    redirects.append((text, "&", start))
+                    redirects.append((text, "&", start, None))
                     index += 2
                     continue
-            redirects.append((text, "", start))
+            redirects.append((text, "", start, None))
             index += 1
             continue
         index += 1
     return redirects
+
+
+def _segment_reference_text(
+    line: str,
+    segment: list[tuple[str, str, int, int]],
+    excluded_spans: list[tuple[int, int]],
+) -> str:
+    """The segment's source text with the redirect targets that provably do
+    NOT name the env file removed, so `echo … >> "$GITHUB_ENV.bak"` does not
+    read as an env-file mention while a read-only `cat "$GITHUB_ENV"`
+    argument still does (issue #342, MINOR-1/F3)."""
+    start = segment[0][2]
+    end = segment[-1][3]
+    if not excluded_spans:
+        return line[start:end]
+    pieces: list[str] = []
+    cursor = start
+    for span_start, span_end in sorted(set(excluded_spans)):
+        if span_start < cursor or span_end > end:
+            continue
+        pieces.append(line[cursor:span_start])
+        cursor = span_end
+    pieces.append(line[cursor:end])
+    return "".join(pieces)
 
 
 def _heredoc_payload_line_indices(lines: list[str]) -> set[int]:
@@ -2651,10 +2690,27 @@ def _heredoc_payload_line_indices(lines: list[str]) -> set[int]:
     return skipped
 
 
+def _alias_value_is_pure_env_spelling(text: str) -> bool:
+    """True when `text` starts with one word that is a pure env-file
+    spelling: no command substitution, backtick, redirection or separator
+    (`x=$(echo … >> "$GITHUB_ENV")` is a command that performs the write,
+    not an alias definition), and the word carries the #339 mention. This
+    is what keeps the alias skip from hiding a write behind `$( )` or a
+    backtick (issue #342, BLOCKER-1)."""
+    word, end = _first_shell_word(text)
+    if word is None or end == 0:
+        return False
+    if any(marker in text[:end] for marker in _ALIAS_RHS_UNMODELLED_CHARS):
+        return False
+    return _mentions_github_env(word)
+
+
 def _env_file_alias_names(lines: list[str], skip: set[int]) -> set[str]:
-    """Body-local variables whose assignment is itself an env-file spelling
-    under the mention detector (`n="GITHUB_""ENV"`, `out="$GITHUB_ENV"`), so
-    a redirect to `$n`/`${out}` resolves to the env file."""
+    """Body-local variables whose assignment is itself a pure env-file
+    spelling (`n="GITHUB_""ENV"`, `out="$GITHUB_ENV"`), so a redirect to
+    `$n`/`${out}` resolves to the env file. An assignment whose first word
+    computes the path (`x=$(… >> "$GITHUB_ENV")`) is not an alias: it is
+    the write itself (issue #342, BLOCKER-1)."""
     names: set[str] = set()
     for index, line in enumerate(lines):
         if index in skip:
@@ -2662,8 +2718,7 @@ def _env_file_alias_names(lines: list[str], skip: set[int]) -> set[str]:
         match = _ENV_ALIAS_ASSIGNMENT_RE.match(line)
         if match is None:
             continue
-        word, _end = _first_shell_word(line[match.end() :])
-        if word is not None and _mentions_github_env(word):
+        if _alias_value_is_pure_env_spelling(line[match.end() :]):
             names.add(match.group(1))
     return names
 
@@ -2693,19 +2748,93 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
     return assignments
 
 
+def _env_file_target_name_kind(
+    name: str,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    write_indent: int,
+    seen: set[str],
+) -> str:
+    """Resolve one expanded redirect-target name to `"env"`, `"other"` or
+    `"unknown"` by program order. A body-assigned name is NOT proof the
+    target cannot be the env file: `n="${!x}"` is assigned and holds the env
+    path, so the reaching assignment is resolved instead. Only a provably
+    non-env literal is `"other"` (a plain word, or an env-file spelling plus
+    extra literal text — `$GITHUB_ENV.bak` is a different file); indirect,
+    computed or unmodelled RHS values are `"unknown"` (issue #342,
+    BLOCKER-2)."""
+    if name in seen:
+        return "unknown"
+    if name in aliases:
+        return "env"
+    reaching = [
+        assignment
+        for assignment in assignments
+        if assignment.name == name and assignment.index <= line_index
+    ]
+    if not reaching:
+        return "unknown"
+    chosen = reaching[-1]
+    if chosen.value is None or chosen.indent > write_indent:
+        return "unknown"
+    if _control_boundary_between(lines, chosen.index, line_index, chosen.indent):
+        return "unknown"
+    value = chosen.value
+    if _ENV_FILE_SPELLING_RE.fullmatch(value):
+        return "env"
+    if "$(" in value or "`" in value or "${!" in value:
+        return "unknown"
+    if _ENV_FILE_SPELLING_RE.search(value):
+        remainder = _ENV_FILE_SPELLING_RE.sub("", value)
+        if remainder and not any(marker in remainder for marker in ("$", "`", "%")):
+            return "other"
+        return "unknown"
+    inner = _local_reference_name(value)
+    if inner is not None:
+        return _env_file_target_name_kind(
+            inner,
+            aliases,
+            assignments,
+            lines,
+            chosen.index,
+            write_indent,
+            seen | {name},
+        )
+    if "$" in value or "`" in value or "%" in value:
+        return "unknown"
+    return "other"
+
+
 def _env_file_target_kind(
-    target: str, aliases: set[str], assigned_names: set[str]
+    target: str,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
 ) -> str:
     """Classify one redirect target: `"env"` when it provably names the env
     file, `"other"` when it provably does not, `"unknown"` when the
     extractor cannot resolve it (an assembled/indirect env-file target is
-    not provably harmless, so the caller refuses)."""
+    not provably harmless, so the caller refuses). The env-file spelling is
+    exact (`$GITHUB_ENV` / `${GITHUB_ENV}` / `%GITHUB_ENV%`, case
+    insensitively): `$GITHUB_ENV.bak` names a different file and must not
+    count (issue #342, MINOR-1/F3)."""
     text = target.strip()
     if not text or text.startswith("&"):
         return "other"
-    if "github_env" in text.lower():
+    if _ENV_FILE_SPELLING_RE.fullmatch(text):
         return "env"
     if "$(" in text or "`" in text or "${!" in text:
+        return "unknown"
+    if _ENV_FILE_SPELLING_RE.search(text):
+        # A spelling plus extra literal text (`$GITHUB_ENV.bak`,
+        # `pre$GITHUB_ENV`) is provably a different file; extra expansion
+        # syntax could collapse onto the env path and is not provable.
+        remainder = _ENV_FILE_SPELLING_RE.sub("", text)
+        if remainder and not any(marker in remainder for marker in ("$", "`", "%")):
+            return "other"
         return "unknown"
     names = re.findall(
         r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"
@@ -2714,32 +2843,55 @@ def _env_file_target_kind(
     )
     expanded = [a or b or c for a, b, c in names]
     if not expanded:
+        # No expansion the grammar parsed. A bare `$`/`%`/backtick is an
+        # expansion shape it does not model, so it is not provable.
+        if "$" in text or "`" in text or "%" in text:
+            return "unknown"
         return "other"
-    if any(name in aliases for name in expanded):
+    kinds = {
+        _env_file_target_name_kind(
+            name,
+            aliases,
+            assignments,
+            lines,
+            line_index,
+            _indent_width(lines[line_index]),
+            set(),
+        )
+        for name in expanded
+    }
+    if "unknown" in kinds:
+        return "unknown"
+    if "env" in kinds:
         return "env"
-    if all(name in assigned_names for name in expanded):
-        return "other"
-    return "unknown"
+    return "other"
 
 
 def _segment_is_env_alias_assignment(
     segment: list[tuple[str, str, int, int]],
 ) -> bool:
-    """A whole segment that only assigns a local from an env-file spelling
-    (`n="GITHUB_""ENV"`): the target-resolution mechanism, not a write."""
+    """A whole segment that only assigns a local from a PURE env-file
+    spelling (`n="GITHUB_""ENV"`): the target-resolution mechanism, not a
+    write. An RHS that computes the path or performs a write (a command
+    substitution, a backtick, a redirection, a separator) is a command, not
+    an alias definition, so the segment falls through to the reference check
+    (issue #342, BLOCKER-1)."""
     if len(segment) != 1 or segment[0][0] != "word":
         return False
     match = _ENV_ALIAS_ASSIGNMENT_RE.match(segment[0][1])
     if match is None:
         return False
-    word, _end = _first_shell_word(segment[0][1][match.end() :])
-    return word is not None and _mentions_github_env(word)
+    return _alias_value_is_pure_env_spelling(segment[0][1][match.end() :])
 
 
 def _segment_references_env_file(text: str, aliases: set[str]) -> bool:
     """True when the segment's text references the env file through a
-    spelling, the 64-character window conjunction, or a resolved alias
-    expansion (`$n`)."""
+    spelling, an indirect expansion (`${!name}` — the value an indirect
+    expansion holds is not visible to any textual match, so every
+    indirection refuses), the 64-character window conjunction, or a resolved
+    alias expansion (`$n`)."""
+    if "${!" in text:
+        return True
     if _mentions_github_env(text):
         return True
     for name in aliases:
@@ -2853,15 +3005,11 @@ def _run_id_write_value_classification(
 
 def _flip_target_match(step: ArtifactStep, name: str, flip_targets: set[str]) -> str | None:
     """The flip-target name `name` matches case-insensitively (the #341
-    Windows `OrdinalIgnoreCase` stance), or None. A non-ASCII name refuses
-    because the exact folding is not modelled."""
-    if not name.isascii():
-        raise Refusal(
-            step.run_id_line or step.uses_line,
-            f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job writes "
-            f"the non-ASCII name `{name}` to `$GITHUB_ENV`, whose case folding is not modelled "
-            "(refusing rather than guessing)",
-        )
+    Windows `OrdinalIgnoreCase` stance), or None. A non-ASCII name never
+    reaches here: `_extract_run_id_writes` only extracts
+    `[A-Za-z_][A-Za-z0-9_]*` names, so a non-ASCII written name is already
+    refused by `_run_id_name_refusal` ("writes an unextractable name") —
+    the plan's non-ASCII refusal is delivered there, not here."""
     folded = name.lower()
     for target in flip_targets:
         if target.isascii() and target.lower() == folded:
@@ -3002,7 +3150,6 @@ def _refuse_github_env_run_id_write(
         payload_lines = _heredoc_payload_line_indices(lines)
         aliases = _env_file_alias_names(lines, payload_lines)
         assignments = _body_shell_assignments(lines, payload_lines)
-        assigned_names = {assignment.name for assignment in assignments}
         skip_until = -1
         for index, line in enumerate(lines):
             if index <= skip_until:
@@ -3010,18 +3157,28 @@ def _refuse_github_env_run_id_write(
             for segment in _shell_segments(_shell_tokens(line)):
                 env_redirect: int | None = None
                 unknown_redirect = False
-                for _op, target, redirect_start in _segment_redirects(segment):
-                    kind = _env_file_target_kind(target, aliases, assigned_names)
+                other_target_spans: list[tuple[int, int]] = []
+                for _op, target, redirect_start, target_span in _segment_redirects(
+                    segment
+                ):
+                    kind = _env_file_target_kind(
+                        target, aliases, assignments, lines, index
+                    )
                     if kind == "unknown":
                         unknown_redirect = True
-                    elif kind == "env" and env_redirect is None:
-                        env_redirect = redirect_start
+                    elif kind == "env":
+                        if env_redirect is None:
+                            env_redirect = redirect_start
+                    elif target_span is not None:
+                        other_target_spans.append(target_span)
                 if unknown_redirect:
                     raise _run_id_reference_refusal(step, body)
                 if env_redirect is None:
                     if _segment_is_env_alias_assignment(segment):
                         continue
-                    segment_text = line[segment[0][2] : segment[-1][3]]
+                    segment_text = _segment_reference_text(
+                        line, segment, other_target_spans
+                    )
                     if _segment_references_env_file(segment_text, aliases):
                         raise _run_id_reference_refusal(step, body)
                     continue

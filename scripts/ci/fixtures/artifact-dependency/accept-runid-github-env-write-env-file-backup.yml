@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a same-run payload written to `"$GITHUB_ENV.bak"` — a DIFFERENT
+# file at runtime (bash ends the variable name at `.`), so it cannot set the
+# `env.SOURCE_RUN_ID` the download resolves through and the cross-run
+# exclusion stands. The env-file spelling check is exact, so the `.bak`
+# target does not count as an env write (issue #342, MINOR-1/F3).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV.bak"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

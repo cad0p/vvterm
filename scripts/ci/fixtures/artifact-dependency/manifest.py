@@ -2101,4 +2101,78 @@ CASES = [
         "excluded": 1,
         "diagnostics": [],
     },
+    # fold round 1 (#342 lens findings): the command-substitution alias skip
+    # (BLOCKER-1, five shapes), the `${!x}` indirect target (BLOCKER-2) plus
+    # its direct-target control, and the `$GITHUB_ENV.bak` false red
+    # (MINOR-1/F3).
+    {
+        "id": "reject-runid-github-env-write-cmdsub-assign",
+        "files": ["reject-runid-github-env-write-cmdsub-assign.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-assign.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-tee",
+        "files": ["reject-runid-github-env-write-cmdsub-tee.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-tee.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 17) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-multi",
+        "files": ["reject-runid-github-env-write-cmdsub-multi.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-multi.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-backtick",
+        "files": ["reject-runid-github-env-write-backtick.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-backtick.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 17) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-read",
+        "files": ["reject-runid-github-env-write-cmdsub-read.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-read.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 17) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-indirect-target",
+        "files": ["reject-runid-github-env-write-indirect-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-indirect-target.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-indirect-target-direct",
+        "files": ["reject-runid-github-env-write-indirect-target-direct.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-indirect-target-direct.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 18) without an extractable write (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "accept-runid-github-env-write-env-file-backup",
+        "files": ["accept-runid-github-env-write-env-file-backup.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
 ]

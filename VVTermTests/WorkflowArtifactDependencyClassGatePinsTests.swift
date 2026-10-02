@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 263
+    private static let expectedManifestCases = 271
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -418,6 +418,17 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-single-line-body.yml",
         "accept-runid-github-env-write-yaml-escaped.yml",
         "accept-runid-github-env-write-tagged-body.yml",
+        // #342 fold round 1: the command-substitution alias skip (BLOCKER-1),
+        // the `${!x}` indirect target (BLOCKER-2) plus its direct-target
+        // control, and the `$GITHUB_ENV.bak` false red (MINOR-1).
+        "reject-runid-github-env-write-cmdsub-assign.yml",
+        "reject-runid-github-env-write-cmdsub-tee.yml",
+        "reject-runid-github-env-write-cmdsub-multi.yml",
+        "reject-runid-github-env-write-backtick.yml",
+        "reject-runid-github-env-write-cmdsub-read.yml",
+        "reject-runid-github-env-write-indirect-target.yml",
+        "reject-runid-github-env-write-indirect-target-direct.yml",
+        "accept-runid-github-env-write-env-file-backup.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -620,6 +631,15 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             Set(fixtureFiles) == Set(Self.requiredFixtures),
             "the fixture directory's YAML files must equal `requiredFixtures` exactly — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count); extra: \(Set(fixtureFiles).subtracting(Self.requiredFixtures).sorted()); missing: \(Set(Self.requiredFixtures).subtracting(fixtureFiles).sorted()) (issue #316)"
         )
+        // Count equality alongside the set equality: `requiredFixtures` may
+        // hold a duplicate entry while both sets stay equal, so the exact
+        // inventory `--selftest` enforces must be asserted as a count too
+        // (issue #342, lens-2 MINOR 1).
+        #expect(
+            fixtureFiles.count == Self.requiredFixtures.count
+                && Set(Self.requiredFixtures).count == Self.requiredFixtures.count,
+            "the fixture directory's YAML files and `requiredFixtures` must match in count, with no duplicate entries — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count), unique required \(Set(Self.requiredFixtures).count) (issue #342)"
+        )
 
         // The script must reference the manifest, and carry the stated
         // manifest-length constant that `--selftest` enforces.
@@ -687,7 +707,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "with a payload the gate cannot extract",
             "writes an unextractable name to `$GITHUB_ENV`",
             "without an extractable write",
-            "whose case folding is not modelled",
+            // The `_flip_target_match` non-ASCII raise was dead code (only
+            // `[A-Za-z_][A-Za-z0-9_]*` names reach it; the unextractable-name
+            // refusal above owns the non-ASCII case), so its fragment is no
+            // longer a manifest-asserted diagnostic (issue #342, F4).
         ]
         for diagnostic in requiredDiagnostics {
             #expect(

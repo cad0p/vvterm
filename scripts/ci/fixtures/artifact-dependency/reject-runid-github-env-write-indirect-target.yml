@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env path arrives through a `${!x}` indirect expansion assigned
+# to a body-local name, then the write targets that name. "Assigned in this
+# body" is not a proof the target is not the env file, so the reaching
+# assignment is resolved instead: an indirect RHS is unprovable and refuses
+# (issue #342, BLOCKER-2).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          x=GITHUB_ENV
+          n="${!x}"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
