@@ -155,10 +155,12 @@ reds are documented rather than modelled; a Windows runner's `env` context is
 case-insensitive (`OrdinalIgnoreCase`, last-wins), so a case-variant
 reference is refused and a case-colliding `env:` mapping cannot make the
 gate exclude a same-run download: for every name a chain resolves through,
-the first visible scope (step, then job, then workflow) containing any
-case-variant decides, the LAST assignment among the variants in it wins
-under `OrdinalIgnoreCase`, and the download is refused when that winner is
-not the exact-case name the value references (issue #341); a name whose
+the visible chain is merged in the runner's order (workflow, then job, then
+step) and the LAST assignment among the case-variants wins under
+`OrdinalIgnoreCase`, so the download is refused when the merged winner is
+not the exact-case name the value references (issue #341), while a chain
+whose exact-case name is assigned nowhere visible is left to the
+pre-existing case-mismatch/unresolved diagnostics; a name whose
 chain has a non-ASCII candidate refuses too, because the exact
 `OrdinalIgnoreCase` folding is not modelled (`lower()`/`upper()` each miss a
 pair); and a preceding `run:` step in the same job whose body contains the
@@ -218,7 +220,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 222
+EXPECTED_MANIFEST_CASES = 225
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2165,21 +2167,21 @@ def _refuse_env_case_collision(
     assignment than the exact-case lookup here. A Windows runner's `env`
     context is `OrdinalIgnoreCase` (last-wins), so a case-colliding mapping
     can leave the runtime token empty (or the run-id same-run) while the gate
-    keeps the cross-run exclusion. The predicate is the winning assignment:
-    the first visible scope (step, then job, then workflow) that contains any
-    case-variant of `name` decides, and within it the LAST assignment among
-    the variants wins; the download is refused when that winner is not
-    `name`. A name the gate cannot prove non-ASCII-safe refuses with its own
-    diagnostic, because the exact `OrdinalIgnoreCase` folding is not modelled
-    (`lower()`/`upper()` each miss a pair). The exact-case name must be
-    assigned in that first scope — when only a case-variant exists, the
-    pre-existing case-mismatch/unresolved diagnostics own the shape."""
+    keeps the cross-run exclusion. The predicate is the winning assignment of
+    the merged visible chain: actions/runner seeds the job environment with
+    the workflow then the job `env:` mapping and merges the step's own `env:`
+    LAST, all under one `OrdinalIgnoreCase` comparer, so the winner is the
+    assignment from the most-specific scope, and the last line within a
+    scope; the download is refused when that winner is not `name`. A name the
+    gate cannot prove non-ASCII-safe refuses with its own diagnostic, because
+    the exact `OrdinalIgnoreCase` folding is not modelled (`lower()`/`upper()`
+    each miss a pair). The exact-case name must be assigned somewhere in the
+    visible chain — when only a case-variant exists, the pre-existing
+    case-mismatch/unresolved diagnostics own the shape."""
     candidates = _env_case_candidates(name, static_env, scopes)
     if not candidates:
         return
-    first_scope = min(candidate[2] for candidate in candidates)
-    in_first_scope = [c for c in candidates if c[2] == first_scope]
-    if not any(candidate[0] == name for candidate in in_first_scope):
+    if not any(candidate[0] == name for candidate in candidates):
         return
     if not name.isascii():
         raise Refusal(
@@ -2199,7 +2201,10 @@ def _refuse_env_case_collision(
             "folding is not modelled — the runtime may resolve a different value, so the "
             "cross-run exclusion cannot be proven (refusing rather than guessing)",
         )
-    winner_key, winner_line, _scope = max(in_first_scope, key=lambda c: c[1])
+    # `scopes` is most-specific first (step, job, workflow); the runner merges
+    # them least-specific first (workflow, then job, then step), so the merged
+    # winner is the candidate in the most-specific scope with the last line.
+    winner_key, winner_line, _scope = max(candidates, key=lambda c: (-c[2], c[1]))
     if winner_key == name:
         return
     raise Refusal(

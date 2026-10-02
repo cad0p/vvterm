@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the JOB scope assigns the exact-case `GH_TOKEN` (statically
+# present), but the download step's own `env:` assigns `gh_token: ""`.
+# actions/runner seeds the job environment from the job `env:` and merges the
+# step's own `env:` LAST under one `OrdinalIgnoreCase` comparer, so on Windows
+# `gh_token` wins and the runtime token is empty: the action ignores `run-id:`
+# and the download is same-run. The merged-winner predicate refuses (issue
+# #341, the step-over-job variant shadow).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          gh_token: ""
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

@@ -1713,8 +1713,11 @@ CASES = [
     # ------------------------------------------------------------------
     # #341 (case-colliding env): the winning-assignment predicate. The
     # rejects close the Windows last-wins fail-open on the token chain
-    # (direct and transitive); the accepts are E8 (exact key last), E7 (a
-    # step-scope exact shadow) and E2 (an unrelated in-scope collision).
+    # (direct and transitive) and across scopes (a case-variant inner scope
+    # shadowing an exact-case outer assignment: step-over-job token,
+    # job-over-workflow token, step-over-job run-id); the accepts are E8
+    # (exact key last), E7 (a step-scope exact shadow) and E2 (an unrelated
+    # in-scope collision).
     # ------------------------------------------------------------------
     {
         "id": "reject-env-case-collision-token",
@@ -1749,5 +1752,29 @@ CASES = [
         "files": ["accept-env-case-variant-unrelated.yml"],
         "exit": 0,
         "diagnostics": [],
+    },
+    {
+        "id": "reject-env-case-collision-step-variant-token",
+        "files": ["reject-env-case-collision-step-variant-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-step-variant-token.yml:27: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.GH_TOKEN`, and the case-variant assignment `env.gh_token` (line 23) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-env-case-collision-job-variant-workflow-exact",
+        "files": ["reject-env-case-collision-job-variant-workflow-exact.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-job-variant-workflow-exact.yml:25: github-token: \'${{ env.GH_TOKEN }}\' resolves through `env.GH_TOKEN`, and the case-variant assignment `env.gh_token` (line 19) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-env-case-collision-runid-step-variant",
+        "files": ["reject-env-case-collision-runid-step-variant.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-env-case-collision-runid-step-variant.yml:24: run-id: \'${{ env.SOURCE_RUN_ID }}\' resolves through `env.SOURCE_RUN_ID`, and the case-variant assignment `env.source_run_id` (line 21) wins under a Windows runner\'s case-insensitive `env` context (`OrdinalIgnoreCase`, last-wins) — the runtime resolves a different value, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
     },
 ]

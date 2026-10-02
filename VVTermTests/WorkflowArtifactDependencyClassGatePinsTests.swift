@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 222
+    private static let expectedManifestCases = 225
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -361,6 +361,13 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-env-case-variant-step-shadow.yml",
         "reject-env-case-collision-transitive.yml",
         "accept-env-case-variant-unrelated.yml",
+        // #341 fold round 1: the merged-winner rule. The exact-case name is
+        // assigned in an OUTER scope while the inner scope holds only a
+        // case-variant; the runner merges the inner scope last, so the
+        // variant wins and the download must refuse (the lens-1 BLOCKER).
+        "reject-env-case-collision-step-variant-token.yml",
+        "reject-env-case-collision-job-variant-workflow-exact.yml",
+        "reject-env-case-collision-runid-step-variant.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

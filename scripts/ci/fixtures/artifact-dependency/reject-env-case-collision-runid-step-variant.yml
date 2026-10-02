@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the JOB scope assigns `SOURCE_RUN_ID` to the cross-run handoff and
+# the download step's own `env:` assigns `source_run_id` to the CURRENT run.
+# The step env merges last under `OrdinalIgnoreCase`, so on Windows the
+# runtime run-id is the current run: a same-run download with no `needs:`
+# edge. The merged-winner predicate refuses the run-id chain (issue #341).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - uses: actions/download-artifact@v8
+        env:
+          source_run_id: ${{ github.run_id }}
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: "ghp_literal"
