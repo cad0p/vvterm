@@ -1665,4 +1665,49 @@ CASES = [
         "exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #339 ($GITHUB_ENV token overwrite): a preceding same-job `run:` body
+    # that MENTIONS `GITHUB_ENV` makes a statically env-resolved
+    # `github-token:` unprovable. The four rejects pin the closed shapes
+    # (`>>`, single `>`, a dynamic name, a same-value rewrite); the accept
+    # is the position control and deliberately writes the chain name.
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-github-env-write-empties-token",
+        "files": ["reject-github-env-write-empties-token.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-empties-token.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-single-redirect",
+        "files": ["reject-github-env-write-single-redirect.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-single-redirect.yml:23: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 18) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-dynamic-name",
+        "files": ["reject-github-env-write-dynamic-name.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-dynamic-name.yml:24: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 19) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "reject-github-env-write-same-value",
+        "files": ["reject-github-env-write-same-value.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-github-env-write-same-value.yml:23: github-token: \'${{ env.GH_TOKEN }}\' resolves through the `env` context, and a preceding step in this job writes to `$GITHUB_ENV` (line 18) — that write can change or empty the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)',
+        ],
+    },
+    {
+        "id": "accept-github-env-write-after-download",
+        "files": ["accept-github-env-write-after-download.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
 ]

@@ -64,7 +64,10 @@ construct the subset grammar cannot model is refused, not skipped. A
 `run-id: ${{ env.NAME }}` whose NAME is only ever written at runtime (e.g.
 `echo "NAME=…" >> "$GITHUB_ENV"` from a `run:` step, the real
 `ios-adhoc-pr.yml` shape) cannot be resolved statically and keeps the
-cross-run exclusion; static in-file `env:` assignments are resolved, and one
+cross-run exclusion — the #339 `$GITHUB_ENV` mention rule below is
+deliberately token-chain-only, because the run-id value chain is the real
+`workflow_run.id` handoff and this repository's own publish workflow depends
+on it; static in-file `env:` assignments are resolved, and one
 the gate cannot classify (including `needs.*.outputs.*`) is refused rather
 than guessed. Static `env:` names are matched case-sensitively —
 actions/runner's `env` context is `StringComparer.Ordinal` on non-Windows
@@ -151,10 +154,19 @@ and a block-scalar env body that is only U+0085/U+001C (`is_blank`'s
 reds are documented rather than modelled; a Windows runner's `env` context is case-insensitive and a
 case-colliding `env:` mapping can resolve a different assignment than the
 exact-case lookup here (Windows-only, not verifiable from this repository);
-and a `run:` step that appends `NAME=` to `$GITHUB_ENV` can overwrite a
-statically assigned `env:` value, so a statically present token can be empty
-at runtime (a pre-existing hole filed as a follow-up; the gate cannot see
-runtime writes). Runtime values were
+and a preceding `run:` step in the same job whose body contains the
+`GITHUB_ENV` substring makes any `github-token:` that resolves through the
+static `env:` chain unprovable, so the download is refused (issue #339):
+actions/runner merges `$GITHUB_ENV` writes into the job environment before a
+later step's `with:` is evaluated, so the write can change or empty the
+token. The detector is the raw substring, not a name extraction (a single
+`>`, `tee`, heredocs, indirection and related spellings are all covered),
+which is a deliberate fail-closed over-approximation: a read-only
+`cat "$GITHUB_ENV"`, an unrelated-name write, a same-value rewrite and a
+write shadowed by the download step's own `env:` all refuse (accepted
+costs, each pinned or named), while a `uses:`/composite action that writes
+`$GITHUB_ENV` stays invisible because the gate sees workflow files only.
+Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
 `dist/templates/template-reader.js` `validate()`), its `yaml` 2.9.1
@@ -199,7 +211,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 212
+EXPECTED_MANIFEST_CASES = 217
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -261,6 +273,9 @@ class Refusal(Exception):
 class ArtifactStep:
     kind: str  # "upload" | "download" | ""
     uses_line: int
+    # The step's first line, used for the #339 position check (a write can
+    # only affect steps that start after it).
+    step_line: int = 0
     name: str | None = None
     name_line: int | None = None
     name_is_literal: bool = False
@@ -279,6 +294,23 @@ class ArtifactStep:
     # range (plus the workflow's and the enclosing job's) is visible to
     # `${{ env.NAME }}` at runtime (R5-MINOR-1).
     env_range: tuple[int, int] | None = None
+    # The `run:` key line and the #339 mention flag (a non-empty body that
+    # contains the `GITHUB_ENV` substring).
+    run_line: int | None = None
+    run_mentions_github_env: bool = False
+
+
+@dataclass
+class RunBody:
+    """A parsed `run:` step's location and whether its body mentions
+    `$GITHUB_ENV`. The gate does not model run bodies otherwise; this is the
+    #339 mention scan (a name extraction is measurably leaky, so the detector
+    is the raw substring: redirects, `tee`, heredocs and indirection all
+    count)."""
+
+    line: int  # the `run:` key line
+    step_line: int  # the enclosing step's first line
+    mentions_github_env: bool
 
 
 @dataclass
@@ -295,6 +327,9 @@ class Job:
     keys_seen: dict[str, int] = field(default_factory=dict)
     # The job's own `env:` block, as an inclusive line range (R5-MINOR-1).
     env_range: tuple[int, int] | None = None
+    # Every parsed `run:` step's location/mention record, in step order
+    # (the #339 same-job, preceding-position scan).
+    run_bodies: list[RunBody] = field(default_factory=list)
 
 
 @dataclass
@@ -1020,9 +1055,15 @@ def _refuse_non_string_value_tag(index: int, key: str, value: str) -> None:
 
 
 class WorkflowParser:
-    def __init__(self, relpath: str, lines: list[str]) -> None:
+    def __init__(
+        self, relpath: str, lines: list[str], block_bodies: dict[int, str]
+    ) -> None:
         self.relpath = relpath
         self.lines = lines
+        # Block-scalar bodies by header line (`blank_block_scalars`), needed
+        # for the #339 mention scan: a `run: |` body is blanked out of
+        # `self.lines` and only the captured body still holds it.
+        self.block_bodies = block_bodies
         self.jobs: list[Job] = []
         self.artifact_step_lines: set[int] = set()
         # The top-level `env:` block, as an inclusive line range: workflow
@@ -1347,7 +1388,7 @@ class WorkflowParser:
         return j
 
     def _parse_step(self, job: Job, body: list[int], item_pos: int, item_col: int) -> int:
-        step = ArtifactStep(kind="", uses_line=0)
+        step = ArtifactStep(kind="", uses_line=0, step_line=body[item_pos] + 1)
         seen: dict[str, int] = {}
         rest = self.lines[body[item_pos]][item_col + 1 :]
         offset = 0
@@ -1397,6 +1438,14 @@ class WorkflowParser:
             if indent != step_key_col:
                 raise Refusal(index + 1, UNCONSUMED_REFUSAL)
             j = self._step_key(job, step, body, j, step_key_col, text, seen)
+        if step.run_line is not None:
+            job.run_bodies.append(
+                RunBody(
+                    line=step.run_line,
+                    step_line=step.step_line,
+                    mentions_github_env=step.run_mentions_github_env,
+                )
+            )
         if step.kind:
             job.artifact_steps.append(step)
             self.artifact_step_lines.add(step.uses_line)
@@ -1441,7 +1490,35 @@ class WorkflowParser:
         if key == "env":
             end, step.env_range = self._consume_env_block(body, pos, col)
             return end
+        if key == "run":
+            step.run_line = index + 1
+            end = pos + 1 if value else self._consume_opaque(body, pos, col)
+            step.run_mentions_github_env = self._run_mentions_github_env(
+                index, value, body, pos, end
+            )
+            return end
         return pos + 1 if value else self._consume_opaque(body, pos, col)
+
+    def _run_mentions_github_env(
+        self, index: int, value: str, body: list[int], pos: int, end: int
+    ) -> bool:
+        """The #339 scan for one `run:` step: the literal substring
+        `GITHUB_ENV` anywhere in its inline value or block body. A block-scalar
+        header's body lives in `self.block_bodies` (the blanked lines no
+        longer hold it); a bare `run:` with an indented plain scalar is
+        scanned from the range `_consume_opaque` consumed. The body is text,
+        not a name list: `$GITHUB_ENV`, `${GITHUB_ENV}`, a single `>`, `tee`,
+        a heredoc and an indirect write all contain the substring."""
+        if value:
+            if _static_block_header(value) is not None:
+                return "GITHUB_ENV" in self.block_bodies.get(index + 1, "")
+            return "GITHUB_ENV" in value
+        block_text = self.block_bodies.get(index + 1)
+        if block_text is not None:
+            return "GITHUB_ENV" in block_text
+        return any(
+            "GITHUB_ENV" in self.lines[body[j]] for j in range(pos + 1, end)
+        )
 
     def _parse_with(self, body: list[int], pos: int, with_col: int, step: ArtifactStep) -> int:
         step.has_with = True
@@ -2020,6 +2097,41 @@ def _classify_token_value(
     return "unknown"
 
 
+def _refuse_github_env_token_mention(job: Job, step: ArtifactStep) -> None:
+    """#339: a preceding `run:` step in the same job whose body mentions
+    `$GITHUB_ENV` can change or empty any token that resolves through the
+    static `env:` chain — actions/runner merges `$GITHUB_ENV` writes into the
+    job's environment before a later step's `with:` is evaluated — so the
+    cross-run exclusion cannot be proven and the download is refused. The
+    detector is the raw `GITHUB_ENV` substring, not a name extraction
+    (measured leaky: single `>`, `tee`, heredocs, indirect names): a
+    read-only `cat "$GITHUB_ENV"`, an unrelated-name write, a same-value
+    rewrite and a write shadowed by the step's own `env:` all refuse too
+    (accepted fail-closed costs, documented in the header). Position is the
+    step's START line, so a write in the download's own step or in a later
+    step proves nothing, and the scan is per job because `$GITHUB_ENV`
+    writes live in the job's global environment."""
+    if step.github_token is None or _env_reference(step.github_token) is None:
+        return
+    mention = next(
+        (
+            body
+            for body in job.run_bodies
+            if body.mentions_github_env and body.step_line < step.uses_line
+        ),
+        None,
+    )
+    if mention is None:
+        return
+    raise Refusal(
+        step.github_token_line or step.uses_line,
+        f"github-token: '{step.github_token}' resolves through the `env` context, and a "
+        f"preceding step in this job writes to `$GITHUB_ENV` (line {mention.line}) — that "
+        "write can change or empty the value at runtime, so the cross-run exclusion cannot "
+        "be proven (refusing rather than guessing)",
+    )
+
+
 def _unresolved_env_link(
     name: str,
     scoped_env: dict[str, list[tuple[str, int]]],
@@ -2069,7 +2181,10 @@ def _apply_static_env_run_id_resolution(
     The `github-token:` that the exclusion depends on is classified the same
     way: a statically empty in-scope token (including an empty block-scalar
     body or a plain YAML null, R6-BLOCKER-1) is absent (the rule applies) and
-    one the gate cannot prove non-empty is refused."""
+    one the gate cannot prove non-empty is refused. A token that resolves
+    through the `env` context is additionally refused when a preceding step
+    in the same job mentions `$GITHUB_ENV` (#339): that write can change or
+    empty the token before the action reads it."""
     static_env = _collect_static_env(lines, block_bodies)
     for job in jobs:
         for step in job.artifact_steps:
@@ -2161,6 +2276,7 @@ def _apply_static_env_run_id_resolution(
                 continue
             token = _classify_token_value(step.github_token, scoped_env, set())
             if token == "present":
+                _refuse_github_env_token_mention(job, step)
                 continue
             if token == "empty":
                 step.has_github_token = False
@@ -2304,7 +2420,7 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
             message = scalar_construct_violation(line)
             if message:
                 raise Refusal(index, message)
-        parser = WorkflowParser(relpath, lines)
+        parser = WorkflowParser(relpath, lines, block_bodies)
         result.jobs = parser.parse()
         reconciliation = reconcile(
             blank_non_semantic_name_values(blank_run_and_env_values(lines)),

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the same write with a single `>` redirect instead of `>>`.
+# Truncation still writes the variable, and a name-extraction rule that
+# keys on `>>` misses it; the mention scan refuses (issue #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token
+        run: echo "GH_TOKEN=" > "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}

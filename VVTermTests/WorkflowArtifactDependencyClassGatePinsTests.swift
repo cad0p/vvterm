@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 212
+    private static let expectedManifestCases = 217
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -343,6 +343,15 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-run-id-nel-tail-literal.yml",
         "reject-run-id-env-nel.yml",
         "accept-run-id-env-bom.yml",
+        // #339: a preceding same-job `run:` body that mentions `GITHUB_ENV`
+        // makes a statically env-resolved `github-token:` unprovable. The
+        // four rejects pin the closed write shapes; the accept is the
+        // position control (the same chain-name write, after the download).
+        "reject-github-env-write-empties-token.yml",
+        "reject-github-env-write-single-redirect.yml",
+        "reject-github-env-write-dynamic-name.yml",
+        "reject-github-env-write-same-value.yml",
+        "accept-github-env-write-after-download.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

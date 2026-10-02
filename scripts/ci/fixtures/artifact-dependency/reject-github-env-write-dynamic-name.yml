@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the written name is built at runtime (`$env_name`), so no
+# literal `GH_TOKEN=` appears on the redirect line — the shape a
+# name-extraction rule reads as `env_name` and misses. The mention scan
+# refuses (issue #339).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: blank the token indirectly
+        run: env_name=GH_TOKEN; echo "$env_name=" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ env.GH_TOKEN }}
