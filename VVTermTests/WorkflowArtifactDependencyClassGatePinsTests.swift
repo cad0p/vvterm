@@ -16,13 +16,16 @@
 //    P2  the required `build` job runs the gate immediately after the license
 //        gate, with the preflight, `--selftest` and the scan in that order,
 //        and the `run:` block asserted EXACTLY (whitespace-normalized), so an
-//        appended `|| true`, a reordering, or a step-level `if:` /
-//        `continue-on-error:` breaks the pin;
+//        appended `|| true`, a reordering, a step-level `if:` /
+//        `continue-on-error:`, or a job-level `if:` / `continue-on-error:` on
+//        `build` (a skipped required job still reports success) breaks the
+//        pin;
 //    P3  the workflow still parses into the canonical job/step shape (shape
 //        guard: without it, P2 could slice an empty or shifted step);
 //    P4  the fixture inventory covers every case the class rule exists for,
-//        each fixture is referenced by the manifest, and the script carries
-//        the stated manifest-length constant and references the manifest;
+//        each fixture is referenced by the manifest, and the script's
+//        manifest-length and scan-floor constants are pinned to their VALUES
+//        (case count and floor), so a stale constant reds here too;
 //    P5  the §4.4 diagnostic format strings are present as CODE (comments are
 //        stripped first), so the diagnostics the manifest compares cannot be
 //        quietly reworded.
@@ -65,6 +68,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         - name: Check artifact dependencies run: | set -euo pipefail command -v python3 >/dev/null || { echo "::error::python3 not found — the artifact-dependency gate needs it"; exit 1; } python3 scripts/ci/check-artifact-dependencies.py --selftest python3 scripts/ci/check-artifact-dependencies.py
         """
 
+    /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
+    /// the scanned-workflow floor. A stale constant must red the pin, not
+    /// only the build-time `--selftest`/scan.
+    private static let expectedManifestCases = 73
+    private static let expectedWorkflowFloor = 12
+
     /// Every fixture the plan requires (accept controls, measured holes, and
     /// refusal controls). The manifest must reference each one, and each file
     /// must exist, so deleting a fixture (or its case) is visible here.
@@ -86,6 +95,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-quote-in-run-body.yml",
         "accept-deep-with.yml",
         "accept-needs-block-with-comment.yml",
+        "accept-quoted-plain-uses.yml",
+        "accept-run-id-static-cross-run-env.yml",
+        "accept-run-line-mentioning-action.yml",
         // rule violations
         "reject-missing-edge.yml",
         "reject-shadow-downloader.yml",
@@ -105,6 +117,15 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-quoted-jobs-missing-edge.yml",
         "reject-crlf-missing-edge.yml",
         "reject-yaml-extension.yaml",
+        "reject-quoted-escape-uses.yml",
+        "reject-quoted-escape-keyed-uses.yml",
+        "reject-block-scalar-uses.yml",
+        "reject-block-scalar-uses-folded.yml",
+        "reject-block-scalar-with-name.yml",
+        "reject-block-scalar-needs.yml",
+        "reject-run-id-env-indirection.yml",
+        "reject-producer-is-consumer-download-first.yml",
+        "reject-orphan-download.yml",
         // refusals
         "reject-cross-file-a.yml",
         "reject-cross-file-b.yml",
@@ -222,6 +243,24 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "the gate step must not declare a step-level `if:` — it must run on every `build` (issue #316)"
         )
 
+        // Job-level guard (lens-2 MINOR 1): a job-level `if:` or
+        // `continue-on-error:` on the required `build` job makes GitHub report
+        // a successful check while the gate never runs, and no step-level
+        // assertion can see it.
+        let jobLevelKeyLines = job.lines.filter { line in
+            line.range(of: #"^    \S"#, options: .regularExpression) != nil
+        }
+        #expect(
+            !jobLevelKeyLines.contains { line in
+                line.range(of: #"^    (if|continue-on-error):"#, options: .regularExpression) != nil
+            },
+            "the `build` job must not declare a job-level `if:` or `continue-on-error:` — a skipped required job reports success, so the gate could be disabled without any step-level pin noticing (issue #316)"
+        )
+        #expect(
+            job.lines.first?.trimmingCharacters(in: .whitespaces) == "build:",
+            "the `build` job key line must be exactly `  build:` — an inline job-level key would carry a job-level condition the step pins cannot see (issue #316)"
+        )
+
         // Ordering inside the required `build` job: license gate → artifact
         // gate → build prep → xcodebuild. A move that skipped the gate on the
         // normal path would otherwise be invisible.
@@ -312,12 +351,17 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "\(Self.scriptPath) must reference the fixture manifest by its fixtures/artifact-dependency path (issue #316)"
         )
         #expect(
-            script.range(of: #"EXPECTED_MANIFEST_CASES\s*=\s*\d+"#, options: .regularExpression) != nil,
-            "\(Self.scriptPath) must carry the stated EXPECTED_MANIFEST_CASES constant so deleting a manifest case fails `--selftest` (issue #316)"
+            script.contains("EXPECTED_MANIFEST_CASES = \(Self.expectedManifestCases)"),
+            "\(Self.scriptPath) must state EXPECTED_MANIFEST_CASES = \(Self.expectedManifestCases) — a stale constant would let a deleted manifest case pass `--selftest` (issue #316, lens-2 NIT 1)"
         )
         #expect(
-            script.contains("MIN_SCANNED_WORKFLOW_FILES"),
-            "\(Self.scriptPath) must carry the scan-floor constant so a typo'd --root cannot masquerade as a pass (issue #316)"
+            script.contains("MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor)"),
+            "\(Self.scriptPath) must state MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor) — a stale floor would let a truncated tree pass (issue #316, lens-2 NIT 1)"
+        )
+        let manifestCaseCount = manifest.components(separatedBy: "\"id\"").count - 1
+        #expect(
+            manifestCaseCount == Self.expectedManifestCases,
+            "the manifest must hold \(Self.expectedManifestCases) case(s) (counted \(manifestCaseCount)) — a stale constant reds this pin, not only the build-time `--selftest` (issue #316)"
         )
     }
 
@@ -353,6 +397,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "'jobs:' is empty",
             "reconciliation failed",
             "scan floor:",
+            "unsupported backslash escape",
+            "block scalar header",
+            "before its own upload step",
+            "move the upload step earlier",
+            "resolves through a static assignment in this file",
+            "`needs: {producer}` to the `{job.name}` job",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(

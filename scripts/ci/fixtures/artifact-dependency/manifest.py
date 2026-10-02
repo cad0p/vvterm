@@ -125,7 +125,7 @@ CASES = [
         "files": ["reject-missing-edge.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-missing-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-missing-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -133,7 +133,7 @@ CASES = [
         "files": ["reject-shadow-downloader.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-shadow-downloader.yml:14: shadow downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-shadow-downloader.yml:14: shadow downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `shadow` job',
         ],
     },
     {
@@ -141,7 +141,7 @@ CASES = [
         "files": ["reject-wrong-job-needs.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-wrong-job-needs.yml:19: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-wrong-job-needs.yml:19: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -149,7 +149,7 @@ CASES = [
         "files": ["reject-steps-at-key-indent.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-steps-at-key-indent.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-steps-at-key-indent.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -157,7 +157,7 @@ CASES = [
         "files": ["reject-steps-at-eight.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-steps-at-eight.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-steps-at-eight.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -165,7 +165,7 @@ CASES = [
         "files": ["reject-job-body-at-six.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-job-body-at-six.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-job-body-at-six.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -173,7 +173,7 @@ CASES = [
         "files": ["reject-run-block-decoy.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-run-block-decoy.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-run-block-decoy.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -181,7 +181,7 @@ CASES = [
         "files": ["reject-run-single-line-decoy.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-run-single-line-decoy.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-run-single-line-decoy.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -189,7 +189,7 @@ CASES = [
         "files": ["reject-quoted-uses-no-edge.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-quoted-uses-no-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-quoted-uses-no-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -197,7 +197,7 @@ CASES = [
         "files": ["reject-case-variant-action.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-case-variant-action.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-case-variant-action.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -205,7 +205,7 @@ CASES = [
         "files": ["reject-quoted-job-key-merge.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-quoted-job-key-merge.yml:21: tail-job downloads artifact "vvterm-build" but no needs: path reaches its producer "producer"',
+            'reject-quoted-job-key-merge.yml:21: tail-job downloads artifact "vvterm-build" but no needs: path reaches its producer "producer" — add `needs: producer` to the `tail-job` job',
         ],
     },
     {
@@ -213,7 +213,7 @@ CASES = [
         "files": ["reject-nested-needs-in-matrix.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-nested-needs-in-matrix.yml:18: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-nested-needs-in-matrix.yml:18: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -221,7 +221,7 @@ CASES = [
         "files": ["reject-run-id-current.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-run-id-current.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-run-id-current.yml:16: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -229,7 +229,7 @@ CASES = [
         "files": ["reject-run-id-fallback.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-run-id-fallback.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-run-id-fallback.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -237,7 +237,7 @@ CASES = [
         "files": ["reject-run-id-bracket.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-run-id-bracket.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-run-id-bracket.yml:15: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -245,7 +245,7 @@ CASES = [
         "files": ["reject-quoted-jobs-missing-edge.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-quoted-jobs-missing-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-quoted-jobs-missing-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -253,7 +253,7 @@ CASES = [
         "files": ["reject-crlf-missing-edge.yml"],
         "exit": 1,
         "diagnostics": [
-            'reject-crlf-missing-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-crlf-missing-edge.yml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -261,7 +261,7 @@ CASES = [
         "files": ["reject-yaml-extension.yaml"],
         "exit": 1,
         "diagnostics": [
-            'reject-yaml-extension.yaml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build"',
+            'reject-yaml-extension.yaml:14: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
         ],
     },
     {
@@ -482,6 +482,100 @@ CASES = [
         "floor": True,
         "diagnostics": [
             "scan floor: only 1 workflow file(s) found under .github/workflows; the floor is 12 — update the floor constant only if workflows were intentionally removed (refusing rather than passing a truncated tree)",
+        ],
+    },
+    # ------------------------------------------------------------------
+    # Round-1 fold: the measured silent passes (lens-1 B1/B2/B3, M1), the
+    # data-mention control (m1) and the orphan-download branch (lens-2 M2).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-quoted-escape-uses",
+        "files": ["reject-quoted-escape-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-quoted-escape-uses.yml:16: unsupported backslash escape '\\u' in a double-quoted scalar — the gate decodes only \\n, \\t, \\\" and \\\\ (refusing rather than guessing YAML's full escape set)",
+        ],
+    },
+    {
+        "id": "reject-quoted-escape-keyed-uses",
+        "files": ["reject-quoted-escape-keyed-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-quoted-escape-keyed-uses.yml:15: unsupported backslash escape '\\u' in a double-quoted scalar — the gate decodes only \\n, \\t, \\\" and \\\\ (refusing rather than guessing YAML's full escape set)",
+        ],
+    },
+    {
+        "id": "accept-quoted-plain-uses",
+        "files": ["accept-quoted-plain-uses.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-block-scalar-uses",
+        "files": ["reject-block-scalar-uses.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-block-scalar-uses.yml:15: block scalar header '|' as the value of 'uses:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+        ],
+    },
+    {
+        "id": "reject-block-scalar-uses-folded",
+        "files": ["reject-block-scalar-uses-folded.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-block-scalar-uses-folded.yml:15: block scalar header '>-' as the value of 'uses:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+        ],
+    },
+    {
+        "id": "reject-block-scalar-with-name",
+        "files": ["reject-block-scalar-with-name.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-block-scalar-with-name.yml:17: block scalar header '>-' as the value of 'name:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+        ],
+    },
+    {
+        "id": "reject-block-scalar-needs",
+        "files": ["reject-block-scalar-needs.yml"],
+        "exit": 1,
+        "diagnostics": [
+            "reject-block-scalar-needs.yml:13: block scalar header '>-' as the value of 'needs:' — this key decides the artifact graph and must be an inline scalar (refusing rather than guessing the folded value)",
+        ],
+    },
+    {
+        "id": "reject-run-id-env-indirection",
+        "files": ["reject-run-id-env-indirection.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-run-id-env-indirection.yml:18: consumer downloads artifact "vvterm-build" but no needs: path reaches its producer "build" — add `needs: build` to the `consumer` job',
+        ],
+    },
+    {
+        "id": "accept-run-id-static-cross-run-env",
+        "files": ["accept-run-id-static-cross-run-env.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-producer-is-consumer-download-first",
+        "files": ["reject-producer-is-consumer-download-first.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-producer-is-consumer-download-first.yml:9: build downloads artifact "vvterm-build" before its own upload step (line 12) — a job\'s steps run in source order; move the upload step earlier',
+        ],
+    },
+    {
+        "id": "accept-run-line-mentioning-action",
+        "files": ["accept-run-line-mentioning-action.yml"],
+        "exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-orphan-download",
+        "files": ["reject-orphan-download.yml"],
+        "exit": 1,
+        "diagnostics": [
+            'reject-orphan-download.yml:8: consumer downloads artifact "never-uploaded" but no job in this workflow uploads that literal name (artifacts are run-scoped; use `run-id:` for a cross-run handoff)',
         ],
     },
 ]

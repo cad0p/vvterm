@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a same-job download that runs before its own upload (lens-1 M1).
+# `producer == consumer` is only sound when the upload step is earlier;
+# here the artifact does not exist when the download runs.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build

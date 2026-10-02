@@ -8,6 +8,8 @@ Every in-workflow artifact downloader must have a `needs:` path to the job
 that uploads the artifact it downloads. Artifacts are run-scoped, so the
 producer must be in the same workflow file; the only exclusion is a
 recognized cross-run `run-id:` handoff (e.g. `${{ env.SOURCE_RUN_ID }}`).
+A `run-id:` that the same file statically assigns the current run's id is
+NOT a cross-run handoff: it is same-run, so the rule still applies.
 
 THE RULE CLAIMS ORDERING, NOT EXISTENCE
 ---------------------------------------
@@ -32,17 +34,31 @@ mechanisms are:
     failed to model can never pass;
   * a scan floor so a typo'd `--root` cannot masquerade as a pass.
 
-Refusals include: tabs in indentation; an unterminated quoted scalar;
-`{`/`&`/`*`/`<<` in a parsed position; duplicate mapping keys; duplicate
-`steps:`; duplicate `with.name`; a `uses:` job that also has `steps:`;
-`pattern:`/`artifact-ids:`; a download without a literal `name:`;
-duplicate literal artifact names; absent/empty `jobs:`; an unrecognized
-`run-id:` expression; and any unconsumed line.
+Refusals include: tabs in indentation; an unterminated quoted scalar; a
+backslash escape in a double-quoted scalar that only YAML's full decoder
+resolves (`\\uXXXX`, `\\xXX`, …); a block-scalar header as the value of a
+semantic key (step `uses`; job `needs`; `with.name`, `with.run-id`,
+`with.pattern`, `with.artifact-ids`); `{`/`&`/`*`/`<<` in a parsed position;
+duplicate mapping keys; duplicate `steps:`; duplicate `with.name`; a `uses:`
+job that also has `steps:`; `pattern:`/`artifact-ids:`; a download without a
+literal `name:`; duplicate literal artifact names; absent/empty `jobs:`; an
+unrecognized `run-id:` expression; a same-job download that precedes its own
+upload; and any unconsumed line.
 
 Known limits, stated honestly: GitHub's own evaluation of duplicate keys
 and action-ref casing is not verifiable from here, so the gate refuses
 duplicates and case-folds action refs rather than guessing; a file with a
-construct the subset grammar cannot model is refused, not skipped.
+construct the subset grammar cannot model is refused, not skipped. A
+`run-id: ${{ env.NAME }}` whose NAME is only ever written at runtime (e.g.
+`echo "NAME=…" >> "$GITHUB_ENV"` from a `run:` step, the real
+`ios-adhoc-pr.yml` shape) cannot be resolved statically and keeps the
+cross-run exclusion; static in-file `env:` assignments are resolved, and one
+the gate cannot classify is refused. Reconciliation deliberately skips
+single-line `run:` bodies and `env:` values (they are data, not steps), so
+an artifact-action token there is not a refusal; in any other scalar (e.g. a
+step `name:`) it still is. Multi-document streams, U+2028/U+2029 line
+breaks, `%YAML` directives, a mid-file BOM and `!!` tags are outside the
+subset grammar and unverified against GitHub's parser.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -72,7 +88,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 61
+EXPECTED_MANIFEST_CASES = 73
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -364,6 +380,62 @@ def unterminated_quote_violation(line: str) -> str | None:
     return None
 
 
+def _escaped_quoted_scalar_violation(text: str, start: int) -> str | None:
+    """Scan the double-quoted scalar opened at `text[start]` for backslash
+    escapes the subset decoder does not implement. YAML's own escape set would
+    decode `\u006c` to `l`, so a value the decoder reads differently from
+    GitHub must not decide whether a step is an artifact step (B1)."""
+    i = start + 1
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            if i + 1 >= len(text):
+                return None  # an unterminated scalar is its own refusal
+            escape = text[i + 1]
+            if escape not in ("n", "t", '"', "\\"):
+                return (
+                    f"unsupported backslash escape '\\{escape}' in a double-quoted scalar — the gate "
+                    "decodes only \\n, \\t, \\\" and \\\\ (refusing rather than guessing YAML's full "
+                    "escape set)"
+                )
+            i += 2
+            continue
+        if c == '"':
+            return None
+        i += 1
+    return None
+
+
+def quoted_escape_violation(line: str) -> str | None:
+    """Refuse a double-quoted scalar at a key or value position that uses an
+    escape outside the decoder's set. Runs after the unterminated-quote check
+    (which names an unclosed scalar more precisely) and after block-scalar
+    blanking (so shell bodies stay opaque)."""
+    stripped = line.lstrip(" ")
+    if starts_item(stripped):
+        stripped = stripped[1:].lstrip(" ")
+    if not stripped:
+        return None
+    if stripped[0] == '"':
+        message = _escaped_quoted_scalar_violation(stripped, 0)
+        if message:
+            return message
+        end, _ = _scan_quoted(stripped, 0)
+        rest = stripped[end:].lstrip(" ")
+        if rest.startswith(":"):
+            value = rest[1:].lstrip(" ")
+            if value.startswith('"'):
+                return _escaped_quoted_scalar_violation(value, 0)
+        return None
+    kv = split_key_value(stripped)
+    if kv is None:
+        return None
+    _, value, _ = kv
+    if value.startswith('"'):
+        return _escaped_quoted_scalar_violation(value, 0)
+    return None
+
+
 def scalar_construct_violation(line: str) -> str | None:
     """Return a refusal message for YAML constructs the subset grammar
     refuses at a parsed position, or None. Called after block-scalar
@@ -386,6 +458,39 @@ def scalar_construct_violation(line: str) -> str | None:
     if value.startswith("&") or value.startswith("*"):
         return ANCHOR_REFUSAL
     return None
+
+
+def blank_run_and_env_values(lines: list[str]) -> list[str]:
+    """Blank the value lines that cannot be artifact steps — a `run:` scalar
+    and every scalar under an `env:` mapping — for the reconciliation scan
+    (m1). A token there is data, not a step; a `uses:` line is never blanked,
+    because that is exactly the spelling reconciliation exists to catch."""
+    out = list(lines)
+    env_columns: list[int] = []
+    for index, line in enumerate(out):
+        if is_blank(line):
+            continue
+        indent = indent_of(line)
+        stripped = line[indent:]
+        prefix = 0
+        item = re.match(r"^-\s+", stripped)
+        if item:
+            prefix = item.end()
+        rest = stripped[prefix:]
+        key_col = indent + prefix
+        while env_columns and key_col <= env_columns[-1]:
+            env_columns.pop()
+        kv = split_key_value(rest)
+        if kv is None:
+            continue
+        key, value, _ = kv
+        key = decode_scalar(key)
+        if key == "env" and not value:
+            env_columns.append(key_col)
+            continue
+        if key == "run" or (env_columns and value):
+            out[index] = " " * len(line)
+    return out
 
 
 def blank_block_scalars(lines: list[str]) -> list[str]:
@@ -429,6 +534,18 @@ def blank_block_scalars(lines: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Workflow parser
 # ---------------------------------------------------------------------------
+
+
+def _refuse_block_scalar_header(index: int, key: str, value: str) -> None:
+    """A block-scalar header where a semantic key's value belongs would make
+    the gate read the header as the value while the real value is blanked
+    (B2), so it is a refusal, not an opaque scalar."""
+    if BLOCK_HEADER_RE.match(value):
+        raise Refusal(
+            index + 1,
+            f"block scalar header '{value}' as the value of '{key}:' — this key decides the artifact "
+            "graph and must be an inline scalar (refusing rather than guessing the folded value)",
+        )
 
 
 class WorkflowParser:
@@ -617,6 +734,7 @@ class WorkflowParser:
                 i = self._parse_steps(job, body, i, body_col)
                 continue
             if key == "needs":
+                _refuse_block_scalar_header(index, key, value)
                 if value:
                     for entry in _parse_inline_needs(index + 1, value):
                         job.needs.append(entry)
@@ -782,6 +900,7 @@ class WorkflowParser:
             )
         seen[key] = index + 1
         if key == "uses":
+            _refuse_block_scalar_header(index, key, value)
             step.uses_line = index + 1
             step.kind = _artifact_action_kind(decode_scalar(value))
             return pos + 1 if value else self._consume_opaque(body, pos, col)
@@ -828,22 +947,26 @@ class WorkflowParser:
                 )
             seen[key] = index + 1
             if key == "name":
+                _refuse_block_scalar_header(index, key, value)
                 step.name = decode_scalar(value)
                 step.name_line = index + 1
                 step.name_is_literal = bool(step.name) and "${{" not in step.name
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
                 continue
             if key == "run-id":
+                _refuse_block_scalar_header(index, key, value)
                 step.run_id = decode_scalar(value)
                 step.run_id_line = index + 1
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
                 continue
             if key == "pattern":
+                _refuse_block_scalar_header(index, key, value)
                 step.has_pattern = True
                 step.pattern_line = index + 1
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
                 continue
             if key == "artifact-ids":
+                _refuse_block_scalar_header(index, key, value)
                 step.has_artifact_ids = True
                 step.artifact_ids_line = index + 1
                 j = j + 1 if value else self._consume_opaque(body, j, with_key_col)
@@ -920,6 +1043,114 @@ def _extract_expression(value: str) -> str | None:
     return text[3:-2]
 
 
+def _collect_static_env(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
+    """Index static `env:` assignments (workflow-, job- and step-level) so a
+    `run-id: ${{ env.NAME }}` can be resolved against the same file (B3).
+    Names are matched case-insensitively (fail-closed: a case variant must not
+    launder a same-run value). Values written to `$GITHUB_ENV` at runtime are
+    invisible here and stay unresolved."""
+    index: dict[str, list[tuple[str, int]]] = {}
+    env_columns: list[int] = []
+    for number, line in enumerate(lines, start=1):
+        if is_blank(line):
+            continue
+        indent = indent_of(line)
+        stripped = line[indent:]
+        prefix = 0
+        item = re.match(r"^-\s+", stripped)
+        if item:
+            prefix = item.end()
+        rest = stripped[prefix:]
+        key_col = indent + prefix
+        while env_columns and key_col <= env_columns[-1]:
+            env_columns.pop()
+        kv = split_key_value(rest)
+        if kv is None:
+            continue
+        key, value, _ = kv
+        key = decode_scalar(key)
+        if key == "env" and not value:
+            env_columns.append(key_col)
+            continue
+        if env_columns and value:
+            index.setdefault(key.lower(), []).append((decode_scalar(value), number))
+    return index
+
+
+def _normalize_expression(value: str) -> str:
+    return re.sub(r"[\s'\"]", "", value).lower()
+
+
+def _classify_env_name(
+    name: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    seen: set[str],
+) -> str:
+    if name in seen:
+        return "unknown"
+    entries = static_env.get(name)
+    if not entries:
+        return "unresolved"
+    results = {
+        _classify_static_value(assigned, static_env, seen | {name}) for assigned, _line in entries
+    }
+    if "same-run" in results:
+        return "same-run"
+    if "unknown" in results:
+        return "unknown"
+    if "cross-run" in results:
+        return "cross-run"
+    return "unresolved"
+
+
+def _classify_static_value(
+    value: str,
+    static_env: dict[str, list[tuple[str, int]]],
+    seen: set[str],
+) -> str:
+    """Classify a statically assigned value: 'same-run', 'cross-run',
+    'unresolved' (no static assignment) or 'unknown' (static, but neither)."""
+    text = value.strip()
+    if not text:
+        return "unknown"
+    if LITERAL_INT_RE.match(text):
+        return "cross-run"
+    expression = _extract_expression(text)
+    if expression is None:
+        return "unknown"
+    normalized = _normalize_expression(expression)
+    if SAME_RUN_RE.search(normalized):
+        return "same-run"
+    if CROSS_RUN_RE.match(normalized):
+        if normalized.startswith("env."):
+            return _classify_env_name(normalized[4:], static_env, seen)
+        return "cross-run"
+    return "unknown"
+
+
+def _apply_static_env_run_id_resolution(jobs: list[Job], lines: list[str]) -> None:
+    """Resolve every cross-run-classified `run-id:` against the file's static
+    `env:` index: a same-run assignment turns the cross-run exclusion off (so
+    the rule applies), and a static value the gate cannot classify is refused
+    rather than excluded (B3)."""
+    static_env = _collect_static_env(lines)
+    for job in jobs:
+        for step in job.artifact_steps:
+            if not step.run_id_cross_run or step.run_id is None:
+                continue
+            resolution = _classify_static_value(step.run_id, static_env, set())
+            if resolution == "same-run":
+                step.run_id_cross_run = False
+                continue
+            if resolution == "unknown":
+                raise Refusal(
+                    step.run_id_line or step.uses_line,
+                    f"run-id: '{step.run_id}' resolves through a static assignment in this file to "
+                    "a value that is neither the current run nor a recognized cross-run handoff "
+                    "(refusing rather than guessing)",
+                )
+
+
 def _parse_inline_needs(line: int, value: str) -> list[str]:
     text = value.strip()
     if text.startswith("["):
@@ -990,15 +1221,19 @@ def process_file(relpath: str, raw: bytes) -> FileResult:
             message = unterminated_quote_violation(line)
             if message:
                 raise Refusal(index, message)
+            message = quoted_escape_violation(line)
+            if message:
+                raise Refusal(index, message)
             message = scalar_construct_violation(line)
             if message:
                 raise Refusal(index, message)
         parser = WorkflowParser(relpath, lines)
         result.jobs = parser.parse()
-        reconciliation = reconcile(lines, parser.artifact_step_lines)
+        reconciliation = reconcile(blank_run_and_env_values(lines), parser.artifact_step_lines)
         if reconciliation:
             result.diagnostics.extend(reconciliation)
             return result
+        _apply_static_env_run_id_resolution(result.jobs, lines)
         for job in result.jobs:
             for step in job.artifact_steps:
                 if step.kind == "upload":
@@ -1107,11 +1342,11 @@ def _evaluate_rules(
     file_result: FileResult, global_producers: dict[str, list[tuple[str, str]]]
 ) -> list[str]:
     diagnostics: list[str] = []
-    per_file_producers: dict[str, str] = {}
+    per_file_producers: dict[str, tuple[str, int]] = {}
     for job in file_result.jobs:
         for step in job.artifact_steps:
             if step.kind == "upload" and step.name_is_literal and step.name:
-                per_file_producers[step.name] = job.name
+                per_file_producers[step.name] = (job.name, step.uses_line)
     needs_map = {job.name: list(job.needs) for job in file_result.jobs}
     closures: dict[str, set[str]] = {}
 
@@ -1134,8 +1369,8 @@ def _evaluate_rules(
             if step.kind != "download" or step.run_id_cross_run:
                 continue
             name = step.name or ""
-            producer = per_file_producers.get(name)
-            if producer is None:
+            producer_entry = per_file_producers.get(name)
+            if producer_entry is None:
                 others = [
                     entry
                     for entry in global_producers.get(name, [])
@@ -1155,12 +1390,21 @@ def _evaluate_rules(
                         f"({RUN_SCOPED_SUFFIX})"
                     )
                 continue
+            producer, producer_line = producer_entry
             if producer == job.name:
+                if producer_line < step.uses_line:
+                    continue
+                diagnostics.append(
+                    f"{file_result.relpath}:{step.uses_line}: {job.name} downloads artifact "
+                    f'"{name}" before its own upload step (line {producer_line}) — a job\'s steps run '
+                    "in source order; move the upload step earlier"
+                )
                 continue
             if producer not in closure(job.name):
                 diagnostics.append(
                     f"{file_result.relpath}:{step.uses_line}: {job.name} downloads artifact "
-                    f'"{name}" but no needs: path reaches its producer "{producer}"'
+                    f'"{name}" but no needs: path reaches its producer "{producer}" — add '
+                    f"`needs: {producer}` to the `{job.name}` job"
                 )
     return diagnostics
 

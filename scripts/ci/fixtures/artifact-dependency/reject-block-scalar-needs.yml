@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `needs:` value written as a folded block scalar (lens-1 B2).
+# The body is blanked, so a parser that reads the `>-` header as the edge
+# would either fabricate or lose the dependency; the header is refused.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    needs: >-
+      build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
