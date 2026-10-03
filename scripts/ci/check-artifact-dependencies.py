@@ -744,16 +744,29 @@ mechanism), and
 `_line_leaves_double_quote_open` still uses the pre-fold escape-blind
 comment test (pre-existing, recorded, not folded — fold round 2 NIT-2;
 the same per-line context gap); a continuation that runs to the end of
-the run body joins to the last line (bash joins a trailing backslash to
-EOF — fold round 3 MAJOR-1), while a continuation
+the run body keeps the partial join (fold round 3 MAJOR-1; the kept join
+is not bash's join — bash removes the \\-newline pair while the join keeps
+the raw \\ and the inserted newline), while a continuation
 longer than 8 physical lines and a continuation inside a command
 substitution (`w=$(cp payload \\` + newline + `"${arr[0]}")`) stay open
 (named residuals; the fold round 2 direction claim in `f68192a6` — "no
 widening is possible" — was wrong about the join construction: the
 continuation *predicate* is monotone, but the end-of-body join discard
 was not, so this class is closed rather than pinned, and the
-plain-backslash EOF twin, pre-existing at base/pre/fold1/head, is
-refused by the same fix and recorded here without a fixture); the
+plain-backslash EOF twin for the argv-target spelling (`tee -a \\` +
+`"${arr[0]}" \\`), pre-existing at base/pre/fold1/head, is refused by the
+same fix and recorded here without a fixture — fold round 3 re-lens
+NIT-1); because the join keeps the raw \\ and the inserted newline, a
+trailing \\ word can mask a last-operand/`w`/`of=` extractor: with
+`cp`/`mv`/`install` (`operands[-1]`), `dd of=` and a sed `w` target, the
+EOF spellings stay accepted and runtime-FLIP, as do the
+continuation-independent controls (`cp payload "${arr[0]}" \\` with no
+continuation line) — all five gates ACCEPT every member, so this is
+pre-existing, not a delta regression (fold round 3 re-lens MINOR-1,
+recorded here, not folded; a strip-the-final-escape-pair candidate was
+measured to close the `cp`/`mv`/`install`/`tee` EOF twins with 0 corpus
+changes and `--selftest` 596/596 but not `dd of=`/sed `w`, whose mask is
+the retained inner \\-newline inside the joined word); the
 comment spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
@@ -4622,10 +4635,13 @@ def _joined_continuation_segments(
     also join as a suffix (the joined scans are additive refusals, so
     double-joining is harmless, and a backslash-terminated comment no
     longer suppresses the real continuation — fold round 1 MAJOR-2(b)). A
-    continuation that runs to the end of the body still yields the joined
-    segments (bash joins a trailing backslash to EOF — fold round 3
-    MAJOR-1), while a join longer than the bound still returns `[]` (a
-    named residual)."""
+    continuation that runs to the end of the body keeps the partial join
+    (fold round 3 MAJOR-1; bash removes the \\-newline pair at EOF,
+    while this join keeps the raw \\ and the inserted newline — the final
+    escape pair is not stripped, which is why the `cp`/`mv`/`install`/
+    `dd of=`/sed `w` EOF spellings stay accepted, a named residual), while
+    a join longer than the bound still returns `[]` (also a named
+    residual)."""
     if not _line_continuation_pending(lines[index]):
         return []
     joined = [lines[index]]
