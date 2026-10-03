@@ -4536,12 +4536,15 @@ def _line_continuation_pending(line: str) -> bool:
     test; this scan additionally rejects a backslash that sits inside a
     single-quoted region, where it is literal rather than a continuation,
     and stops at an unquoted `#` comment word, where the shell ends the
-    command (fold round 1 MAJOR-2(b))."""
+    command (fold round 1 MAJOR-2(b)). The comment test is escape-aware:
+    whitespace a backslash just escaped is part of the word, so a `#`
+    behind it does not start a comment (fold round 2 MAJOR-1)."""
     if not _line_has_continuation(line):
         return False
     quote: str | None = None
     index = 0
     end = len(line)
+    escaped_until = -1
     while index < end:
         char = line[index]
         if quote == "'":
@@ -4550,6 +4553,7 @@ def _line_continuation_pending(line: str) -> bool:
             index += 1
             continue
         if char == "\\" and quote != "'" and index + 1 < end:
+            escaped_until = index + 1
             index += 2
             continue
         if char == "'" and quote is None:
@@ -4560,7 +4564,11 @@ def _line_continuation_pending(line: str) -> bool:
             quote = None if quote == '"' else '"'
             index += 1
             continue
-        if char == "#" and quote is None and (index == 0 or line[index - 1].isspace()):
+        if (
+            char == "#"
+            and quote is None
+            and (index == 0 or (line[index - 1].isspace() and index - 1 != escaped_until))
+        ):
             end = index
             break
         index += 1
