@@ -655,8 +655,11 @@ escaped parenthesis or quote, a subshell, a process substitution, a `}`
 inside a backtick/`$(…)` region, a nested `$()` inside double quotes or
 an ANSI-C continuation string inside it) — is closed by A12; the name text must still appear; a `$(…)` body
 whose heredoc hides the halves, the `\\$NAME`/single-quoted-`$GITHUB`
-spellings the unbraced elision deliberately skips and NUL/`$'…'` name
-concatenation are outside the walk's claimed text); a `source`d or
+spellings the unbraced elision deliberately skips and the NUL/`$'…'` name
+concatenation spellings the bounded empty-pad elision does not cover
+(`$'\\x00'`, `$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`,
+`""`; the `''` and `$'\\0'`-only forms now refuse) are outside the walk's
+claimed text); a `source`d or
 `.`-sourced script's body, a `bash script.sh` path and an interpreter
 script file or `-m module` (`python3 /tmp/evil.py`, `python3 -m evilmod`;
 only the inline-program string is inspected), an interpreter fed its
@@ -739,14 +742,25 @@ lines) is tokenized whole and its target classified; the join only feeds
 the sed `w`/`$a\\` scan, so it can only add refusals, and the two benign
 multi-line single-quoted controls stay accepted (the GNU-sed run of the
 append is a deliberate fail-closed over-refusal, the same platform nuance
-as item 6; the BSD run is a real runtime FLIP). Measured at A13: the
-fixture corpus is
-577/577, of which 146 fixtures declare their measured base verdict
+as item 6; the BSD run is a real runtime FLIP); (viii-h) the mention
+walk's bounded
+empty-pad elision removes adjacent empty single-quoted strings (`''`)
+and ANSI-C literals whose body is a run of literal `\\0` escapes
+(`$'\\0'`, `$'\\0\\0'`) before the 64-character window test — a fail-closed
+addition (dropping a pad can only add mentions) that closes 3 of the 10
+measured NUL spellings; item 8 stays a boundary class, with `$'\\x00'`,
+`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'` and `""` as
+accepted boundary pins. Measured at A13: the fixture corpus is
+585/585, of which 154 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 3 over-refusal pins under
 one root cause (any unmodelled write of the now-relevant base name
-refuses), item 2 adds its unresolved-upstream pin, and item 7 adds its
-GNU-proxy fail-closed class, bringing the measured benign floor to
-62 + 3 + 1 + 1 = 67.
+refuses), item 2 adds its unresolved-upstream pin, item 7 adds its
+GNU-proxy fail-closed class, and item 8's elision adds the hidden-name
+echo class, bringing the measured benign floor to
+62 + 3 + 1 + 1 + 1 = 68. The A13 boundary (stays open, never implied
+closed) is items 3, 4, 5, 6, 8, 10, 11 and the item-2
+wrapper/assignment/continuation class; items 4, 5, 8 and 11 carry the
+committed accept pins added at this commit.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -796,7 +810,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 577
+EXPECTED_MANIFEST_CASES = 585
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -813,7 +827,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 146
+EXPECTED_BASE_VERDICT_CASES = 154
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -2352,6 +2366,17 @@ _EXPANSION_ELISION_RE = re.compile(
     re.DOTALL,
 )
 
+# The empty-pad elision for the mention-window walk: a zero-width pad made
+# of adjacent empty single-quoted strings (`''`) or an ANSI-C literal whose
+# body is a run of literal `\0` escapes (`$'\0'`, `$'\0\0'`). Dropping it
+# can only add mentions, so the direction is fail-closed. The class is
+# deliberately bounded: it closes 3 of the 10 measured NUL spellings and
+# the survivors (`$'\x00'`, `$'\000'`, `$'\u0000'`, `$'\c@'`,
+# `$'\0\000'`, `$'\x0'`, `""`) stay accepted and are pinned as boundary
+# accepts; a complete closure needs an ANSI-C/empty-pad normalizer (issue
+# #350, item 8, un-folded to the boundary).
+_EMPTY_PAD_ELISION_RE = re.compile(r"''|\$'(?:\\0)+'")
+
 # The elision runs to a bounded fixpoint. Two mechanisms cooperate and
 # disagree about order: the regex fallback's braced alternative must
 # consume a `${…}` before the unbraced `$NAME` alternative can swallow a
@@ -2426,6 +2451,7 @@ def _mention_candidates(text: str) -> set[str] | None:
             for collapsed in (
                 _EXPANSION_ELISION_RE.sub("", candidate),
                 _elide_balanced_expansions(candidate),
+                _EMPTY_PAD_ELISION_RE.sub("", candidate),
             ):
                 if collapsed != candidate and collapsed not in seen:
                     seen.add(collapsed)

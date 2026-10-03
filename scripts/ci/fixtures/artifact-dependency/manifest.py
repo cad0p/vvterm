@@ -5080,5 +5080,92 @@ CASES = [
         "base_exit": 0,
         "excluded": 1,
         "diagnostics": []
+    },
+    # #350 item 8 (boundary, partial credit): the bounded empty-pad elision
+    # closes the `''` and `$'\0'`-only spellings; the other measured NUL
+    # spellings stay accepted boundary pins.
+    {
+        "id": "reject-runid-github-env-write-mention-window-empty-single-quote-pad",
+        "files": [
+            "reject-runid-github-env-write-mention-window-empty-single-quote-pad.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-empty-single-quote-pad.yml:21: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-mention-window-empty-ansic-pad",
+        "files": [
+            "reject-runid-github-env-write-mention-window-empty-ansic-pad.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-empty-ansic-pad.yml:21: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-mention-window-empty-pad-ansic-hex",
+        "files": [
+            "accept-runid-github-env-write-mention-window-empty-pad-ansic-hex.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-mention-window-empty-pad-empty-dquote",
+        "files": [
+            "accept-runid-github-env-write-mention-window-empty-pad-empty-dquote.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    # #350 boundary pins: items 4, 5 and 11 stay open, each with a committed
+    # accept pin.
+    {
+        "id": "accept-runid-github-env-write-python3-stdin-program",
+        "files": [
+            "accept-runid-github-env-write-python3-stdin-program.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-python3-stdin-heredoc-program",
+        "files": [
+            "accept-runid-github-env-write-python3-stdin-heredoc-program.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-python3-process-substitution-program",
+        "files": [
+            "accept-runid-github-env-write-python3-process-substitution-program.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-cmdsub-heredoc-program",
+        "files": [
+            "accept-runid-github-env-write-cmdsub-heredoc-program.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
     }
 ]
