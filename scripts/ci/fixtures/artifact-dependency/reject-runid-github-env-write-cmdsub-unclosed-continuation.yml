@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the heredoc continuation carrying the write (issue #345,
+# shape `h23-heredoc-continuation`). The only shape the (ii'')
+# unclosed-substitution continuation guard closes: the physical line
+# ends in an unescaped `\` with an unclosed `$(` already showing a
+# redirect.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          cat <<EOF
+          w=$(printf '%s\n' "SOURCE_RUN_ID=${{ github.run_id }}" >> \
+          "$n")
+          EOF
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

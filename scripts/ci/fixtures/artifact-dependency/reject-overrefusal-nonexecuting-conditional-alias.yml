@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: OVER-REFUSAL PIN, shape `h28-true-or-alias` (issue
+# #345). `true || n="$GITHUB_ENV"` never executes the alias, so
+# the runtime is benign; the gate refuses fail-closed.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; true || n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          x=$(printf '%s\n' "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

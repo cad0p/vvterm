@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the F1' payload-word variant of `h17` (issue #345, shape
+# `q6-payload-word-computed-alias`). The env-write payload carries
+# the substitution with the computed alias target.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          x=GITHUB_
+          y=ENV
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          n=$(printenv "${x}${y}")
+          printf '%s\n' "X=$(printf '%s\n' SOURCE_RUN_ID=${{ github.run_id }} >> "$n")" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

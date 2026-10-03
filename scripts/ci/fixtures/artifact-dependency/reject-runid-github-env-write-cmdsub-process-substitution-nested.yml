@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture: nested `<(...)` process substitution writing the env
+# file (issue #345, fold round 2 D1, re-lens 1 BLOCKER-1). The
+# inner substitution's closing `)` and the outer one are both
+# glued to the redirect target, so the target text is
+# `$GITHUB_ENV))`; the classifier strips every glued closing
+# parenthesis under the opener guard; runtime-malicious (rc=0,
+# current run last).
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          x=GITHUB_
+          y=ENV
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf '%s\n' <(cat <(printf '%s\n' "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV"))
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

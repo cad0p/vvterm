@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# ACCEPT control: login/noprofile flags are not command carriers
+# (issue #345, fold round 1 F1). `bash -l -c` and
+# `bash --noprofile -c` carry no env-file write, so the cluster
+# recognition must not read `-l`/`--noprofile` as a carrier and
+# the invocations stay accepted; runtime-benign.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          w=$(bash -l -c "echo hi")
+          z=$(bash --noprofile -c "echo hi")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture: OVER-REFUSAL PIN, runtime-assembled interpreter
+# inline-program flag (issue #345, fold round 5). The program is
+# benign (`echo 1;`) and the trailing word is a value, not a path,
+# so the runtime is benign; the fail-closed rule refuses it. Same
+# class as the literal-flag pins.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          x=GITHUB_
+          y=ENV
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          F=-r; w=$(php $F 'echo 1;' -- "${{ github.run_id }}" < /dev/null)
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# ACCEPT control: a `<(…)`/`>(…)` body whose redirect target is a
+# literal non-env path stays accepted (issue #345, fold round 1
+# F3), and a literal filename that merely ends in `)` is untouched
+# because no process-substitution opener is present on its line;
+# runtime-benign.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf '%s\n' <(printf '%s\n' hi >> /tmp/out)
+          printf '%s\n' >(printf '%s\n' hi >> /tmp/out)
+          w=$(printf '%s\n' hi >> '/tmp/out)')
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
