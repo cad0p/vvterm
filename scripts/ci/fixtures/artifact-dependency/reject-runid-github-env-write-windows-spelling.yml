@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a Windows `cmd` step writes the env file through
+# `%github_env%`. The case-insensitive spelling resolves to the env file,
+# and the same-run payload refuses (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: blank the run id
+        shell: cmd
+        run: echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "%github_env%"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

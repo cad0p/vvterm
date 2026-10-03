@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `declare -g CI_RUN_ID=...` inside a called function writes the
+# global from a non-statement position; the extractor never saw the write,
+# so the stale cross-run assignment kept the exclusion (issue #342, R4;
+# fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          f() { declare -g CI_RUN_ID=42424242; }
+          f
+          echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

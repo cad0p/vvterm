@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the written NAME is assembled at runtime (`$n=…`), so no
+# literal `SOURCE_RUN_ID=` appears on the write line — an unextractable
+# name refuses (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          n=SOURCE_RUN_ID; echo "$n=${{ github.run_id }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

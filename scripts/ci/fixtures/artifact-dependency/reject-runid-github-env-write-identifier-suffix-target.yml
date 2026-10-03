@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a same-run payload written directly to `$GITHUB_ENV_X`. The
+# runner publishes the env-file path only as `GITHUB_ENV` / `%GITHUB_ENV%`,
+# but this name can be made the env path by a PRECEDING step
+# (`GITHUB_ENV_X=$GITHUB_ENV`), and the flip step cannot prove it is not, so
+# the unresolved suffix target is `unknown` and refuses (issue #342,
+# BLOCKER-4; the fixture was an accept under the unprovable "never set"
+# assumption). Measured fail-open at base `81673bd5`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV_X"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

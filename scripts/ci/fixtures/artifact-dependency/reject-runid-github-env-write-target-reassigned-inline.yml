@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the whole hijack on one line — the stale `n=/tmp/foo` is
+# reassigned to the env spelling before the write in the same statement
+# list. (line, column) order must pick the env assignment, not the earlier
+# literal (issue #342, F7).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          n=/tmp/foo; n="$GITHUB_ENV"; echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

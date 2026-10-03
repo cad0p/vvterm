@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Accept control: a bare `<>` (fd 0) opens stdin read-write and provably does
+# not write the payload, so the target is not the write and the cross-run
+# exclusion is kept. The explicit-fd `<>` forms are rejects (issue #342, R2;
+# non-vacuous: the download keeps `excluded: 1`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" <>"$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

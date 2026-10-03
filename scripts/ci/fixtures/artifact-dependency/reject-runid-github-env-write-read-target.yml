@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `read -r n` overwrites the stale `n=/tmp/foo` with the env path
+# from `"$m"`, so the runtime redirect target is the env file; the target
+# trace never saw the `read` write and kept the exclusion (issue #342, R4;
+# fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          x=1; m="$GITHUB_ENV"
+          n=/tmp/foo
+          read -r n <<< "$m"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the written value's shell local is reassigned to the current
+# run on the same line as another assignment (`m=1; CI_RUN_ID="…run_id"`).
+# The value trace must index the mid-line reassignment, so `${CI_RUN_ID}`
+# classifies same-run and refuses — not the stale `1234` literal
+# (issue #342, F8).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID=1234
+          m=1; CI_RUN_ID="${{ github.run_id }}"
+          echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

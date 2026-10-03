@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env-file target is assigned in the `then` branch (mid-line, so
+# the alias set does not see it) and the write sits after `fi`; the `else`
+# branch's stale `n=/tmp/foo` is later in program order and was read as
+# reaching, waiving the same-run write. A branch closer between the chosen
+# assignment and the write is now a fail-closed boundary (issue #342,
+# BLOCKER-2; measured fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          if true; then
+          m=1; n="$GITHUB_ENV"
+          else
+          n=/tmp/foo
+          fi
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

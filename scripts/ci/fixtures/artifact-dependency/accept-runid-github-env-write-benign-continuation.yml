@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the fold-4 blanket continuation refusal newly refused a benign
+# `printf … \` argument split; only a trailing redirect operator can
+# hide a target on the joined line, so this body is accepted again
+# (issue #342, F1; non-vacuous, the download keeps the exclusion).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf '%s\n' \
+            "hello"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

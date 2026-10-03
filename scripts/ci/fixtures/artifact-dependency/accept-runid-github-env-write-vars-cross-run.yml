@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `vars.*` write value classifies cross-run (the same literal
+# stance as the static `env:` classifiers), so the exclusion stands
+# (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ vars.SOURCE_RUN_ID }}
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=${{ vars.OTHER }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

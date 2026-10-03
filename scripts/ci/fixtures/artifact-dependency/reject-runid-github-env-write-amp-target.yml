@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: bash's omitted-fd form `>&word` with a non-digit word redirects
+# stdout+stderr to that FILE, so the word is a redirect target and the
+# mid-line alias `n="$GITHUB_ENV"` makes it the env file. The old redirect
+# grammar treated `>&` as an fd duplication and skipped the word entirely,
+# so the same-run write passed (issue #342, BLOCKER-1; measured fail-open at
+# base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >&"$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

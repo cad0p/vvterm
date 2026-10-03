@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `readonly CI_RUN_ID=42424242` assigns before it marks the variable
+# read-only, and the write is outside the indexed statement positions, so the
+# value trace read the stale cross-run assignment (issue #342, R4; fail-open
+# at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          readonly CI_RUN_ID=42424242
+          echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

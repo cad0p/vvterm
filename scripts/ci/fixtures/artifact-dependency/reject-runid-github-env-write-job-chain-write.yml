@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the job-level link shape. A job-level `A: ${{ env.B }}` is
+# frozen at job start, so a later write of `B` is not a true runtime flip;
+# refusing it is a fail-closed over-approximation (lens-2 MAJOR-1, issue
+# #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      A: ${{ env.B }}
+      B: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "B=${{ github.run_id }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.A }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

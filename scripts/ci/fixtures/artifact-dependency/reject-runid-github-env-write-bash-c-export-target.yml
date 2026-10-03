@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `export n` hands the env-file alias to a child `bash -c` that
+# writes the same-run payload through it. The child command string is not a
+# statement-position assignment, so the write passed (issue #342, R4;
+# fail-open at base `81673bd5`).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          m=1; n="$GITHUB_ENV"; export n
+          bash -c 'echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$n"'
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

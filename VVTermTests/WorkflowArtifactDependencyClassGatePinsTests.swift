@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 231
+    private static let expectedManifestCases = 343
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -379,6 +379,147 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-env-case-collision-step-variant-token.yml",
         "reject-env-case-collision-job-variant-workflow-exact.yml",
         "reject-env-case-collision-runid-step-variant.yml",
+        // #342: the run-id `$GITHUB_ENV` write class. The rejects cover the
+        // same-run flip (direct, guarded-local, static and step-level chain),
+        // the unmodelled write verbs and redirect targets (per-line
+        // accounting), the unextractable payload/name shapes, the case-variant
+        // and non-ASCII name stances, and the Windows `%GITHUB_ENV%` spelling;
+        // the accepts cover the real handoff, the `inputs.*` local trace, the
+        // position/scope controls and the step-`env:` shadow.
+        "reject-runid-github-env-write-same-run.yml",
+        "reject-runid-github-env-write-guarded-local.yml",
+        "reject-runid-github-env-write-static-cross-run-flip.yml",
+        "reject-runid-github-env-write-step-chain-flip.yml",
+        "reject-runid-github-env-write-job-chain-write.yml",
+        "reject-runid-github-env-write-vars-flip.yml",
+        "reject-runid-github-env-write-empty.yml",
+        "reject-runid-github-env-write-command-substitution.yml",
+        "reject-runid-github-env-write-dynamic-name.yml",
+        "reject-runid-github-env-write-shell-assembled-name.yml",
+        "reject-runid-github-env-write-heredoc.yml",
+        "reject-runid-github-env-write-read-only-mention.yml",
+        "reject-runid-github-env-write-payload-unknown.yml",
+        "reject-runid-github-env-write-tee-unmodelled.yml",
+        "reject-runid-github-env-write-dd-unmodelled.yml",
+        "reject-runid-github-env-write-sed-append-unmodelled.yml",
+        "reject-runid-github-env-write-case-variant-name.yml",
+        "reject-runid-github-env-write-bash-c-indirect.yml",
+        "reject-runid-github-env-write-mixed-unmodelled-launder.yml",
+        "reject-runid-github-env-write-windows-spelling.yml",
+        "accept-runid-github-env-write-cross-run.yml",
+        "accept-runid-github-env-write-inputs-local.yml",
+        "accept-runid-github-env-write-real-handoff.yml",
+        "accept-runid-github-env-write-unrelated-name.yml",
+        "accept-runid-github-env-write-after-download.yml",
+        "accept-runid-github-env-write-direct-expression.yml",
+        "accept-runid-github-env-write-vars-cross-run.yml",
+        "accept-runid-github-env-write-other-job.yml",
+        "accept-runid-github-env-write-step-env-shadow.yml",
+        "accept-runid-github-env-write-single-line-body.yml",
+        "accept-runid-github-env-write-yaml-escaped.yml",
+        "accept-runid-github-env-write-tagged-body.yml",
+        // #342 fold round 1: the command-substitution alias skip (BLOCKER-1),
+        // the `${!x}` indirect target (BLOCKER-2) plus its direct-target
+        // control, and the `$GITHUB_ENV.bak` false red (MINOR-1).
+        "reject-runid-github-env-write-cmdsub-assign.yml",
+        "reject-runid-github-env-write-cmdsub-tee.yml",
+        "reject-runid-github-env-write-cmdsub-multi.yml",
+        "reject-runid-github-env-write-backtick.yml",
+        "reject-runid-github-env-write-cmdsub-read.yml",
+        "reject-runid-github-env-write-indirect-target.yml",
+        "reject-runid-github-env-write-indirect-target-direct.yml",
+        "accept-runid-github-env-write-env-file-backup.yml",
+        // #342 fold round 2: the same-line multi-assignment traces (F7/F8,
+        // including the (line, column) after-write fixtures), the
+        // `$GITHUB_ENV_X` spelling narrowing (F9), the F2(b)-alone trace pin
+        // (F10), and the own-line reassignment control.
+        "reject-runid-github-env-write-target-reassigned-mid-line.yml",
+        "reject-runid-github-env-write-target-reassigned-inline.yml",
+        "reject-runid-github-env-write-target-reassigned-after-write.yml",
+        "reject-runid-github-env-write-value-reassigned-mid-line.yml",
+        "reject-runid-github-env-write-value-reassigned-inline.yml",
+        "reject-runid-github-env-write-value-reassigned-after-write.yml",
+        "reject-runid-github-env-write-own-line-reassign-control.yml",
+        "reject-runid-github-env-write-unresolved-target-value.yml",
+        // #342 fold round 3: the `>&word`/`>|word` redirect targets
+        // (BLOCKER-1), the branch-closer boundary (BLOCKER-2), the
+        // command-prefix assignment in the write's own segment (BLOCKER-3),
+        // and the cross-step `GITHUB_ENV_X` suffix chain (BLOCKER-4: the
+        // suffix target is `unknown`, so the old accept became a reject).
+        "reject-runid-github-env-write-amp-target.yml",
+        "reject-runid-github-env-write-noclobber-target.yml",
+        "reject-runid-github-env-write-exec-amp-target.yml",
+        "reject-runid-github-env-write-ifelse-branch-target.yml",
+        "reject-runid-github-env-write-case-branch-target.yml",
+        "reject-runid-github-env-write-branch-residual.yml",
+        "reject-runid-github-env-write-prefix-target-oneline.yml",
+        "reject-runid-github-env-write-prefix-target.yml",
+        "reject-runid-github-env-write-prefix-value-oneline.yml",
+        "reject-runid-github-env-write-prefix-value.yml",
+        "reject-runid-github-env-write-identifier-suffix-chain.yml",
+        "reject-runid-github-env-write-identifier-suffix-concat-chain.yml",
+        "reject-runid-github-env-write-identifier-suffix-target.yml",
+        // #342 fold round 4: the `&&`/`||` short-circuit ambiguity (R1,
+        // including the cross-line continuation), the `<>` read-write
+        // redirect targets and the line-continuation split (R2/R3), the
+        // unmodelled variable-writing mechanisms and carriers (R4), and the
+        // two accept controls (bare fd-0 `<>`; an unrelated `read` operand).
+        "reject-runid-github-env-write-or-target-oneline.yml",
+        "reject-runid-github-env-write-and-or-target-oneline.yml",
+        "reject-runid-github-env-write-or-target-continuation.yml",
+        "reject-runid-github-env-write-or-value-oneline.yml",
+        "reject-runid-github-env-write-rw-target.yml",
+        "reject-runid-github-env-write-rw-exec.yml",
+        "reject-runid-github-env-write-continuation-amp-target.yml",
+        "reject-runid-github-env-write-continuation-noclobber-target.yml",
+        "reject-runid-github-env-write-trap-target.yml",
+        "reject-runid-github-env-write-eval-target.yml",
+        "reject-runid-github-env-write-bash-c-export-target.yml",
+        "reject-runid-github-env-write-bash-c-export-unset-target.yml",
+        "reject-runid-github-env-write-brace-group-target.yml",
+        "reject-runid-github-env-write-read-value.yml",
+        "reject-runid-github-env-write-read-target.yml",
+        "reject-runid-github-env-write-printf-v-value.yml",
+        "reject-runid-github-env-write-declare-value.yml",
+        "reject-runid-github-env-write-declare-target.yml",
+        "reject-runid-github-env-write-readonly-value.yml",
+        "reject-runid-github-env-write-readonly-target.yml",
+        "reject-runid-github-env-write-typeset-value.yml",
+        "reject-runid-github-env-write-declare-g-value.yml",
+        "accept-runid-github-env-write-rw-plain.yml",
+        "accept-runid-github-env-write-unrelated-mechanism.yml",
+        // #342 fold round 5: the F1 benign continuations, the F2
+        // subshell shapes, and the F3 detection-completeness fixtures.
+        "accept-runid-github-env-write-benign-continuation.yml",
+        "accept-runid-github-env-write-benign-continuation-heredoc.yml",
+        "accept-runid-github-env-write-benign-continuation-comment.yml",
+        "reject-runid-github-env-write-amp-background-target.yml",
+        "reject-runid-github-env-write-pipe-left-target.yml",
+        "reject-runid-github-env-write-pipe-left-or-target.yml",
+        "reject-runid-github-env-write-subshell-group-target.yml",
+        "reject-runid-github-env-write-cmdsub-multiline-target.yml",
+        "reject-runid-github-env-write-mapfile-t-value.yml",
+        "reject-runid-github-env-write-readarray-t-value.yml",
+        "reject-runid-github-env-write-mapfile-n-t-value.yml",
+        "reject-runid-github-env-write-mapfile-t-target.yml",
+        "reject-runid-github-env-write-eval-read-value.yml",
+        "reject-runid-github-env-write-eval-read-target.yml",
+        "reject-runid-github-env-write-eval-printf-v-value.yml",
+        "reject-runid-github-env-write-nameref-read-target.yml",
+        "reject-runid-github-env-write-nameref-eval-target.yml",
+        "reject-runid-github-env-write-read-subscript-value.yml",
+        "reject-runid-github-env-write-let-value.yml",
+        "reject-runid-github-env-write-arith-value.yml",
+        "reject-runid-github-env-write-array-element-value.yml",
+        "reject-runid-github-env-write-expansion-read-value.yml",
+        // #342 fold round 6: the cross-line tracker close (fold-5
+        // BLOCKER-1) and the unterminated-heredoc delimiter refusal
+        // (fold-5 MINOR-3).
+        "accept-runid-github-env-write-substitution-then-cross-run-write.yml",
+        "accept-runid-github-env-write-substitution-then-value-trace.yml",
+        "accept-runid-github-env-write-substitution-then-alias-target.yml",
+        "accept-runid-github-env-write-backtick-then-alias-target.yml",
+        "reject-runid-github-env-write-unterminated-heredoc-delimiter.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -574,9 +715,21 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             atPath: root.appendingPathComponent(Self.fixturesDirectory).path
         )) ?? []
         let fixtureFiles = onDisk.filter { $0.hasSuffix(".yml") || $0.hasSuffix(".yaml") }
+        // Exact agreement, not a lower bound: `--selftest` already refuses an
+        // unreferenced fixture file, and this pins the same invariant where a
+        // build-time red is visible (issue #342, lens-3 MINOR 8).
         #expect(
-            fixtureFiles.count >= Self.requiredFixtures.count,
-            "the fixture directory holds \(fixtureFiles.count) YAML file(s), fewer than the \(Self.requiredFixtures.count) required — a deleted fixture file must red this pin (issue #316)"
+            Set(fixtureFiles) == Set(Self.requiredFixtures),
+            "the fixture directory's YAML files must equal `requiredFixtures` exactly — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count); extra: \(Set(fixtureFiles).subtracting(Self.requiredFixtures).sorted()); missing: \(Set(Self.requiredFixtures).subtracting(fixtureFiles).sorted()) (issue #316)"
+        )
+        // Count equality alongside the set equality: `requiredFixtures` may
+        // hold a duplicate entry while both sets stay equal, so the exact
+        // inventory `--selftest` enforces must be asserted as a count too
+        // (issue #342, lens-2 MINOR 1).
+        #expect(
+            fixtureFiles.count == Self.requiredFixtures.count
+                && Set(Self.requiredFixtures).count == Self.requiredFixtures.count,
+            "the fixture directory's YAML files and `requiredFixtures` must match in count, with no duplicate entries — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count), unique required \(Set(Self.requiredFixtures).count) (issue #342)"
         )
 
         // The script must reference the manifest, and carry the stated
@@ -641,6 +794,24 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "YAML tag",
             "only the string tag",
             "cannot be proven non-empty at runtime",
+            "with a value that is not provably cross-run",
+            "with a payload the gate cannot extract",
+            "writes an unextractable name to `$GITHUB_ENV`",
+            "without an extractable write",
+            // #342 fold round 4: the R1 short-circuit, R2 `<>`, R3
+            // continuation and R4 unmodelled-mechanism refusals, plus the
+            // distinct unresolved-redirect-target message (NIT-2).
+            "a target the extractor cannot resolve to the env file or prove harmless",
+            "with an unescaped backslash continuation",
+            "with a command string that names the value the download",
+            "which the extractor does not model",
+            "an out-of-statement assignment",
+            // #342 fold round 5: the F3 detection-completeness refusal.
+            "an occurrence the extractor cannot account for",
+            // The `_flip_target_match` non-ASCII raise was dead code (only
+            // `[A-Za-z_][A-Za-z0-9_]*` names reach it; the unextractable-name
+            // refusal above owns the non-ASCII case), so its fragment is no
+            // longer a manifest-asserted diagnostic (issue #342, F4).
         ]
         for diagnostic in requiredDiagnostics {
             #expect(

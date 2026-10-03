@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an empty write. `parseInt('')` is NaN, so the action requests
+# `/runs/NaN/artifacts` (a 404, not a same-run download) — the exclusion
+# cannot be proven and must be refused (lens-2 MINOR-3; issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Resolve run context
+        run: |
+          echo "SOURCE_RUN_ID=" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

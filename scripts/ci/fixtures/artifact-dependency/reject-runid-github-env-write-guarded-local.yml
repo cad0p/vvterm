@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the same-run value arrives through a shell local with a
+# `[[ -n … ]]` guard. A guard is not a classification, so the trace must
+# follow `CI_RUN_ID` to `github.run_id` and refuse (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          set -euo pipefail
+          CI_RUN_ID="${{ github.run_id }}"
+          [[ -n "$CI_RUN_ID" ]] || { echo "::error::requires ci_run_id"; exit 1; }
+          echo "SOURCE_RUN_ID=${CI_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

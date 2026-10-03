@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a heredoc delimiter line ending in `\` is not the delimiter, so
+# bash consumes the rest of the body as heredoc text (`here-document …
+# delimited by end-of-file`) and the cross-run write after it never
+# executes; the download would fail with an empty run-id (issue #342,
+# fold-6 MINOR-3; the gate refuses rather than reading the swallowed write
+# as shell).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          cat <<'EOF'
+          payload
+          EOF \
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

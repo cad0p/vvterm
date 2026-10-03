@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the env-file spelling is YAML-escaped (`\x5f`) inside a
+# double-quoted run scalar; the one decode path resolves it and the
+# cross-run payload keeps the exclusion (issue #342).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: "echo \"SOURCE_RUN_ID=${{ github.event.workflow_run.id }}\" >> \"$GITHUB\x5fENV\""
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
