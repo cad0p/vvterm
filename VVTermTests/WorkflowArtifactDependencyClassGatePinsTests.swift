@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 594
-    private static let expectedBaseVerdictCases = 163
+    private static let expectedManifestCases = 596
+    private static let expectedBaseVerdictCases = 165
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -763,6 +763,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         // behind escaped whitespace does not start a comment, so the
         // escaped-whitespace spelling is a real continuation.
         "reject-runid-github-env-write-array-element-escaped-whitespace-comment-target.yml",
+        // Fold round 3 MAJOR-1: the join runs to the end of the run body,
+        // so the partial join must be kept (bash joins to EOF).
+        "reject-runid-github-env-write-array-element-continuation-eof-target.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-read.yml",
         "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml",
@@ -788,6 +791,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-array-element-slice-target.yml",
         "accept-runid-github-env-write-array-element-offset-target.yml",
         "accept-runid-github-env-write-array-element-multiline-subscript.yml",
+        // Fold round 3 MAJOR-2 / NIT-2: a `#` immediately after an
+        // escaped newline is still read as a comment; named and pinned
+        // as an accept boundary (runtime FLIP).
+        "accept-runid-github-env-write-array-element-hash-after-escaped-newline-target.yml",
         // A13 (#350 item 9): `--expression` unambiguous-prefix spellings.
         "reject-runid-github-env-write-sed-expression-abbrev-e-eq.yml",
         "reject-runid-github-env-write-sed-expression-abbrev-ex-eq.yml",

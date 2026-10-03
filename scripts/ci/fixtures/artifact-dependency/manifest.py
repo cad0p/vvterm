@@ -4896,6 +4896,17 @@ CASES = [
         ]
     },
     {
+        "id": "reject-runid-github-env-write-array-element-continuation-eof-target",
+        "files": [
+            "reject-runid-github-env-write-array-element-continuation-eof-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-array-element-continuation-eof-target.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
         "id": "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile",
         "files": [
             "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml"
@@ -5112,6 +5123,21 @@ CASES = [
         "id": "accept-runid-github-env-write-array-element-multiline-subscript",
         "files": [
             "accept-runid-github-env-write-array-element-multiline-subscript.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    # Fold round 3 MAJOR-2 / NIT-2: the per-line comment test has no
+    # previous-line context, so a `#` immediately after an escaped
+    # newline is read as a comment and the joined target never reaches
+    # the relevance set; the gate ACCEPTs while bash joins (a named
+    # boundary residual, runtime FLIP).
+    {
+        "id": "accept-runid-github-env-write-array-element-hash-after-escaped-newline-target",
+        "files": [
+            "accept-runid-github-env-write-array-element-hash-after-escaped-newline-target.yml"
         ],
         "exit": 0,
         "base_exit": 0,

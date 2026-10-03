@@ -730,17 +730,34 @@ skipped as the second half of a `\\X` escape pair is part of the word, so
 `foo\\ #bar \\` (and its escaped-tab twin) is a real continuation, not a
 comment — pinned by
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target`;
-the comment-start class remains whitespace-or-line-start, so `;#`, `|#`,
-`&#` and `(#` stay read as continuations (a pre-existing fail-closed
-over-refusal, recorded here, not folded — fold round 2 MINOR-1), and
+the comment-start class remains whitespace-or-line-start, so `;#`, `|#`
+and `&#` stay read as continuations (a pre-existing fail-closed
+over-refusal, recorded here, not folded — fold round 2 MINOR-1; `(#` is
+a bash syntax error, not a comment, so it is no longer listed); the
+per-line comment test has no previous-line context, so a `#` immediately
+after an escaped newline (`tee -a \\` + `x\\` + `#y \\` + target) is
+still read as a comment and the target never joins (a pre-existing
+fail-open, recorded here, not folded — fold round 3 MAJOR-2, pinned by
+`accept-runid-github-env-write-array-element-hash-after-escaped-newline-target`;
+carrying the joined prefix into the per-line decision is a new
+mechanism), and
 `_line_leaves_double_quote_open` still uses the pre-fold escape-blind
-comment test (pre-existing, recorded, not folded — fold round 2 NIT-2);
-a continuation
+comment test (pre-existing, recorded, not folded — fold round 2 NIT-2;
+the same per-line context gap); a continuation that runs to the end of
+the run body joins to the last line (bash joins a trailing backslash to
+EOF — fold round 3 MAJOR-1), while a continuation
 longer than 8 physical lines and a continuation inside a command
 substitution (`w=$(cp payload \\` + newline + `"${arr[0]}")`) stay open
-(named residuals); the comment spellings are pinned by
-`reject-runid-github-env-write-array-element-comment-continuation-target` and
-`reject-runid-github-env-write-array-element-escaped-whitespace-comment-target`; (viii-d) the
+(named residuals; the fold round 2 direction claim in `f68192a6` — "no
+widening is possible" — was wrong about the join construction: the
+continuation *predicate* is monotone, but the end-of-body join discard
+was not, so this class is closed rather than pinned, and the
+plain-backslash EOF twin, pre-existing at base/pre/fold1/head, is
+refused by the same fix and recorded here without a fixture); the
+comment spellings are pinned by
+`reject-runid-github-env-write-array-element-comment-continuation-target`,
+`reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
+`reject-runid-github-env-write-array-element-continuation-eof-target`; (viii-d) the
 `_HEREDOC_RE` guard `(?<!<)<<-?(?!<)` stops a here-string (`<<<`) from
 being read as a heredoc opener, so the line after it is walked as shell
 (`<<<<`/`<<<<<` are bash syntax errors and `<<<-` is a here-string, so no
@@ -788,7 +805,7 @@ measured NUL spellings; item 8 stays a boundary class: `$'\\x00'` and `""`
 are pinned as accepted boundary fixtures, and the other five measured
 survivors (`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`)
 stay accepted and are recorded here. Measured at A13: the fixture corpus is
-594/594, of which 163 fixtures declare their measured base verdict
+596/596, of which 165 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 4 over-refusal pins under
 two root causes — 3 unmodelled-write shapes (any unmodelled write of the
 now-relevant base name refuses) and 1 no-write target mention (the
@@ -853,7 +870,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 594
+EXPECTED_MANIFEST_CASES = 596
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -870,7 +887,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 163
+EXPECTED_BASE_VERDICT_CASES = 165
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
