@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a process-substitution parenthesis inside the `$(…)` pad defeats the regex elision; the balanced scanner must flatten it (re-lens 3 BLOCKER-1, H8)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          eval "echo SOURCE_RUN_ID=${{ github.run_id }} >> \$GITHUB_$(cat <(true) # (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          )ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

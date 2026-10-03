@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the `$!` pad elides to the joined env-file name; `$!` is empty with no background job (fold lens-1 round 2 MAJOR-3 closure)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          eval "echo SOURCE_RUN_ID=${{ github.run_id }} >> \$GITHUB_$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!$!ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

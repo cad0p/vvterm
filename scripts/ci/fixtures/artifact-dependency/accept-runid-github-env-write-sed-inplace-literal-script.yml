@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: BSD `sed -i ''` with a literal path and an assembled script stays accepted
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      v: SOURCE
+      r: _RUN_
+      i: ID
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          RESOLVED_SHA=abc
+          sed -i '' "s|.*|$v$r$i|" scripts/patches/ghostty/BASE
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

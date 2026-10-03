@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `$(…)` pad whose double-quoted region contains a nested `$(…)` with its own quoted `)`: the outer quote skip ended on the nested quote and the next `)` closed the pad early (fold round 6, A3)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          eval "echo SOURCE_RUN_ID=${{ github.run_id }} >> \$GITHUB_$( : "$(echo ")")" AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA )ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

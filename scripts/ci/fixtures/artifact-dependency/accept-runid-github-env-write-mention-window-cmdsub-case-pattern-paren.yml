@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `$(…)` pad whose interior is a `case` statement: the pattern terminator `)` closes the balanced depth early. The scanner does not model `case` grammar, and the fail-closed last-`)` rule was measured and rejected (it subsumed the ANSI-C/backtick lexer fixes), so this runtime-proven fail-open stays a named residual (#350) and is pinned ACCEPT (fold round 5, X1)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          eval "echo SOURCE_RUN_ID=${{ github.run_id }} >> \$GITHUB_$(case x in x) : # AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          ;; esac)ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

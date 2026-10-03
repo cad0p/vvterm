@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `eval` with arithmetic `$((` is refused fail-closed; the claim is `any $(` including arithmetic (fold lens-1 round 2 MINOR-1 cost)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          eval 'echo $((1+1))'
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
