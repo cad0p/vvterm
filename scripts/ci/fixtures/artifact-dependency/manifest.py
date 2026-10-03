@@ -3542,4 +3542,63 @@ CASES = [
             "reject-runid-github-env-write-cmdsub-php-readline-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
         ],
     },
+    # ------------------------------------------------------------------
+    # #345 fold round 4 (A10): php's long-option inline-program aliases
+    # (`--run`, `--process-begin`, `--process-end`, `--process-code`) and
+    # the long spelling's over-refusal pin.
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-long-run-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-long-run-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-long-run-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-long-run-attached-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-long-run-attached-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-long-run-attached-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-long-before-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-long-before-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-long-before-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-long-after-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-long-after-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-long-after-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-long-readline-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-long-readline-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-long-readline-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-interpreter-long-alias-expansion-argv",
+        "files": ["reject-overrefusal-interpreter-long-alias-expansion-argv.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-overrefusal-interpreter-long-alias-expansion-argv.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$MESSAGE` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
 ]

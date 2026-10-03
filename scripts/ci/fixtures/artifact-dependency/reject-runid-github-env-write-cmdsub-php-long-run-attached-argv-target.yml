@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `php --run='prog'` — the attached-argument spelling of
+# `--run` (code follows `=`) can write the argv target (issue
+# #345, fold round 4, php long-option aliases); runtime-malicious.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          x=GITHUB_
+          y=ENV
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          w=$(php --run='file_put_contents($argv[1], "SOURCE_RUN_ID=${{ github.run_id }}\n", FILE_APPEND);' -- "$(printenv "${x}${y}")" < /dev/null)
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

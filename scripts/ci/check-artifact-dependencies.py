@@ -381,8 +381,11 @@ carrier as the bare `-c`, for the carrier table and for the `$VAR`
 command-position widening alike, while `-l`/`--noprofile` stay
 non-carriers — retained for defence-in-depth only: once (xvi) exists the
 cluster rule closes no malicious shape (measured: reducing it to an exact
-`-c` leaves the whole corpus green), and its only independent effect is
-the benign over-refusal `w=$(bash -ec 'SOURCE_RUN_ID=1 true')`; (xi) the
+`-c` leaves the whole corpus green), and its independent effect is the
+class of benign `-Xc` cluster over-refusals whose `$`-free command string
+names a traced value (`w=$(bash -ec 'SOURCE_RUN_ID=1 true')` and the
+`-lc`/`-ilc`/`sh -lc`/`-xc` spellings of the same string, five measured,
+all runtime benign) rather than one shape; (xi) the
 substitution-body argv deferral applies only when
 the enclosing segment has no env redirect of its own — when the segment's
 redirect IS the env file the outer per-segment reference accounting never
@@ -423,7 +426,12 @@ and (xviii) php's `-B`/`-E`/`-R` inline programs (before/after/per-line
 input), which take the code as the next word and can write the argv
 target, are recognized next to `-r` (the attached `-B'code'` spelling
 previously refused only by accident, because the `-r` cluster rule
-matched an `r` inside the code text). The opener
+matched an `r` inside the code text); A10 (fold round 4) extends (xviii)
+to php's long spellings — `--run`/`--process-begin`/`--process-end`/
+`--process-code` (php-src's CLI option table maps each short flag to
+that name; the long flag takes the program as the next word or after
+`=`) are recognized like the short forms, after the A9 re-lens measured
+all four accepted while runtime-live. The opener
 scan is quote/comment-aware: a quoted or commented `<(` no longer counts,
 so a literal `$GITHUB_ENV)` filename stays untouched (fold round 2
 MINOR-1). Boundary sentence: the
@@ -432,7 +440,8 @@ basename and version suffix, a short-option cluster containing `c`, a
 pure variable with a command flag, a `$`-bearing shell argv word,
 `eval`/`trap`, `awk -v`), recognized argv write verb (`tee`, `dd of=`) or
 recognized inline-program interpreter — in every spelling that
-interpreter accepts (exact, clustered, attached or `--flag=value`) —
+interpreter accepts (exact, clustered, attached, `--flag=value`, or the
+long `--flag` followed by the program word) —
 whose carried command string or
 file target cannot be proven
 disjoint from the env file — it names the env machinery or a traced
@@ -449,9 +458,12 @@ command flag (13 new closure fixtures, all runtime-proven, plus a
 `python3.12 -c` corpus pin for the version-suffix mechanism); A9 closes
 the two runtime-proven inline-program spelling gaps the A8 re-lenses
 found — `node -pe` and php's `-B`/`-E`/`-R` (4 closure fixtures, all
-runtime-proven). The fixture corpus is 420/420 with zero diagnostic
-changes on the 416 pre-existing cases (`old.CASES ==
-new.CASES[:416]`), and the real tree stays byte-identical green
+runtime-proven); A10 (fold round 4) closes php's four long-option
+aliases of those inline programs (5 closure fixtures — both `--run`
+forms plus one each of `--process-begin`/`--process-end`/
+`--process-code` — all runtime-proven). The fixture corpus is 426/426
+with zero diagnostic changes on the 420 pre-existing cases (`old.CASES
+== new.CASES[:420]`), and the real tree stays byte-identical green
 (`ios-adhoc-pr.yml`'s `gh api …`, `find …`, `${!name:-}` and continuation
 bodies are untouched). The cost is fail-closed over-refusal of 24
 measured benign shapes before A8: the 20 pre-A7 ones — A4's 12 (the quoted-heredoc
@@ -476,14 +488,25 @@ operand (`bash "$script"`, `bash script.sh "$arg"`; benign, pinned by
 `reject-overrefusal-shell-variable-operand`) and the attached
 inline-program spelling of A7's interpreter-expansion class (`python3
 -c'…' "$MESSAGE"`; pinned by
-`reject-overrefusal-interpreter-attached-expansion-argv`); plus A9's two
-named shapes: the (x) cluster's benign over-refusal (`w=$(bash -ec
-'SOURCE_RUN_ID=1 true')`, runtime benign; the rule is retained for
-defence-in-depth) and a literal target that is the exact env spelling
+`reject-overrefusal-interpreter-attached-expansion-argv`); plus A9's two newly named pre-existing over-refusals (both refuse on A8
+already): the (x) cluster rule's benign `-Xc` over-refusals — its
+independent effect is the class whose `$`-free command string names a
+traced value, at least the five measured `-ec`/`-lc`/`-ilc`/`sh -lc`/
+`-xc` spellings, all runtime benign; the rule is retained for
+defence-in-depth — and a literal target that is the exact env spelling
 plus glued parens on a real-opener line (`printf … >> "$GITHUB_ENV))" <
-<(true)`; runtime benign) — 24 + 8 + 2 = 34 measured benign shapes, every
-class named and the `reject-overrefusal-*` pins keeping the stance
-visible.
+<(true)`; runtime benign); plus A9's new benign instances of A7's
+interpreter-trailing-argv class (`node -pe '1+1' "$MESSAGE"`, `php
+-B`/`-E`/`-R 'echo 1;' "$MESSAGE"` and the attached
+`php -B'echo 1;' "$MESSAGE"`; all runtime benign); plus A10's eight
+long-alias spelling instances of the same class (the space and
+`=`-attached forms of `--run`/`--process-begin`/`--process-end`/
+`--process-code` with a benign program and `"$MESSAGE"`, pinned by
+`reject-overrefusal-interpreter-long-alias-expansion-argv`) — at least
+24 + 8 + 5 + 8 = 45 measured benign shapes at A10 (≥37 at A9); every
+class is named, the pre-A8 classes are pinned by the
+`reject-overrefusal-*` fixtures, and the two A9-named shapes are
+documented here (they have no fixture).
 A8 also removes A7's uncounted F3 false red: a quoted or commented `<(`
 no longer turns a literal `$GITHUB_ENV)` filename into the env file
 (pinned accepted by the quoted-process-substitution literal-target
@@ -511,11 +534,12 @@ outside the mechanism tables — including one the run creates (`ln -sf
 >> \\$${x}${y}")`: the tables key on the basename; measured ACCEPT,
 runtime-malicious); substitution nesting deeper than
 8; and a heredoc opened inside a substitution body, which the inner scope
-does not model. The A7, A8 and A9 widenings are not residuals: the cluster
+does not model. The A7, A8, A9 and A10 widenings are not residuals: the cluster
 spelling, the deferral with an enclosing env redirect, process
 substitution, the interpreter argv file targets, the nested glued parens,
 the inline-program flag cluster/attached/`--flag=value`/`-E` spellings,
-the `node -pe` cluster, the php `-B`/`-E`/`-R` inline programs
+the `node -pe` cluster, the php `-B`/`-E`/`-R` inline programs and their
+`--run`/`--process-begin`/`--process-end`/`--process-code` long aliases
 and the runtime-assembled shell command flag are refused by the
 mechanisms above.
 The detection-completeness walk therefore closes the naming family the
@@ -567,7 +591,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 420
+EXPECTED_MANIFEST_CASES = 426
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2747,14 +2771,27 @@ _UNMODELLED_WRITE_VERBS = (
 # and `-R` (per input line), all taking the code as the next word (or
 # attached); before fold round 3 the attached `-B'code'` spelling refused
 # only by accident, because the `-r` cluster rule matched an `r` inside
-# the code text.
+# the code text. PHP's CLI option table gives every short flag a long
+# name (`-r` -> `--run`, `-B` -> `--process-begin`, `-E` ->
+# `--process-end`, `-R` -> `--process-code` on 8.3/8.4/8.5/master); fold
+# round 4 added the four long names after the A9 re-lens measured each
+# accepted while runtime-live.
 _INLINE_PROGRAM_FLAGS: dict[str, tuple[str, ...]] = {
     "python": ("-c",),
     "python3": ("-c",),
     "perl": ("-e", "-E"),
     "ruby": ("-e",),
     "node": ("-e", "-p", "--eval", "--print"),
-    "php": ("-r", "-B", "-E", "-R"),
+    "php": (
+        "--run",
+        "--process-begin",
+        "--process-end",
+        "--process-code",
+        "-r",
+        "-B",
+        "-E",
+        "-R",
+    ),
 }
 _INLINE_PROGRAM_POSITIONAL = frozenset({"awk", "gawk", "mawk", "nawk"})
 _INLINE_PROGRAM_VERBS = frozenset(_INLINE_PROGRAM_FLAGS) | _INLINE_PROGRAM_POSITIONAL
@@ -2810,7 +2847,13 @@ def _short_option_cluster_carries_command(word: str) -> bool:
     (`bash -ec`, `sh -lc`): bash reads the command string for a clustered
     `-c` exactly as for the bare flag, so the carrier test must recognize
     both spellings. A long option (`--noprofile`) and a cluster without `c`
-    (`-l`) are not carriers (issue #345, fold round 1 F1)."""
+    (`-l`) are not carriers (issue #345, fold round 1 F1). Retained for
+    defence-in-depth only: once (xvi) exists the cluster rule closes no
+    malicious shape (the whole corpus stays green with it reduced to an
+    exact `-c`), and its independent effect is the class of benign `-Xc`
+    over-refusals whose `$`-free command string names a traced value
+    (`-ec`/`-lc`/`-ilc`/`-xc`, and `sh -lc`; five measured, all runtime
+    benign)."""
     if word == "-c":
         return True
     return (
