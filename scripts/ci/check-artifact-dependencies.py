@@ -4605,14 +4605,19 @@ def _joined_continuation_segments(
     also join as a suffix (the joined scans are additive refusals, so
     double-joining is harmless, and a backslash-terminated comment no
     longer suppresses the real continuation — fold round 1 MAJOR-2(b)). A
-    continuation longer than the bound stays open (a named residual)."""
+    continuation that runs to the end of the body still yields the joined
+    segments (bash joins a trailing backslash to EOF — fold round 3
+    MAJOR-1), while a join longer than the bound still returns `[]` (a
+    named residual)."""
     if not _line_continuation_pending(lines[index]):
         return []
     joined = [lines[index]]
     cursor = index
     while _line_continuation_pending(joined[-1]):
         cursor += 1
-        if cursor >= len(lines) or (cursor - index) >= _CONTINUATION_JOIN_MAX_LINES:
+        if cursor >= len(lines):
+            break
+        if (cursor - index) >= _CONTINUATION_JOIN_MAX_LINES:
             return []
         joined.append(lines[cursor])
     return [
