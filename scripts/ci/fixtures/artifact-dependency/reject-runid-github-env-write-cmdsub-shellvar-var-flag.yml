@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `f=-ec; bash $f "..."` — the command flag assembled in
+# a variable (issue #345, fold round 2 D5, re-lens 1 MAJOR-1). A
+# recognized shell with a `$`-bearing argv word cannot be proven
+# not to carry a command string; runtime-malicious (rc=0, current
+# run last).
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          x=GITHUB_
+          y=ENV
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          f=-ec; w=$(bash $f "printf '%s\n' SOURCE_RUN_ID=${{ github.run_id }} >> \$${x}${y}")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

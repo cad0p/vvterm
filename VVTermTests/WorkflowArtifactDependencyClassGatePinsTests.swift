@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 398
+    private static let expectedManifestCases = 416
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -579,6 +579,24 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-cmdsub-process-substitution-other-target.yml",
         "accept-runid-github-env-write-cmdsub-interpreter-literal-argv.yml",
         "reject-overrefusal-interpreter-expansion-argv.yml",
+        "reject-runid-github-env-write-cmdsub-process-substitution-nested.yml",
+        "reject-runid-github-env-write-cmdsub-output-process-substitution-nested.yml",
+        "reject-runid-github-env-write-cmdsub-perl-capital-e-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-python3-cluster-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-python3-attached-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-perl-cluster-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-perl-attached-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-ruby-attached-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-php-attached-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-node-long-eval-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-python312-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-shellvar-var-flag.yml",
+        "reject-runid-github-env-write-cmdsub-shellvar-attached-var-flag.yml",
+        "reject-runid-github-env-write-cmdsub-shellvar-var-command-flag.yml",
+        "accept-runid-github-env-write-cmdsub-interpreter-flag-spellings.yml",
+        "accept-runid-github-env-write-cmdsub-quoted-process-substitution-literal-target.yml",
+        "reject-overrefusal-shell-variable-operand.yml",
+        "reject-overrefusal-interpreter-attached-expansion-argv.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

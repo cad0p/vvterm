@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# ACCEPT control: a quoted or commented `<( ` is not a
+# process-substitution opener (issue #345, fold round 2 MINOR-1).
+# The literal target is the env spelling plus one `)` — a file
+# literally named `<envpath>)` — and the line has no real opener,
+# so it must stay accepted; runtime-benign (the env file is not
+# written).
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'a<(%s\n' "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV)"
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "$GITHUB_ENV)" # <(
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

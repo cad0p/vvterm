@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# ACCEPT control: the new inline-program flag spellings stay
+# accepted when the trailing argv word is a literal non-env path
+# (issue #345, fold round 2 D3b) — cluster, attached and
+# `--flag=value` controls. `node -e'attached'` is also accepted:
+# node rejects the glued flag (`bad option`), so it cannot run a
+# program and is not classified as one; runtime-benign.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          w=$(python3 -uc "print(1)" /tmp/data)
+          z=$(perl -we 'print 1' /tmp/report.txt)
+          v=$(node --eval="1+1" /tmp/data)
+          u=$(python3 -c'print(1)' /tmp/data)
+          t=$(node -e'attached')
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -385,29 +385,54 @@ redirect IS the env file the outer per-segment reference accounting never
 runs, so a `tee`/`dd of=` target of the exact env spelling refuses with
 the argv diagnostic; (xii) `<( … )`/`>( … )` are recognized as
 substitution openers, and a redirect target that is the exact env
-spelling plus one trailing `)` is the env file when the
-continuation-joined line carries an opener (the shell lexer splits an
-unquoted opener, gluing the substitution's `)` to the target), while a
-literal filename that merely ends in `)` is untouched; (xiii) a
+spelling plus a trailing `)` (or, for nested substitutions, several) is
+the env file when the continuation-joined line carries a real opener
+(the shell lexer splits an unquoted opener, gluing the substitution's
+`)` to the target), while a literal filename that merely ends in `)` is
+untouched; the target-classification half carries the measured closures,
+and the `<( … )` branch in `_substitution_bodies` is defense-in-depth for
+bodies the word scan does not otherwise re-tokenize; (xiii) a
 recognized interpreter invoked with an inline-program flag (`python3 -c`,
 `perl -e`, `ruby -e`, `node -e`/`-p`, `php -r`) classifies the remaining
 non-flag argv words as potential file targets with the `tee`/`dd of=`
-resolver (`sys.argv[1]`, `$ARGV[0]`, `ARGV[0]`). Boundary sentence: the
+resolver (`sys.argv[1]`, `$ARGV[0]`, `ARGV[0]`). A8 (fold round 2) adds
+three widenings and one guard refinement: (xiv) the trailing-`)` rule
+strips every glued closing parenthesis (`text.rstrip(")")`), so a nested
+`<(cat <( … ))`/`>(cat >( … ))` body — whose target carries two `)`s
+— is still the env file; (xv) an inline-program flag is recognized in a
+short-option cluster (`python3 -uc`, `perl -we`), as an attached argument
+(`-cPROG`, `-ePROG`, `-rPROG`, `--flag=value`) and as perl's alternate
+`-E`; the glued spellings are not recognized for `node`, which rejects
+`-eprog` at runtime (`bad option`) and cannot run a program; and (xvi) a
+recognized shell with a `$`/backtick-bearing argv word (`f=-ec; bash $f
+…`, `bash -e$f …`) is fail-closed because the word may be the command
+flag (for the measured A7 F1 fixtures this subsumes the (x) cluster rule,
+because every POSIX env-write command string carries a `$`). The opener
+scan is quote/comment-aware: a quoted or commented `<(` no longer counts,
+so a literal `$GITHUB_ENV)` filename stays untouched (fold round 2
+MINOR-1). Boundary sentence: the
 gate refuses any recognized carrier invocation (shell/interpreter by
 basename and version suffix, a short-option cluster containing `c`, a
-pure variable with a command flag, `eval`/`trap`, `awk -v`), recognized
-argv write verb (`tee`, `dd of=`) or recognized inline-program
-interpreter whose carried command string or file target cannot be proven
+pure variable with a command flag, a `$`-bearing shell argv word,
+`eval`/`trap`, `awk -v`), recognized argv write verb (`tee`, `dd of=`) or
+recognized inline-program interpreter — in its exact, clustered,
+attached or `--flag=value` spelling — whose carried command string or
+file target cannot be proven
 disjoint from the env file — it names the env machinery or a traced
 value, is an unreadable pure variable, or has a non-single-resolved
 target — while literal/read-only usages and non-write commands stay
 accepted.
 
 Measured scope: A7 closes every runtime-proven flip in the measured
-family (A6's 382 shapes stay closed; the four new classes' ten
-runtime-proven writes refuse), the fixture corpus is 398/398 with zero
-diagnostic changes on the 382 pre-existing cases (`old.CASES ==
-new.CASES[:382]`), and the real tree stays byte-identical green
+family (A6's 382 shapes stay closed; the four new classes' eleven
+runtime-proven writes refuse); A8 closes the three re-lens flips — the
+nested process substitution, the inline-program flag
+clusters/attached/alternate spellings, and the runtime-assembled shell
+command flag (13 new closure fixtures, all runtime-proven, plus a
+`python3.12 -c` corpus pin for the version-suffix mechanism). The fixture
+corpus is 416/416 with zero
+diagnostic changes on the 398 pre-existing cases (`old.CASES ==
+new.CASES[:398]`), and the real tree stays byte-identical green
 (`ios-adhoc-pr.yml`'s `gh api …`, `find …`, `${!name:-}` and continuation
 bodies are untouched). The cost is fail-closed over-refusal of 24
 measured benign shapes: the 20 pre-A7 ones — A4's 12 (the quoted-heredoc
@@ -424,7 +449,17 @@ argv targets `t03`/`t04`/`t20` — plus A7's one new class: an interpreter's
 trailing argv word that is a shell expansion the extractor cannot resolve
 (`python3 -c`/`perl -e` with a `$MESSAGE` or assembled `${x}${y}` value
 argument; 4 measured benign shapes, pinned by
-`reject-overrefusal-interpreter-expansion-argv`).
+`reject-overrefusal-interpreter-expansion-argv`), plus A8's two new
+classes: a recognized shell with an unreadable variable operand (`bash
+"$script"`, `bash script.sh "$arg"`; benign, pinned by
+`reject-overrefusal-shell-variable-operand`) and the attached
+inline-program spelling of A7's interpreter-expansion class (`python3
+-c'…' "$MESSAGE"`; pinned by
+`reject-overrefusal-interpreter-attached-expansion-argv`) — 26 total.
+A8 also removes A7's uncounted F3 false red: a quoted or commented `<(`
+no longer turns a literal `$GITHUB_ENV)` filename into the env file
+(pinned accepted by the quoted-process-substitution literal-target
+fixture).
 
 Named residuals: a caller (`workflow_call`) or dispatcher
 (`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
@@ -433,8 +468,10 @@ deliberately not modelled); a `$GITHUB_ENV` write whose name pieces never
 appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a
 name split past the 64-character window — the `w2-64window-eval` class) is
 not detected, the inherited text-detector boundary; a `source`d or
-`.`-sourced script's body and a `bash script.sh` path (only the `-c` string
-is inspected); a carrier whose command string is assembled at runtime
+`.`-sourced script's body, a `bash script.sh` path and an interpreter
+script file or `-m module` (`python3 /tmp/evil.py`, `python3 -m evilmod`;
+only the inline-program string is inspected); a carrier whose command
+string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
 env file or a traced name is the inherited textual boundary); a carrier
 operand that is itself a command substitution (`eval "$(cat …)"`); other
@@ -442,9 +479,12 @@ argv write verbs that need verb-specific semantics (`sed -i`, `cp`/`mv`/
 `install`, `touch`/`truncate`); interpreters outside the inline-program
 table (`lua -e`, `tclsh`, a script file); substitution nesting deeper than
 8; and a heredoc opened inside a substitution body, which the inner scope
-does not model. The A7 widenings are not residuals: the cluster spelling,
-the deferral with an enclosing env redirect, process substitution and the
-interpreter argv file targets are refused by the mechanisms above.
+does not model. The A7 and A8 widenings are not residuals: the cluster
+spelling, the deferral with an enclosing env redirect, process
+substitution, the interpreter argv file targets, the nested glued parens,
+the inline-program flag cluster/attached/`--flag=value`/`-E` spellings
+and the runtime-assembled shell command flag are refused by the
+mechanisms above.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -494,7 +534,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 398
+EXPECTED_MANIFEST_CASES = 416
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2673,13 +2713,19 @@ _UNMODELLED_WRITE_VERBS = (
 _INLINE_PROGRAM_FLAGS: dict[str, tuple[str, ...]] = {
     "python": ("-c",),
     "python3": ("-c",),
-    "perl": ("-e",),
+    "perl": ("-e", "-E"),
     "ruby": ("-e",),
     "node": ("-e", "-p", "--eval", "--print"),
     "php": ("-r",),
 }
 _INLINE_PROGRAM_POSITIONAL = frozenset({"awk", "gawk", "mawk", "nawk"})
 _INLINE_PROGRAM_VERBS = frozenset(_INLINE_PROGRAM_FLAGS) | _INLINE_PROGRAM_POSITIONAL
+# Interpreters whose short inline-program flag accepts a glued argument
+# (`-cPROG`) or a short-option cluster (`-uc`). `node` is absent: it
+# requires the flag and program as separate words (or `--eval=`) and
+# rejects `-eprog` at runtime (`bad option`), so a glued spelling there is
+# not a program carrier (issue #345, fold round 2 D3b).
+_INLINE_PROGRAM_GLUED = frozenset({"python", "python3", "perl", "ruby", "php"})
 # A version suffix on an interpreter name (`python3.12`, `perl5.36`,
 # `php8.2`): the base name is the recognized interpreter, so a versioned
 # spelling does not evade the carrier check.
@@ -2718,6 +2764,63 @@ def _argv_has_command_flag(argv: list[str]) -> bool:
     """True when an argv carries a `-c` command string, exactly or as a
     short-option cluster (issue #345, fold round 1 F1)."""
     return any(_short_option_cluster_carries_command(word) for word in argv)
+
+
+def _argv_has_unresolved_word(argv: list[str]) -> bool:
+    """True when a recognized shell's argv carries a word assembled from a
+    `$`/backtick the extractor cannot read (`f=-ec; bash $f \u2026`,
+    `bash -e$f \u2026`): the word may be the command flag the shell reads,
+    so the invocation cannot be proven not to carry a command string
+    (issue #345, fold round 2 D5)."""
+    return any("$" in word or "`" in word for word in argv)
+
+
+def _inline_program_flag(
+    core: str, args: list[str]
+) -> tuple[int, bool, str] | None:
+    """The `(index, attached, program)` inline program of a recognized
+    interpreter's argv, or None when no inline-program flag is present (a
+    script path is a named residual). The flag is matched exactly, as
+    `--flag=value`, and — for the interpreters that accept it — as an
+    attached argument (`-cPROG`) or inside a short-option cluster
+    (`python3 -uc 'prog'`). For a cluster the program is the next word
+    only when the flag character ends the word (`-uc`), because the
+    interpreter consumes the rest of the word as the argument otherwise
+    (`-cu` is the program `u`) (issue #345, fold round 1 F4; fold round 2
+    D3b)."""
+    flags = _INLINE_PROGRAM_FLAGS[core]
+    glued = core in _INLINE_PROGRAM_GLUED
+    for index, argument in enumerate(args):
+        for flag in flags:
+            if flag.startswith("--"):
+                if argument == flag:
+                    if index + 1 < len(args):
+                        return (index, False, args[index + 1])
+                    return None
+                if argument.startswith(flag + "="):
+                    return (index, True, argument[len(flag) + 1 :])
+                continue
+            if argument == flag:
+                if index + 1 < len(args):
+                    return (index, False, args[index + 1])
+                return None
+            if not glued:
+                continue
+            if argument.startswith(flag) and len(argument) > len(flag):
+                return (index, True, argument[len(flag) :])
+            if (
+                argument.startswith("-")
+                and not argument.startswith("--")
+                and len(argument) > len(flag)
+                and flag[1] in argument[1:]
+            ):
+                program_start = argument.index(flag[1], 1) + 1
+                if program_start < len(argument):
+                    return (index, True, argument[program_start:])
+                if index + 1 < len(args):
+                    return (index, False, args[index + 1])
+                return None
+    return None
 # One whole shell expansion: `$NAME`, `${NAME}` or `%NAME%`. Used to count
 # how many expansion pieces an argv write target is assembled from.
 _EXPANSION_PIECE_RE = re.compile(
@@ -3463,14 +3566,77 @@ def _env_file_target_name_kind(
     return "other"
 
 
+def _mask_quoted_and_commented(line: str) -> str:
+    """`line` with quoted spans and the comment tail blanked to spaces, so
+    a `<(`/`>(` that is only quoted data or comment text is not read as a
+    process-substitution opener (issue #345, fold round 2 MINOR-1). The
+    scan is deliberately local to quoting: a `$(`/backtick body keeps its
+    text, because a real opener inside one still belongs to the line."""
+    masked = list(line)
+    n = len(line)
+    index = 0
+    word_start = True
+    while index < n:
+        char = line[index]
+        if char in " \t":
+            word_start = True
+            index += 1
+            continue
+        if char == "#" and word_start:
+            for tail in range(index, n):
+                masked[tail] = " "
+            break
+        if char in ";&|<>":
+            # `_shell_tokens` treats an operator as a word boundary, so a
+            # `#` directly after one opens a comment there too.
+            word_start = True
+            index += 1
+            continue
+        word_start = False
+        if char == "'":
+            end = line.find("'", index + 1)
+            end = n if end == -1 else end + 1
+            for quoted in range(index, end):
+                masked[quoted] = " "
+            index = end
+            continue
+        if char == '"':
+            end = index + 1
+            while end < n:
+                if line[end] == "\\" and end + 1 < n:
+                    masked[end] = " "
+                    masked[end + 1] = " "
+                    end += 2
+                    continue
+                if line[end] == '"':
+                    masked[end] = " "
+                    end += 1
+                    break
+                masked[end] = " "
+                end += 1
+            masked[index] = " "
+            index = end
+            continue
+        if char == "\\" and index + 1 < n:
+            masked[index] = " "
+            masked[index + 1] = " "
+            index += 2
+            continue
+        index += 1
+    return "".join(masked)
+
+
 def _line_has_process_substitution(line: str) -> bool:
-    """True when a physical line carries a process-substitution opener
-    (`<( … )`/`>( … )`). The shell lexer splits an unquoted opener into an
+    """True when a physical line carries a real process-substitution
+    opener (`<( … )`/`>( … )`), i.e. an unquoted, uncommented `<`/`>` glued
+    to a following `(`. The shell lexer splits an unquoted opener into an
     operator plus a `(…` word, so the substitution's closing `)` is glued
-    to the redirect target before it; the target classifier strips that
-    `)` only when this opener is present (issue #345, fold round 1 F3)."""
-    for index, char in enumerate(line[:-1]):
-        if char in "<>" and line[index + 1] == "(":
+    to the redirect target before it; the target classifier strips those
+    `)` only when this opener is present (issue #345, fold round 1 F3;
+    fold round 2 MINOR-1 masks quotes and comments first)."""
+    unquoted = _mask_quoted_and_commented(line)
+    for index, char in enumerate(unquoted[:-1]):
+        if char in "<>" and unquoted[index + 1] == "(":
             return True
     return False
 
@@ -3518,16 +3684,17 @@ def _env_file_target_kind(
         return "env"
     if (
         text.endswith(")")
-        and _ENV_FILE_SPELLING_RE.fullmatch(text[:-1])
+        and _ENV_FILE_SPELLING_RE.fullmatch(text.rstrip(")"))
         and _logical_line_has_process_substitution(lines, line_index)
     ):
         # The shell lexer splits an unquoted process substitution into an
-        # operator plus a `(…` word, so the substitution's closing `)` is
+        # operator plus a `(…` word, so the substitution's closing `)`s are
         # glued to the redirect target that precedes it (`… >>
-        # "$GITHUB_ENV")`): the exact env spelling plus one trailing `)` is
-        # the env file, not a different filename. The opener on the line is
-        # required so a literal filename that merely ends in `)` is
-        # untouched (issue #345, fold round 1 F3).
+        # "$GITHUB_ENV")`): the exact env spelling plus one (or, nested,
+        # several) trailing `)` is the env file, not a different filename.
+        # The opener on the line is required so a literal filename that
+        # merely ends in `)` is untouched (issue #345, fold round 1 F3;
+        # fold round 2 D1 strips every glued closing parenthesis).
         return "env"
     if "$(" in text or "`" in text or "${!" in text:
         return "unknown"
@@ -3610,20 +3777,17 @@ def _argv_write_targets(
         core = _interpreter_core(verb)
         if core not in _INLINE_PROGRAM_FLAGS:
             continue
-        flags = _INLINE_PROGRAM_FLAGS[core]
         args = words[position + 1 :]
-        program_index: int | None = None
-        for offset, argument in enumerate(args):
-            if argument in flags:
-                program_index = offset
-                break
-        if program_index is None:
+        inline = _inline_program_flag(core, args)
+        if inline is None:
             # No inline program: a script path (`python3 script.py`) is a
             # named residual and its operands are not classified.
             continue
+        program_index, attached, _program = inline
+        first = program_index + (1 if attached else 2)
         return [
             (verb, argument)
-            for argument in args[program_index + 2 :]
+            for argument in args[first:]
             if not argument.startswith("-")
         ]
     return []
@@ -4315,8 +4479,8 @@ def _mechanism_operands(
         return []
     if mechanism in ("trap", "eval"):
         return [(word, True) for word in argv]
-    if mechanism in ("bash", "sh", "zsh", "dash", "ksh") and _argv_has_command_flag(
-        argv
+    if mechanism in ("bash", "sh", "zsh", "dash", "ksh") and (
+        _argv_has_command_flag(argv) or _argv_has_unresolved_word(argv)
     ):
         return [(word, True) for word in argv]
     if mechanism in _INLINE_PROGRAM_POSITIONAL:
@@ -4332,12 +4496,10 @@ def _mechanism_operands(
             operands.append((word, True))
         return operands
     if mechanism in _INLINE_PROGRAM_FLAGS:
-        flags = _INLINE_PROGRAM_FLAGS[mechanism]
-        return [
-            (argv[position + 1], True)
-            for position, word in enumerate(argv)
-            if word in flags and position + 1 < len(argv)
-        ]
+        inline = _inline_program_flag(mechanism, argv)
+        if inline is None:
+            return []
+        return [(inline[2], True)]
     return []
 
 
@@ -4429,8 +4591,11 @@ def _unmodelled_write_match(
             # reach the env file/traced names to refuse (issue #345,
             # lens-v2 t02). The command flag may be a short-option cluster
             # (`$SHELL -ec`), so the cluster spelling is recognized here too
-            # (issue #345, fold round 1 F1).
-            if _argv_has_command_flag(argv):
+            # (issue #345, fold round 1 F1); a `$`/backtick-bearing argv
+            # word may itself be the command flag (`$SHELL $f`), so the
+            # unresolved-word form is fail-closed too (issue #345, fold
+            # round 2 D5).
+            if _argv_has_command_flag(argv) or _argv_has_unresolved_word(argv):
                 for word in argv:
                     if _carrier_operand_matches(word, relevant, flip_targets):
                         return (text, word, True)
