@@ -435,9 +435,17 @@ all four accepted while runtime-live. A11 (fold round 5) closes the
 interpreter sibling of A8's (xvi): (xix) a recognized interpreter whose
 argv carries a `$`/backtick-bearing word and no literal inline-program
 flag (`F=-r; php $F 'prog'`, `php $'--run' 'prog'`, `F=-c; python3 $F
-'prog'`, `F=--eval; node $F 'prog'`) is fail-closed because that word may
-itself be the inline-program flag, the same rule as the runtime-assembled
-shell command flag. The opener
+'prog'`, `F=--eval; node $F 'prog'`) is walked as a carrier: every argv
+word is treated as a candidate command string / file target, and the
+invocation is refused when a walked word cannot be proven harmless (it
+names the env file or a traced value, or is an unresolvable value that may
+be a file target). That is the same fail-closed shape as the
+runtime-assembled shell command flag (D5). The walk is content-driven, so
+a benign invocation with an unresolved argv word is refused only when that
+word trips the content test; an unresolved *command-substitution* operand
+whose remaining words are harmless is still accepted, which is the
+already-named "a carrier operand that is itself a command substitution"
+residual. The opener
 scan is quote/comment-aware: a quoted or commented `<(` no longer counts,
 so a literal `$GITHUB_ENV)` filename stays untouched (fold round 2
 MINOR-1). Boundary sentence: the
@@ -517,12 +525,17 @@ long-alias spelling instances of the same class (the space and
 `--process-code` with a benign program and `"$MESSAGE"`; the class is
 named by `reject-overrefusal-interpreter-long-alias-expansion-argv`,
 which pins the `--run` space form, and all eight measured spellings are
-listed here); plus A11's one new sub-class instance (the non-literal-flag
-spelling of the interpreter-argv over-refusal class: `F=-r; php $F 'echo
+listed here); plus A11's new instances of the interpreter-argv
+over-refusal class: the non-literal-flag spelling (`F=-r; php $F 'echo
 1;' -- "${{ github.run_id }}"`, pinned by
-`reject-overrefusal-interpreter-runtime-flag-expansion-argv`) — at least
-24 + 8 + 5 + 8 + 1 = 46 measured benign shapes at A11 (≥45 at A10,
-≥37 at A9); every
+`reject-overrefusal-interpreter-runtime-flag-expansion-argv`) and a
+script/module invocation whose argv carries an unresolved word
+(`python3 script.py "$HOME"`, `python3 -m module "$VAR"`, `node x.js
+"$HOME"`, `perl x.pl "$HOME"`, `php x.php "$HOME"`, `python3
+"$SCRIPTPATH"`; the A11 re-lens measured six such instances, none
+fixture-pinned) — at least
+24 + 8 + 5 + 8 + 1 = 46 measured benign shapes at A11, plus that named
+script/module sub-class (≥45 at A10, ≥37 at A9); every
 class is named, the pre-A8 classes are pinned by the
 `reject-overrefusal-*` fixtures, and the two A9-named shapes are
 documented here (they have no fixture).
@@ -541,8 +554,10 @@ not detected, the inherited text-detector boundary; a `source`d or
 `.`-sourced script's body, a `bash script.sh` path and an interpreter
 script file or `-m module` (`python3 /tmp/evil.py`, `python3 -m evilmod`;
 only the inline-program string is inspected), an interpreter fed its
-program on stdin (`python3 -`, `ruby -`, `perl -`) or a
-process-substitution script operand (`php -f <(code)`, `python3 <(…)`);
+program on stdin with no unresolved argv word (`echo 'code' | python3 -`,
+`ruby -`, `perl -`; the argv-carrying spelling is refused by A11's walk)
+or a process-substitution script operand (`php -f <(code)`, `python3
+<(…)`; measured ACCEPT, runtime-malicious on A11 too);
 a carrier whose command
 string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
