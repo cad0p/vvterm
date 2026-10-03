@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an ANSI-C-spelled substitution in an eval carrier (fold lens-1 MAJOR-4)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+      v: SOURCE
+      r: _RUN_
+      i: ID
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          eval $'echo \x53\x4f\x55\x52\x43\x45\x5f\x52\x55\x4e\x5f\x49\x44=42424242 >> \x24\x28printenv "$x$y"\x29'
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

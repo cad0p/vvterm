@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `lua -e` stays accepted; the #346.4 interpreter residual (fold lens-2 MAJOR-3)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+      v: SOURCE
+      r: _RUN_
+      i: ID
+      n: GITHUB
+      m: _
+      k: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          lua -e "local f=io.open(os.getenv('$n$m$k'),'a'); f:write('$v$r$i=${{ github.run_id }}\\n'); f:close()"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

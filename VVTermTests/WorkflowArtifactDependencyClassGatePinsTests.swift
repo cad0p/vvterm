@@ -68,11 +68,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         - name: Check artifact dependencies run: | set -euo pipefail command -v python3 >/dev/null || { echo "::error::python3 not found — the artifact-dependency gate needs it"; exit 1; } python3 scripts/ci/check-artifact-dependencies.py --selftest python3 scripts/ci/check-artifact-dependencies.py
         """
 
-    /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
-    /// the scanned-workflow floor. A stale constant must red the pin, not
-    /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 447
-    private static let expectedBaseVerdictCases = 16
+    /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count,
+    /// the scanned-workflow floor, and the number of A12 fixtures that
+    /// declare their measured pre-fold base verdict. A stale constant must
+    /// red the pin, not only the build-time `--selftest`/scan.
+    private static let expectedManifestCases = 500
+    private static let expectedBaseVerdictCases = 69
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -621,13 +622,66 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-mention-window-unbraced-special-pad.yml",
         "reject-runid-github-env-write-mention-window-unbraced-name-pad.yml",
         "reject-runid-github-env-write-mention-window-split-spelling.yml",
+        "reject-runid-github-env-write-sed-inplace-target.yml",
+        "reject-runid-github-env-write-cp-target.yml",
+        "reject-runid-github-env-write-mv-target.yml",
+        "reject-runid-github-env-write-install-target.yml",
+        "reject-runid-github-env-write-truncate-target.yml",
+        "reject-runid-github-env-write-touch-target.yml",
+        "reject-runid-github-env-write-sed-w-target.yml",
+        "reject-runid-github-env-write-sed-w-inplace-target.yml",
+        "reject-runid-github-env-write-sed-long-inplace-target.yml",
+        "reject-runid-github-env-write-assignment-rhs-sed-decoy.yml",
+        "reject-runid-github-env-write-assignment-rhs-cp-decoy.yml",
+        "reject-runid-github-env-write-assignment-rhs-alias-mention.yml",
+        "reject-runid-github-env-write-carrier-eval-cat.yml",
+        "reject-runid-github-env-write-carrier-sh-c-cat.yml",
+        "reject-runid-github-env-write-carrier-bash-c-cat.yml",
+        "reject-runid-github-env-write-carrier-backtick-cat.yml",
+        "reject-runid-github-env-write-carrier-embedded-eval.yml",
+        "reject-runid-github-env-write-carrier-embedded-eval-prefix.yml",
+        "reject-runid-github-env-write-carrier-embedded-sh-prefix.yml",
+        "reject-runid-github-env-write-carrier-ansic-eval.yml",
+        "reject-runid-github-env-write-carrier-ansic-trap.yml",
+        "reject-runid-github-env-write-unmodelled-printf-v-target.yml",
+        "reject-runid-github-env-write-unmodelled-read-target.yml",
+        "reject-runid-github-env-write-unmodelled-declare-target.yml",
+        "accept-runid-github-env-write-cp-two-expansions-destination.yml",
+        "accept-runid-github-env-write-cp-home-profile-destination.yml",
+        "accept-runid-github-env-write-sed-inplace-literal-script.yml",
+        "accept-runid-github-env-write-bash-script-data-substitution.yml",
+        "accept-runid-github-env-write-bash-c-data-substitution.yml",
+        "accept-runid-github-env-write-sed-n-read-unassigned-file.yml",
+        "accept-runid-github-env-write-python-script-invocation.yml",
+        "reject-runid-github-env-write-sed-n-read-assigned-file.yml",
         "reject-overrefusal-mention-window-long-expansion-assembly.yml",
+        "reject-overrefusal-carrier-benign-substitution.yml",
+        "reject-overrefusal-new-verb-unresolvable-target.yml",
+        "reject-overrefusal-new-verb-unmodelled-write-target.yml",
         "reject-overrefusal-mention-window-digit-pad.yml",
         "reject-runid-github-env-write-mention-window-backtick-isolating.yml",
         "reject-runid-github-env-write-mention-window-digit-positional-pad.yml",
+        "accept-runid-github-env-write-sed-append-literal-payload.yml",
+        "accept-runid-github-env-write-assignment-sed-no-mention.yml",
+        "accept-runid-github-env-write-lua-inline-program.yml",
+        "accept-runid-github-env-write-tclsh-script-invocation.yml",
+        "accept-runid-github-env-write-perl-script-invocation.yml",
+        "reject-runid-github-env-write-sed-long-inplace-suffix-target.yml",
+        "reject-runid-github-env-write-sed-inplace-suffix-target.yml",
+        "reject-overrefusal-carrier-ansic-quoted-form.yml",
         "accept-runid-github-env-write-mention-window-escaped-special-pad.yml",
         "reject-overrefusal-mention-window-bare-github-name.yml",
+        "reject-runid-github-env-write-sed-option-cluster-ni-target.yml",
+        "reject-runid-github-env-write-sed-option-cluster-Ei-target.yml",
+        "reject-runid-github-env-write-sed-option-cluster-ni-e-target.yml",
+        "reject-runid-github-env-write-sed-addressed-w-target.yml",
+        "reject-runid-github-env-write-sed-addressed-space-w-target.yml",
+        "reject-runid-github-env-write-sed-addressed-dollar-w-target.yml",
+        "reject-runid-github-env-write-sed-newline-block-w-target.yml",
+        "reject-runid-github-env-write-sed-two-line-w-target.yml",
         "reject-runid-github-env-write-mention-window-bang-pad.yml",
+        "reject-overrefusal-interpreter-inline-program-substitution.yml",
+        "reject-overrefusal-eval-arithmetic-substitution.yml",
         "reject-overrefusal-mention-window-zero-pad.yml",
     ]
 
@@ -855,7 +909,16 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             script.contains("MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor)"),
             "\(Self.scriptPath) must state MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor) — a stale floor would let a truncated tree pass (issue #316, lens-2 NIT 1)"
         )
+        #expect(
+            script.contains("EXPECTED_BASE_VERDICT_CASES = \(Self.expectedBaseVerdictCases)"),
+            "\(Self.scriptPath) must state EXPECTED_BASE_VERDICT_CASES = \(Self.expectedBaseVerdictCases) — the selftest's base-verdict transition check would otherwise be a no-op (issue #346+#347 fold round 2)"
+        )
         let manifestCaseCount = manifest.components(separatedBy: "\"id\"").count - 1
+        let baseVerdictCount = manifest.components(separatedBy: "\"base_exit\"").count - 1
+        #expect(
+            baseVerdictCount == Self.expectedBaseVerdictCases,
+            "the manifest must hold \(Self.expectedBaseVerdictCases) case(s) declaring a `base_exit` base verdict (counted \(baseVerdictCount)) — every A12 fixture must declare the measured pre-fold verdict, so an accept-widening or double-caused fixture cannot hide (issue #346+#347 fold round 2)"
+        )
         #expect(
             manifestCaseCount == Self.expectedManifestCases,
             "the manifest must hold \(Self.expectedManifestCases) case(s) (counted \(manifestCaseCount)) — a stale constant reds this pin, not only the build-time `--selftest` (issue #316)"
