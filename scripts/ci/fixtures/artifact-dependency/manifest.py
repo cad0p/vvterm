@@ -4070,10 +4070,30 @@ CASES = [
         ],
     },
     {
-        "id": "accept-runid-github-env-write-sed-append-literal-payload",
-        "files": ["accept-runid-github-env-write-sed-append-literal-payload.yml"],
+        "id": "reject-runid-github-env-write-sed-append-single-quote-join",
+        "files": ["reject-runid-github-env-write-sed-append-single-quote-join.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-append-single-quote-join.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-single-quote-multiline-benign",
+        "files": ["accept-runid-github-env-write-sed-single-quote-multiline-benign.yml"],
         "exit": 0,
         "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+
+        ],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-single-quote-literal-append-benign",
+        "files": ["accept-runid-github-env-write-sed-single-quote-literal-append-benign.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
         "diagnostics": [
 
         ],

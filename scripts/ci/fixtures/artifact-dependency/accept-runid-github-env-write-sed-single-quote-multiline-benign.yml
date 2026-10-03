@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control): a benign multi-line single-quoted sed script
+# whose `w` target is a literal path; joining the single-quoted script
+# must not refuse it (issue #350, item 7 boundary).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'foo\n' > in.txt
+          sed -n 's/foo/bar/;
+          w out.txt' in.txt
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -628,8 +628,7 @@ lens-3 new-verb witnesses (`cp`/`mv`/`install`/`touch`/`truncate`/`sed
 containing a `$(`; `eval` arithmetic `$((`; the ANSI-C quoted form in a
 double-quoted operand; and a bare `$GITHUB` name the elided walk keeps.
 The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
-fold does not close: sed's `s///w file` flag and `-f` bodies, the BSD
-`$a\\` two-line append, interpreters outside the inline-program table
+fold does not close: sed's `s///w file` flag and `-f` bodies, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
 / process-substitution script operands, the xargs wrapper/assignment/
 continuation spellings (`env xargs`, `FOO=1 xargs`, `nice xargs`,
@@ -733,13 +732,21 @@ recognizing `--e=x` reclassifies the first positional from script
 candidate to file operand, so a target base scanned as a script is no
 longer scanned; the direction is correct (the base refusal was a
 misparse) and the corpus cannot represent it (`base_exit: 1` +
-`exit: 0` is a hard selftest failure). Measured at A13: the fixture
-corpus is
-575/575, of which 144 fixtures declare their measured base verdict
+`exit: 0` is a hard selftest failure); (viii-g) the sed script join treats
+an unclosed single quote like an unclosed double quote, so the BSD `$a\\`
+two-line append (and a single-quoted `w` command split across physical
+lines) is tokenized whole and its target classified; the join only feeds
+the sed `w`/`$a\\` scan, so it can only add refusals, and the two benign
+multi-line single-quoted controls stay accepted (the GNU-sed run of the
+append is a deliberate fail-closed over-refusal, the same platform nuance
+as item 6; the BSD run is a real runtime FLIP). Measured at A13: the
+fixture corpus is
+577/577, of which 146 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 3 over-refusal pins under
 one root cause (any unmodelled write of the now-relevant base name
-refuses) and item 2 adds its unresolved-upstream pin, bringing the
-measured benign floor to 62 + 3 + 1 = 66.
+refuses), item 2 adds its unresolved-upstream pin, and item 7 adds its
+GNU-proxy fail-closed class, bringing the measured benign floor to
+62 + 3 + 1 + 1 = 67.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -789,7 +796,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 575
+EXPECTED_MANIFEST_CASES = 577
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -806,7 +813,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 144
+EXPECTED_BASE_VERDICT_CASES = 146
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -4401,11 +4408,13 @@ def _sed_write_targets(script: str) -> list[str]:
 
 
 def _line_leaves_double_quote_open(line: str) -> bool:
-    """True when one physical line ends inside an unclosed double-quoted
-    string: a newline inside `"…"` is part of the word, not a command
+    """True when one physical line ends inside an unclosed quoted string:
+    a newline inside `"…"` or `'…'` is part of the word, not a command
     boundary. Used only to join a sed script that spans physical lines
-    (fold lens-1 round 2 MAJOR-2); single quotes and escapes are honoured
-    like `_command_substitution_depth`, and a `#` comment ends the scan."""
+    (fold lens-1 round 2 MAJOR-2; single-quote join added for the BSD
+    `$a\\` two-line append, issue #350 item 7 — the name is retained for
+    continuity). Escapes are honoured like `_command_substitution_depth`,
+    and a `#` comment ends the scan."""
     quote: str | None = None
     index = 0
     while index < len(line):
@@ -4429,7 +4438,7 @@ def _line_leaves_double_quote_open(line: str) -> bool:
         if char == "#" and quote is None and (index == 0 or line[index - 1].isspace()):
             break
         index += 1
-    return quote == '"'
+    return quote is not None
 
 
 def _joined_sed_segments(

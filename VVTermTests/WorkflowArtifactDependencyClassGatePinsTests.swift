@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 575
-    private static let expectedBaseVerdictCases = 144
+    private static let expectedManifestCases = 577
+    private static let expectedBaseVerdictCases = 146
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -697,7 +697,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-mention-window-question-pad.yml",
         "reject-runid-github-env-write-mention-window-backtick-isolating.yml",
         "reject-runid-github-env-write-mention-window-digit-positional-pad.yml",
-        "accept-runid-github-env-write-sed-append-literal-payload.yml",
+        // A13 (#350 item 7): the single-quote sed join. The old accept pin
+        // was converted to a reject; the two accepts are the benign
+        // multi-line single-quoted controls.
+        "reject-runid-github-env-write-sed-append-single-quote-join.yml",
+        "accept-runid-github-env-write-sed-single-quote-multiline-benign.yml",
+        "accept-runid-github-env-write-sed-single-quote-literal-append-benign.yml",
         "accept-runid-github-env-write-assignment-sed-no-mention.yml",
         "accept-runid-github-env-write-lua-inline-program.yml",
         "accept-runid-github-env-write-tclsh-script-invocation.yml",

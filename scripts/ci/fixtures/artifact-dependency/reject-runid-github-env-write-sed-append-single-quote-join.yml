@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the BSD sed `$a\` two-line append — the script's file operand
+# is on the next physical line, so the single-quoted script must be joined
+# before the `w`/`$a\` scan (issue #350, item 7; base ACCEPT, runtime FLIP
+# under BSD sed; a deliberate fail-closed refusal under GNU sed).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+      v: SOURCE
+      r: _RUN_
+      i: ID
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          sed -i '' '$a\
+          SOURCE_RUN_ID=${{ github.run_id }}' "$(printenv "${x}${y}")"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
