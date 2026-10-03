@@ -4885,6 +4885,17 @@ CASES = [
         ]
     },
     {
+        "id": "reject-runid-github-env-write-array-element-escaped-whitespace-comment-target",
+        "files": [
+            "reject-runid-github-env-write-array-element-escaped-whitespace-comment-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-array-element-escaped-whitespace-comment-target.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
         "id": "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile",
         "files": [
             "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml"

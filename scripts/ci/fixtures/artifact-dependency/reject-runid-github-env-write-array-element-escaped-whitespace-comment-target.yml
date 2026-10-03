@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Fixture: escaped whitespace before a `#` on a backslash-continuation line
+# is part of the word, so the `#` does not start a comment and the trailing
+# backslash is a real continuation. The fold round 1 comment test read the
+# character before `#` raw, so the escaped space opened a comment and the
+# joined `tee -a` target `${arr[0]}` was dropped (base ACCEPT, fold round 1
+# head ACCEPT, runtime FLIP; the fold round 2 escape-aware test refuses).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" | tee -a \
+          foo\ #bar \
+          "${arr[0]}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

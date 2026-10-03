@@ -705,7 +705,10 @@ spellings stay accepted boundary pins (an offset-suffix matcher or a
 literal-newline word join is a new mechanism, deferred): the array slice
 `"${arr[@]:0}"`, the scalar offset `"${arr:0}"` and a target word split
 by a literal newline inside a double quote (`"${arr[` + newline +
-`0]}"`). Claimed mechanisms:
+`0]}"`); an open single-quote or ANSI-C `$'…'` word does not join the
+next physical line even when it ends in `\\` (bash does join it; the
+continuation join exists only for the double-quote spelling — fold
+round 2 MINOR-2). Claimed mechanisms:
 (viii-a) `_LOCAL_REFERENCE_RE` and `_expansion_names` accept an optional
 `[...]` array subscript and contribute the base name, so a target spelled
 `${arr[0]}` joins the relevance set through the same narrow
@@ -721,11 +724,23 @@ to the relevance set, and skips heredoc payload lines, while the joined
 segments also feed the narrow argv-target scan; the continuation test
 stops at an unquoted `#` comment word (fold round 1 MAJOR-2(b): bash ends
 the comment at the physical newline, so a backslash-terminated comment no
-longer suppresses the real continuation on the next line); a continuation
+longer suppresses the real continuation on the next line), and that
+comment test is escape-aware (fold round 2 MAJOR-1): whitespace the scan
+skipped as the second half of a `\\X` escape pair is part of the word, so
+`foo\\ #bar \\` (and its escaped-tab twin) is a real continuation, not a
+comment — pinned by
+`reject-runid-github-env-write-array-element-escaped-whitespace-comment-target`;
+the comment-start class remains whitespace-or-line-start, so `;#`, `|#`,
+`&#` and `(#` stay read as continuations (a pre-existing fail-closed
+over-refusal, recorded here, not folded — fold round 2 MINOR-1), and
+`_line_leaves_double_quote_open` still uses the pre-fold escape-blind
+comment test (pre-existing, recorded, not folded — fold round 2 NIT-2);
+a continuation
 longer than 8 physical lines and a continuation inside a command
 substitution (`w=$(cp payload \\` + newline + `"${arr[0]}")`) stay open
-(named residuals); the comment spelling is pinned by
-`reject-runid-github-env-write-array-element-comment-continuation-target`; (viii-d) the
+(named residuals); the comment spellings are pinned by
+`reject-runid-github-env-write-array-element-comment-continuation-target` and
+`reject-runid-github-env-write-array-element-escaped-whitespace-comment-target`; (viii-d) the
 `_HEREDOC_RE` guard `(?<!<)<<-?(?!<)` stops a here-string (`<<<`) from
 being read as a heredoc opener, so the line after it is walked as shell
 (`<<<<`/`<<<<<` are bash syntax errors and `<<<-` is a here-string, so no
@@ -773,7 +788,7 @@ measured NUL spellings; item 8 stays a boundary class: `$'\\x00'` and `""`
 are pinned as accepted boundary fixtures, and the other five measured
 survivors (`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`)
 stay accepted and are recorded here. Measured at A13: the fixture corpus is
-593/593, of which 162 fixtures declare their measured base verdict
+594/594, of which 163 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 4 over-refusal pins under
 two root causes — 3 unmodelled-write shapes (any unmodelled write of the
 now-relevant base name refuses) and 1 no-write target mention (the
@@ -838,7 +853,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 593
+EXPECTED_MANIFEST_CASES = 594
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -855,7 +870,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 162
+EXPECTED_BASE_VERDICT_CASES = 163
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",

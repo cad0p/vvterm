@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 593
-    private static let expectedBaseVerdictCases = 162
+    private static let expectedManifestCases = 594
+    private static let expectedBaseVerdictCases = 163
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -759,6 +759,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-array-element-read-subscript-target.yml",
         "reject-runid-github-env-write-array-element-continuation-target.yml",
         "reject-runid-github-env-write-array-element-comment-continuation-target.yml",
+        // Fold round 2 MAJOR-1: the comment test is escape-aware. A `#`
+        // behind escaped whitespace does not start a comment, so the
+        // escaped-whitespace spelling is a real continuation.
+        "reject-runid-github-env-write-array-element-escaped-whitespace-comment-target.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-read.yml",
         "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml",
