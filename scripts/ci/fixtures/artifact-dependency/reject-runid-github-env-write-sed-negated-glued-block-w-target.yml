@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `!`-negated address glued to a block opener (`/zzz/!{w …`) writes the env file (re-lens 3 MAJOR-2, N9)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+      v: SOURCE
+      r: _RUN_
+      i: ID
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'zzz\n' > payload
+          printf '%s%s%s=%s\n' "$v" "$r" "$i" "${{ github.run_id }}" >> payload
+          sed -n "/zzz/!{w $(printenv "${x}${y}")
+          }" payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

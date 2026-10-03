@@ -4402,4 +4402,169 @@ CASES = [
             "reject-overrefusal-mention-window-bang-pid.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
         ],
     },
+    {
+        "id": "reject-runid-github-env-write-mention-window-cmdsub-comment-paren",
+        "files": [
+            "reject-runid-github-env-write-mention-window-cmdsub-comment-paren.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-cmdsub-comment-paren.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-mention-window-cmdsub-quoted-paren",
+        "files": [
+            "reject-runid-github-env-write-mention-window-cmdsub-quoted-paren.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-cmdsub-quoted-paren.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-mention-window-cmdsub-subshell-paren",
+        "files": [
+            "reject-runid-github-env-write-mention-window-cmdsub-subshell-paren.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-cmdsub-subshell-paren.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-mention-window-cmdsub-escaped-paren",
+        "files": [
+            "reject-runid-github-env-write-mention-window-cmdsub-escaped-paren.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-cmdsub-escaped-paren.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-mention-window-cmdsub-process-substitution",
+        "files": [
+            "reject-runid-github-env-write-mention-window-cmdsub-process-substitution.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-cmdsub-process-substitution.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-mention-window-cmdsub-escaped-quote",
+        "files": [
+            "reject-runid-github-env-write-mention-window-cmdsub-escaped-quote.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-mention-window-cmdsub-escaped-quote.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-negated-line-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-negated-line-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-negated-line-w-target.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-negated-range-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-negated-range-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-negated-range-w-target.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-negated-last-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-negated-last-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-negated-last-w-target.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-negated-space-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-negated-space-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-negated-space-w-target.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-negated-regex-W-target",
+        "files": [
+            "reject-runid-github-env-write-sed-negated-regex-W-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-negated-regex-W-target.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-alt-delimiter-hash-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-alt-delimiter-hash-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-alt-delimiter-hash-w-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-alt-delimiter-pipe-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-alt-delimiter-pipe-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-alt-delimiter-pipe-w-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-alt-delimiter-at-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-alt-delimiter-at-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-alt-delimiter-at-w-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-negated-glued-block-w-target",
+        "files": [
+            "reject-runid-github-env-write-sed-negated-glued-block-w-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-negated-glued-block-w-target.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    }
 ]
