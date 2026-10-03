@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 530
-    private static let expectedBaseVerdictCases = 99
+    private static let expectedManifestCases = 537
+    private static let expectedBaseVerdictCases = 106
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -92,6 +92,13 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// refusal controls). The manifest must reference each one, and each file
     /// must exist, so deleting a fixture (or its case) is visible here.
     private static let requiredFixtures: [String] = [
+        "accept-runid-github-env-write-mention-window-cmdsub-case-pattern-paren.yml",
+        "reject-runid-github-env-write-mention-window-cmdsub-ansic-escaped-quote.yml",
+        "reject-runid-github-env-write-mention-window-cmdsub-backtick-paren.yml",
+        "reject-runid-github-env-write-sed-mixed-range-alt-delimiter-hash-w-target.yml",
+        "reject-runid-github-env-write-sed-mixed-range-alt-delimiter-percent-two-backslash-w-target.yml",
+        "reject-runid-github-env-write-sed-mixed-range-alt-delimiter-percent-w-target.yml",
+        "reject-runid-github-env-write-sed-mixed-range-alt-delimiter-pipe-w-target.yml",
         "reject-runid-github-env-write-mention-window-cmdsub-comment-paren.yml",
         "reject-runid-github-env-write-mention-window-cmdsub-escaped-paren.yml",
         "reject-runid-github-env-write-mention-window-cmdsub-escaped-quote.yml",

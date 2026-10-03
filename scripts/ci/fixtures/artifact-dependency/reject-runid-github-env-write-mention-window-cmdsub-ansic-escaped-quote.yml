@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `$(…)` pad whose interior ANSI-C `$'…'` string carries an escaped quote (`\'`) desynchronised the scanner's single-quote skip, so the ` )` inside the ANSI-C string closed the pad early (fold round 5, X2)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          eval "echo SOURCE_RUN_ID=${{ github.run_id }} >> \$GITHUB_$(: $'a\' )AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

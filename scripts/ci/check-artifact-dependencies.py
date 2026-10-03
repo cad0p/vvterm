@@ -482,7 +482,7 @@ runtime-assembled/ANSI-C-quoted interpreter inline-program flag (4
 closure fixtures — php short flag via a variable, php's ANSI-C-quoted
 `--run`, python3's `-c` via a variable, node's `--eval` via a variable —
 all runtime-proven, plus an over-refusal pin for the benign `F=-r; php
-$F 'echo 1;'` control). At A12 the fixture corpus is 530/530, of which the 99 A12 fixtures
+$F 'echo 1;'` control). At A12 the fixture corpus is 537/537, of which the 106 A12 fixtures
 each declare their measured base verdict (`base_exit`);
 at A11 the fixture corpus was 431/431
 with zero diagnostic changes on the 426 then-pre-existing cases (`old.CASES
@@ -563,7 +563,9 @@ multi-piece targets that name only unassigned variables
 `$w`, `/re/w`, a comma-separated range — `1,+3w`, `/re/,/re2/w`,
 `0,/re/w`, a `!`-negated address or range (`1!w`, `$!w`, `1,2!w`,
 `/re/!W`, `1! w`), the general GNU alternate-delimiter `\\cREc`
-address (`\\,re,`, `\\%re%`, `\\#re#w`, `\\|re|w`, `\\@re@w`), or a
+address (`\\,re,`, `\\%re%`, `\\#re#w`, `\\|re|w`, `\\@re@w`) in
+either range position and in both the raw `\\c…c` and the
+double-quoted-source `\\\\c…c` spelling, or a
 `{`-glued block opener — negated or not), newline-separated or
 physically line-spanning quoted script, and recognizes `--in-place`/`--in-place=SUFFIX` and any
 non-empty abbreviation of the option name (`--i`, `--in`, `--in=.bak`;
@@ -587,16 +589,23 @@ quote/escape/comment-aware balanced scanner for `$(…)`/`${…}` regions
 with a regex fallback for the simple spellings, backticks, backslash
 continuations and unbraced `$NAME`/`$@`/`$*`/`$?`/`$!`/`$N` pads, so
 any balanced `${…}`/`$(…)` pad whose interior is a comment
-parenthesis, a quoted or escaped parenthesis or quote, a subshell or a
-process substitution cannot keep the halves apart (the
-escaped-`\\$…` and bare-`$GITHUB` guards are pinned); the raw text is
+parenthesis, a quoted or escaped parenthesis or quote, a subshell, a
+process substitution, an ANSI-C `$'…'` string (an escaped `\\'` does
+not close it) or a backtick region (opaque to the parenthesis depth)
+cannot keep the halves apart; the escaped-`\\$…` guard is pinned,
+while the bare-`$GITHUB` guard is defence-in-depth (the scanner's
+braced-only candidate subsumes it — `mut-F-guard-notgithub-off` reds
+0); a `case`-pattern terminator `)` inside the pad is the scanner's
+named residual (the fail-closed last-`)` rule was measured with 0
+corpus flips and rejected because it subsumed the ANSI-C/backtick
+lexer fixes); the raw text is
 always walked, so every base mention is kept (the elided-only walk
 lost nine measured strings and reopened four runtime-proven flips,
 pinned by
 `reject-runid-github-env-write-mention-window-split-spelling`).
-Measured at the fold: `--selftest` 530/530; `--root .` byte-identical
+Measured at the fold: `--selftest` 537/537; `--root .` byte-identical
 green; the 26-shape #346/#347 battery keeps the 20-closed / 6-residual
-split; 37 falsifying mutants red each mechanism's own fixtures and no
+split; 41 falsifying mutants red each mechanism's own fixtures and no
 others (the red-set matrix is the bleed check). Over-refusal accounting:
 the fold adds at least 16 measured benign shapes (base ACCEPT -> refuse)
 over nine named classes, each class pinned by at least one
@@ -618,7 +627,11 @@ basename, the `--expression` long-option abbreviations in the
 `=`-attached form (`--e=`, `--ex=`, `--expr=`; a GNU getopt_long
 abbreviation the sed argv loop does not model, re-filed as #350
 item 9), and a `$(…)` body whose unmodelled heredoc hides the halves
-(a substitution-body heredoc is the scanner's named residual).
+(a substitution-body heredoc is the scanner's named residual), and a
+`case`-pattern terminator `)` inside a `$(…)` pad (the balanced
+scanner counts the grammar `)`; measured ACCEPT at the fold with a
+runtime FLIP, and the fail-closed last-`)` elision was measured and
+rejected).
 
 Named residuals (re-filed in #350): a caller (`workflow_call`) or dispatcher
 (`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
@@ -716,7 +729,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 530
+EXPECTED_MANIFEST_CASES = 537
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -733,7 +746,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 99
+EXPECTED_BASE_VERDICT_CASES = 106
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -3235,17 +3248,52 @@ def _indent_width(line: str) -> int:
 
 def _consume_command_substitution(text: str, start: int) -> int:
     """The index just past the `$(…)` opened at `text[start:start + 2]`,
-    with quotes, escapes, `#` comments and nested parentheses honoured;
-    `len(text)` when the substitution is unclosed on the line (the
-    caller's per-line scan refuses rather than guesses). Bash starts a `#`
-    comment at the beginning of a word, and the comment runs to the next
-    physical line; a parenthesis inside a comment must not count toward
-    the nesting depth (fold round 4 BLOCKER-1)."""
+    with quotes, escapes, `#` comments, nested parentheses, ANSI-C
+    `$'…'` regions and backtick regions honoured; `len(text)` when the
+    substitution is unclosed on the line (the caller's per-line scan
+    refuses rather than guesses). Bash starts a `#` comment at the
+    beginning of a word, and the comment runs to the next physical line;
+    a parenthesis inside a comment must not count toward the nesting
+    depth (fold round 4 BLOCKER-1). Inside `$'…'`, `\'` is an escaped
+    quote and `\\` an escaped backslash; a backtick region is opaque to
+    the depth, so a `)` inside it belongs to the backtick command (fold
+    round 5, X2/X3)."""
     n = len(text)
     depth = 1
     j = start + 2
     while j < n and depth:
         cj = text[j]
+        if cj == "$" and j + 1 < n and text[j + 1] == "'":
+            # ANSI-C quoting: `\'` does not close the region and `\\`
+            # is an escaped backslash, so the region can carry a raw
+            # parenthesis without closing the substitution (fold round
+            # 5, X2).
+            j += 2
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == "'":
+                    j += 1
+                    break
+                j += 1
+            continue
+        if cj == "`":
+            # A backtick region is opaque to the parenthesis depth (bash
+            # parses it as a separate construct), so a `)` inside it must
+            # not close the substitution; an unterminated backtick swallows
+            # the rest of the text, which the caller treats fail-closed
+            # (fold round 5, X3).
+            j += 1
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == "`":
+                    j += 1
+                    break
+                j += 1
+            continue
         if cj in "'\"":
             quote = cj
             j += 1
@@ -4172,12 +4220,37 @@ def _env_file_target_kind(
 # substitution. The extracted target is tested with the same narrow
 # predicate as the file operands, and a broader match can only add targets,
 # so the direction is fail-closed. The alternate-delimiter address term is
-# the general GNU `\cREc` form (`\([^\\\n])[^\n]*?\1`), with `,`/`%`
-# kept as the pinned instances (fold round 4 MAJOR-2); the optional `!`
-# modifier after an address or range is GNU's negation, without which
-# `1!w`/`/re/!W` never reach the command scan.
-_SED_ADDRESS_TERM = r"(?:[0-9$~+]+|/[^/\n]*/|\\([^\\\n])[^\n]*?\1)"
-_SED_ADDRESS = _SED_ADDRESS_TERM + r"(?:[ \t]*,[ \t]*" + _SED_ADDRESS_TERM + r")?"
+# the general GNU `\cREc` form; it accepts both the raw single-backslash
+# spelling and the double-quoted-source double-backslash spelling (shell
+# double quotes turn `\\` into `\`), and its backreference is numbered per
+# copy so a range's second term can itself be the alternate-delimiter form
+# (fold round 5, Z1/Y9/Z2/Z3/Z4); the optional `!` modifier after an
+# address or range is GNU's negation, without which `1!w`/`/re/!W` never
+# reach the command scan (fold round 4 MAJOR-2).
+
+
+def _sed_address_term(backreference: int) -> str:
+    """One sed address term: a line number/`$`/`~`/`+` address, a
+    `/regex/` address, or GNU's general `\\cREc` alternate-delimiter
+    address. `\\\\?` carries the optional second raw backslash of the
+    double-quoted-source spelling, the delimiter is group
+    `backreference`, and the closing delimiter is matched with the same
+    number."""
+    return (
+        r"(?:[0-9$~+]+|/[^/\n]*/|"
+        r"\\\\?([^\\\n])[^\n]*?"
+        + "\\"
+        + str(backreference)
+        + r")"
+    )
+
+
+_SED_ADDRESS = (
+    _sed_address_term(1)
+    + r"(?:[ \t]*,[ \t]*"
+    + _sed_address_term(2)
+    + r")?"
+)
 _SED_WRITE_COMMAND_RE = re.compile(
     r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*[wW][ \t]+(?P<target>\S[^\n;]*)",
     re.MULTILINE,
