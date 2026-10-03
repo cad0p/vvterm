@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: monotonicity pin: the raw window walk must keep this base refusal (fold BLOCKER-1)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          v=GITHUB_$(echo ENV)
+          echo "SOURCE_RUN_ID=${{ github.run_id }}" >> "${!v}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

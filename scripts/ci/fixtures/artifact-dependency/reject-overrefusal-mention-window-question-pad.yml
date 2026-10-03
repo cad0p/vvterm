@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `$?`-padded window spelling expands to digits at runtime; the elided walk refuses it (`$?` is the question mark, hence `question-pad`; the `$N` positional pad is `…-digit-positional-pad`) (fold lens-1 MAJOR-5 cost, round 3 NIT-1 rename)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          echo "GITHUB$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?$?ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a `perl` script-file invocation stays accepted; the #346.4 residual (fold lens-2 MAJOR-3)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+      v: SOURCE
+      r: _RUN_
+      i: ID
+      n: GITHUB
+      m: _
+      k: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'open(my $f, ">>", $ENV{"%s%s%s"}) or die; print $f "%s%s%s=%s\\n"; close $f;\n' "$n" "$m" "$k" "$v" "$r" "$i" "${{ github.run_id }}" > evil.pl
+          perl evil.pl
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

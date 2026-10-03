@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a Python inline program containing a data substitution is refused fail-closed; a `$(` in a Python string names nothing (fold lens-1 round 2 MAJOR-6 cost)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          python3 -c 'print("$(date)")'
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the `(?!GITHUB)` guard: a bare `$GITHUB` must survive the elided walk so the assembled name still mentions (fold lens-2 MINOR-1)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "$GITHUB${LONGPADLONGPADLONGPADLONGPADLONGPADLONGPADLONGPADLONGPADLONGPAD}ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

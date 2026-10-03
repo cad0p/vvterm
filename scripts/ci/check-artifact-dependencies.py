@@ -482,8 +482,10 @@ runtime-assembled/ANSI-C-quoted interpreter inline-program flag (4
 closure fixtures — php short flag via a variable, php's ANSI-C-quoted
 `--run`, python3's `-c` via a variable, node's `--eval` via a variable —
 all runtime-proven, plus an over-refusal pin for the benign `F=-r; php
-$F 'echo 1;'` control). The fixture corpus is 431/431
-with zero diagnostic changes on the 426 pre-existing cases (`old.CASES
+$F 'echo 1;'` control). At A12 the fixture corpus is 530/530, of which the 99 A12 fixtures
+each declare their measured base verdict (`base_exit`);
+at A11 the fixture corpus was 431/431
+with zero diagnostic changes on the 426 then-pre-existing cases (`old.CASES
 == new.CASES[:426]`), and the real tree stays byte-identical green
 (`ios-adhoc-pr.yml`'s `gh api …`, `find …`, `${!name:-}` and continuation
 bodies are untouched). The cost is fail-closed over-refusal of 24
@@ -544,13 +546,93 @@ no longer turns a literal `$GITHUB_ENV)` filename into the env file
 (pinned accepted by the quoted-process-substitution literal-target
 fixture).
 
-Named residuals: a caller (`workflow_call`) or dispatcher
+A12 (the #346+#347 fold) closes three families and rewrites the mention
+walk. Claimed mechanisms:
+(vii-a) the verb-specific argv write table (`sed`, `cp`, `mv`, `install`,
+`touch`, `truncate`, added to `tee`/`dd`) with the narrow target
+predicate: a target refuses only when it names the env file, carries
+`$(`/backtick/`${!}`/an env spelling, or is a PURE variable (`$p`) whose
+name an unmodelled assignment form (`_UNMODELLED_WRITE_VERBS`:
+`read`/`readarray`/`mapfile`/`declare`/`local`/`typeset`/`readonly`/
+`unset`/`getopts`/`printf`/`for`/`select`/`trap`/`eval`/the shells)
+writes — the measured `printf -v`/`read`/`declare` and
+`mapfile`/`readarray`/`getopts`/`readonly`/`unset` spellings all refuse;
+multi-piece targets that name only unassigned variables
+(`$OUT_DIR/VVTerm.ipa`) stay accepted. sed additionally classifies its
+`w`/`W` script-command target for an address-prefixed (`1w`, `1 w`,
+`$w`, `/re/w`, a comma-separated range — `1,+3w`, `/re/,/re2/w`,
+`0,/re/w`, a `!`-negated address or range (`1!w`, `$!w`, `1,2!w`,
+`/re/!W`, `1! w`), the general GNU alternate-delimiter `\\cREc`
+address (`\\,re,`, `\\%re%`, `\\#re#w`, `\\|re|w`, `\\@re@w`), or a
+`{`-glued block opener — negated or not), newline-separated or
+physically line-spanning quoted script, and recognizes `--in-place`/`--in-place=SUFFIX` and any
+non-empty abbreviation of the option name (`--i`, `--in`, `--in=.bak`;
+GNU getopt_long accepts any unambiguous prefix, and `in-place` is sed's
+only long option starting with `i`), `-i`/`-iSUFFIX`, an attached `-e`
+script (`-eSCRIPT`, `-nEeSCRIPT`) or a short-option cluster containing
+`i` (`-ni`, `-Ei`), and the BSD `-i ''` extension word (sed's `s///w
+file` flag and `-f` script bodies stay residual).
+(vii-b) the carrier-substitution test (`trap`/`eval`/`sh -c`/`bash -c`/
+`$SHELL -c`, and an interpreter inline-program operand) refuses an
+operand containing any command substitution — including arithmetic
+`$((` — or backtick, with ANSI-C `$'…'` spellings decoded for that test
+only (the quoted form and the quote-stripped token form); a
+substitution passed as data after a shell script path (`bash script.sh
+"$(mktemp)"`) or as a positional (`bash -c 'echo "$1"' _ "$(mktemp)"`)
+stays accepted. An interpreter inline program is refused fail-closed and
+its diagnostic says so instead of claiming the operand names the value.
+(vii-c) `_mentions_github_env`'s 64-character window walk runs over the
+raw text and every text reachable by a bounded elision that combines a
+quote/escape/comment-aware balanced scanner for `$(…)`/`${…}` regions
+with a regex fallback for the simple spellings, backticks, backslash
+continuations and unbraced `$NAME`/`$@`/`$*`/`$?`/`$!`/`$N` pads, so
+any balanced `${…}`/`$(…)` pad whose interior is a comment
+parenthesis, a quoted or escaped parenthesis or quote, a subshell or a
+process substitution cannot keep the halves apart (the
+escaped-`\\$…` and bare-`$GITHUB` guards are pinned); the raw text is
+always walked, so every base mention is kept (the elided-only walk
+lost nine measured strings and reopened four runtime-proven flips,
+pinned by
+`reject-runid-github-env-write-mention-window-split-spelling`).
+Measured at the fold: `--selftest` 530/530; `--root .` byte-identical
+green; the 26-shape #346/#347 battery keeps the 20-closed / 6-residual
+split; 37 falsifying mutants red each mechanism's own fixtures and no
+others (the red-set matrix is the bleed check). Over-refusal accounting:
+the fold adds at least 16 measured benign shapes (base ACCEPT -> refuse)
+over nine named classes, each class pinned by at least one
+`reject-overrefusal-*` fixture — `m1-long-expansion-assembly`; the pad
+class (`$?`/`$0`/`$!` spellings); `eval "echo $(date +%s)"`; the six
+lens-3 new-verb witnesses (`cp`/`mv`/`install`/`touch`/`truncate`/`sed
+-i` with a `$(mktemp)` target); a pure target written by `printf -v`
+(`printf -v p … ; cp payload "$p"`); an interpreter inline program
+containing a `$(`; `eval` arithmetic `$((`; the ANSI-C quoted form in a
+double-quoted operand; and a bare `$GITHUB` name the elided walk keeps.
+The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
+fold does not close: sed's `s///w file` flag and `-f` bodies, the BSD
+`$a\\` two-line append, interpreters outside the inline-program table
+(`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
+/ process-substitution script operands, array-element write targets
+(`${arr[0]}`), stdin-fed argv operands (`… | xargs cp payload {}`), the
+no-mention job-env assembly (`s2a`), the created-or-aliased
+basename, the `--expression` long-option abbreviations in the
+`=`-attached form (`--e=`, `--ex=`, `--expr=`; a GNU getopt_long
+abbreviation the sed argv loop does not model, re-filed as #350
+item 9), and a `$(…)` body whose unmodelled heredoc hides the halves
+(a substitution-body heredoc is the scanner's named residual).
+
+Named residuals (re-filed in #350): a caller (`workflow_call`) or dispatcher
 (`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
 value (no `workflow_call` exists in this repo, and trigger parsing is
 deliberately not modelled); a `$GITHUB_ENV` write whose name pieces never
-appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a
-name split past the 64-character window — the `w2-64window-eval` class) is
-not detected, the inherited text-detector boundary; a `source`d or
+appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`)
+is not detected, the inherited text-detector boundary (the padded
+64-character-window class — including any balanced `${…}`/`$(…)` pad the
+scanner or the bounded regex fixpoint removes (a comment, a quoted or
+escaped parenthesis or quote, a subshell or a process substitution inside
+it) — is closed by A12; the name text must still appear; a `$(…)` body
+whose heredoc hides the halves, the `\\$NAME`/single-quoted-`$GITHUB`
+spellings the unbraced elision deliberately skips and NUL/`$'…'` name
+concatenation are outside the walk's claimed text); a `source`d or
 `.`-sourced script's body, a `bash script.sh` path and an interpreter
 script file or `-m module` (`python3 /tmp/evil.py`, `python3 -m evilmod`;
 only the inline-program string is inspected), an interpreter fed its
@@ -561,10 +643,14 @@ or a process-substitution script operand (`php -f <(code)`, `python3
 a carrier whose command
 string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
-env file or a traced name is the inherited textual boundary); a carrier
-operand that is itself a command substitution (`eval "$(cat …)"`); other
-argv write verbs that need verb-specific semantics (`sed -i`, `cp`/`mv`/
-`install`, `touch`/`truncate`); interpreters outside the inline-program
+env file or a traced name is the inherited textual boundary); an
+array-element write target (`cp payload "${arr[0]}"`) and an argv operand
+fed on stdin (`… | xargs cp payload {}`) sit outside the argv verb table;
+other
+argv write verbs that need verb-specific semantics are closed by A12
+(sed `-i`/`--in-place` (and its abbreviations)/`w` targets,
+`cp`/`mv`/`install` last operand,
+`touch`/`truncate` every operand); interpreters outside the inline-program
 table (`lua -e`, `tclsh`, a script file); a shell/interpreter basename
 outside the mechanism tables — including one the run creates (`ln -sf
 /bin/sh ash`, then `w=$(./ash -c "printf '%s\\n' SOURCE_RUN_ID=${{ github.run_id }}
@@ -577,9 +663,10 @@ substitution, the interpreter argv file targets, the nested glued parens,
 the inline-program flag cluster/attached/`--flag=value`/`-E` spellings,
 the `node -pe` cluster, the php `-B`/`-E`/`-R` inline programs and their
 `--run`/`--process-begin`/`--process-end`/`--process-code` long aliases,
-the runtime-assembled shell command flag and the runtime-assembled /
-ANSI-C-quoted interpreter inline-program flag are refused by the
-mechanisms above.
+the runtime-assembled shell command flag, the runtime-assembled /
+ANSI-C-quoted interpreter inline-program flag, and the A12 argv-verb /
+carrier-substitution / raw-OR-elided mention-walk mechanisms are refused
+by the mechanisms above.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -629,12 +716,30 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 431
+EXPECTED_MANIFEST_CASES = 530
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
 # removed (and then update the pin suite too).
 MIN_SCANNED_WORKFLOW_FILES = 12
+# A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold + 15 at
+# the round-3 fold + 15 at the round-4 fold) each declare the measured
+# exit of the pre-fold gate
+# (150a56a3) as `base_exit`; `--selftest` refuses an accept-widening (base
+# REFUSE -> folded ACCEPT) and any base-REFUSE reject fixture that is not
+# one of the documented pre-existing pins, so a double-caused fixture
+# cannot hide behind a verdict the new mechanism did not cause. Limit:
+# `--selftest` cannot re-run the historical gate, so an honestly recorded
+# double cause reds but a *false* `base_exit: 0` still passes; the field
+# is reviewable data backed by the measured counterfactual evidence, not a
+# re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
+EXPECTED_BASE_VERDICT_CASES = 99
+A12_BASE_REFUSAL_PINS = frozenset(
+    {
+        "reject-runid-github-env-write-mention-window-split-spelling",
+        "reject-runid-github-env-write-sed-n-read-assigned-file",
+    }
+)
 
 UPLOAD_ACTION = "actions/upload-artifact"
 DOWNLOAD_ACTION = "actions/download-artifact"
@@ -2147,6 +2252,114 @@ def _is_parseint_literal(value: str) -> bool:
 GITHUB_ENV_WINDOW = 64
 
 
+# The elision set for the mention-window walk: braced expansions, simple
+# command substitutions, backticks, backslash-newline continuations, and
+# UNBRACED `$NAME`/`$@`/`$*`/`$?`/`$!`/`$N` padding. The unbraced
+# alternative deliberately skips a backslash-escaped `$` (the `\$GITHUB` in
+# the `w2` family is literal text for the later `eval`) and a name beginning
+# with `GITHUB`: eliding the first conjunct would delete the mention the walk
+# is supposed to preserve (issue #347, fold lens-1 MAJOR-5). `$?`/`$!`/`$N`
+# are elided too even though they expand to digits or a pid — the direction
+# is fail-closed over-refusal, not miss (fold lens-1 round 2 MAJOR-3).
+_EXPANSION_ELISION_RE = re.compile(
+    r"\$\{[^{}]*\}"
+    r"|\$\([^()]*\)"
+    r"|`[^`]*`"
+    r"|\\\n"
+    r"|(?<!\\)\$(?!GITHUB)[A-Za-z_][A-Za-z0-9_]*"
+    r"|(?<!\\)\$[@*?!]"
+    r"|(?<!\\)\$[0-9]+",
+    re.DOTALL,
+)
+
+# The elision runs to a bounded fixpoint. Two mechanisms cooperate and
+# disagree about order: the regex fallback's braced alternative must
+# consume a `${…}` before the unbraced `$NAME` alternative can swallow a
+# trailing `ENV` (`GITHUB_$A…$A${A}ENV`), while the balanced scanner must
+# see a `$(…)` whole before the regex can remove only its first
+# `[^()]*`-shaped fragment (an interior escaped quote/comment paren). The
+# walk therefore closes over every text reachable by applying either
+# operation, in any order, bounded by `_EXPANSION_ELISION_MAX_PASSES`; the
+# raw text is one of the candidates, so no base mention is ever lost, and
+# exhausting either bound refuses fail-closed. The regex pass alone cannot
+# flatten an outer `${…}`/`$(…)` whose interior holds an inner one (fold
+# lens-1 round 3 MAJOR-1); the scanner removes any balanced region (however
+# nested) in one pass.
+_EXPANSION_ELISION_MAX_PASSES = 8
+
+# A guard against a pathological candidate explosion: every candidate is
+# strictly shorter than its parent, so the reachable set is finite, but the
+# bound keeps the walk cheap and refuses fail-closed if it is ever hit.
+_EXPANSION_ELISION_MAX_CANDIDATES = 64
+
+
+def _elide_balanced_expansions(text: str) -> str:
+    """`text` with every balanced `$(…)`/`${…}` region removed, with
+    nesting, quotes, escapes and `#` comments honoured (re-lens 3
+    BLOCKER-1). The regex fallback in `_mentions_github_env` still removes
+    the simple spellings, backticks, backslash continuations and unbraced
+    `$NAME`/`$@`/`$*`/`$?`/`$!`/`$N` pads; this scanner exists because the
+    regex alone cannot elide a `$(…)` whose interior carries a parenthesis
+    (a comment, a quoted argument, an escaped paren, a subshell, a process
+    substitution), and a pad the elision cannot flatten keeps the
+    `GITHUB`/`ENV` halves apart and skips the whole run-id scan. An
+    unclosed construct deletes the rest of the text from the elided half
+    only; the raw half is walked separately, so the delete stays
+    fail-closed in the mention direction."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out.append(text[i : i + 2])
+            i += 2
+            continue
+        if c == "'":
+            end = text.find("'", i + 1)
+            end = n if end == -1 else end + 1
+            out.append(text[i:end])
+            i = end
+            continue
+        if c == "$" and i + 1 < n and text[i + 1] == "(":
+            i = _consume_command_substitution(text, i)
+            continue
+        if c == "$" and i + 1 < n and text[i + 1] == "{":
+            i = _consume_braced_expansion(text, i)
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _mention_candidates(text: str) -> set[str] | None:
+    """Every elision of `text` reachable by applying the regex fallback
+    and the balanced scanner in any order, to a bounded fixpoint. `None`
+    when either bound is exhausted (the caller treats that as fail-closed).
+    The raw `text` is included, so the mention walk keeps every base
+    mention."""
+    seen = {text}
+    frontier = [text]
+    for _ in range(_EXPANSION_ELISION_MAX_PASSES):
+        next_round: list[str] = []
+        for candidate in frontier:
+            for collapsed in (
+                _EXPANSION_ELISION_RE.sub("", candidate),
+                _elide_balanced_expansions(candidate),
+            ):
+                if collapsed != candidate and collapsed not in seen:
+                    seen.add(collapsed)
+                    next_round.append(collapsed)
+        if not next_round:
+            break
+        if len(seen) > _EXPANSION_ELISION_MAX_CANDIDATES:
+            return None
+        frontier = next_round
+    else:
+        return None
+    return seen
+
+
 def _mentions_github_env(text: str) -> bool:
     """The #339 mention test for one decoded `run:` scalar or block body.
     The case-insensitive `github_env` substring closes `$GITHUB_ENV`,
@@ -2159,11 +2372,21 @@ def _mentions_github_env(text: str) -> bool:
     text-based detector."""
     if "github_env" in text.lower():
         return True
-    start = text.find("GITHUB")
-    while start != -1:
-        if "ENV" in text[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
-            return True
-        start = text.find("GITHUB", start + 1)
+    # Monotonicity: the raw-text walk is the base behaviour and must stay.
+    # Eliding expansions can DELETE one half of a spelling the raw text
+    # carries (`GITHUB_$(echo ENV)` -> `GITHUB_`), so the walk gate would skip
+    # a body the base gate walked and reopen a runtime-proven fail-open.
+    # Walk every candidate: raw (never lose a base mention) and every
+    # bounded elision (close the window-spanning assembly).
+    candidates = _mention_candidates(text)
+    if candidates is None:
+        return True
+    for candidate in candidates:
+        start = candidate.find("GITHUB")
+        while start != -1:
+            if "ENV" in candidate[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
+                return True
+            start = candidate.find("GITHUB", start + 1)
     return False
 
 
@@ -2977,7 +3200,7 @@ _PURE_VARIABLE_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 # (`tee`, `dd of=…`): a computed operand cannot be seen by the redirect
 # classification, so it needs its own target check (issue #345, lens-v2
 # t04/t20/t22/t23).
-_ARGV_WRITE_VERBS = frozenset({"tee", "dd"})
+_ARGV_WRITE_VERBS = frozenset({"tee", "dd", "sed", "cp", "mv", "install", "touch", "truncate"})
 # `read` options that consume the next word. `-a` is deliberately absent:
 # its argument IS the array name that the rule must inspect.
 _READ_OPTIONS_WITH_ARGUMENT = ("-d", "-i", "-n", "-N", "-p", "-t", "-u")
@@ -3012,9 +3235,12 @@ def _indent_width(line: str) -> int:
 
 def _consume_command_substitution(text: str, start: int) -> int:
     """The index just past the `$(…)` opened at `text[start:start + 2]`,
-    with quotes, escapes and nested parentheses honoured; `len(text)` when
-    the substitution is unclosed on the line (the caller's per-line scan
-    refuses rather than guesses)."""
+    with quotes, escapes, `#` comments and nested parentheses honoured;
+    `len(text)` when the substitution is unclosed on the line (the
+    caller's per-line scan refuses rather than guesses). Bash starts a `#`
+    comment at the beginning of a word, and the comment runs to the next
+    physical line; a parenthesis inside a comment must not count toward
+    the nesting depth (fold round 4 BLOCKER-1)."""
     n = len(text)
     depth = 1
     j = start + 2
@@ -3023,17 +3249,62 @@ def _consume_command_substitution(text: str, start: int) -> int:
         if cj in "'\"":
             quote = cj
             j += 1
-            while j < n and text[j] != quote:
-                j += 1
-            if j < n:
+            while j < n:
+                if quote == '"' and text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == quote:
+                    j += 1
+                    break
                 j += 1
             continue
         if cj == "\\" and j + 1 < n:
             j += 2
             continue
+        if cj == "#" and (j == start + 2 or text[j - 1] in " \t\n;|&()"):
+            newline = text.find("\n", j)
+            j = n if newline == -1 else newline + 1
+            continue
         if cj == "(":
             depth += 1
         elif cj == ")":
+            depth -= 1
+        j += 1
+    return j
+
+
+def _consume_braced_expansion(text: str, start: int) -> int:
+    """The index just past the `${…}` opened at `text[start:start + 2]`,
+    with nested `${…}` expansions, quotes and escapes honoured;
+    `len(text)` when the expansion is unclosed (the caller leaves the raw
+    half untouched, so the fail-closed direction is the mention walk).
+    The bounded regex fixpoint can flatten nested braces only when every
+    level is a simple `${…}`; a brace inside a quoted word is not a
+    closing brace (fold round 4 BLOCKER-1)."""
+    n = len(text)
+    depth = 1
+    j = start + 2
+    while j < n and depth:
+        cj = text[j]
+        if cj == "\\" and j + 1 < n:
+            j += 2
+            continue
+        if cj in "'\"":
+            quote = cj
+            j += 1
+            while j < n and text[j] != quote:
+                if quote == '"' and text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                j += 1
+            if j < n:
+                j += 1
+            continue
+        if cj == "$" and j + 1 < n and text[j + 1] == "{":
+            depth += 1
+            j += 2
+            continue
+        if cj == "}":
             depth -= 1
         j += 1
     return j
@@ -3886,6 +4157,107 @@ def _env_file_target_kind(
     return "other"
 
 
+# A sed `w`/`W` script command: the target filename is the rest of the
+# script line. The command position is the start of the script, a `;`
+# separator, or the start of any script line (`re.MULTILINE`), optionally
+# preceded by a GNU address — a line number/`$`/`~step`/`+N`, a `/regex/`,
+# an alternate-delimiter `\,regex,`/`\%regex%`, one of those or a
+# comma-separated pair of them (a range), optionally followed by a `{`
+# block opener. Bracketed and addressed spellings are the same command at
+# runtime (fold lens-1 MAJOR-2, round 3 MAJOR-4). The tokenizer keeps an
+# escaped `\$` from a double-quoted operand, so the address may carry that
+# backslash (`"\$w file"` passes `$w file` to sed). The `s///w file`
+# substitution flag is left as a named residual: the prefix is anchored at
+# a command position (start/`;`/line start), so it cannot start inside a
+# substitution. The extracted target is tested with the same narrow
+# predicate as the file operands, and a broader match can only add targets,
+# so the direction is fail-closed. The alternate-delimiter address term is
+# the general GNU `\cREc` form (`\([^\\\n])[^\n]*?\1`), with `,`/`%`
+# kept as the pinned instances (fold round 4 MAJOR-2); the optional `!`
+# modifier after an address or range is GNU's negation, without which
+# `1!w`/`/re/!W` never reach the command scan.
+_SED_ADDRESS_TERM = r"(?:[0-9$~+]+|/[^/\n]*/|\\([^\\\n])[^\n]*?\1)"
+_SED_ADDRESS = _SED_ADDRESS_TERM + r"(?:[ \t]*,[ \t]*" + _SED_ADDRESS_TERM + r")?"
+_SED_WRITE_COMMAND_RE = re.compile(
+    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*[wW][ \t]+(?P<target>\S[^\n;]*)",
+    re.MULTILINE,
+)
+
+
+def _sed_write_targets(script: str) -> list[str]:
+    """The target of every `w`/`W` script command in one sed script
+    operand: sed's second write channel, whose filename is the rest of the
+    script line (issue #346, fold lens-1 MAJOR-1)."""
+    targets: list[str] = []
+    for match in _SED_WRITE_COMMAND_RE.finditer(script):
+        target = match.group("target").strip()
+        if target:
+            targets.append(target)
+    return targets
+
+
+def _line_leaves_double_quote_open(line: str) -> bool:
+    """True when one physical line ends inside an unclosed double-quoted
+    string: a newline inside `"…"` is part of the word, not a command
+    boundary. Used only to join a sed script that spans physical lines
+    (fold lens-1 round 2 MAJOR-2); single quotes and escapes are honoured
+    like `_command_substitution_depth`, and a `#` comment ends the scan."""
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and quote != "'" and index + 1 < len(line):
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if char == "#" and quote is None and (index == 0 or line[index - 1].isspace()):
+            break
+        index += 1
+    return quote == '"'
+
+
+def _joined_sed_segments(
+    lines: list[str], index: int
+) -> list[list[tuple[str, str, int, int]]]:
+    """The token segment of a sed invocation whose quoted script spans
+    physical lines, joined for the `w`/`W` scan only (fold lens-1 round 2
+    MAJOR-2). The caller's per-line walk cannot see a script that continues
+    past the closing quote's line, so this joins while the double quote is
+    open and re-tokenizes; the result feeds the same narrow predicate, so
+    the addition is fail-closed. Returns `[]` for every other line."""
+    if not _line_leaves_double_quote_open(lines[index]):
+        return []
+    first = _first_shell_word(lines[index])[0]
+    if first is None or first.rsplit("/", 1)[-1] != "sed":
+        return []
+    joined = [lines[index]]
+    cursor = index
+    while _line_leaves_double_quote_open("\n".join(joined)):
+        cursor += 1
+        if cursor >= len(lines):
+            return []
+        joined.append(lines[cursor])
+    return [
+        segment
+        for segment in _shell_segments(_shell_tokens("\n".join(joined)))
+        if segment
+        and segment[0][0] == "word"
+        and segment[0][1].rsplit("/", 1)[-1] == "sed"
+    ]
+
+
 def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
 ) -> list[tuple[str, str]]:
@@ -3917,11 +4289,146 @@ def _argv_write_targets(
                         continue
                     targets.append(("tee", argument))
                 return targets
-            return [
-                ("dd", argument[3:])
-                for argument in args
-                if argument.startswith("of=") and len(argument) > 3
-            ]
+            if verb == "dd":
+                return [
+                    ("dd", argument[3:])
+                    for argument in args
+                    if argument.startswith("of=") and len(argument) > 3
+                ]
+            if verb in ("cp", "mv", "install"):
+                operands = [a for a in args if not a.startswith("-")]
+                if not operands:
+                    return []
+                return [(verb, operands[-1])]
+            if verb in ("touch", "truncate"):
+                targets = []
+                options_done = False
+                for argument in args:
+                    if argument == "--":
+                        options_done = True
+                        continue
+                    if not options_done and argument.startswith("-"):
+                        continue
+                    targets.append((verb, argument))
+                return targets
+            if verb == "sed":
+                args2 = list(args)
+                inplace = False
+                expressions: list[str] = []
+                positional: list[str] = []
+                has_expression_flag = False
+                index = 0
+                while index < len(args2):
+                    argument = args2[index]
+                    if argument == "--":
+                        positional.extend(args2[index + 1 :])
+                        break
+                    if argument in ("-e", "--expression"):
+                        has_expression_flag = True
+                        if index + 1 < len(args2):
+                            expressions.append(args2[index + 1])
+                            index += 2
+                            continue
+                        index += 1
+                        continue
+                    if argument.startswith("--expression="):
+                        has_expression_flag = True
+                        expressions.append(argument.split("=", 1)[1])
+                        index += 1
+                        continue
+                    if argument in ("-f", "--file"):
+                        # The script file's body is not read (named
+                        # residual); its argument is not a positional
+                        # operand.
+                        has_expression_flag = True
+                        index += 2
+                        continue
+                    if argument.startswith("--file="):
+                        has_expression_flag = True
+                        index += 1
+                        continue
+                    if argument == "-i":
+                        inplace = True
+                        if index + 1 < len(args2) and args2[index + 1] == "":
+                            # BSD `-i ''` extension argument.
+                            index += 1
+                        index += 1
+                        continue
+                    if argument.startswith("--"):
+                        option_name = argument[2:].split("=", 1)[0]
+                        if option_name and "in-place".startswith(option_name):
+                            # GNU getopt_long accepts any unambiguous
+                            # abbreviation of a long option, and `in-place`
+                            # is sed's only long option starting with `i`,
+                            # so `--i`/`--in`/`--in-plac` (and the
+                            # `--in=.bak` attached-argument form) are the
+                            # in-place form (fold lens-1 round 3 MAJOR-2).
+                            inplace = True
+                            index += 1
+                            continue
+                    if argument.startswith("-i"):
+                        inplace = True
+                        index += 1
+                        continue
+                    if (
+                        argument.startswith("-")
+                        and not argument.startswith("--")
+                        and not argument.startswith("-i")
+                        and not argument.startswith("-f")
+                    ):
+                        # GNU getopt scans a short-option word left to
+                        # right: the first `e` takes the remainder of the
+                        # word as the script (`-eSCRIPT`, `-nEeSCRIPT`) and
+                        # an `i` before it is the in-place flag, with the
+                        # remainder as its optional suffix (`-ni`, `-Ei`,
+                        # `-ni.bak`; the `-i`/`-iSUFFIX` forms are
+                        # handled above). A script attached to `-e` was previously
+                        # never scanned (fold lens-1 round 3 MAJOR-3), and
+                        # an `i` inside an attached script no longer sets
+                        # in-place. Recognized flags only ever add script
+                        # text or positional file targets, so the direction
+                        # is fail-closed. `-f` keeps its previous handling
+                        # (the script-file body stays residual).
+                        cluster = argument[1:]
+                        expression_at = cluster.find("e")
+                        inplace_at = cluster.find("i")
+                        if expression_at != -1 and (
+                            inplace_at == -1 or expression_at < inplace_at
+                        ):
+                            has_expression_flag = True
+                            remainder = cluster[expression_at + 1 :]
+                            if remainder:
+                                expressions.append(remainder)
+                                index += 1
+                            elif index + 1 < len(args2):
+                                expressions.append(args2[index + 1])
+                                index += 2
+                            else:
+                                index += 1
+                            continue
+                        if inplace_at != -1:
+                            inplace = True
+                            index += 1
+                            continue
+                    if argument.startswith("-"):
+                        index += 1
+                        continue
+                    positional.append(argument)
+                    index += 1
+                if has_expression_flag:
+                    files = positional
+                else:
+                    expressions = positional[:1]
+                    files = positional[1:]
+                targets = [
+                    ("sed", target)
+                    for expression in expressions
+                    for target in _sed_write_targets(expression)
+                ]
+                if inplace:
+                    targets.extend(("sed", f) for f in files)
+                return targets
+            return []
         core = _interpreter_core(verb)
         if core not in _INLINE_PROGRAM_FLAGS:
             continue
@@ -3939,6 +4446,43 @@ def _argv_write_targets(
             if not argument.startswith("-")
         ]
     return []
+
+
+def _new_verb_target_is_unproven(
+    target: str,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+) -> bool:
+    """r1: the narrow predicate for the newly modelled verbs. A target is
+    unproven when it names the env file, carries a command substitution /
+    backtick / indirection / env spelling, or resolves through an assignment
+    whose RHS carries one of those. A multi-expansion target that names only
+    unassigned variables (`$OUT_DIR/VVTerm.ipa`) is accepted -- it cannot be
+    proven to be the env file, but the strict A6 predicate would refuse every
+    real `cp`/`mv`/`install` destination."""
+    text = target.strip()
+    if (
+        _env_file_target_kind(
+            target, aliases, assignments, lines, line_index, column_index
+        )
+        == "env"
+    ):
+        return True
+    if "$(" in text or "`" in text or "${!" in text:
+        return True
+    if _ENV_FILE_SPELLING_RE.search(text):
+        return True
+    inner = _local_reference_name(text)
+    if inner is not None:
+        for assignment in assignments:
+            if assignment.name == inner and assignment.value is not None:
+                value = assignment.value
+                if "$(" in value or "`" in value or "${!" in value:
+                    return True
+    return False
 
 
 def _argv_write_target_is_unproven(
@@ -4009,9 +4553,15 @@ def _refuse_argv_write_targets(
     and otherwise refuses with the argv diagnostic (issue #345, fold round 1
     F2)."""
     for verb, target in _argv_write_targets(segment):
-        if not _argv_write_target_is_unproven(
-            target, aliases, assignments, lines, line_index, column_index
-        ):
+        if verb in ("tee", "dd") or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
+            unproven = _argv_write_target_is_unproven(
+                target, aliases, assignments, lines, line_index, column_index
+            )
+        else:
+            unproven = _new_verb_target_is_unproven(
+                target, aliases, assignments, lines, line_index, column_index
+            )
+        if not unproven:
             continue
         if defer_env_spelling and _env_file_target_kind(
             target, aliases, assignments, lines, line_index, column_index
@@ -4523,6 +5073,15 @@ def _run_id_unmodelled_write_refusal(
         detail = (
             f"writes a variable through `{mechanism}` with a target the extractor cannot resolve"
         )
+    elif carrier and _interpreter_core(mechanism) in _INLINE_PROGRAM_FLAGS:
+        # An interpreter inline program (`python3 -c`, `php -r`, …) is
+        # refused by the same content test, but a `$(` inside a Python or
+        # PHP string names nothing the download resolves through, so the
+        # shell-carrier wording would be a false claim (fold lens-1 round 2
+        # MAJOR-6).
+        detail = (
+            f"runs `{mechanism}` with an inline program the extractor cannot prove harmless"
+        )
     elif carrier:
         detail = (
             f"runs `{mechanism}` with a command string that names the value the download "
@@ -4630,7 +5189,18 @@ def _mechanism_operands(
     if mechanism in ("bash", "sh", "zsh", "dash", "ksh") and (
         _argv_has_command_flag(argv) or _argv_has_unresolved_word(argv)
     ):
-        return [(word, True) for word in argv]
+        program_index = None
+        for index, word in enumerate(argv):
+            if _short_option_cluster_carries_command(word):
+                program_index = index + 1
+                break
+        if program_index is not None:
+            if program_index < len(argv):
+                return [(argv[program_index], True)]
+            return []
+        if argv:
+            return [(argv[0], True)]
+        return []
     if mechanism in _INLINE_PROGRAM_POSITIONAL:
         operands = []
         for word in argv:
@@ -4685,6 +5255,87 @@ def _text_references_names(
     return False
 
 
+_ANSI_C_QUOTED_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'", re.DOTALL)
+_ANSI_C_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
+
+
+def _decode_ansi_c_body(body: str) -> str:
+    r"""Decode the body of a bash `$'…'` ANSI-C literal (issue #346, fold
+    lens-1 MAJOR-4). Bounded to the escape set a carrier needs: `\xHH`,
+    `\uHHHH`, `\UHHHHHHHH`, octal `\NNN` and the single-character C
+    escapes. An unrecognized escape keeps its character, as bash does."""
+    result: list[str] = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\" or index + 1 >= len(body):
+            result.append(char)
+            index += 1
+            continue
+        nxt = body[index + 1]
+        if nxt in ("x", "u", "U"):
+            width = {"x": 2, "u": 4, "U": 8}[nxt]
+            digits = body[index + 2 : index + 2 + width]
+            match = re.match(r"[0-9A-Fa-f]{1," + str(width) + r"}", digits)
+            if match is not None:
+                result.append(chr(int(match.group(0), 16)))
+                index += 2 + len(match.group(0))
+                continue
+            result.append(nxt)
+            index += 2
+            continue
+        if nxt in "01234567":
+            match = re.match(r"[0-7]{1,3}", body[index + 1 :])
+            result.append(chr(int(match.group(0), 8)))
+            index += 1 + len(match.group(0))
+            continue
+        result.append(_ANSI_C_ESCAPES.get(nxt, nxt))
+        index += 2
+    return "".join(result)
+
+
+def _ansi_c_decoded(text: str) -> str:
+    """Every `$'…'` ANSI-C literal in `text` replaced with its decoded
+    text. Used only by the carrier-substitution test, so the decoder does
+    not widen any unrelated rule (issue #346, fold lens-1 MAJOR-4)."""
+    return _ANSI_C_QUOTED_RE.sub(
+        lambda match: _decode_ansi_c_body(match.group(1)), text
+    )
+
+
+def _carries_substitution_spelling(text: str) -> bool:
+    """True when `text`, or its ANSI-C decoding, contains a command
+    substitution or a backtick. The shell tokenizer strips the `$'…'`
+    quotes, so an operand reaches the carrier test as `$` plus the
+    backslash-escaped body (`$\x24\x28…`); that token form is decoded too
+    (issue #346, fold lens-1 MAJOR-4)."""
+    if "$(" in text or "`" in text:
+        return True
+    decoded = _ansi_c_decoded(text)
+    if "$(" in decoded or "`" in decoded:
+        return True
+    if text.startswith("$") and "\\" in text:
+        body = text[1:]
+        decoded_body = _decode_ansi_c_body(body)
+        if "$(" in decoded_body or "`" in decoded_body:
+            return True
+    return False
+
+
 def _carrier_operand_matches(
     text: str, relevant: set[str], flip_targets: set[str]
 ) -> bool:
@@ -4697,6 +5348,11 @@ def _carrier_operand_matches(
     if _mentions_github_env(text):
         return True
     if _PURE_VARIABLE_RE.match(text) is not None:
+        return True
+    # The substitution test reads the ANSI-C-decoded text: `$'…\x24\x28…'`
+    # is a spelling of `$(…` that the raw text does not expose (issue #346,
+    # fold lens-1 MAJOR-4).
+    if _carries_substitution_spelling(text):
         return True
     if _text_references_names(text, relevant, flip_targets):
         return True
@@ -4828,6 +5484,18 @@ def _relevant_shell_names(
         for segment in _shell_segments(_shell_tokens(line)):
             for _op, target, _start, _span, _fd in _segment_redirects(segment):
                 names.update(_expansion_names(target))
+            # A newly-modelled argv write target's variable name is traced
+            # too when the target is a PURE variable (`$p`): if the name is
+            # written by an unmodelled assignment form (`printf -v`,
+            # `read`, `declare`/`local`/`typeset`), the unmodelled-write
+            # guard refuses the write rather than accepting the target as
+            # unassigned (issue #346, fold lens-1 MAJOR-3). A multi-piece
+            # target (`$OUT_DIR/VVTerm.ipa`) deliberately adds no names:
+            # that is the real `cp` false-red the narrow predicate exists
+            # to keep accepted.
+            for _verb, target in _argv_write_targets(segment):
+                if _local_reference_name(target) is not None:
+                    names.update(_expansion_names(target))
     return names
 
 
@@ -5198,6 +5866,23 @@ def _refuse_github_env_run_id_write(
                     lines,
                     index,
                     segment[0][2] if segment else 0,
+                    False,
+                )
+            # A sed script that spans physical lines is invisible to the
+            # per-line walk above; join it for the `w`/`W` scan (fold
+            # lens-1 round 2 MAJOR-2). The joined segment is classified
+            # with the same narrow predicate, so the addition only ever
+            # adds a refusal.
+            for joined_segment in _joined_sed_segments(lines, index):
+                _refuse_argv_write_targets(
+                    joined_segment,
+                    step,
+                    body,
+                    aliases,
+                    assignments,
+                    lines,
+                    index,
+                    joined_segment[0][2] if joined_segment else 0,
                     False,
                 )
 
@@ -5724,6 +6409,34 @@ def run_selftest() -> int:
             f"{EXPECTED_MANIFEST_CASES}; update the constant AND the Swift pin, or restore the case(s)"
         )
         return 1
+    base_verdict_cases = [case for case in cases if "base_exit" in case]
+    if len(base_verdict_cases) != EXPECTED_BASE_VERDICT_CASES:
+        print(
+            f"selftest: FAIL — {len(base_verdict_cases)} case(s) declare a base "
+            f"verdict, the stated constant is {EXPECTED_BASE_VERDICT_CASES}; every "
+            "A12 fixture must declare its measured base verdict"
+        )
+        return 1
+    for case in base_verdict_cases:
+        base_exit = case["base_exit"]
+        if base_exit not in (0, 1):
+            print(
+                f"selftest: FAIL — {case['id']}: base_exit must be 0 or 1, got "
+                f"{base_exit!r}"
+            )
+            return 1
+        if base_exit == 1 and int(case["exit"]) == 0:
+            print(
+                f"selftest: FAIL — {case['id']}: accept-widening (base REFUSE -> "
+                "folded ACCEPT) is never allowed in this fold"
+            )
+            return 1
+        if base_exit == 1 and case["id"] not in A12_BASE_REFUSAL_PINS:
+            print(
+                f"selftest: FAIL — {case['id']}: a fixture that already refused at "
+                "base must be one of the documented pre-existing pins"
+            )
+            return 1
     referenced: set[str] = set()
     for case in cases:
         referenced.update(case["files"])

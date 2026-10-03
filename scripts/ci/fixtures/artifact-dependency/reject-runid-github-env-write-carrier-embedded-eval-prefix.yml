@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture: an embedded substitution after a `true;` prefix (issue #346.3)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB
+      y: ENV
+      v: SOURCE
+      r: _RUN_
+      i: ID
+      m: _
+      k: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'echo %s%s%s=%s >> $%s%s%s\n' "$v" "$r" "$i" "${{ github.run_id }}" "$x" "$m" "$k" > cmd
+          eval "true; $(cat cmd)"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
