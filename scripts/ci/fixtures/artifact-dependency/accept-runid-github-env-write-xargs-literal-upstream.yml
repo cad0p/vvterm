@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control): the real-tree witness `name="$(echo "$raw" |
+# xargs)"` — the substitution-body carrier site deliberately drops the
+# `$`-word catch so this benign upstream stays accepted (issue #350,
+# item 2 boundary).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          name="$(echo "$raw" | xargs)"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

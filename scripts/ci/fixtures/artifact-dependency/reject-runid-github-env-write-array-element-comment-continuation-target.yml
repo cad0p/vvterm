@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a backslash-terminated comment line must not suppress the real
+# continuation on the next line — bash ends the comment at the physical
+# newline. Without the fold round 1 MAJOR-2(b) decoder fix the pre-pass
+# reads `# comment \` as pending and drops the joined `cp payload \` +
+# `"${arr[0]}"` target, so the array-element write is never seen (base
+# ACCEPT, pre-fix shipped ACCEPT, runtime FLIP; the fixed gate refuses).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          # comment \
+          cp payload \
+          "${arr[0]}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

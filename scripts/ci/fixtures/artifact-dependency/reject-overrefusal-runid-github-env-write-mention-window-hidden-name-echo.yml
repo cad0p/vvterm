@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture (over-refusal pin): a benign hidden-name echo — the variable name
+# is quoted (`'SOURCE_RUN_ID'=x`) and the env-file name hides behind 24
+# ANSI-C empty pads (>64-char window), so base ACCEPTs; the bounded
+# empty-pad elision then surfaces `GITHUB_ENV` and refuses. Runtime is
+# cross-run (echo writes nothing); the shape is benign and has 0 real-tree
+# witnesses (issue #350, item 8 over-refusal class; fold round 1 MINOR-1).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          echo 'SOURCE_RUN_ID'=x 'GITHUB_'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0'$'\0''ENV'
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

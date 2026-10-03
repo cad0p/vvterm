@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control, boundary): the array-element argv-write target
+# sits on a backslash continuation inside a command substitution, so the
+# substitution body the pre-pass sees stops at the first physical line and
+# the target never joins the relevance set. Extending the pre-pass into
+# substitution bodies is a new mechanism deferred as a residual (issue
+# #350, item 1 boundary class; fold round 1 MAJOR-2(a): base ACCEPT,
+# shipped ACCEPT, runtime FLIP).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          w=$(cp payload \
+          "${arr[0]}")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

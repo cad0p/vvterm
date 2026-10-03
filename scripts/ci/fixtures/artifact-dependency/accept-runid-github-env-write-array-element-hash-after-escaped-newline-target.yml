@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control, boundary): a `#` immediately after an escaped
+# newline is still read as a comment at every revision. Bash removes the
+# `x\` newline, so the logical line is `... | tee -a x#y "${arr[0]}"` —
+# the `#` is mid-word (not a comment) and the trailing backslash is a real
+# continuation, so the target joins. The per-line comment test cannot see
+# the previous line's escaped newline (the fold round 3 NIT-2 context gap;
+# carrying the joined prefix into the decision is a new mechanism), so the
+# gate ACCEPTs while the runtime FLIPs (base/pre/fold1/head/fixed ACCEPT).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" | tee -a \
+          x\
+          #y \
+          "${arr[0]}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control, boundary): the item-2 assignment-wrapped nested
+# form — a bare-command upstream inside `$(...)` assigned to `w` — stays
+# accepted and runtime-FLIPs. The relaxed substitution-body carrier site
+# deliberately drops the `$`-word catch (to keep the real-tree witness
+# `name="$(echo "$raw" | xargs)"` accepted), and command-position
+# resolution is a new mechanism deferred as a residual (issue #350, item 2
+# boundary class; fold round 1 MAJOR-1).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          w=$(printenv "${x}${y}" | xargs -I{} cp payload {})
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

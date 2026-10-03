@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture (boundary accept): the heredoc twin of the stdin-fed interpreter
+# program (issue #350, item 4).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os
+          n="".join(chr(c) for c in [71,73,84,72,85,66,95,69,78,86])
+          k="".join(chr(c) for c in [83,79,85,82,67,69,95,82,85,78,95,73,68])
+          open(os.environ[n],"a").write(k+"=${{ github.run_id }}\n")
+          PY
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
