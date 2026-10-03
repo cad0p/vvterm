@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-# Fixture: `eval "$CMD"` with `CMD` from the job env (issue #345,
-# A6 shape `t16-env-var-eval`). Fail-closed carrier operands; the
-# operand cannot be proven disjoint; runtime-malicious.
+# Fixture: `eval "$CMD"` with CMD from the job env (issue #345, A6 shape
+# `t16-env-var-eval`). Fail-closed carrier operands: the gate refusal is
+# independent; runtime-malicious only when the probe injects CMD, not as stored.
 name: probe
 on: [workflow_dispatch]
 jobs:

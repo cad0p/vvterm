@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-# Fixture: `eval "$CMD"` with no traced assembly (issue #345, A6
-# shape `t16b-env-eval-noxy`). Same fail-closed operand rule;
-# runtime-malicious (rc=0, current run last).
+# Fixture: `eval "$CMD"` with no traced assembly (issue #345, A6 shape
+# `t16b-env-eval-noxy`). Same fail-closed operand rule; runtime-malicious
+# only when the probe injects CMD (`eval ""` is benign as stored).
 name: probe
 on: [workflow_dispatch]
 jobs:
