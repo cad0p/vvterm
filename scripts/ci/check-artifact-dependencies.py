@@ -482,7 +482,7 @@ runtime-assembled/ANSI-C-quoted interpreter inline-program flag (4
 closure fixtures — php short flag via a variable, php's ANSI-C-quoted
 `--run`, python3's `-c` via a variable, node's `--eval` via a variable —
 all runtime-proven, plus an over-refusal pin for the benign `F=-r; php
-$F 'echo 1;'` control). At A12 the fixture corpus is 500/500, of which the 69 A12 fixtures
+$F 'echo 1;'` control). At A12 the fixture corpus is 515/515, of which the 84 A12 fixtures
 each declare their measured base verdict (`base_exit`);
 at A11 the fixture corpus was 431/431
 with zero diagnostic changes on the 426 then-pre-existing cases (`old.CASES
@@ -560,11 +560,16 @@ writes — the measured `printf -v`/`read`/`declare` and
 multi-piece targets that name only unassigned variables
 (`$OUT_DIR/VVTerm.ipa`) stay accepted. sed additionally classifies its
 `w`/`W` script-command target for an address-prefixed (`1w`, `1 w`,
-`$w`, `/re/w`), newline-separated or physically line-spanning quoted
-script, and recognizes `--in-place`/`--in-place=SUFFIX`,
-`-i`/`-iSUFFIX`, a short-option cluster containing `i` (`-ni`, `-Ei`)
-and the BSD `-i ''` extension word (sed's `s///w file` flag and `-f`
-script bodies stay residual).
+`$w`, `/re/w`, a comma-separated range — `1,+3w`, `/re/,/re2/w`,
+`0,/re/w` — an alternate-delimiter `\\,re,`/`\\%re%` address, or a
+`{`-glued block opener), newline-separated or physically line-spanning
+quoted script, and recognizes `--in-place`/`--in-place=SUFFIX` and any
+non-empty abbreviation of the option name (`--i`, `--in`, `--in=.bak`;
+GNU getopt_long accepts any unambiguous prefix, and `in-place` is sed's
+only long option starting with `i`), `-i`/`-iSUFFIX`, an attached `-e`
+script (`-eSCRIPT`, `-nEeSCRIPT`) or a short-option cluster containing
+`i` (`-ni`, `-Ei`), and the BSD `-i ''` extension word (sed's `s///w
+file` flag and `-f` script bodies stay residual).
 (vii-b) the carrier-substitution test (`trap`/`eval`/`sh -c`/`bash -c`/
 `$SHELL -c`, and an interpreter inline-program operand) refuses an
 operand containing any command substitution — including arithmetic
@@ -577,13 +582,15 @@ its diagnostic says so instead of claiming the operand names the value.
 (vii-c) `_mentions_github_env`'s 64-character window walk runs over the
 raw text OR the text with braced and unbraced expansions (`$NAME`, `$@`,
 `$*`, `$?`, `$!`, `$N`), substitutions, backticks and backslash
-continuations elided (the escaped-`\\$…` and bare-`$GITHUB` guards are
-pinned); the raw half keeps every base mention (the elided-only walk lost
-nine measured strings and reopened four runtime-proven flips, pinned by
+continuations elided to a bounded fixpoint, so a nested `${…}`/`$(…)`
+pad cannot keep the halves apart (the escaped-`\\$…` and bare-`$GITHUB`
+guards are pinned); the raw half keeps every base mention (the
+elided-only walk lost nine measured strings and reopened four
+runtime-proven flips, pinned by
 `reject-runid-github-env-write-mention-window-split-spelling`).
-Measured at the fold: `--selftest` 500/500; `--root .` byte-identical
+Measured at the fold: `--selftest` 515/515; `--root .` byte-identical
 green; the 26-shape #346/#347 battery keeps the 20-closed / 6-residual
-split; 31 falsifying mutants red each mechanism's own fixtures and no
+split; 34 falsifying mutants red each mechanism's own fixtures and no
 others (the red-set matrix is the bleed check). Over-refusal accounting:
 the fold adds at least 16 measured benign shapes (base ACCEPT -> refuse)
 over nine named classes, each class pinned by at least one
@@ -603,14 +610,16 @@ fold does not close: sed's `s///w file` flag and `-f` bodies, the BSD
 no-mention job-env assembly (`s2a`), and the created-or-aliased
 basename.
 
-Named residuals: a caller (`workflow_call`) or dispatcher
+Named residuals (re-filed in #350): a caller (`workflow_call`) or dispatcher
 (`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
 value (no `workflow_call` exists in this repo, and trigger parsing is
 deliberately not modelled); a `$GITHUB_ENV` write whose name pieces never
 appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`)
 is not detected, the inherited text-detector boundary (the padded
-64-character-window class is closed by A12; the name text must still
-appear; the `\\$NAME`/single-quoted-`$GITHUB` spellings the unbraced
+64-character-window class — including the nested `${…}`/`$(…)` pads the
+bounded fixpoint elision closes — is closed by A12; the name text must
+still appear; the `\\$NAME`/single-quoted-`$GITHUB` spellings the
+unbraced
 elision deliberately skips and NUL/`$'…'` name concatenation are outside
 the walk's claimed text); a `source`d or
 `.`-sourced script's body, a `bash script.sh` path and an interpreter
@@ -628,7 +637,8 @@ array-element write target (`cp payload "${arr[0]}"`) and an argv operand
 fed on stdin (`… | xargs cp payload {}`) sit outside the argv verb table;
 other
 argv write verbs that need verb-specific semantics are closed by A12
-(sed `-i`/`--in-place`/`w` targets, `cp`/`mv`/`install` last operand,
+(sed `-i`/`--in-place` (and its abbreviations)/`w` targets,
+`cp`/`mv`/`install` last operand,
 `touch`/`truncate` every operand); interpreters outside the inline-program
 table (`lua -e`, `tclsh`, a script file); a shell/interpreter basename
 outside the mechanism tables — including one the run creates (`ln -sf
@@ -695,19 +705,23 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 500
+EXPECTED_MANIFEST_CASES = 515
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
 # removed (and then update the pin suite too).
 MIN_SCANNED_WORKFLOW_FILES = 12
-# A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold)
-# each declare the measured exit of the pre-fold gate (150a56a3) as
-# `base_exit`; `--selftest` refuses an accept-widening (base REFUSE ->
-# folded ACCEPT) and any base-REFUSE reject fixture that is not one of
-# the documented pre-existing pins, so a double-caused fixture cannot
-# hide behind a verdict the new mechanism did not cause.
-EXPECTED_BASE_VERDICT_CASES = 69
+# A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold + 15 at
+# the round-3 fold) each declare the measured exit of the pre-fold gate
+# (150a56a3) as `base_exit`; `--selftest` refuses an accept-widening (base
+# REFUSE -> folded ACCEPT) and any base-REFUSE reject fixture that is not
+# one of the documented pre-existing pins, so a double-caused fixture
+# cannot hide behind a verdict the new mechanism did not cause. Limit:
+# `--selftest` cannot re-run the historical gate, so an honestly recorded
+# double cause reds but a *false* `base_exit: 0` still passes; the field
+# is reviewable data backed by the measured counterfactual evidence, not a
+# re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
+EXPECTED_BASE_VERDICT_CASES = 84
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -2246,6 +2260,15 @@ _EXPANSION_ELISION_RE = re.compile(
     re.DOTALL,
 )
 
+# The elision above runs to a fixpoint: one pass cannot remove an outer
+# `${…}`/`$(…)` whose interior still holds an inner `${…}`/`$(…)`, so a
+# nested pad kept the `GITHUB`/`ENV` halves more than 64 characters apart
+# (fold lens-1 round 3 MAJOR-1). Every pass that changes the text removes
+# characters, so a fixpoint always exists; this bound is a guard far above
+# any plausible body, and exhausting it refuses fail-closed rather than
+# walking text whose nesting the elision could not flatten.
+_EXPANSION_ELISION_MAX_PASSES = 8
+
 
 def _mentions_github_env(text: str) -> bool:
     """The #339 mention test for one decoded `run:` scalar or block body.
@@ -2265,7 +2288,15 @@ def _mentions_github_env(text: str) -> bool:
     # a body the base gate walked and reopen a runtime-proven fail-open.
     # Walk both: raw (never lose a base mention) and elided (close the
     # window-spanning assembly).
-    for candidate in (text, _EXPANSION_ELISION_RE.sub("", text)):
+    elided = text
+    for _ in range(_EXPANSION_ELISION_MAX_PASSES):
+        collapsed = _EXPANSION_ELISION_RE.sub("", elided)
+        if collapsed == elided:
+            break
+        elided = collapsed
+    else:
+        return True
+    for candidate in (text, elided):
         start = candidate.find("GITHUB")
         while start != -1:
             if "ENV" in candidate[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
@@ -3996,16 +4027,22 @@ def _env_file_target_kind(
 # A sed `w`/`W` script command: the target filename is the rest of the
 # script line. The command position is the start of the script, a `;`
 # separator, or the start of any script line (`re.MULTILINE`), optionally
-# preceded by a line address (`1`, `$`, `1,5`, `/re/`) — bracketed and
-# addressed spellings are the same command at runtime (fold lens-1 round 2
-# MAJOR-2). The tokenizer keeps an escaped `\$` from a double-quoted
-# operand, so the address may carry that backslash (`"\$w file"` passes
-# `$w file` to sed). The `s///w file` substitution flag is left as a named
-# residual. The extracted target is tested with the same narrow predicate
-# as the file operands, and a broader match can only add targets, so the
-# direction is fail-closed.
+# preceded by a GNU address — a line number/`$`/`~step`/`+N`, a `/regex/`,
+# an alternate-delimiter `\,regex,`/`\%regex%`, one of those or a
+# comma-separated pair of them (a range), optionally followed by a `{`
+# block opener. Bracketed and addressed spellings are the same command at
+# runtime (fold lens-1 MAJOR-2, round 3 MAJOR-4). The tokenizer keeps an
+# escaped `\$` from a double-quoted operand, so the address may carry that
+# backslash (`"\$w file"` passes `$w file` to sed). The `s///w file`
+# substitution flag is left as a named residual: the prefix is anchored at
+# a command position (start/`;`/line start), so it cannot start inside a
+# substitution. The extracted target is tested with the same narrow
+# predicate as the file operands, and a broader match can only add targets,
+# so the direction is fail-closed.
+_SED_ADDRESS_TERM = r"(?:[0-9$~+]+|/[^/\n]*/|\\,[^,\n]*,|\\%[^%\n]*%)"
+_SED_ADDRESS = _SED_ADDRESS_TERM + r"(?:[ \t]*,[ \t]*" + _SED_ADDRESS_TERM + r")?"
 _SED_WRITE_COMMAND_RE = re.compile(
-    r"(?:^|;)[ \t]*(?:\\)?(?:[0-9$,~]+|/[^/\n]*/)?[ \t]*[wW][ \t]+(\S[^\n;]*)",
+    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*\{?[ \t]*[wW][ \t]+(\S[^\n;]*)",
     re.MULTILINE,
 )
 
@@ -4180,11 +4217,18 @@ def _argv_write_targets(
                             index += 1
                         index += 1
                         continue
-                    if argument == "--in-place" or argument.startswith("--in-place="):
-                        # GNU's long spelling of `-i` (fold lens-1 MAJOR-2).
-                        inplace = True
-                        index += 1
-                        continue
+                    if argument.startswith("--"):
+                        option_name = argument[2:].split("=", 1)[0]
+                        if option_name and "in-place".startswith(option_name):
+                            # GNU getopt_long accepts any unambiguous
+                            # abbreviation of a long option, and `in-place`
+                            # is sed's only long option starting with `i`,
+                            # so `--i`/`--in`/`--in-plac` (and the
+                            # `--in=.bak` attached-argument form) are the
+                            # in-place form (fold lens-1 round 3 MAJOR-2).
+                            inplace = True
+                            index += 1
+                            continue
                     if argument.startswith("-i"):
                         inplace = True
                         index += 1
@@ -4193,21 +4237,42 @@ def _argv_write_targets(
                         argument.startswith("-")
                         and not argument.startswith("--")
                         and not argument.startswith("-i")
-                        and not argument.startswith("-e")
                         and not argument.startswith("-f")
-                        and "i" in argument[1:]
                     ):
-                        # GNU getopt parses a short-option cluster like
-                        # `-ni`/`-Ei` as the flags plus `-i`; the remainder
-                        # after the first `i` is its optional suffix. `-e`/
-                        # `-f` take their whole attached argument, so an `i`
-                        # inside an attached script is not a cluster flag
-                        # (fold lens-1 round 2 MAJOR-1). Clustering only
-                        # ever adds positional file targets, so the
-                        # direction is fail-closed.
-                        inplace = True
-                        index += 1
-                        continue
+                        # GNU getopt scans a short-option word left to
+                        # right: the first `e` takes the remainder of the
+                        # word as the script (`-eSCRIPT`, `-nEeSCRIPT`) and
+                        # an `i` before it is the in-place flag, with the
+                        # remainder as its optional suffix (`-ni`, `-Ei`,
+                        # `-ni.bak`; the `-i`/`-iSUFFIX` forms are
+                        # handled above). A script attached to `-e` was previously
+                        # never scanned (fold lens-1 round 3 MAJOR-3), and
+                        # an `i` inside an attached script no longer sets
+                        # in-place. Recognized flags only ever add script
+                        # text or positional file targets, so the direction
+                        # is fail-closed. `-f` keeps its previous handling
+                        # (the script-file body stays residual).
+                        cluster = argument[1:]
+                        expression_at = cluster.find("e")
+                        inplace_at = cluster.find("i")
+                        if expression_at != -1 and (
+                            inplace_at == -1 or expression_at < inplace_at
+                        ):
+                            has_expression_flag = True
+                            remainder = cluster[expression_at + 1 :]
+                            if remainder:
+                                expressions.append(remainder)
+                                index += 1
+                            elif index + 1 < len(args2):
+                                expressions.append(args2[index + 1])
+                                index += 2
+                            else:
+                                index += 1
+                            continue
+                        if inplace_at != -1:
+                            inplace = True
+                            index += 1
+                            continue
                     if argument.startswith("-"):
                         index += 1
                         continue

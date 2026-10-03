@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 500
-    private static let expectedBaseVerdictCases = 69
+    private static let expectedManifestCases = 515
+    private static let expectedBaseVerdictCases = 84
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -658,7 +658,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-carrier-benign-substitution.yml",
         "reject-overrefusal-new-verb-unresolvable-target.yml",
         "reject-overrefusal-new-verb-unmodelled-write-target.yml",
-        "reject-overrefusal-mention-window-digit-pad.yml",
+        "reject-overrefusal-mention-window-question-pad.yml",
         "reject-runid-github-env-write-mention-window-backtick-isolating.yml",
         "reject-runid-github-env-write-mention-window-digit-positional-pad.yml",
         "accept-runid-github-env-write-sed-append-literal-payload.yml",
@@ -683,6 +683,21 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-interpreter-inline-program-substitution.yml",
         "reject-overrefusal-eval-arithmetic-substitution.yml",
         "reject-overrefusal-mention-window-zero-pad.yml",
+        "reject-runid-github-env-write-mention-window-nested-brace.yml",
+        "reject-runid-github-env-write-mention-window-nested-two-level.yml",
+        "reject-runid-github-env-write-mention-window-nested-cmdsub.yml",
+        "reject-runid-github-env-write-sed-long-inplace-abbrev-i-target.yml",
+        "reject-runid-github-env-write-sed-long-inplace-abbrev-in-target.yml",
+        "reject-runid-github-env-write-sed-long-inplace-abbrev-eq-suffix-target.yml",
+        "reject-runid-github-env-write-sed-attached-e-ni-p-target.yml",
+        "reject-runid-github-env-write-sed-attached-e-ni-w-target.yml",
+        "reject-runid-github-env-write-sed-cluster-attached-e-w-target.yml",
+        "reject-runid-github-env-write-sed-addressed-plus-w-target.yml",
+        "reject-runid-github-env-write-sed-addressed-two-regex-w-target.yml",
+        "reject-runid-github-env-write-sed-addressed-zero-regex-w-target.yml",
+        "reject-runid-github-env-write-sed-addressed-alt-delimiter-w-target.yml",
+        "reject-runid-github-env-write-sed-glued-block-w-target.yml",
+        "reject-overrefusal-mention-window-bang-pid.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

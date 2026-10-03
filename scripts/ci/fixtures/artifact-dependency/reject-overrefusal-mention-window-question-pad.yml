@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Fixture: a `$?`-padded window spelling expands to digits at runtime; the elided walk refuses it (fold lens-1 MAJOR-5 cost)
+# Fixture: a `$?`-padded window spelling expands to digits at runtime; the elided walk refuses it (`$?` is the question mark, hence `question-pad`; the `$N` positional pad is `…-digit-positional-pad`) (fold lens-1 MAJOR-5 cost, round 3 NIT-1 rename)
 jobs:
   build:
     runs-on: ubuntu-latest
