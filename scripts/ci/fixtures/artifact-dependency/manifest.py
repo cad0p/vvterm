@@ -3601,4 +3601,49 @@ CASES = [
             "reject-overrefusal-interpreter-long-alias-expansion-argv.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a file target `$MESSAGE` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
         ],
     },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-runtime-flag-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-runtime-flag-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-runtime-flag-argv-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-php-ansic-long-flag-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-php-ansic-long-flag-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-php-ansic-long-flag-argv-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-python3-runtime-flag-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-python3-runtime-flag-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-python3-runtime-flag-argv-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `python3` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-node-runtime-flag-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-node-runtime-flag-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-node-runtime-flag-argv-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `node` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-interpreter-runtime-flag-expansion-argv",
+        "files": ["reject-overrefusal-interpreter-runtime-flag-expansion-argv.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-overrefusal-interpreter-runtime-flag-expansion-argv.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
 ]

@@ -431,7 +431,13 @@ to php's long spellings — `--run`/`--process-begin`/`--process-end`/
 `--process-code` (php-src's CLI option table maps each short flag to
 that name; the long flag takes the program as the next word or after
 `=`) are recognized like the short forms, after the A9 re-lens measured
-all four accepted while runtime-live. The opener
+all four accepted while runtime-live. A11 (fold round 5) closes the
+interpreter sibling of A8's (xvi): (xix) a recognized interpreter whose
+argv carries a `$`/backtick-bearing word and no literal inline-program
+flag (`F=-r; php $F 'prog'`, `php $'--run' 'prog'`, `F=-c; python3 $F
+'prog'`, `F=--eval; node $F 'prog'`) is fail-closed because that word may
+itself be the inline-program flag, the same rule as the runtime-assembled
+shell command flag. The opener
 scan is quote/comment-aware: a quoted or commented `<(` no longer counts,
 so a literal `$GITHUB_ENV)` filename stays untouched (fold round 2
 MINOR-1). Boundary sentence: the
@@ -440,8 +446,10 @@ basename and version suffix, a short-option cluster containing `c`, a
 pure variable with a command flag, a `$`-bearing shell argv word,
 `eval`/`trap`, `awk -v`), recognized argv write verb (`tee`, `dd of=`) or
 recognized inline-program interpreter — in every spelling that
-interpreter accepts (exact, clustered, attached, `--flag=value`, or the
-long `--flag` followed by the program word) —
+interpreter accepts (exact, clustered, attached, `--flag=value`, the
+long `--flag` followed by the program word, or a runtime-assembled /
+ANSI-C-quoted flag word: `F=-r; php $F …`, `php $'--run' …`, `F=-c;
+python3 $F …`, `F=--eval; node $F …`) —
 whose carried command string or
 file target cannot be proven
 disjoint from the env file — it names the env machinery or a traced
@@ -461,9 +469,14 @@ found — `node -pe` and php's `-B`/`-E`/`-R` (4 closure fixtures, all
 runtime-proven); A10 (fold round 4) closes php's four long-option
 aliases of those inline programs (5 closure fixtures — both `--run`
 forms plus one each of `--process-begin`/`--process-end`/
-`--process-code` — all runtime-proven). The fixture corpus is 426/426
-with zero diagnostic changes on the 420 pre-existing cases (`old.CASES
-== new.CASES[:420]`), and the real tree stays byte-identical green
+`--process-code` — all runtime-proven); A11 (fold round 5) closes the
+runtime-assembled/ANSI-C-quoted interpreter inline-program flag (4
+closure fixtures — php short flag via a variable, php's ANSI-C-quoted
+`--run`, python3's `-c` via a variable, node's `--eval` via a variable —
+all runtime-proven, plus an over-refusal pin for the benign `F=-r; php
+$F 'echo 1;'` control). The fixture corpus is 431/431
+with zero diagnostic changes on the 426 pre-existing cases (`old.CASES
+== new.CASES[:426]`), and the real tree stays byte-identical green
 (`ios-adhoc-pr.yml`'s `gh api …`, `find …`, `${!name:-}` and continuation
 bodies are untouched). The cost is fail-closed over-refusal of 24
 measured benign shapes before A8: the 20 pre-A7 ones — A4's 12 (the quoted-heredoc
@@ -501,9 +514,15 @@ interpreter-trailing-argv class (`node -pe '1+1' "$MESSAGE"`, `php
 `php -B'echo 1;' "$MESSAGE"`; all runtime benign); plus A10's eight
 long-alias spelling instances of the same class (the space and
 `=`-attached forms of `--run`/`--process-begin`/`--process-end`/
-`--process-code` with a benign program and `"$MESSAGE"`, pinned by
-`reject-overrefusal-interpreter-long-alias-expansion-argv`) — at least
-24 + 8 + 5 + 8 = 45 measured benign shapes at A10 (≥37 at A9); every
+`--process-code` with a benign program and `"$MESSAGE"`; the class is
+named by `reject-overrefusal-interpreter-long-alias-expansion-argv`,
+which pins the `--run` space form, and all eight measured spellings are
+listed here); plus A11's one new sub-class instance (the non-literal-flag
+spelling of the interpreter-argv over-refusal class: `F=-r; php $F 'echo
+1;' -- "${{ github.run_id }}"`, pinned by
+`reject-overrefusal-interpreter-runtime-flag-expansion-argv`) — at least
+24 + 8 + 5 + 8 + 1 = 46 measured benign shapes at A11 (≥45 at A10,
+≥37 at A9); every
 class is named, the pre-A8 classes are pinned by the
 `reject-overrefusal-*` fixtures, and the two A9-named shapes are
 documented here (they have no fixture).
@@ -521,7 +540,10 @@ name split past the 64-character window — the `w2-64window-eval` class) is
 not detected, the inherited text-detector boundary; a `source`d or
 `.`-sourced script's body, a `bash script.sh` path and an interpreter
 script file or `-m module` (`python3 /tmp/evil.py`, `python3 -m evilmod`;
-only the inline-program string is inspected); a carrier whose command
+only the inline-program string is inspected), an interpreter fed its
+program on stdin (`python3 -`, `ruby -`, `perl -`) or a
+process-substitution script operand (`php -f <(code)`, `python3 <(…)`);
+a carrier whose command
 string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
 env file or a traced name is the inherited textual boundary); a carrier
@@ -534,13 +556,14 @@ outside the mechanism tables — including one the run creates (`ln -sf
 >> \\$${x}${y}")`: the tables key on the basename; measured ACCEPT,
 runtime-malicious); substitution nesting deeper than
 8; and a heredoc opened inside a substitution body, which the inner scope
-does not model. The A7, A8, A9 and A10 widenings are not residuals: the cluster
+does not model. The A7, A8, A9, A10 and A11 widenings are not residuals: the cluster
 spelling, the deferral with an enclosing env redirect, process
 substitution, the interpreter argv file targets, the nested glued parens,
 the inline-program flag cluster/attached/`--flag=value`/`-E` spellings,
 the `node -pe` cluster, the php `-B`/`-E`/`-R` inline programs and their
-`--run`/`--process-begin`/`--process-end`/`--process-code` long aliases
-and the runtime-assembled shell command flag are refused by the
+`--run`/`--process-begin`/`--process-end`/`--process-code` long aliases,
+the runtime-assembled shell command flag and the runtime-assembled /
+ANSI-C-quoted interpreter inline-program flag are refused by the
 mechanisms above.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
@@ -591,7 +614,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 426
+EXPECTED_MANIFEST_CASES = 431
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -4608,6 +4631,15 @@ def _mechanism_operands(
     if mechanism in _INLINE_PROGRAM_FLAGS:
         inline = _inline_program_flag(mechanism, argv)
         if inline is None:
+            # No literal inline-program flag, but a `$`/backtick-bearing
+            # word may itself be that flag (`F=-r; php $F 'prog'`, `php
+            # $'--run' 'prog'`), so the invocation cannot be proven not to
+            # carry an inline program: the interpreter sibling of the
+            # runtime-assembled shell command flag (D5), the same
+            # fail-closed rule as the shell branch above (issue #345,
+            # fold round 5).
+            if _argv_has_unresolved_word(argv):
+                return [(word, True) for word in argv]
             return []
         return [(inline[2], True)]
     return []

@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 426
+    private static let expectedManifestCases = 431
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -607,6 +607,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-cmdsub-php-long-after-argv-target.yml",
         "reject-runid-github-env-write-cmdsub-php-long-readline-argv-target.yml",
         "reject-overrefusal-interpreter-long-alias-expansion-argv.yml",
+        "reject-runid-github-env-write-cmdsub-php-runtime-flag-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-php-ansic-long-flag-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-python3-runtime-flag-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-node-runtime-flag-argv-target.yml",
+        "reject-overrefusal-interpreter-runtime-flag-expansion-argv.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
