@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# ACCEPT control: with the enclosing segment's own env redirect
+# (issue #345, fold round 1 F2), a `tee` target that is a literal
+# non-env path stays accepted — only the exact env spelling is
+# refused; runtime-benign.
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          echo "N=$(printf '%s\n' hi | tee -a /tmp/out)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

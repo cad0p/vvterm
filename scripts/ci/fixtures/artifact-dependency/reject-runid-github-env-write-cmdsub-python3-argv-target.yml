@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a recognized interpreter's file target passed in argv
+# (issue #345, fold round 1 F4, lens-1 BLOCKER-4). `python3 -c`
+# writes `sys.argv[1]`; the remaining non-flag argv words are
+# classified with the `tee`/`dd of=` resolver; runtime-malicious
+# (rc=0, current run last).
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          x=GITHUB_
+          y=ENV
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          w=$(python3 -c 'import sys; open(sys.argv[1],"a").write("SOURCE_RUN_ID=${{ github.run_id }}\n")' "$(printenv "${x}${y}")")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

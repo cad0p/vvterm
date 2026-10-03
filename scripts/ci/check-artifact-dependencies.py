@@ -348,8 +348,8 @@ resolve. The rule never
 touches the #339 token rule, the `needs:` reconciliation, the case-collision
 rule, or the trim/`parseInt` rules.
 
-THE `$( … )`/BACKTICK SUBSTITUTION-BODY SCAN (#345)
----------------------------------------------------
+THE `$( … )`/BACKTICK/`<( … )` SUBSTITUTION-BODY SCAN (#345)
+------------------------------------------------------------
 The #342 rule is gated on `_mentions_github_env` and walks shell words; a
 `$( … )`/backtick word is one token, so an env-file write inside one was
 invisible when the word was accounted (an assignment RHS, an
@@ -375,31 +375,56 @@ programs by basename and version suffix (`python3`, `python3.12`, `perl`,
 `ruby`, `node`, `php`, `awk -v`); (viii) `tee`/`dd of=` argv file targets
 are classified with the alias/assignment resolver; (ix) a carrier operand
 that is exactly one variable expansion (`eval "$CMD"`) cannot be proven
-disjoint and refuses. Boundary sentence: the gate refuses any recognized
-carrier invocation (shell/interpreter by basename and version suffix, a
-pure variable with `-c`, `eval`/`trap`, `awk -v`) or recognized argv write
-verb (`tee`, `dd of=`) whose carried command string or file target cannot
-be proven disjoint from the env file — it names the env machinery or a
-traced value, is an unreadable pure variable, or has a non-single-resolved
+disjoint and refuses. A7 (fold round 1) adds four widenings: (x) a shell
+command flag in a short-option cluster (`bash -ec`, `sh -lc`) is the same
+carrier as the bare `-c`, for the carrier table and for the `$VAR`
+command-position widening alike, while `-l`/`--noprofile` stay
+non-carriers; (xi) the substitution-body argv deferral applies only when
+the enclosing segment has no env redirect of its own — when the segment's
+redirect IS the env file the outer per-segment reference accounting never
+runs, so a `tee`/`dd of=` target of the exact env spelling refuses with
+the argv diagnostic; (xii) `<( … )`/`>( … )` are recognized as
+substitution openers, and a redirect target that is the exact env
+spelling plus one trailing `)` is the env file when the
+continuation-joined line carries an opener (the shell lexer splits an
+unquoted opener, gluing the substitution's `)` to the target), while a
+literal filename that merely ends in `)` is untouched; (xiii) a
+recognized interpreter invoked with an inline-program flag (`python3 -c`,
+`perl -e`, `ruby -e`, `node -e`/`-p`, `php -r`) classifies the remaining
+non-flag argv words as potential file targets with the `tee`/`dd of=`
+resolver (`sys.argv[1]`, `$ARGV[0]`, `ARGV[0]`). Boundary sentence: the
+gate refuses any recognized carrier invocation (shell/interpreter by
+basename and version suffix, a short-option cluster containing `c`, a
+pure variable with a command flag, `eval`/`trap`, `awk -v`), recognized
+argv write verb (`tee`, `dd of=`) or recognized inline-program
+interpreter whose carried command string or file target cannot be proven
+disjoint from the env file — it names the env machinery or a traced
+value, is an unreadable pure variable, or has a non-single-resolved
 target — while literal/read-only usages and non-write commands stay
 accepted.
 
-Measured scope: A6 closes every runtime-proven flip in the 382-shape
-measured family (A4 left 7 fail-opens; A6 newly refuses exactly 10 shapes
-and reopens none), the fixture corpus stays 382/382 with zero diagnostic
-changes, and the real tree stays green (`ios-adhoc-pr.yml`'s `gh api …`,
-`find …`, `${!name:-}` and continuation bodies are untouched). The cost is
-fail-closed over-refusal of 15 measured benign shapes (A4's 12 + A6's 3):
-the quoted-heredoc payload (`f15`); the unquoted executing heredoc where
-the parent expands the substitution before the alias exists (`h01`/`h02b`/
-`q3`) or the child does not inherit a non-exported alias (`k05`); the
-assembled literal target (`h10`/`h20`); the non-executing
-`true || n="$GITHUB_ENV"` alias (`h28`); a name-writing mechanism inside a
-body (`fz-o6-i4/i5/i7`); the malformed no-trailing-newline value (`a7`);
-and A6's three benign-as-stored argv targets (`t03`/`t04`/`t20`). The A6
-measurement also verified the lens-v2 `b1` (quoted data scanned as code),
-`b2` (heredoc-payload alias then a benign outer read) and `d9` (benign
-nesting depth > 8) classes as additional fail-closed refusals.
+Measured scope: A7 closes every runtime-proven flip in the measured
+family (A6's 382 shapes stay closed; the four new classes' ten
+runtime-proven writes refuse), the fixture corpus is 398/398 with zero
+diagnostic changes on the 382 pre-existing cases (`old.CASES ==
+new.CASES[:382]`), and the real tree stays byte-identical green
+(`ios-adhoc-pr.yml`'s `gh api …`, `find …`, `${!name:-}` and continuation
+bodies are untouched). The cost is fail-closed over-refusal of 24
+measured benign shapes: the 20 pre-A7 ones — A4's 12 (the quoted-heredoc
+payload `f15`; the unquoted executing heredoc where the parent expands
+the substitution before the alias exists `h01`/`h02b`/`q3` or the child
+does not inherit a non-exported alias `k05`; the assembled literal target
+`h10`/`h20`; the non-executing `true || n="$GITHUB_ENV"` alias `h28`; a
+name-writing mechanism inside a body `fz-o6-i4/i5/i7`; the malformed
+no-trailing-newline value `a7`), the lens-v2 `b1` (quoted data scanned as
+code), `b2` (heredoc-payload alias then a benign outer read), `d9`/
+`d10` (benign nesting depth > 8) and `t18-busybox-sh` (benign on the
+probe host, where `busybox` is absent), and A6's three benign-as-stored
+argv targets `t03`/`t04`/`t20` — plus A7's one new class: an interpreter's
+trailing argv word that is a shell expansion the extractor cannot resolve
+(`python3 -c`/`perl -e` with a `$MESSAGE` or assembled `${x}${y}` value
+argument; 4 measured benign shapes, pinned by
+`reject-overrefusal-interpreter-expansion-argv`).
 
 Named residuals: a caller (`workflow_call`) or dispatcher
 (`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
@@ -417,7 +442,9 @@ argv write verbs that need verb-specific semantics (`sed -i`, `cp`/`mv`/
 `install`, `touch`/`truncate`); interpreters outside the inline-program
 table (`lua -e`, `tclsh`, a script file); substitution nesting deeper than
 8; and a heredoc opened inside a substitution body, which the inner scope
-does not model.
+does not model. The A7 widenings are not residuals: the cluster spelling,
+the deferral with an enclosing env redirect, process substitution and the
+interpreter argv file targets are refused by the mechanisms above.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -467,7 +494,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 382
+EXPECTED_MANIFEST_CASES = 398
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2657,6 +2684,40 @@ _INLINE_PROGRAM_VERBS = frozenset(_INLINE_PROGRAM_FLAGS) | _INLINE_PROGRAM_POSIT
 # `php8.2`): the base name is the recognized interpreter, so a versioned
 # spelling does not evade the carrier check.
 _INTERPRETER_VERSION_RE = re.compile(r"^(.*?)([0-9]+(?:\.[0-9]+)*)$")
+
+
+def _interpreter_core(verb: str) -> str:
+    """The table name for an interpreter spelling: `python3.12` resolves
+    to `python3`, and any other verb is returned unchanged (issue #345,
+    A6 widening (vii))."""
+    if verb in _INLINE_PROGRAM_VERBS:
+        return verb
+    match = _INTERPRETER_VERSION_RE.match(verb)
+    if match is not None and match.group(1) in _INLINE_PROGRAM_VERBS:
+        return match.group(1)
+    return verb
+
+
+def _short_option_cluster_carries_command(word: str) -> bool:
+    """True for an exact `-c` or a short-option cluster that contains `c`
+    (`bash -ec`, `sh -lc`): bash reads the command string for a clustered
+    `-c` exactly as for the bare flag, so the carrier test must recognize
+    both spellings. A long option (`--noprofile`) and a cluster without `c`
+    (`-l`) are not carriers (issue #345, fold round 1 F1)."""
+    if word == "-c":
+        return True
+    return (
+        word.startswith("-")
+        and not word.startswith("--")
+        and len(word) > 2
+        and "c" in word[1:]
+    )
+
+
+def _argv_has_command_flag(argv: list[str]) -> bool:
+    """True when an argv carries a `-c` command string, exactly or as a
+    short-option cluster (issue #345, fold round 1 F1)."""
+    return any(_short_option_cluster_carries_command(word) for word in argv)
 # One whole shell expansion: `$NAME`, `${NAME}` or `%NAME%`. Used to count
 # how many expansion pieces an argv write target is assembled from.
 _EXPANSION_PIECE_RE = re.compile(
@@ -3402,6 +3463,39 @@ def _env_file_target_name_kind(
     return "other"
 
 
+def _line_has_process_substitution(line: str) -> bool:
+    """True when a physical line carries a process-substitution opener
+    (`<( … )`/`>( … )`). The shell lexer splits an unquoted opener into an
+    operator plus a `(…` word, so the substitution's closing `)` is glued
+    to the redirect target before it; the target classifier strips that
+    `)` only when this opener is present (issue #345, fold round 1 F3)."""
+    for index, char in enumerate(line[:-1]):
+        if char in "<>" and line[index + 1] == "(":
+            return True
+    return False
+
+
+def _logical_line_has_process_substitution(
+    lines: list[str], line_index: int
+) -> bool:
+    """True when the continuation-joined logical line containing
+    `line_index` carries a process-substitution opener. A shell joins a
+    physical line that ends in an unescaped `\\` with the next one, but the
+    tokenizer still sees each physical line on its own, so a target whose
+    closing `)` is glued on the continuation line needs the opener from the
+    line before it (issue #345, fold round 1 F3)."""
+    first = line_index
+    while first > 0 and _line_has_continuation(lines[first - 1]):
+        first -= 1
+    last = line_index
+    while last + 1 < len(lines) and _line_has_continuation(lines[last]):
+        last += 1
+    return any(
+        _line_has_process_substitution(lines[index])
+        for index in range(first, last + 1)
+    )
+
+
 def _env_file_target_kind(
     target: str,
     aliases: set[str],
@@ -3421,6 +3515,19 @@ def _env_file_target_kind(
     if not text or text.startswith("&"):
         return "other"
     if _ENV_FILE_SPELLING_RE.fullmatch(text):
+        return "env"
+    if (
+        text.endswith(")")
+        and _ENV_FILE_SPELLING_RE.fullmatch(text[:-1])
+        and _logical_line_has_process_substitution(lines, line_index)
+    ):
+        # The shell lexer splits an unquoted process substitution into an
+        # operator plus a `(…` word, so the substitution's closing `)` is
+        # glued to the redirect target that precedes it (`… >>
+        # "$GITHUB_ENV")`): the exact env spelling plus one trailing `)` is
+        # the env file, not a different filename. The opener on the line is
+        # required so a literal filename that merely ends in `)` is
+        # untouched (issue #345, fold round 1 F3).
         return "env"
     if "$(" in text or "`" in text or "${!" in text:
         return "unknown"
@@ -3470,31 +3577,54 @@ def _argv_write_targets(
     """The `(verb, target)` file operands of an argv write verb in one
     segment: `tee` appends to every non-option path operand and `dd` writes
     `of=…`. The verb is matched by basename so a path prefix does not evade
-    (issue #345, lens-v2 t04/t20/t22/t23)."""
+    (issue #345, lens-v2 t04/t20/t22/t23). A recognized interpreter invoked
+    with an inline-program flag (`python3 -c`, `perl -e`, `ruby -e`) also
+    carries its file targets in argv (`sys.argv[1]`, `$ARGV[0]`, `ARGV[0]`),
+    so the non-flag words after the inline program are returned too and
+    classified with the same resolver as `tee`/`dd of=` (issue #345, fold
+    round 1 F4)."""
     words = [token[1] for token in segment if token[0] == "word"]
     for position, text in enumerate(words):
         verb = text.rsplit("/", 1)[-1] if "/" in text else text
-        if verb not in _ARGV_WRITE_VERBS:
+        if verb in _ARGV_WRITE_VERBS:
+            args = words[position + 1 :]
+            if verb == "tee":
+                targets: list[tuple[str, str]] = []
+                options_done = False
+                for argument in args:
+                    if argument == "--":
+                        options_done = True
+                        continue
+                    if argument == "-":
+                        # stdout, not a file.
+                        continue
+                    if not options_done and argument.startswith("-"):
+                        continue
+                    targets.append(("tee", argument))
+                return targets
+            return [
+                ("dd", argument[3:])
+                for argument in args
+                if argument.startswith("of=") and len(argument) > 3
+            ]
+        core = _interpreter_core(verb)
+        if core not in _INLINE_PROGRAM_FLAGS:
             continue
+        flags = _INLINE_PROGRAM_FLAGS[core]
         args = words[position + 1 :]
-        if verb == "tee":
-            targets: list[tuple[str, str]] = []
-            options_done = False
-            for argument in args:
-                if argument == "--":
-                    options_done = True
-                    continue
-                if argument == "-":
-                    # stdout, not a file.
-                    continue
-                if not options_done and argument.startswith("-"):
-                    continue
-                targets.append(("tee", argument))
-            return targets
+        program_index: int | None = None
+        for offset, argument in enumerate(args):
+            if argument in flags:
+                program_index = offset
+                break
+        if program_index is None:
+            # No inline program: a script path (`python3 script.py`) is a
+            # named residual and its operands are not classified.
+            continue
         return [
-            ("dd", argument[3:])
-            for argument in args
-            if argument.startswith("of=") and len(argument) > 3
+            (verb, argument)
+            for argument in args[program_index + 2 :]
+            if not argument.startswith("-")
         ]
     return []
 
@@ -3521,6 +3651,32 @@ def _argv_write_target_is_unproven(
     return len(_EXPANSION_PIECE_RE.findall(target)) > 1
 
 
+def _segment_env_redirect_present(
+    segment: list[tuple[str, str, int, int]],
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+) -> bool:
+    """True when this segment itself redirects to the env file. The
+    substitution-body argv deferral is only sound when the outer
+    per-segment reference accounting runs, and that accounting is skipped
+    when the segment has an env redirect of its own, so the caller needs
+    this before the body scan (issue #345, fold round 1 F2)."""
+    for _op, target, _start, _span, redirect_fd in _segment_redirects(segment):
+        if _op == "<>" and redirect_fd == 0:
+            continue
+        if (
+            _env_file_target_kind(
+                target, aliases, assignments, lines, line_index, column_index
+            )
+            == "env"
+        ):
+            return True
+    return False
+
+
 def _refuse_argv_write_targets(
     segment: list[tuple[str, str, int, int]],
     step: ArtifactStep,
@@ -3536,7 +3692,10 @@ def _refuse_argv_write_targets(
     extractor cannot prove harmless. Inside a substitution body
     (`defer_env_spelling`) the exact env-file spelling is left to the outer
     per-segment reference accounting, which sees the same text and owns that
-    diagnostic (issue #345)."""
+    diagnostic — but that accounting only runs when the enclosing segment
+    has no env redirect of its own, so the caller defers only in that case
+    and otherwise refuses with the argv diagnostic (issue #345, fold round 1
+    F2)."""
     for verb, target in _argv_write_targets(segment):
         if not _argv_write_target_is_unproven(
             target, aliases, assignments, lines, line_index, column_index
@@ -3586,13 +3745,14 @@ _SUBSTITUTION_SCAN_DEPTH_LIMIT = 8
 
 
 def _substitution_bodies(text: str) -> list[str]:
-    """Every `$( \u2026 )`/backtick body inside one shell word, in source
-    order. `$( \u2026 )` is quote-aware (`_consume_command_substitution`);
-    an unclosed construct yields the rest of the word, which the callers
-    treat fail-closed. The word text has usually lost its quotes, so a
-    single-quoted `$( \u2026 )` is indistinguishable here and is refused by
-    the callers' fail-closed guards rather than silently skipped (issue
-    #345, Option A (ii))."""
+    """Every `$( … )`/backtick/`<( … )` body inside one shell word, in
+    source order. `$( … )`/`<( … )` are quote-aware
+    (`_consume_command_substitution`); an unclosed construct yields the rest
+    of the word, which the callers treat fail-closed. The word text has
+    usually lost its quotes, so a single-quoted `$( … )` is
+    indistinguishable here and is refused by the callers' fail-closed
+    guards rather than silently skipped (issue #345, Option A (ii); the
+    process-substitution opener is fold round 1 F3)."""
     bodies: list[str] = []
     i = 0
     n = len(text)
@@ -3611,6 +3771,14 @@ def _substitution_bodies(text: str) -> list[str]:
                 i = end + 1
             continue
         if c == "$" and i + 1 < n and text[i + 1] == "(":
+            end = _consume_command_substitution(text, i)
+            bodies.append(text[i + 2 : end - 1])
+            i = end
+            continue
+        if c in "<>" and i + 1 < n and text[i + 1] == "(":
+            # `<( … )`/`>( … )` executes its body exactly as `$( … )` does,
+            # so its redirects are scanned with the same rules (issue #345,
+            # fold round 1 F3).
             end = _consume_command_substitution(text, i)
             bodies.append(text[i + 2 : end - 1])
             i = end
@@ -3699,6 +3867,7 @@ def _refuse_substitution_body_writes(
     mechanism_guard: str | None,
     use_body_shadow_guard: bool,
     broad_shadow_guard: bool,
+    defer_env_spelling: bool,
     depth: int = 0,
 ) -> None:
     """Issue #345, Option A (ii)/(iii): a `$( \u2026 )`/backtick body the
@@ -3752,7 +3921,7 @@ def _refuse_substitution_body_writes(
                 lines,
                 line_index,
                 column_index,
-                True,
+                defer_env_spelling,
             )
             for token in inner_segment:
                 if token[0] == "word" and ("$(" in token[1] or "`" in token[1]):
@@ -3770,6 +3939,7 @@ def _refuse_substitution_body_writes(
                         mechanism_guard,
                         use_body_shadow_guard,
                         broad_shadow_guard,
+                        defer_env_spelling,
                         depth + 1,
                     )
 
@@ -3788,6 +3958,7 @@ def _scan_segment_substitutions(
     mechanism_guard: str | None,
     use_body_shadow_guard: bool,
     broad_shadow_guard: bool,
+    defer_env_spelling: bool,
 ) -> None:
     for token in segment:
         if token[0] != "word":
@@ -3808,6 +3979,7 @@ def _scan_segment_substitutions(
             mechanism_guard,
             use_body_shadow_guard,
             broad_shadow_guard,
+            defer_env_spelling,
         )
 
 
@@ -4143,7 +4315,9 @@ def _mechanism_operands(
         return []
     if mechanism in ("trap", "eval"):
         return [(word, True) for word in argv]
-    if mechanism in ("bash", "sh", "zsh", "dash", "ksh") and "-c" in argv:
+    if mechanism in ("bash", "sh", "zsh", "dash", "ksh") and _argv_has_command_flag(
+        argv
+    ):
         return [(word, True) for word in argv]
     if mechanism in _INLINE_PROGRAM_POSITIONAL:
         operands = []
@@ -4223,14 +4397,6 @@ def _unmodelled_write_match(
     operand names a variable the run-id rule traces, or None. The walk is
     over words, not segment starts, so a mechanism inside a group or a
     function body (`f() { declare -g …; }`) is seen (issue #342, R4)."""
-    def _interpreter_core(verb: str) -> str:
-        if verb in _INLINE_PROGRAM_VERBS:
-            return verb
-        match = _INTERPRETER_VERSION_RE.match(verb)
-        if match is not None and match.group(1) in _INLINE_PROGRAM_VERBS:
-            return match.group(1)
-        return verb
-
     index = 0
     while index < len(tokens):
         kind, text, _start, _end = tokens[index]
@@ -4261,8 +4427,10 @@ def _unmodelled_write_match(
             # A variable in command position (`$SHELL -c …`): only an
             # invocation with `-c` carries a command string, and it must
             # reach the env file/traced names to refuse (issue #345,
-            # lens-v2 t02).
-            if "-c" in argv:
+            # lens-v2 t02). The command flag may be a short-option cluster
+            # (`$SHELL -ec`), so the cluster spelling is recognized here too
+            # (issue #345, fold round 1 F1).
+            if _argv_has_command_flag(argv):
                 for word in argv:
                     if _carrier_operand_matches(word, relevant, flip_targets):
                         return (text, word, True)
@@ -4548,6 +4716,14 @@ def _refuse_github_env_run_id_write(
             accounted: set[tuple[int, int]] = set()
             for segment in _shell_segments(tokens):
                 write_column = segment[0][2]
+                defer_env_spelling = not _segment_env_redirect_present(
+                    segment,
+                    aliases,
+                    assignments,
+                    lines,
+                    index,
+                    write_column,
+                )
                 _scan_segment_substitutions(
                     segment,
                     step,
@@ -4562,6 +4738,7 @@ def _refuse_github_env_run_id_write(
                     'carrier',
                     False,
                     False,
+                    defer_env_spelling,
                 )
                 env_redirect: int | None = None
                 unknown_redirect: str | None = None

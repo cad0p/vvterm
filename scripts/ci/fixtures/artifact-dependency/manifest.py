@@ -3202,4 +3202,145 @@ CASES = [
             "reject-runid-github-env-write-cmdsub-unclosed-continuation.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job ends a line with an unescaped backslash continuation, so a redirect target or assignment can sit on the next line outside the extractor's per-line view (refusing rather than guessing)",
         ],
     },
+    # ------------------------------------------------------------------
+    # #345 fold round 1 (A7): clustered command flags, the argv
+    # deferral with an enclosing env redirect, process substitution,
+    # and interpreter argv file targets.
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-runid-github-env-write-cmdsub-bash-ec",
+        "files": ["reject-runid-github-env-write-cmdsub-bash-ec.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-bash-ec.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `bash` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-sh-ec",
+        "files": ["reject-runid-github-env-write-cmdsub-sh-ec.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-sh-ec.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sh` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-shellvar-ec",
+        "files": ["reject-runid-github-env-write-cmdsub-shellvar-ec.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-shellvar-ec.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `$SHELL` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-tee-outer-env-target",
+        "files": ["reject-runid-github-env-write-cmdsub-tee-outer-env-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-tee-outer-env-target.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `tee` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-dd-outer-env-target",
+        "files": ["reject-runid-github-env-write-cmdsub-dd-outer-env-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-dd-outer-env-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `dd` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-process-substitution",
+        "files": ["reject-runid-github-env-write-cmdsub-process-substitution.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-process-substitution.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 21) with a value that is not provably cross-run \u2014 that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-output-process-substitution",
+        "files": ["reject-runid-github-env-write-cmdsub-output-process-substitution.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-output-process-substitution.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to `$GITHUB_ENV` (line 19) with a value that is not provably cross-run \u2014 that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-python3-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-python3-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-python3-argv-target.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `python3` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-perl-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-perl-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-perl-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `perl` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-ruby-argv-target",
+        "files": ["reject-runid-github-env-write-cmdsub-ruby-argv-target.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-ruby-argv-target.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `ruby` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-cmdsub-process-substitution-continuation",
+        "files": ["reject-runid-github-env-write-cmdsub-process-substitution-continuation.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-cmdsub-process-substitution-continuation.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes to `$GITHUB_ENV` (line 20) with a payload the gate cannot extract (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "accept-runid-github-env-write-cmdsub-shell-login-flags",
+        "files": ["accept-runid-github-env-write-cmdsub-shell-login-flags.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-cmdsub-tee-literal-outer-env",
+        "files": ["accept-runid-github-env-write-cmdsub-tee-literal-outer-env.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-cmdsub-process-substitution-other-target",
+        "files": ["accept-runid-github-env-write-cmdsub-process-substitution-other-target.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-cmdsub-interpreter-literal-argv",
+        "files": ["accept-runid-github-env-write-cmdsub-interpreter-literal-argv.yml"],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-overrefusal-interpreter-expansion-argv",
+        "files": ["reject-overrefusal-interpreter-expansion-argv.yml"],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-overrefusal-interpreter-expansion-argv.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `python3` with a file target `$MESSAGE` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
 ]

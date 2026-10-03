@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 382
+    private static let expectedManifestCases = 398
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -563,6 +563,22 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-cmdsub-test-operand.yml",
         "reject-runid-github-env-write-cmdsub-test-zero-exit.yml",
         "reject-runid-github-env-write-cmdsub-unclosed-continuation.yml",
+        "reject-runid-github-env-write-cmdsub-bash-ec.yml",
+        "reject-runid-github-env-write-cmdsub-sh-ec.yml",
+        "reject-runid-github-env-write-cmdsub-shellvar-ec.yml",
+        "reject-runid-github-env-write-cmdsub-tee-outer-env-target.yml",
+        "reject-runid-github-env-write-cmdsub-dd-outer-env-target.yml",
+        "reject-runid-github-env-write-cmdsub-process-substitution.yml",
+        "reject-runid-github-env-write-cmdsub-output-process-substitution.yml",
+        "reject-runid-github-env-write-cmdsub-python3-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-perl-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-ruby-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-process-substitution-continuation.yml",
+        "accept-runid-github-env-write-cmdsub-shell-login-flags.yml",
+        "accept-runid-github-env-write-cmdsub-tee-literal-outer-env.yml",
+        "accept-runid-github-env-write-cmdsub-process-substitution-other-target.yml",
+        "accept-runid-github-env-write-cmdsub-interpreter-literal-argv.yml",
+        "reject-overrefusal-interpreter-expansion-argv.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
