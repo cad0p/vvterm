@@ -631,8 +631,11 @@ The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
 fold does not close: sed's `s///w file` flag and `-f` bodies, the BSD
 `$a\\` two-line append, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
-/ process-substitution script operands, stdin-fed argv operands (`… |
-xargs cp payload {}`), the
+/ process-substitution script operands, the xargs wrapper/assignment/
+continuation spellings (`env xargs`, `FOO=1 xargs`, `nice xargs`,
+`command xargs`, `time xargs`, `xargs … < pf`, a trailing-`|` or
+backslash multi-line pipeline — the bare `… | xargs cp payload {}` form
+now refuses), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, the `--expression` long-option abbreviations in the
 `=`-attached form (`--e=`, `--ex=`, `--expr=`; a GNU getopt_long
@@ -669,8 +672,10 @@ a carrier whose command
 string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
 env file or a traced name is the inherited textual boundary); an argv
-operand fed on stdin (`… | xargs cp payload {}`) sits outside the argv verb
-table;
+operand fed on stdin behind a wrapper, an assignment prefix or a
+continuation (`env xargs`, `FOO=1 xargs`, `… |` newline `xargs`) sits
+outside the argv verb table (the bare `… | xargs cp payload {}` form
+refuses since A13);
 other
 argv write verbs that need verb-specific semantics are closed by A12
 (sed `-i`/`--in-place` (and its abbreviations)/`w` targets,
@@ -711,11 +716,21 @@ than 8 physical lines stays open (a named residual); (viii-d) the
 `_HEREDOC_RE` guard `(?<!<)<<-?(?!<)` stops a here-string (`<<<`) from
 being read as a heredoc opener, so the line after it is walked as shell
 (`<<<<`/`<<<<<` are bash syntax errors and `<<<-` is a here-string, so no
-genuine heredoc is missed). Measured at A13: the fixture corpus is
-560/560, of which 129 fixtures declare their measured base verdict
+genuine heredoc is missed); (viii-e) an `xargs` segment refuses when its
+upstream pipeline text can carry the stdin operand — it names the env
+file, references a traced name, or carries a command substitution/
+backtick; the per-line site also refuses a `$`-bearing upstream word the
+extractor cannot resolve, while the substitution-body site (issue #350,
+item 2's `$(…)`-nested spelling) drops that word catch so the real-tree
+witness `name="$(echo "$raw" | xargs)"` stays accepted; the
+wrapper/assignment-prefix/trailing-`|` spellings stay accepted boundary
+pins (a new command-position mechanism, deferred). Measured at A13: the
+fixture corpus is
+569/569, of which 138 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 3 over-refusal pins under
 one root cause (any unmodelled write of the now-relevant base name
-refuses), bringing the measured benign floor to 62 + 3 = 65.
+refuses) and item 2 adds its unresolved-upstream pin, bringing the
+measured benign floor to 62 + 3 + 1 = 66.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -765,7 +780,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 560
+EXPECTED_MANIFEST_CASES = 569
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -782,7 +797,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 129
+EXPECTED_BASE_VERDICT_CASES = 138
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -5020,6 +5035,17 @@ def _refuse_substitution_body_writes(
                     raise _run_id_unresolved_target_refusal(step, body, target)
                 if kind == "env":
                     raise _run_id_reference_refusal(step, body)
+            carrier = _xargs_upstream_carrier(
+                inner,
+                inner_segment,
+                relevant_names,
+                flip_targets,
+                require_unresolved_word_catch=False,
+            )
+            if carrier is not None:
+                raise _run_id_unmodelled_write_refusal(
+                    step, body, ("xargs", carrier, True)
+                )
             _refuse_argv_write_targets(
                 inner_segment,
                 step,
@@ -5901,6 +5927,45 @@ def _run_id_unaccounted_occurrence_refusal(
     )
 
 
+def _xargs_upstream_carrier(
+    line: str,
+    segment: list[tuple[str, str, int, int]],
+    relevant: set[str],
+    flip_targets: set[str],
+    require_unresolved_word_catch: bool = True,
+) -> str | None:
+    """The upstream pipeline text of an `xargs` segment when it can carry
+    the operand argv cannot see (issue #350, item 2), or None. The operand
+    arrives on xargs' stdin; refuse when the upstream names the env file,
+    references a traced name, carries a command substitution/backtick, or
+    (at the per-line site) is a `$`-bearing word the extractor cannot
+    resolve. The substitution-body site passes
+    `require_unresolved_word_catch=False`: a body whose upstream merely
+    carries a benign `$raw` word is the real-tree witness the catch
+    over-refuses, while a body carrying a nested `$(…)` still refuses
+    through the substitution-spelling test."""
+    if not segment or segment[0][0] != "word":
+        return None
+    verb = segment[0][1].rsplit("/", 1)[-1]
+    if verb != "xargs":
+        return None
+    text = line[: segment[0][2]].strip()
+    if not text:
+        return None
+    if _mentions_github_env(text):
+        return text
+    if _carries_substitution_spelling(text):
+        return text
+    if _text_references_names(text, relevant, flip_targets):
+        return text
+    if require_unresolved_word_catch and any(
+        token[0] == "word" and ("$" in token[1] or "`" in token[1])
+        for token in _shell_tokens(text)
+    ):
+        return text
+    return None
+
+
 def _refuse_github_env_run_id_write(
     job: Job,
     step: ArtifactStep,
@@ -5993,6 +6058,13 @@ def _refuse_github_env_run_id_write(
                     index,
                     write_column,
                 )
+                xargs_carrier = _xargs_upstream_carrier(
+                    line, segment, relevant_names, flip_targets
+                )
+                if xargs_carrier is not None:
+                    raise _run_id_unmodelled_write_refusal(
+                        step, body, ("xargs", xargs_carrier, True)
+                    )
                 _scan_segment_substitutions(
                     segment,
                     step,

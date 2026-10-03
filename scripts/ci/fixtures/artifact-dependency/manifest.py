@@ -4897,5 +4897,102 @@ CASES = [
         "diagnostics": [
             "reject-runid-github-env-write-here-string-not-a-heredoc.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
         ]
+    },
+    # #350 item 2: xargs as a carrier (A13). The per-line walk refuses a
+    # resolvable upstream; the substitution-body site drops the `$`-word
+    # catch; the two wrapper spellings stay accepted boundary pins.
+    {
+        "id": "reject-runid-github-env-write-xargs-stdin-operand",
+        "files": [
+            "reject-runid-github-env-write-xargs-stdin-operand.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-stdin-operand.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-plain-stdin-operand",
+        "files": [
+            "reject-runid-github-env-write-xargs-plain-stdin-operand.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-plain-stdin-operand.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-xargs-unresolved-upstream",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-xargs-unresolved-upstream.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-xargs-unresolved-upstream.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-in-cmdsub-operand",
+        "files": [
+            "reject-runid-github-env-write-xargs-in-cmdsub-operand.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-in-cmdsub-operand.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-literal-upstream",
+        "files": [
+            "accept-runid-github-env-write-xargs-literal-upstream.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-padding-short",
+        "files": [
+            "accept-runid-github-env-write-xargs-padding-short.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-padding-long",
+        "files": [
+            "accept-runid-github-env-write-xargs-padding-long.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-env-wrapper",
+        "files": [
+            "accept-runid-github-env-write-xargs-env-wrapper.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-pipe",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-pipe.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
     }
 ]
