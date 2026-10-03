@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 585
-    private static let expectedBaseVerdictCases = 154
+    private static let expectedManifestCases = 593
+    private static let expectedBaseVerdictCases = 162
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -703,12 +703,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-sed-append-single-quote-join.yml",
         "accept-runid-github-env-write-sed-single-quote-multiline-benign.yml",
         "accept-runid-github-env-write-sed-single-quote-literal-append-benign.yml",
-        // A13 (#350 items 4/5/8/11): the boundary pins and the item-8
-        // bounded empty-pad elision (2 closed spellings + 2 survivors).
+        // A13 (#350 items 4/5/8/11): the boundary pins, the item-8
+        // bounded empty-pad elision (2 closed spellings + 2 survivors),
+        // and the hidden-name-echo over-refusal pin (fold round 1).
         "reject-runid-github-env-write-mention-window-empty-single-quote-pad.yml",
         "reject-runid-github-env-write-mention-window-empty-ansic-pad.yml",
         "accept-runid-github-env-write-mention-window-empty-pad-ansic-hex.yml",
         "accept-runid-github-env-write-mention-window-empty-pad-empty-dquote.yml",
+        "reject-overrefusal-runid-github-env-write-mention-window-hidden-name-echo.yml",
         "accept-runid-github-env-write-python3-stdin-program.yml",
         "accept-runid-github-env-write-python3-stdin-heredoc-program.yml",
         "accept-runid-github-env-write-python3-process-substitution-program.yml",
@@ -750,15 +752,17 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-sed-glued-block-w-target.yml",
         "reject-overrefusal-mention-window-bang-pid.yml",
         // A13 (#350 item 1): the array-element write-target family, the
-        // continuation relevance pre-pass, and the three over-refusal pins.
+        // continuation relevance pre-pass, and the four over-refusal pins.
         "reject-runid-github-env-write-array-element-read-a-target.yml",
         "reject-runid-github-env-write-array-element-mapfile-t-target.yml",
         "reject-runid-github-env-write-array-element-printf-v-target.yml",
         "reject-runid-github-env-write-array-element-read-subscript-target.yml",
         "reject-runid-github-env-write-array-element-continuation-target.yml",
+        "reject-runid-github-env-write-array-element-comment-continuation-target.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-read.yml",
         "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml",
+        "reject-overrefusal-runid-github-env-write-array-element-no-write-target.yml",
         // A13 here-string guard (#350 audit defect): `<<<` is not a heredoc.
         "reject-runid-github-env-write-here-string-not-a-heredoc.yml",
         // A13 (#350 item 2): xargs as a carrier (per-line + relaxed
@@ -772,6 +776,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-xargs-padding-long.yml",
         "accept-runid-github-env-write-xargs-env-wrapper.yml",
         "accept-runid-github-env-write-xargs-multiline-pipe.yml",
+        // Fold round 1 boundary pins: the item-2 assignment-wrapped nested
+        // form, the substitution-nested continuation, and the array
+        // slice/offset/literal-newline-subscript spellings.
+        "accept-runid-github-env-write-xargs-assignment-wrapped-nested.yml",
+        "accept-runid-github-env-write-array-element-cmdsub-continuation.yml",
+        "accept-runid-github-env-write-array-element-slice-target.yml",
+        "accept-runid-github-env-write-array-element-offset-target.yml",
+        "accept-runid-github-env-write-array-element-multiline-subscript.yml",
         // A13 (#350 item 9): `--expression` unambiguous-prefix spellings.
         "reject-runid-github-env-write-sed-expression-abbrev-e-eq.yml",
         "reject-runid-github-env-write-sed-expression-abbrev-ex-eq.yml",

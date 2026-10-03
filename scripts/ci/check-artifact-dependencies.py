@@ -696,8 +696,16 @@ the runtime-assembled shell command flag, the runtime-assembled /
 ANSI-C-quoted interpreter inline-program flag, and the A12 argv-verb /
 carrier-substitution / raw-OR-elided mention-walk mechanisms are refused
 by the mechanisms above.
-A13 (the #350 fold) closes the array-element write-target family and the
-backslash-continuation spelling. Claimed mechanisms:
+A13 (the #350 fold) closes the measured spellings of the array-element
+write-target family — `${arr[0]}` (plain or on a backslash-continuation
+line), `read 'arr[0]'`, `printf -v 'arr[0]'`, `mapfile -t arr`,
+`readarray -t arr` and `read -a arr` — plus the backslash-continuation
+spelling of an argv-write target. The family's bash-valid sibling
+spellings stay accepted boundary pins (an offset-suffix matcher or a
+literal-newline word join is a new mechanism, deferred): the array slice
+`"${arr[@]:0}"`, the scalar offset `"${arr:0}"` and a target word split
+by a literal newline inside a double quote (`"${arr[` + newline +
+`0]}"`). Claimed mechanisms:
 (viii-a) `_LOCAL_REFERENCE_RE` and `_expansion_names` accept an optional
 `[...]` array subscript and contribute the base name, so a target spelled
 `${arr[0]}` joins the relevance set through the same narrow
@@ -710,8 +718,14 @@ option argument, so `mapfile -t arr`/`readarray -t arr` no longer lose
 the array name; (viii-c) a bounded pre-pass joins a physical line ending
 in an unquoted backslash, adds the joined argv-write targets' base names
 to the relevance set, and skips heredoc payload lines, while the joined
-segments also feed the narrow argv-target scan — a continuation longer
-than 8 physical lines stays open (a named residual); (viii-d) the
+segments also feed the narrow argv-target scan; the continuation test
+stops at an unquoted `#` comment word (fold round 1 MAJOR-2(b): bash ends
+the comment at the physical newline, so a backslash-terminated comment no
+longer suppresses the real continuation on the next line); a continuation
+longer than 8 physical lines and a continuation inside a command
+substitution (`w=$(cp payload \\` + newline + `"${arr[0]}")`) stay open
+(named residuals); the comment spelling is pinned by
+`reject-runid-github-env-write-array-element-comment-continuation-target`; (viii-d) the
 `_HEREDOC_RE` guard `(?<!<)<<-?(?!<)` stops a here-string (`<<<`) from
 being read as a heredoc opener, so the line after it is walked as shell
 (`<<<<`/`<<<<<` are bash syntax errors and `<<<-` is a here-string, so no
@@ -723,14 +737,21 @@ extractor cannot resolve, while the substitution-body site (issue #350,
 item 2's `$(…)`-nested spelling) drops that word catch so the real-tree
 witness `name="$(echo "$raw" | xargs)"` stays accepted; the
 wrapper/assignment-prefix/trailing-`|` spellings stay accepted boundary
-pins (a new command-position mechanism, deferred); (viii-f) the sed argv
+pins (a new command-position mechanism, deferred), as does an
+assignment-wrapped nested form whose upstream is a bare command
+(`w=$(printenv "${x}${y}" | xargs -I{} cp payload {})`; the relaxed
+substitution-body site drops the `$`-word catch, so the bare upstream is
+not refused — fold round 1 MAJOR-1, a named residual that
+runtime-FLIPs); (viii-f) the sed argv
 branch recognizes every unambiguous abbreviation of `--expression`
 (`--e=`, `--ex=`, `--expr=`, `--expre=`, `--expressio=`, both separated
 and `=`-attached), so the abbreviated expression's `w` target is
 classified; the rule deliberately stops at `expression` (`--f` is
 ambiguous between `--file` and `--follow-symlinks`). A13 also accepts
-one measured out-of-corpus shape that base refused — `sed -n --e=x 'w
-$(printenv …)' payload` (base REFUSE → A13 ACCEPT, runtime cross-run):
+one measured out-of-corpus class that base refused — the `--e=`-family
+abbreviations `--e=`, `--ex=`, `--expr=`, `--expre=` and `--expressio=`
+(`sed -n --e=x 'w $(printenv …)' payload` is the representative; base
+REFUSE → A13 ACCEPT, runtime cross-run):
 recognizing `--e=x` reclassifies the first positional from script
 candidate to file operand, so a target base scanned as a script is no
 longer scanned; the direction is correct (the base refusal was a
@@ -748,19 +769,26 @@ empty-pad elision removes adjacent empty single-quoted strings (`''`)
 and ANSI-C literals whose body is a run of literal `\\0` escapes
 (`$'\\0'`, `$'\\0\\0'`) before the 64-character window test — a fail-closed
 addition (dropping a pad can only add mentions) that closes 3 of the 10
-measured NUL spellings; item 8 stays a boundary class, with `$'\\x00'`,
-`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'` and `""` as
-accepted boundary pins. Measured at A13: the fixture corpus is
-585/585, of which 154 fixtures declare their measured base verdict
-(`base_exit`); the array-element family adds 3 over-refusal pins under
-one root cause (any unmodelled write of the now-relevant base name
-refuses), item 2 adds its unresolved-upstream pin, item 7 adds its
-GNU-proxy fail-closed class, and item 8's elision adds the hidden-name
-echo class, bringing the measured benign floor to
-62 + 3 + 1 + 1 + 1 = 68. The A13 boundary (stays open, never implied
+measured NUL spellings; item 8 stays a boundary class: `$'\\x00'` and `""`
+are pinned as accepted boundary fixtures, and the other five measured
+survivors (`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`)
+stay accepted and are recorded here. Measured at A13: the fixture corpus is
+593/593, of which 162 fixtures declare their measured base verdict
+(`base_exit`); the array-element family adds 4 over-refusal pins under
+two root causes — 3 unmodelled-write shapes (any unmodelled write of the
+now-relevant base name refuses) and 1 no-write target mention (the
+occurrence backstop refuses a target that mentions the base name) — item
+2 adds its unresolved-upstream pin, item 7 adds its GNU-proxy fail-closed
+class (measured on the converted append fixture: the same body
+runtime-FLIPs under BSD sed, so the benign GNU run is recorded here
+rather than separately pinned), and item 8's elision adds the hidden-name
+echo class (now pinned), bringing the measured benign floor to
+62 + 4 + 1 + 1 + 1 = 69. The A13 boundary (stays open, never implied
 closed) is items 3, 4, 5, 6, 8, 10, 11 and the item-2
-wrapper/assignment/continuation class; items 4, 5, 8 and 11 carry the
-committed accept pins added at this commit.
+wrapper/assignment/continuation class, plus the newly named array
+slice/offset and literal-newline-subscript spellings, the
+substitution-nested continuation and the assignment-wrapped nested form;
+the boundary pins for all of these are committed at this commit.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -810,7 +838,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 585
+EXPECTED_MANIFEST_CASES = 593
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -827,7 +855,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 154
+EXPECTED_BASE_VERDICT_CASES = 162
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -2371,9 +2399,10 @@ _EXPANSION_ELISION_RE = re.compile(
 # body is a run of literal `\0` escapes (`$'\0'`, `$'\0\0'`). Dropping it
 # can only add mentions, so the direction is fail-closed. The class is
 # deliberately bounded: it closes 3 of the 10 measured NUL spellings and
-# the survivors (`$'\x00'`, `$'\000'`, `$'\u0000'`, `$'\c@'`,
-# `$'\0\000'`, `$'\x0'`, `""`) stay accepted and are pinned as boundary
-# accepts; a complete closure needs an ANSI-C/empty-pad normalizer (issue
+# the two representative survivors (`$'\x00'`, `""`) are pinned as
+# boundary accepts while the other five (`$'\000'`, `$'\u0000'`,
+# `$'\c@'`, `$'\0\000'`, `$'\x0'`) stay accepted and are recorded here;
+# a complete closure needs an ANSI-C/empty-pad normalizer (issue
 # #350, item 8, un-folded to the boundary).
 _EMPTY_PAD_ELISION_RE = re.compile(r"''|\$'(?:\\0)+'")
 

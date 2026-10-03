@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): the xargs wrapper spelling
-# (`env xargs`) stays accepted and runtime-FLIPs; wrapper/assignment-prefix
-# resolution is a new mechanism deferred as a residual (issue #350, item 2
-# boundary class).
+# Fixture (accept control, boundary): the scalar-offset spelling
+# `"${arr:0}"` is not a pure reference — `_LOCAL_REFERENCE_RE` requires `}`
+# immediately after `[...]`, so `arr` never joins the relevance set.
+# Widening the subscript pattern to an offset suffix is a matcher change
+# deferred as a residual (issue #350, item 1 boundary class; fold round 1
+# MAJOR-3: base ACCEPT, shipped ACCEPT, runtime FLIP).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,7 +22,9 @@ jobs:
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
-          printf '%s\n' "$(printenv "${x}${y}")" | env xargs -I{} cp payload {}
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          cp payload "${arr:0}"
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

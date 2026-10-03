@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): the xargs wrapper spelling
-# (`env xargs`) stays accepted and runtime-FLIPs; wrapper/assignment-prefix
-# resolution is a new mechanism deferred as a residual (issue #350, item 2
-# boundary class).
+# Fixture (over-refusal pin): the array-element argv target with no write
+# at all — `arr` is never filled, so the target mention alone puts `arr`
+# in the relevance set and the occurrence backstop refuses. Base ACCEPT;
+# runtime cross-run (`cp payload ""` fails, the env file is untouched);
+# benign, 0 real-tree witnesses (issue #350, item 1 over-refusal class;
+# fold round 1 MINOR-1).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,7 +22,7 @@ jobs:
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
-          printf '%s\n' "$(printenv "${x}${y}")" | env xargs -I{} cp payload {}
+          cp payload "${arr[0]}"
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

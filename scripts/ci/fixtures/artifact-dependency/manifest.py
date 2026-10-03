@@ -4874,6 +4874,17 @@ CASES = [
         ]
     },
     {
+        "id": "reject-runid-github-env-write-array-element-comment-continuation-target",
+        "files": [
+            "reject-runid-github-env-write-array-element-comment-continuation-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-array-element-comment-continuation-target.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
         "id": "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile",
         "files": [
             "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml"
@@ -4904,6 +4915,32 @@ CASES = [
         "base_exit": 0,
         "diagnostics": [
             "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job mentions `arr`, an occurrence the extractor cannot account for (refusing rather than guessing)"
+        ]
+    },
+    # #350 fold round 1 MINOR-1: the over-refusal floor's missing pins —
+    # the no-write array target (occurrence backstop) and the benign
+    # hidden-name echo the item-8 elision surfaces (both base ACCEPT,
+    # shipped REFUSE, runtime cross-run).
+    {
+        "id": "reject-overrefusal-runid-github-env-write-array-element-no-write-target",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-array-element-no-write-target.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-array-element-no-write-target.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job mentions `arr`, an occurrence the extractor cannot account for (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-mention-window-hidden-name-echo",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-mention-window-hidden-name-echo.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-mention-window-hidden-name-echo.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job references `$GITHUB_ENV` (line 19) without an extractable write (refusing rather than guessing)"
         ]
     },
     # #350 here-string defect: `<<<` must not open a phantom heredoc.
@@ -5009,6 +5046,61 @@ CASES = [
         "id": "accept-runid-github-env-write-xargs-multiline-pipe",
         "files": [
             "accept-runid-github-env-write-xargs-multiline-pipe.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    # #350 fold round 1: boundary accepts for the newly named residual
+    # sub-shapes — the item-2 assignment-wrapped nested form, the
+    # substitution-nested continuation, and the array slice/offset/
+    # multi-line-subscript spellings (all base ACCEPT, shipped ACCEPT,
+    # runtime FLIP; extending the mechanisms is deferred).
+    {
+        "id": "accept-runid-github-env-write-xargs-assignment-wrapped-nested",
+        "files": [
+            "accept-runid-github-env-write-xargs-assignment-wrapped-nested.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-array-element-cmdsub-continuation",
+        "files": [
+            "accept-runid-github-env-write-array-element-cmdsub-continuation.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-array-element-slice-target",
+        "files": [
+            "accept-runid-github-env-write-array-element-slice-target.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-array-element-offset-target",
+        "files": [
+            "accept-runid-github-env-write-array-element-offset-target.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-array-element-multiline-subscript",
+        "files": [
+            "accept-runid-github-env-write-array-element-multiline-subscript.yml"
         ],
         "exit": 0,
         "base_exit": 0,

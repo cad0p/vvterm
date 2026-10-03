@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): the xargs wrapper spelling
-# (`env xargs`) stays accepted and runtime-FLIPs; wrapper/assignment-prefix
-# resolution is a new mechanism deferred as a residual (issue #350, item 2
-# boundary class).
+# Fixture: a backslash-terminated comment line must not suppress the real
+# continuation on the next line — bash ends the comment at the physical
+# newline. Without the fold round 1 MAJOR-2(b) decoder fix the pre-pass
+# reads `# comment \` as pending and drops the joined `cp payload \` +
+# `"${arr[0]}"` target, so the array-element write is never seen (base
+# ACCEPT, pre-fix shipped ACCEPT, runtime FLIP; the fixed gate refuses).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,7 +22,11 @@ jobs:
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
-          printf '%s\n' "$(printenv "${x}${y}")" | env xargs -I{} cp payload {}
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          # comment \
+          cp payload \
+          "${arr[0]}"
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build
