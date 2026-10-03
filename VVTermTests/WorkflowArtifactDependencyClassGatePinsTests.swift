@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 569
-    private static let expectedBaseVerdictCases = 138
+    private static let expectedManifestCases = 575
+    private static let expectedBaseVerdictCases = 144
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -757,6 +757,13 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-xargs-padding-long.yml",
         "accept-runid-github-env-write-xargs-env-wrapper.yml",
         "accept-runid-github-env-write-xargs-multiline-pipe.yml",
+        // A13 (#350 item 9): `--expression` unambiguous-prefix spellings.
+        "reject-runid-github-env-write-sed-expression-abbrev-e-eq.yml",
+        "reject-runid-github-env-write-sed-expression-abbrev-ex-eq.yml",
+        "reject-runid-github-env-write-sed-expression-abbrev-expr-eq.yml",
+        "reject-runid-github-env-write-sed-expression-abbrev-expre-eq.yml",
+        "reject-runid-github-env-write-sed-expression-abbrev-expressio-eq.yml",
+        "accept-runid-github-env-write-sed-expression-abbrev-benign.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

@@ -4994,5 +4994,71 @@ CASES = [
         "base_exit": 0,
         "excluded": 1,
         "diagnostics": []
+    },
+    # #350 item 9: `--expression` long-option abbreviations (A13).
+    {
+        "id": "reject-runid-github-env-write-sed-expression-abbrev-e-eq",
+        "files": [
+            "reject-runid-github-env-write-sed-expression-abbrev-e-eq.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-expression-abbrev-e-eq.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-expression-abbrev-ex-eq",
+        "files": [
+            "reject-runid-github-env-write-sed-expression-abbrev-ex-eq.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-expression-abbrev-ex-eq.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-expression-abbrev-expr-eq",
+        "files": [
+            "reject-runid-github-env-write-sed-expression-abbrev-expr-eq.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-expression-abbrev-expr-eq.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-expression-abbrev-expre-eq",
+        "files": [
+            "reject-runid-github-env-write-sed-expression-abbrev-expre-eq.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-expression-abbrev-expre-eq.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-expression-abbrev-expressio-eq",
+        "files": [
+            "reject-runid-github-env-write-sed-expression-abbrev-expressio-eq.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-expression-abbrev-expressio-eq.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-expression-abbrev-benign",
+        "files": [
+            "accept-runid-github-env-write-sed-expression-abbrev-benign.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
     }
 ]

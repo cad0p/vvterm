@@ -637,10 +637,7 @@ continuation spellings (`env xargs`, `FOO=1 xargs`, `nice xargs`,
 backslash multi-line pipeline — the bare `… | xargs cp payload {}` form
 now refuses), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
-basename, the `--expression` long-option abbreviations in the
-`=`-attached form (`--e=`, `--ex=`, `--expr=`; a GNU getopt_long
-abbreviation the sed argv loop does not model, re-filed as #350
-item 9), and a `$(…)` body whose unmodelled heredoc hides the halves
+basename, and a `$(…)` body whose unmodelled heredoc hides the halves
 (a substitution-body heredoc is the scanner's named residual), and a
 `case`-pattern terminator `)` inside a `$(…)` pad (the balanced
 scanner counts the grammar `)`; measured ACCEPT at the fold with a
@@ -724,9 +721,21 @@ extractor cannot resolve, while the substitution-body site (issue #350,
 item 2's `$(…)`-nested spelling) drops that word catch so the real-tree
 witness `name="$(echo "$raw" | xargs)"` stays accepted; the
 wrapper/assignment-prefix/trailing-`|` spellings stay accepted boundary
-pins (a new command-position mechanism, deferred). Measured at A13: the
-fixture corpus is
-569/569, of which 138 fixtures declare their measured base verdict
+pins (a new command-position mechanism, deferred); (viii-f) the sed argv
+branch recognizes every unambiguous abbreviation of `--expression`
+(`--e=`, `--ex=`, `--expr=`, `--expre=`, `--expressio=`, both separated
+and `=`-attached), so the abbreviated expression's `w` target is
+classified; the rule deliberately stops at `expression` (`--f` is
+ambiguous between `--file` and `--follow-symlinks`). A13 also accepts
+one measured out-of-corpus shape that base refused — `sed -n --e=x 'w
+$(printenv …)' payload` (base REFUSE → A13 ACCEPT, runtime cross-run):
+recognizing `--e=x` reclassifies the first positional from script
+candidate to file operand, so a target base scanned as a script is no
+longer scanned; the direction is correct (the base refusal was a
+misparse) and the corpus cannot represent it (`base_exit: 1` +
+`exit: 0` is a hard selftest failure). Measured at A13: the fixture
+corpus is
+575/575, of which 144 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 3 over-refusal pins under
 one root cause (any unmodelled write of the now-relevant base name
 refuses) and item 2 adds its unresolved-upstream pin, bringing the
@@ -780,7 +789,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 569
+EXPECTED_MANIFEST_CASES = 575
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -797,7 +806,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 138
+EXPECTED_BASE_VERDICT_CASES = 144
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -4625,6 +4634,25 @@ def _argv_write_targets(
                             # `--in=.bak` attached-argument form) are the
                             # in-place form (fold lens-1 round 3 MAJOR-2).
                             inplace = True
+                            index += 1
+                            continue
+                        if option_name and "expression".startswith(option_name):
+                            # GNU getopt_long accepts any unambiguous
+                            # abbreviation of `--expression`, and
+                            # `expression` is sed's only long option
+                            # starting with `e`, so `--e`/`--ex`/…/
+                            # `--expressio` are the expression flag in
+                            # both the separated and the attached
+                            # (`--ex=`) form (issue #350, item 9).
+                            has_expression_flag = True
+                            if "=" in argument:
+                                expressions.append(argument.split("=", 1)[1])
+                                index += 1
+                                continue
+                            if index + 1 < len(args2):
+                                expressions.append(args2[index + 1])
+                                index += 2
+                                continue
                             index += 1
                             continue
                     if argument.startswith("-i"):
