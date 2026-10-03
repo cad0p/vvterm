@@ -482,7 +482,7 @@ runtime-assembled/ANSI-C-quoted interpreter inline-program flag (4
 closure fixtures — php short flag via a variable, php's ANSI-C-quoted
 `--run`, python3's `-c` via a variable, node's `--eval` via a variable —
 all runtime-proven, plus an over-refusal pin for the benign `F=-r; php
-$F 'echo 1;'` control). At A12 the fixture corpus is 537/537, of which the 106 A12 fixtures
+$F 'echo 1;'` control). At A12 the fixture corpus is 551/551, of which the 120 A12 fixtures
 each declare their measured base verdict (`base_exit`);
 at A11 the fixture corpus was 431/431
 with zero diagnostic changes on the 426 then-pre-existing cases (`old.CASES
@@ -560,8 +560,11 @@ writes — the measured `printf -v`/`read`/`declare` and
 multi-piece targets that name only unassigned variables
 (`$OUT_DIR/VVTerm.ipa`) stay accepted. sed additionally classifies its
 `w`/`W` script-command target for an address-prefixed (`1w`, `1 w`,
-`$w`, `/re/w`, a comma-separated range — `1,+3w`, `/re/,/re2/w`,
-`0,/re/w`, a `!`-negated address or range (`1!w`, `$!w`, `1,2!w`,
+`$w`, `/re/w`, a `/regex/` address whose regex carries the standard
+escaped delimiter (`/a\\/b/`, in both the raw `\\/` and the
+double-quoted-source `\\\\/` spelling), a comma-separated range —
+`1,+3w`, `/re/,/re2/w`, `0,/re/w`, a `!`-negated address or range
+(`1!w`, `$!w`, `1,2!w`,
 `/re/!W`, `1! w`), the general GNU alternate-delimiter `\\cREc`
 address (`\\,re,`, `\\%re%`, `\\#re#w`, `\\|re|w`, `\\@re@w`) in
 either range position and in both the raw `\\c…c` and the
@@ -591,21 +594,29 @@ continuations and unbraced `$NAME`/`$@`/`$*`/`$?`/`$!`/`$N` pads, so
 any balanced `${…}`/`$(…)` pad whose interior is a comment
 parenthesis, a quoted or escaped parenthesis or quote, a subshell, a
 process substitution, an ANSI-C `$'…'` string (an escaped `\\'` does
-not close it) or a backtick region (opaque to the parenthesis depth)
-cannot keep the halves apart; the escaped-`\\$…` guard is pinned,
+not close it, and the `$` + backslash-newline + `'…'` continuation
+spelling is the same string), a backtick region (opaque to the
+parenthesis depth), a `}` inside a backtick or `$(…)` region of a
+`${…}` pad, or a nested `$(…)` carrying its own quotes inside a
+double-quoted region cannot keep the halves apart; the escaped-`\\$…` guard is pinned,
 while the bare-`$GITHUB` guard is defence-in-depth (the scanner's
 braced-only candidate subsumes it — `mut-F-guard-notgithub-off` reds
-0); a `case`-pattern terminator `)` inside the pad is the scanner's
-named residual (the fail-closed last-`)` rule was measured with 0
-corpus flips and rejected because it subsumed the ANSI-C/backtick
-lexer fixes); the raw text is
+0); a `case`-pattern terminator `)` inside the pad and a `$(…)` body
+whose heredoc hides the halves are the scanner's named residuals (the
+fail-closed last-`)` rule was measured with 0 corpus flips and rejected
+because it subsumed the ANSI-C/backtick lexer fixes; the block-scalar
+capture keeps the raw indentation while the runner executes the dedented
+text, so the ANSI-C lookahead skips spaces/tabs after a backslash-newline
+to model the runner's text — the gate-text/runner-text divergence remains
+a named limit, and dedenting block bodies is the principled fix); the raw
+text is
 always walked, so every base mention is kept (the elided-only walk
 lost nine measured strings and reopened four runtime-proven flips,
 pinned by
 `reject-runid-github-env-write-mention-window-split-spelling`).
-Measured at the fold: `--selftest` 537/537; `--root .` byte-identical
+Measured at the fold: `--selftest` 551/551; `--root .` byte-identical
 green; the 26-shape #346/#347 battery keeps the 20-closed / 6-residual
-split; 41 falsifying mutants red each mechanism's own fixtures and no
+split; 45 falsifying mutants red each mechanism's own fixtures and no
 others (the red-set matrix is the bleed check). Over-refusal accounting:
 the fold adds at least 16 measured benign shapes (base ACCEPT -> refuse)
 over nine named classes, each class pinned by at least one
@@ -641,8 +652,9 @@ appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`)
 is not detected, the inherited text-detector boundary (the padded
 64-character-window class — including any balanced `${…}`/`$(…)` pad the
 scanner or the bounded regex fixpoint removes (a comment, a quoted or
-escaped parenthesis or quote, a subshell or a process substitution inside
-it) — is closed by A12; the name text must still appear; a `$(…)` body
+escaped parenthesis or quote, a subshell, a process substitution, a `}`
+inside a backtick/`$(…)` region, a nested `$()` inside double quotes or
+an ANSI-C continuation string inside it) — is closed by A12; the name text must still appear; a `$(…)` body
 whose heredoc hides the halves, the `\\$NAME`/single-quoted-`$GITHUB`
 spellings the unbraced elision deliberately skips and NUL/`$'…'` name
 concatenation are outside the walk's claimed text); a `source`d or
@@ -729,7 +741,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 537
+EXPECTED_MANIFEST_CASES = 551
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -746,7 +758,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 106
+EXPECTED_BASE_VERDICT_CASES = 120
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -3246,6 +3258,25 @@ def _indent_width(line: str) -> int:
     return len(line) - len(line.lstrip(" \t"))
 
 
+def _consume_backtick_region(text: str, start: int) -> int:
+    """The index just past the backtick region opened at `text[start]`,
+    with escaped backticks honoured; `len(text)` when the region is unclosed
+    (the caller treats that fail-closed). A backtick region is opaque to
+    an enclosing parenthesis/brace depth (bash parses it as a separate
+    construct), so a `)`/`}` inside it belongs to the backtick command
+    (fold round 5, X3; fold round 6, A2)."""
+    n = len(text)
+    j = start + 1
+    while j < n:
+        if text[j] == "\\" and j + 1 < n:
+            j += 2
+            continue
+        if text[j] == "`":
+            return j + 1
+        j += 1
+    return n
+
+
 def _consume_command_substitution(text: str, start: int) -> int:
     """The index just past the `$(…)` opened at `text[start:start + 2]`,
     with quotes, escapes, `#` comments, nested parentheses, ANSI-C
@@ -3257,42 +3288,43 @@ def _consume_command_substitution(text: str, start: int) -> int:
     depth (fold round 4 BLOCKER-1). Inside `$'…'`, `\'` is an escaped
     quote and `\\` an escaped backslash; a backtick region is opaque to
     the depth, so a `)` inside it belongs to the backtick command (fold
-    round 5, X2/X3)."""
+    round 5, X2/X3). A backslash-newline continuation before the quote
+    is removed by bash before tokenisation, and the runner executes the
+    dedented block text, so a dollar followed by a backslash-newline
+    continuation and the raw block indentation is the same ANSI-C
+    string (fold round 6, A4). Inside a double-quoted region a nested
+    `$(…)`/`${…}`/backtick region is consumed whole, so its own quotes
+    pair inside the nested construct instead of ending the outer region
+    early (fold round 6, A3)."""
     n = len(text)
     depth = 1
     j = start + 2
     while j < n and depth:
         cj = text[j]
-        if cj == "$" and j + 1 < n and text[j + 1] == "'":
+        if cj == "$":
             # ANSI-C quoting: `\'` does not close the region and `\\`
             # is an escaped backslash, so the region can carry a raw
             # parenthesis without closing the substitution (fold round
-            # 5, X2).
-            j += 2
-            while j < n:
-                if text[j] == "\\" and j + 1 < n:
-                    j += 2
-                    continue
-                if text[j] == "'":
+            # 5, X2). A backslash-newline continuation before the quote
+            # is removed by bash first (fold round 6, A4).
+            k = j + 1
+            while k + 1 < n and text[k] == "\\" and text[k + 1] == "\n":
+                k += 2
+                while k < n and text[k] in " \t":
+                    k += 1
+            if k < n and text[k] == "'":
+                j = k + 1
+                while j < n:
+                    if text[j] == "\\" and j + 1 < n:
+                        j += 2
+                        continue
+                    if text[j] == "'":
+                        j += 1
+                        break
                     j += 1
-                    break
-                j += 1
-            continue
+                continue
         if cj == "`":
-            # A backtick region is opaque to the parenthesis depth (bash
-            # parses it as a separate construct), so a `)` inside it must
-            # not close the substitution; an unterminated backtick swallows
-            # the rest of the text, which the caller treats fail-closed
-            # (fold round 5, X3).
-            j += 1
-            while j < n:
-                if text[j] == "\\" and j + 1 < n:
-                    j += 2
-                    continue
-                if text[j] == "`":
-                    j += 1
-                    break
-                j += 1
+            j = _consume_backtick_region(text, j)
             continue
         if cj in "'\"":
             quote = cj
@@ -3300,6 +3332,20 @@ def _consume_command_substitution(text: str, start: int) -> int:
             while j < n:
                 if quote == '"' and text[j] == "\\" and j + 1 < n:
                     j += 2
+                    continue
+                if quote == '"' and text[j] == "$":
+                    # A nested `$(…)`/`${…}` inside the quotes is a
+                    # separate parsing context: consume it whole so a
+                    # quote inside the nested construct does not end the
+                    # outer region (fold round 6, A3).
+                    if j + 1 < n and text[j + 1] == "(":
+                        j = _consume_command_substitution(text, j)
+                        continue
+                    if j + 1 < n and text[j + 1] == "{":
+                        j = _consume_braced_expansion(text, j)
+                        continue
+                if quote == '"' and text[j] == "`":
+                    j = _consume_backtick_region(text, j)
                     continue
                 if text[j] == quote:
                     j += 1
@@ -3323,7 +3369,9 @@ def _consume_command_substitution(text: str, start: int) -> int:
 
 def _consume_braced_expansion(text: str, start: int) -> int:
     """The index just past the `${…}` opened at `text[start:start + 2]`,
-    with nested `${…}` expansions, quotes and escapes honoured;
+    with nested `${…}` expansions, quotes and escapes honoured; a
+    backtick region and a `$(…)` region are consumed whole, so a `}`
+    inside them does not close the expansion (fold round 6, A2);
     `len(text)` when the expansion is unclosed (the caller leaves the raw
     half untouched, so the fail-closed direction is the mention walk).
     The bounded regex fixpoint can flatten nested braces only when every
@@ -3344,9 +3392,29 @@ def _consume_braced_expansion(text: str, start: int) -> int:
                 if quote == '"' and text[j] == "\\" and j + 1 < n:
                     j += 2
                     continue
+                if quote == '"' and text[j] == "$":
+                    # A nested `$(…)`/`${…}` inside the quotes is a
+                    # separate parsing context: consume it whole so a
+                    # quote inside the nested construct does not end the
+                    # quoted region early.
+                    if j + 1 < n and text[j + 1] == "(":
+                        j = _consume_command_substitution(text, j)
+                        continue
+                    if j + 1 < n and text[j + 1] == "{":
+                        j = _consume_braced_expansion(text, j)
+                        continue
+                if quote == '"' and text[j] == "`":
+                    j = _consume_backtick_region(text, j)
+                    continue
                 j += 1
             if j < n:
                 j += 1
+            continue
+        if cj == "$" and j + 1 < n and text[j + 1] == "(":
+            j = _consume_command_substitution(text, j)
+            continue
+        if cj == "`":
+            j = _consume_backtick_region(text, j)
             continue
         if cj == "$" and j + 1 < n and text[j + 1] == "{":
             depth += 1
@@ -4237,7 +4305,7 @@ def _sed_address_term(backreference: int) -> str:
     `backreference`, and the closing delimiter is matched with the same
     number."""
     return (
-        r"(?:[0-9$~+]+|/[^/\n]*/|"
+        r"(?:[0-9$~+]+|/(?:[^/\\\n]|\\\\/|\\.)*/|"
         r"\\\\?([^\\\n])[^\n]*?"
         + "\\"
         + str(backreference)
