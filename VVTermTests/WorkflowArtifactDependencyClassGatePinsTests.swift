@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 551
-    private static let expectedBaseVerdictCases = 120
+    private static let expectedManifestCases = 559
+    private static let expectedBaseVerdictCases = 128
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -734,6 +734,16 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-sed-addressed-alt-delimiter-w-target.yml",
         "reject-runid-github-env-write-sed-glued-block-w-target.yml",
         "reject-overrefusal-mention-window-bang-pid.yml",
+        // A13 (#350 item 1): the array-element write-target family, the
+        // continuation relevance pre-pass, and the three over-refusal pins.
+        "reject-runid-github-env-write-array-element-read-a-target.yml",
+        "reject-runid-github-env-write-array-element-mapfile-t-target.yml",
+        "reject-runid-github-env-write-array-element-printf-v-target.yml",
+        "reject-runid-github-env-write-array-element-read-subscript-target.yml",
+        "reject-runid-github-env-write-array-element-continuation-target.yml",
+        "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml",
+        "reject-overrefusal-runid-github-env-write-array-element-literal-read.yml",
+        "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

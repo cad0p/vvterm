@@ -631,8 +631,8 @@ The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
 fold does not close: sed's `s///w file` flag and `-f` bodies, the BSD
 `$a\\` two-line append, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
-/ process-substitution script operands, array-element write targets
-(`${arr[0]}`), stdin-fed argv operands (`… | xargs cp payload {}`), the
+/ process-substitution script operands, stdin-fed argv operands (`… |
+xargs cp payload {}`), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, the `--expression` long-option abbreviations in the
 `=`-attached form (`--e=`, `--ex=`, `--expr=`; a GNU getopt_long
@@ -668,9 +668,9 @@ or a process-substitution script operand (`php -f <(code)`, `python3
 a carrier whose command
 string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
-env file or a traced name is the inherited textual boundary); an
-array-element write target (`cp payload "${arr[0]}"`) and an argv operand
-fed on stdin (`… | xargs cp payload {}`) sit outside the argv verb table;
+env file or a traced name is the inherited textual boundary); an argv
+operand fed on stdin (`… | xargs cp payload {}`) sits outside the argv verb
+table;
 other
 argv write verbs that need verb-specific semantics are closed by A12
 (sed `-i`/`--in-place` (and its abbreviations)/`w` targets,
@@ -692,6 +692,27 @@ the runtime-assembled shell command flag, the runtime-assembled /
 ANSI-C-quoted interpreter inline-program flag, and the A12 argv-verb /
 carrier-substitution / raw-OR-elided mention-walk mechanisms are refused
 by the mechanisms above.
+A13 (the #350 fold) closes the array-element write-target family and the
+backslash-continuation spelling. Claimed mechanisms:
+(viii-a) `_LOCAL_REFERENCE_RE` and `_expansion_names` accept an optional
+`[...]` array subscript and contribute the base name, so a target spelled
+`${arr[0]}` joins the relevance set through the same narrow
+pure-reference predicate that keeps a multi-piece `$OUT_DIR/x` accepted
+(a nested `$i` index is dropped deliberately: the base name is what the
+relevance set needs); (viii-b) the read-operand parser contributes the
+base name of an array-element operand (`read 'arr[0]'`) and uses a
+mapfile/readarray option table in which `-t` is a flag rather than an
+option argument, so `mapfile -t arr`/`readarray -t arr` no longer lose
+the array name; (viii-c) a bounded pre-pass joins a physical line ending
+in an unquoted backslash, adds the joined argv-write targets' base names
+to the relevance set, and skips heredoc payload lines, while the joined
+segments also feed the narrow argv-target scan — a continuation longer
+than 8 physical lines stays open (a named residual). Measured at A13's
+first commit: the fixture corpus is 559/559, of which 128 fixtures
+declare their measured base verdict (`base_exit`); the array-element
+family adds 3 over-refusal pins under one root cause (any unmodelled
+write of the now-relevant base name refuses), bringing the measured
+benign floor to 62 + 3 = 65.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -741,7 +762,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 551
+EXPECTED_MANIFEST_CASES = 559
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -758,7 +779,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 120
+EXPECTED_BASE_VERDICT_CASES = 128
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -2996,9 +3017,14 @@ _ENV_ALIAS_ASSIGNMENT_RE = re.compile(
 _ENV_APPEND_ASSIGNMENT_RE = re.compile(
     r"^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)\+="
 )
-# A whole shell word that is exactly one local expansion (`${NAME}`/`$NAME`).
+# A whole shell word that is exactly one local expansion (`${NAME}`/`$NAME`,
+# with an optional `[...]` array subscript). The subscript-aware form lets
+# an argv-write target spelled `${arr[0]}` join the relevance set through the
+# same narrow predicate, while a multi-piece target (`$OUT_DIR/x`) still does
+# not (issue #350, item 1).
 _LOCAL_REFERENCE_RE = re.compile(
-    r"^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$"
+    r"^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]*\])?\}"
+    r"|([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]*\])?)$"
 )
 # A heredoc operator plus its delimiter (`<<EOF`, `<<'EOF'`, `<<-EOF`).
 _HEREDOC_RE = re.compile(
@@ -3229,6 +3255,11 @@ _ARGV_WRITE_VERBS = frozenset({"tee", "dd", "sed", "cp", "mv", "install", "touch
 # `read` options that consume the next word. `-a` is deliberately absent:
 # its argument IS the array name that the rule must inspect.
 _READ_OPTIONS_WITH_ARGUMENT = ("-d", "-i", "-n", "-N", "-p", "-t", "-u")
+# `mapfile`/`readarray` share most option letters but `-t` is a flag there
+# (`mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd]
+# [-C callback] [-c quantum] [array]`), so the array name must not be
+# skipped as its argument (issue #350, item 1).
+_MAPFILE_OPTIONS_WITH_ARGUMENT = ("-C", "-c", "-d", "-n", "-O", "-s", "-u")
 _ASSIGNMENT_OPERAND_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
 _ARRAY_OPERAND_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\[")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -4399,6 +4430,72 @@ def _joined_sed_segments(
     ]
 
 
+_CONTINUATION_JOIN_MAX_LINES = 8
+
+
+def _line_continuation_pending(line: str) -> bool:
+    """True when the physical line ends in an unquoted, unescaped
+    backslash, so the shell joins the next physical line into this command
+    (issue #350, item 1 (iii)). `_line_has_continuation` owns the odd-run
+    test; this scan additionally rejects a backslash that sits inside a
+    single-quoted region, where it is literal rather than a continuation."""
+    if not _line_has_continuation(line):
+        return False
+    quote: str | None = None
+    index = 0
+    end = len(line)
+    while index < end:
+        char = line[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and quote != "'" and index + 1 < end:
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        index += 1
+    return quote != "'"
+
+
+def _joined_continuation_segments(
+    lines: list[str], index: int
+) -> list[list[tuple[str, str, int, int]]]:
+    """The argv-write segments of the logical line that starts at
+    `lines[index]` when it ends in an unquoted backslash (issue #350, item 1
+    (iii)). The per-line walk cannot see an argv target the shell joins
+    from the continuation line (`cp payload \\` + newline + `"${arr[0]}"`),
+    so the logical line is tokenized whole and the argv-target predicate
+    runs on the result. Returns [] unless `index` is the first physical
+    line of the continuation and the join stays inside the bound, so every
+    other line is untouched. A continuation longer than the bound stays
+    open (a named residual)."""
+    if index > 0 and _line_continuation_pending(lines[index - 1]):
+        return []
+    if not _line_continuation_pending(lines[index]):
+        return []
+    joined = [lines[index]]
+    cursor = index
+    while _line_continuation_pending(joined[-1]):
+        cursor += 1
+        if cursor >= len(lines) or (cursor - index) >= _CONTINUATION_JOIN_MAX_LINES:
+            return []
+        joined.append(lines[cursor])
+    return [
+        segment
+        for segment in _shell_segments(_shell_tokens("\n".join(joined)))
+        if segment
+    ]
+
+
 def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
 ) -> list[tuple[str, str]]:
@@ -5251,11 +5348,17 @@ def _assignment_operand_name(word: str) -> str | None:
     return None
 
 
-def _read_operands(argv: list[str]) -> list[str | None]:
+def _read_operands(
+    argv: list[str],
+    options_with_argument: tuple[str, ...] = _READ_OPTIONS_WITH_ARGUMENT,
+) -> list[str | None]:
     """Every variable `read`/`mapfile`/`readarray` writes: the non-option
     words, with option arguments skipped. A dynamic operand (`read -r
     "$name"`) is returned as None so the caller refuses rather than
-    guessing which variable it writes (issue #342, R4)."""
+    guessing which variable it writes (issue #342, R4). An array-element
+    operand (`read 'arr[0]'`) contributes its base name; the caller passes
+    the verb-specific option table because `-t` takes an argument for
+    `read` but is a flag for `mapfile`/`readarray` (issue #350, item 1)."""
     operands: list[str | None] = []
     position = 0
     while position < len(argv):
@@ -5264,12 +5367,14 @@ def _read_operands(argv: list[str]) -> list[str | None]:
             position += 1
             continue
         if word.startswith("-") and len(word) > 1:
-            position += 2 if word in _READ_OPTIONS_WITH_ARGUMENT else 1
+            position += 2 if word in options_with_argument else 1
             continue
         if word.startswith("$"):
             operands.append(None)
         elif _IDENTIFIER_RE.match(word):
             operands.append(word)
+        elif _ARRAY_OPERAND_RE.match(word):
+            operands.append(_ARRAY_OPERAND_RE.match(word).group(1))
         position += 1
     return operands
 
@@ -5282,7 +5387,12 @@ def _mechanism_operands(
     carriers (`trap`/`eval`/`sh -c`), and None for an operand the extractor
     cannot resolve, which the caller refuses (issue #342, R4)."""
     if mechanism in ("read", "readarray", "mapfile"):
-        return [(name, False) for name in _read_operands(argv)]
+        options = (
+            _READ_OPTIONS_WITH_ARGUMENT
+            if mechanism == "read"
+            else _MAPFILE_OPTIONS_WITH_ARGUMENT
+        )
+        return [(name, False) for name in _read_operands(argv, options)]
     if mechanism == "printf":
         for position, word in enumerate(argv):
             if word == "-v" and position + 1 < len(argv):
@@ -5595,15 +5705,21 @@ def _statement_assignment_miss(
 def _expansion_names(text: str) -> set[str]:
     """Every `$NAME`/`${NAME}`/`%NAME%` variable a redirect target
     references, so an unmodelled write of that variable is seen as able to
-    change the redirect's destination (issue #342, R4)."""
-    return {
-        a or b or c
-        for a, b, c in re.findall(
-            r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"
-            r"|%([A-Za-z_][A-Za-z0-9_]*)%",
-            text,
-        )
-    }
+    change the redirect's destination (issue #342, R4). An array subscript
+    contributes its base name: the base name is what the relevance set
+    needs (`${arr[$i]}` decodes to `arr`; a nested `$i` index is dropped
+    deliberately, issue #350 item 1 note)."""
+    names: set[str] = set()
+    for a, b, c in re.findall(
+        r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]\n]*\])?)\}"
+        r"|([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]\n]*\])?))"
+        r"|%([A-Za-z_][A-Za-z0-9_]*)%",
+        text,
+    ):
+        name = a or b or c
+        if name:
+            names.add(name.split("[", 1)[0])
+    return names
 
 
 def _relevant_shell_names(
@@ -5830,6 +5946,20 @@ def _refuse_github_env_run_id_write(
         relevant_names = _relevant_shell_names(
             flip_targets, aliases, assignments, lines, payload_lines
         )
+        # Issue #350 item 1 (iii): a backslash continuation hides an argv
+        # target from `_relevant_shell_names` (which reads physical lines),
+        # so the array base name the joined target references never joins
+        # the relevance set and the occurrence backstop cannot fire on the
+        # continued line. Add the joined targets' base names first; heredoc
+        # payload lines are skipped because they are literal text, not
+        # shell.
+        for _joined_index in range(len(lines)):
+            if _joined_index in payload_lines:
+                continue
+            for _joined_segment in _joined_continuation_segments(lines, _joined_index):
+                for _verb, _target in _argv_write_targets(_joined_segment):
+                    if _local_reference_name(_target) is not None:
+                        relevant_names.update(_expansion_names(_target))
         skip_until = -1
         for index, line in enumerate(lines):
             if index <= skip_until:
@@ -6015,6 +6145,24 @@ def _refuse_github_env_run_id_write(
             # with the same narrow predicate, so the addition only ever
             # adds a refusal.
             for joined_segment in _joined_sed_segments(lines, index):
+                _refuse_argv_write_targets(
+                    joined_segment,
+                    step,
+                    body,
+                    aliases,
+                    assignments,
+                    lines,
+                    index,
+                    joined_segment[0][2] if joined_segment else 0,
+                    False,
+                )
+            # A backslash continuation splits a command across physical
+            # lines, so the argv-target walk above never sees a target on
+            # the continued line (issue #350, item 1 (iii)). Join the
+            # logical line for the narrow argv-target scan only; the joined
+            # segments feed the same predicate, so the addition only ever
+            # adds a refusal.
+            for joined_segment in _joined_continuation_segments(lines, index):
                 _refuse_argv_write_targets(
                     joined_segment,
                     step,
