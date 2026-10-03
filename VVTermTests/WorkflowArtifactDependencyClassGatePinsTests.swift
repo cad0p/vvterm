@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 559
-    private static let expectedBaseVerdictCases = 128
+    private static let expectedManifestCases = 560
+    private static let expectedBaseVerdictCases = 129
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -744,6 +744,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-runid-github-env-write-array-element-literal-mapfile.yml",
         "reject-overrefusal-runid-github-env-write-array-element-literal-read.yml",
         "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml",
+        // A13 here-string guard (#350 audit defect): `<<<` is not a heredoc.
+        "reject-runid-github-env-write-here-string-not-a-heredoc.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

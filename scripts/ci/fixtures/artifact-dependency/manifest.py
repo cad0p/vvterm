@@ -4885,5 +4885,17 @@ CASES = [
         "diagnostics": [
             "reject-overrefusal-runid-github-env-write-array-element-plain-assignment.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job mentions `arr`, an occurrence the extractor cannot account for (refusing rather than guessing)"
         ]
+    },
+    # #350 here-string defect: `<<<` must not open a phantom heredoc.
+    {
+        "id": "reject-runid-github-env-write-here-string-not-a-heredoc",
+        "files": [
+            "reject-runid-github-env-write-here-string-not-a-heredoc.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-here-string-not-a-heredoc.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
     }
 ]

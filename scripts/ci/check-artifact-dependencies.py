@@ -707,12 +707,15 @@ the array name; (viii-c) a bounded pre-pass joins a physical line ending
 in an unquoted backslash, adds the joined argv-write targets' base names
 to the relevance set, and skips heredoc payload lines, while the joined
 segments also feed the narrow argv-target scan — a continuation longer
-than 8 physical lines stays open (a named residual). Measured at A13's
-first commit: the fixture corpus is 559/559, of which 128 fixtures
-declare their measured base verdict (`base_exit`); the array-element
-family adds 3 over-refusal pins under one root cause (any unmodelled
-write of the now-relevant base name refuses), bringing the measured
-benign floor to 62 + 3 = 65.
+than 8 physical lines stays open (a named residual); (viii-d) the
+`_HEREDOC_RE` guard `(?<!<)<<-?(?!<)` stops a here-string (`<<<`) from
+being read as a heredoc opener, so the line after it is walked as shell
+(`<<<<`/`<<<<<` are bash syntax errors and `<<<-` is a here-string, so no
+genuine heredoc is missed). Measured at A13: the fixture corpus is
+560/560, of which 129 fixtures declare their measured base verdict
+(`base_exit`); the array-element family adds 3 over-refusal pins under
+one root cause (any unmodelled write of the now-relevant base name
+refuses), bringing the measured benign floor to 62 + 3 = 65.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -762,7 +765,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 559
+EXPECTED_MANIFEST_CASES = 560
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -779,7 +782,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 128
+EXPECTED_BASE_VERDICT_CASES = 129
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -3027,8 +3030,13 @@ _LOCAL_REFERENCE_RE = re.compile(
     r"|([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]*\])?)$"
 )
 # A heredoc operator plus its delimiter (`<<EOF`, `<<'EOF'`, `<<-EOF`).
+# The `(?<!<)`/`(?!<)` guards keep a here-string (`<<<`) from being read as
+# a heredoc: without them the regex matches the `<<` formed by the second
+# and third `<`, so the next line is misclassified as heredoc payload and
+# skipped (issue #350, audit-found defect). `<<<<`/`<<<<<` are bash syntax
+# errors and `<<<-` is a here-string, so no genuine heredoc is missed.
 _HEREDOC_RE = re.compile(
-    r"<<-?[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))"
+    r"(?<!<)<<-?(?!<)[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))"
 )
 # The exact env-file spellings: actions/runner sets `GITHUB_ENV` (POSIX
 # shells) / `%GITHUB_ENV%` (cmd) to the env-file path. A redirect target that
