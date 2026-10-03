@@ -379,7 +379,11 @@ disjoint and refuses. A7 (fold round 1) adds four widenings: (x) a shell
 command flag in a short-option cluster (`bash -ec`, `sh -lc`) is the same
 carrier as the bare `-c`, for the carrier table and for the `$VAR`
 command-position widening alike, while `-l`/`--noprofile` stay
-non-carriers; (xi) the substitution-body argv deferral applies only when
+non-carriers — retained for defence-in-depth only: once (xvi) exists the
+cluster rule closes no malicious shape (measured: reducing it to an exact
+`-c` leaves the whole corpus green), and its only independent effect is
+the benign over-refusal `w=$(bash -ec 'SOURCE_RUN_ID=1 true')`; (xi) the
+substitution-body argv deferral applies only when
 the enclosing segment has no env redirect of its own — when the segment's
 redirect IS the env file the outer per-segment reference accounting never
 runs, so a `tee`/`dd of=` target of the exact env spelling refuses with
@@ -388,8 +392,10 @@ substitution openers, and a redirect target that is the exact env
 spelling plus a trailing `)` (or, for nested substitutions, several) is
 the env file when the continuation-joined line carries a real opener
 (the shell lexer splits an unquoted opener, gluing the substitution's
-`)` to the target), while a literal filename that merely ends in `)` is
-untouched; the target-classification half carries the measured closures,
+`)` to the target), while a literal filename that is not the exact env
+spelling plus glued parens stays untouched — a literal `"$GITHUB_ENV))"`
+target on a real-opener line refuses and is a named benign over-refusal;
+the target-classification half carries the measured closures,
 and the `<( … )` branch in `_substitution_bodies` is defense-in-depth for
 bodies the word scan does not otherwise re-tokenize; (xiii) a
 recognized interpreter invoked with an inline-program flag (`python3 -c`,
@@ -402,12 +408,22 @@ strips every glued closing parenthesis (`text.rstrip(")")`), so a nested
 — is still the env file; (xv) an inline-program flag is recognized in a
 short-option cluster (`python3 -uc`, `perl -we`), as an attached argument
 (`-cPROG`, `-ePROG`, `-rPROG`, `--flag=value`) and as perl's alternate
-`-E`; the glued spellings are not recognized for `node`, which rejects
-`-eprog` at runtime (`bad option`) and cannot run a program; and (xvi) a
+`-E`; every attached spelling is dead for `node` (runtime `bad option`),
+so `node -e'attached'` stays accepted as a non-carrier; and (xvi) a
 recognized shell with a `$`/backtick-bearing argv word (`f=-ec; bash $f
 …`, `bash -e$f …`) is fail-closed because the word may be the command
 flag (for the measured A7 F1 fixtures this subsumes the (x) cluster rule,
-because every POSIX env-write command string carries a `$`). The opener
+because every POSIX env-write command string carries a `$`). A9 (fold
+round 3) closes two runtime-proven inline-program spelling gaps: (xvii)
+`node -pe` — node's only accepted short-option cluster (`-p` then `-e`,
+program = the next word) is recognized as an inline program, while every
+other node cluster (`-ep`, `-ee`, `-ie`, `-pi`, `-vpe`, `-px`, …) and
+every attached node spelling stays unrecognized (runtime `bad option`);
+and (xviii) php's `-B`/`-E`/`-R` inline programs (before/after/per-line
+input), which take the code as the next word and can write the argv
+target, are recognized next to `-r` (the attached `-B'code'` spelling
+previously refused only by accident, because the `-r` cluster rule
+matched an `r` inside the code text). The opener
 scan is quote/comment-aware: a quoted or commented `<(` no longer counts,
 so a literal `$GITHUB_ENV)` filename stays untouched (fold round 2
 MINOR-1). Boundary sentence: the
@@ -415,8 +431,9 @@ gate refuses any recognized carrier invocation (shell/interpreter by
 basename and version suffix, a short-option cluster containing `c`, a
 pure variable with a command flag, a `$`-bearing shell argv word,
 `eval`/`trap`, `awk -v`), recognized argv write verb (`tee`, `dd of=`) or
-recognized inline-program interpreter — in its exact, clustered,
-attached or `--flag=value` spelling — whose carried command string or
+recognized inline-program interpreter — in every spelling that
+interpreter accepts (exact, clustered, attached or `--flag=value`) —
+whose carried command string or
 file target cannot be proven
 disjoint from the env file — it names the env machinery or a traced
 value, is an unreadable pure variable, or has a non-single-resolved
@@ -429,13 +446,15 @@ runtime-proven writes refuse); A8 closes the three re-lens flips — the
 nested process substitution, the inline-program flag
 clusters/attached/alternate spellings, and the runtime-assembled shell
 command flag (13 new closure fixtures, all runtime-proven, plus a
-`python3.12 -c` corpus pin for the version-suffix mechanism). The fixture
-corpus is 416/416 with zero
-diagnostic changes on the 398 pre-existing cases (`old.CASES ==
-new.CASES[:398]`), and the real tree stays byte-identical green
+`python3.12 -c` corpus pin for the version-suffix mechanism); A9 closes
+the two runtime-proven inline-program spelling gaps the A8 re-lenses
+found — `node -pe` and php's `-B`/`-E`/`-R` (4 closure fixtures, all
+runtime-proven). The fixture corpus is 420/420 with zero diagnostic
+changes on the 416 pre-existing cases (`old.CASES ==
+new.CASES[:416]`), and the real tree stays byte-identical green
 (`ios-adhoc-pr.yml`'s `gh api …`, `find …`, `${!name:-}` and continuation
 bodies are untouched). The cost is fail-closed over-refusal of 24
-measured benign shapes: the 20 pre-A7 ones — A4's 12 (the quoted-heredoc
+measured benign shapes before A8: the 20 pre-A7 ones — A4's 12 (the quoted-heredoc
 payload `f15`; the unquoted executing heredoc where the parent expands
 the substitution before the alias exists `h01`/`h02b`/`q3` or the child
 does not inherit a non-exported alias `k05`; the assembled literal target
@@ -445,17 +464,26 @@ no-trailing-newline value `a7`), the lens-v2 `b1` (quoted data scanned as
 code), `b2` (heredoc-payload alias then a benign outer read), `d9`/
 `d10` (benign nesting depth > 8) and `t18-busybox-sh` (benign on the
 probe host, where `busybox` is absent), and A6's three benign-as-stored
-argv targets `t03`/`t04`/`t20` — plus A7's one new class: an interpreter's
-trailing argv word that is a shell expansion the extractor cannot resolve
-(`python3 -c`/`perl -e` with a `$MESSAGE` or assembled `${x}${y}` value
-argument; 4 measured benign shapes, pinned by
-`reject-overrefusal-interpreter-expansion-argv`), plus A8's two new
-classes: a recognized shell with an unreadable variable operand (`bash
-"$script"`, `bash script.sh "$arg"`; benign, pinned by
+argv targets `t03`/`t04`/`t20` — plus A7's one new class (4 measured
+shapes): an interpreter's trailing argv word that is a shell expansion
+the extractor cannot resolve (`python3 -c`/`perl -e` with a `$MESSAGE`
+or assembled `${x}${y}` value argument, pinned by
+`reject-overrefusal-interpreter-expansion-argv`); plus A8's two new
+classes / 8 measured benign shapes in the fold's own A7→A8 battery (the
+A8 re-lens's independent battery found 11 instances of the same
+shell-variable class): a recognized shell with an unreadable variable
+operand (`bash "$script"`, `bash script.sh "$arg"`; benign, pinned by
 `reject-overrefusal-shell-variable-operand`) and the attached
 inline-program spelling of A7's interpreter-expansion class (`python3
 -c'…' "$MESSAGE"`; pinned by
-`reject-overrefusal-interpreter-attached-expansion-argv`) — 26 total.
+`reject-overrefusal-interpreter-attached-expansion-argv`); plus A9's two
+named shapes: the (x) cluster's benign over-refusal (`w=$(bash -ec
+'SOURCE_RUN_ID=1 true')`, runtime benign; the rule is retained for
+defence-in-depth) and a literal target that is the exact env spelling
+plus glued parens on a real-opener line (`printf … >> "$GITHUB_ENV))" <
+<(true)`; runtime benign) — 24 + 8 + 2 = 34 measured benign shapes, every
+class named and the `reject-overrefusal-*` pins keeping the stance
+visible.
 A8 also removes A7's uncounted F3 false red: a quoted or commented `<(`
 no longer turns a literal `$GITHUB_ENV)` filename into the env file
 (pinned accepted by the quoted-process-substitution literal-target
@@ -477,12 +505,17 @@ env file or a traced name is the inherited textual boundary); a carrier
 operand that is itself a command substitution (`eval "$(cat …)"`); other
 argv write verbs that need verb-specific semantics (`sed -i`, `cp`/`mv`/
 `install`, `touch`/`truncate`); interpreters outside the inline-program
-table (`lua -e`, `tclsh`, a script file); substitution nesting deeper than
+table (`lua -e`, `tclsh`, a script file); a shell/interpreter basename
+outside the mechanism tables — including one the run creates (`ln -sf
+/bin/sh ash`, then `w=$(./ash -c "printf '%s\\n' SOURCE_RUN_ID=${{ github.run_id }}
+>> \\$${x}${y}")`: the tables key on the basename; measured ACCEPT,
+runtime-malicious); substitution nesting deeper than
 8; and a heredoc opened inside a substitution body, which the inner scope
-does not model. The A7 and A8 widenings are not residuals: the cluster
+does not model. The A7, A8 and A9 widenings are not residuals: the cluster
 spelling, the deferral with an enclosing env redirect, process
 substitution, the interpreter argv file targets, the nested glued parens,
-the inline-program flag cluster/attached/`--flag=value`/`-E` spellings
+the inline-program flag cluster/attached/`--flag=value`/`-E` spellings,
+the `node -pe` cluster, the php `-B`/`-E`/`-R` inline programs
 and the runtime-assembled shell command flag are refused by the
 mechanisms above.
 The detection-completeness walk therefore closes the naming family the
@@ -534,7 +567,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 416
+EXPECTED_MANIFEST_CASES = 420
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2710,22 +2743,36 @@ _UNMODELLED_WRITE_VERBS = (
 # `awk …`) is shell-adjacent code that can write a file: the program
 # operand is a carrier, and an awk `-v` assignment is one too because it
 # can name the program's redirect target (issue #345, lens-v2 t03/t17).
+# `php` also runs inline code from `-B` (before input), `-E` (after input)
+# and `-R` (per input line), all taking the code as the next word (or
+# attached); before fold round 3 the attached `-B'code'` spelling refused
+# only by accident, because the `-r` cluster rule matched an `r` inside
+# the code text.
 _INLINE_PROGRAM_FLAGS: dict[str, tuple[str, ...]] = {
     "python": ("-c",),
     "python3": ("-c",),
     "perl": ("-e", "-E"),
     "ruby": ("-e",),
     "node": ("-e", "-p", "--eval", "--print"),
-    "php": ("-r",),
+    "php": ("-r", "-B", "-E", "-R"),
 }
 _INLINE_PROGRAM_POSITIONAL = frozenset({"awk", "gawk", "mawk", "nawk"})
 _INLINE_PROGRAM_VERBS = frozenset(_INLINE_PROGRAM_FLAGS) | _INLINE_PROGRAM_POSITIONAL
 # Interpreters whose short inline-program flag accepts a glued argument
-# (`-cPROG`) or a short-option cluster (`-uc`). `node` is absent: it
-# requires the flag and program as separate words (or `--eval=`) and
-# rejects `-eprog` at runtime (`bad option`), so a glued spelling there is
-# not a program carrier (issue #345, fold round 2 D3b).
+# (`-cPROG`) — the attached branch. `node` is absent: it rejects every
+# attached spelling (`-eprog`, `-ePROG`) at runtime (`bad option`), so
+# `node -e'attached'` stays accepted as a non-carrier (issue #345, fold
+# round 2 D3b; fold round 3 F1).
 _INLINE_PROGRAM_GLUED = frozenset({"python", "python3", "perl", "ruby", "php"})
+# Interpreters whose inline-program flag may also be recognized in a
+# short-option cluster: the glued set plus `node`, whose only accepted
+# cluster is the exact trailing-flag word `-pe` (`-p` then `-e`, program =
+# the next word; the tuple above checks `-e` before `-p`, so the `e` in
+# `-pe` is the last character and yields the next word). Every other node
+# cluster (`-ep`, `-ee`, `-ie`, `-pi`, `-vpe`, `-px`, …) is a runtime
+# `bad option`, so node is admitted to the cluster branch only for that
+# single spelling (issue #345, fold round 3 F1).
+_INLINE_PROGRAM_CLUSTERED = _INLINE_PROGRAM_GLUED | {"node"}
 # A version suffix on an interpreter name (`python3.12`, `perl5.36`,
 # `php8.2`): the base name is the recognized interpreter, so a versioned
 # spelling does not evade the carrier check.
@@ -2742,6 +2789,20 @@ def _interpreter_core(verb: str) -> str:
     if match is not None and match.group(1) in _INLINE_PROGRAM_VERBS:
         return match.group(1)
     return verb
+
+
+def _inline_program_cluster_spelling(core: str, argument: str) -> bool:
+    """True when `argument` is a short-option cluster spelling whose
+    inline-program flag the interpreter accepts. A glued interpreter
+    accepts the cluster spellings the flag loop models; `node` accepts
+    exactly `-pe` and rejects every other cluster at runtime (`bad
+    option`), so only that word is admitted (issue #345, fold round 3
+    F1)."""
+    if core not in _INLINE_PROGRAM_CLUSTERED:
+        return False
+    if core == "node":
+        return argument == "-pe"
+    return True
 
 
 def _short_option_cluster_carries_command(word: str) -> bool:
@@ -2783,11 +2844,13 @@ def _inline_program_flag(
     script path is a named residual). The flag is matched exactly, as
     `--flag=value`, and — for the interpreters that accept it — as an
     attached argument (`-cPROG`) or inside a short-option cluster
-    (`python3 -uc 'prog'`). For a cluster the program is the next word
-    only when the flag character ends the word (`-uc`), because the
-    interpreter consumes the rest of the word as the argument otherwise
-    (`-cu` is the program `u`) (issue #345, fold round 1 F4; fold round 2
-    D3b)."""
+    (`python3 -uc 'prog'`, `node -pe 'prog'`). For a cluster the program
+    is the next word only when the flag character ends the word (`-uc`),
+    because the interpreter consumes the rest of the word as the argument
+    otherwise (`-cu` is the program `u`); `node` accepts no attached
+    spelling and only its single accepted cluster `-pe` is admitted to
+    the cluster branch (issue #345, fold round 1 F4; fold round 2 D3b;
+    fold round 3 F1)."""
     flags = _INLINE_PROGRAM_FLAGS[core]
     glued = core in _INLINE_PROGRAM_GLUED
     for index, argument in enumerate(args):
@@ -2804,7 +2867,7 @@ def _inline_program_flag(
                 if index + 1 < len(args):
                     return (index, False, args[index + 1])
                 return None
-            if not glued:
+            if not glued and not _inline_program_cluster_spelling(core, argument):
                 continue
             if argument.startswith(flag) and len(argument) > len(flag):
                 return (index, True, argument[len(flag) :])
@@ -3692,9 +3755,13 @@ def _env_file_target_kind(
         # glued to the redirect target that precedes it (`… >>
         # "$GITHUB_ENV")`): the exact env spelling plus one (or, nested,
         # several) trailing `)` is the env file, not a different filename.
-        # The opener on the line is required so a literal filename that
-        # merely ends in `)` is untouched (issue #345, fold round 1 F3;
-        # fold round 2 D1 strips every glued closing parenthesis).
+        # The opener on the line is required, and only the exact env
+        # spelling plus glued parens matches: a literal filename that is
+        # not that spelling stays untouched (a literal `"$GITHUB_ENV))"`
+        # target on a real-opener line refuses and is a named benign
+        # over-refusal; issue #345, fold round 1 F3; fold round 2 D1
+        # strips every glued closing parenthesis; fold round 3 names the
+        # cost).
         return "env"
     if "$(" in text or "`" in text or "${!" in text:
         return "unknown"
