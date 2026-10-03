@@ -71,7 +71,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 431
+    private static let expectedManifestCases = 447
+    private static let expectedBaseVerdictCases = 16
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -612,6 +613,22 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-cmdsub-python3-runtime-flag-argv-target.yml",
         "reject-runid-github-env-write-cmdsub-node-runtime-flag-argv-target.yml",
         "reject-overrefusal-interpreter-runtime-flag-expansion-argv.yml",
+        "reject-runid-github-env-write-mention-window-eval-pad.yml",
+        "reject-runid-github-env-write-mention-window-empty-var-literal-underscore.yml",
+        "reject-runid-github-env-write-mention-window-printf-pad.yml",
+        "reject-runid-github-env-write-mention-window-backslash-continuation.yml",
+        "reject-runid-github-env-write-mention-window-backtick-pad.yml",
+        "reject-runid-github-env-write-mention-window-unbraced-special-pad.yml",
+        "reject-runid-github-env-write-mention-window-unbraced-name-pad.yml",
+        "reject-runid-github-env-write-mention-window-split-spelling.yml",
+        "reject-overrefusal-mention-window-long-expansion-assembly.yml",
+        "reject-overrefusal-mention-window-digit-pad.yml",
+        "reject-runid-github-env-write-mention-window-backtick-isolating.yml",
+        "reject-runid-github-env-write-mention-window-digit-positional-pad.yml",
+        "accept-runid-github-env-write-mention-window-escaped-special-pad.yml",
+        "reject-overrefusal-mention-window-bare-github-name.yml",
+        "reject-runid-github-env-write-mention-window-bang-pad.yml",
+        "reject-overrefusal-mention-window-zero-pad.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

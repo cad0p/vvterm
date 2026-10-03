@@ -629,12 +629,24 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 431
+EXPECTED_MANIFEST_CASES = 447
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
 # removed (and then update the pin suite too).
 MIN_SCANNED_WORKFLOW_FILES = 12
+# A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold)
+# each declare the measured exit of the pre-fold gate (150a56a3) as
+# `base_exit`; `--selftest` refuses an accept-widening (base REFUSE ->
+# folded ACCEPT) and any base-REFUSE reject fixture that is not one of
+# the documented pre-existing pins, so a double-caused fixture cannot
+# hide behind a verdict the new mechanism did not cause.
+EXPECTED_BASE_VERDICT_CASES = 16
+A12_BASE_REFUSAL_PINS = frozenset(
+    {
+        "reject-runid-github-env-write-mention-window-split-spelling",
+    }
+)
 
 UPLOAD_ACTION = "actions/upload-artifact"
 DOWNLOAD_ACTION = "actions/download-artifact"
@@ -2147,6 +2159,27 @@ def _is_parseint_literal(value: str) -> bool:
 GITHUB_ENV_WINDOW = 64
 
 
+# The elision set for the mention-window walk: braced expansions, simple
+# command substitutions, backticks, backslash-newline continuations, and
+# UNBRACED `$NAME`/`$@`/`$*`/`$?`/`$!`/`$N` padding. The unbraced
+# alternative deliberately skips a backslash-escaped `$` (the `\$GITHUB` in
+# the `w2` family is literal text for the later `eval`) and a name beginning
+# with `GITHUB`: eliding the first conjunct would delete the mention the walk
+# is supposed to preserve (issue #347, fold lens-1 MAJOR-5). `$?`/`$!`/`$N`
+# are elided too even though they expand to digits or a pid — the direction
+# is fail-closed over-refusal, not miss (fold lens-1 round 2 MAJOR-3).
+_EXPANSION_ELISION_RE = re.compile(
+    r"\$\{[^{}]*\}"
+    r"|\$\([^()]*\)"
+    r"|`[^`]*`"
+    r"|\\\n"
+    r"|(?<!\\)\$(?!GITHUB)[A-Za-z_][A-Za-z0-9_]*"
+    r"|(?<!\\)\$[@*?!]"
+    r"|(?<!\\)\$[0-9]+",
+    re.DOTALL,
+)
+
+
 def _mentions_github_env(text: str) -> bool:
     """The #339 mention test for one decoded `run:` scalar or block body.
     The case-insensitive `github_env` substring closes `$GITHUB_ENV`,
@@ -2159,11 +2192,18 @@ def _mentions_github_env(text: str) -> bool:
     text-based detector."""
     if "github_env" in text.lower():
         return True
-    start = text.find("GITHUB")
-    while start != -1:
-        if "ENV" in text[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
-            return True
-        start = text.find("GITHUB", start + 1)
+    # Monotonicity: the raw-text walk is the base behaviour and must stay.
+    # Eliding expansions can DELETE one half of a spelling the raw text
+    # carries (`GITHUB_$(echo ENV)` -> `GITHUB_`), so the walk gate would skip
+    # a body the base gate walked and reopen a runtime-proven fail-open.
+    # Walk both: raw (never lose a base mention) and elided (close the
+    # window-spanning assembly).
+    for candidate in (text, _EXPANSION_ELISION_RE.sub("", text)):
+        start = candidate.find("GITHUB")
+        while start != -1:
+            if "ENV" in candidate[start + len("GITHUB") : start + GITHUB_ENV_WINDOW]:
+                return True
+            start = candidate.find("GITHUB", start + 1)
     return False
 
 
@@ -5724,6 +5764,34 @@ def run_selftest() -> int:
             f"{EXPECTED_MANIFEST_CASES}; update the constant AND the Swift pin, or restore the case(s)"
         )
         return 1
+    base_verdict_cases = [case for case in cases if "base_exit" in case]
+    if len(base_verdict_cases) != EXPECTED_BASE_VERDICT_CASES:
+        print(
+            f"selftest: FAIL — {len(base_verdict_cases)} case(s) declare a base "
+            f"verdict, the stated constant is {EXPECTED_BASE_VERDICT_CASES}; every "
+            "A12 fixture must declare its measured base verdict"
+        )
+        return 1
+    for case in base_verdict_cases:
+        base_exit = case["base_exit"]
+        if base_exit not in (0, 1):
+            print(
+                f"selftest: FAIL — {case['id']}: base_exit must be 0 or 1, got "
+                f"{base_exit!r}"
+            )
+            return 1
+        if base_exit == 1 and int(case["exit"]) == 0:
+            print(
+                f"selftest: FAIL — {case['id']}: accept-widening (base REFUSE -> "
+                "folded ACCEPT) is never allowed in this fold"
+            )
+            return 1
+        if base_exit == 1 and case["id"] not in A12_BASE_REFUSAL_PINS:
+            print(
+                f"selftest: FAIL — {case['id']}: a fixture that already refused at "
+                "base must be one of the documented pre-existing pins"
+            )
+            return 1
     referenced: set[str] = set()
     for case in cases:
         referenced.update(case["files"])

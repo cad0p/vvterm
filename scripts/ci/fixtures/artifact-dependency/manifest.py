@@ -3646,4 +3646,148 @@ CASES = [
             "reject-overrefusal-interpreter-runtime-flag-expansion-argv.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `php` with a command string that names the value the download resolves through (refusing rather than guessing)",
         ],
     },
+    {
+            "id": "reject-runid-github-env-write-mention-window-eval-pad",
+            "files": ["reject-runid-github-env-write-mention-window-eval-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-eval-pad.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-empty-var-literal-underscore",
+            "files": ["reject-runid-github-env-write-mention-window-empty-var-literal-underscore.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-empty-var-literal-underscore.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-printf-pad",
+            "files": ["reject-runid-github-env-write-mention-window-printf-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-printf-pad.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-backslash-continuation",
+            "files": ["reject-runid-github-env-write-mention-window-backslash-continuation.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-backslash-continuation.yml:21: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-backtick-pad",
+            "files": ["reject-runid-github-env-write-mention-window-backtick-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-backtick-pad.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-unbraced-special-pad",
+            "files": ["reject-runid-github-env-write-mention-window-unbraced-special-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-unbraced-special-pad.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-unbraced-name-pad",
+            "files": ["reject-runid-github-env-write-mention-window-unbraced-name-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-unbraced-name-pad.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-split-spelling",
+            "files": ["reject-runid-github-env-write-mention-window-split-spelling.yml"],
+            "exit": 1,
+            "base_exit": 1,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-split-spelling.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 14) without an extractable write (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-overrefusal-mention-window-long-expansion-assembly",
+            "files": ["reject-overrefusal-mention-window-long-expansion-assembly.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-overrefusal-mention-window-long-expansion-assembly.yml:21: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 14) without an extractable write (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-overrefusal-mention-window-digit-pad",
+            "files": ["reject-overrefusal-mention-window-digit-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-overrefusal-mention-window-digit-pad.yml:20: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 14) without an extractable write (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-backtick-isolating",
+            "files": ["reject-runid-github-env-write-mention-window-backtick-isolating.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-backtick-isolating.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-digit-positional-pad",
+            "files": ["reject-runid-github-env-write-mention-window-digit-positional-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-digit-positional-pad.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "accept-runid-github-env-write-mention-window-escaped-special-pad",
+            "files": ["accept-runid-github-env-write-mention-window-escaped-special-pad.yml"],
+            "exit": 0,
+            "base_exit": 0,
+            "diagnostics": [
+
+            ],
+        },
+    {
+            "id": "reject-overrefusal-mention-window-bare-github-name",
+            "files": ["reject-overrefusal-mention-window-bare-github-name.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-overrefusal-mention-window-bare-github-name.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references `$GITHUB_ENV` (line 14) without an extractable write (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-runid-github-env-write-mention-window-bang-pad",
+            "files": ["reject-runid-github-env-write-mention-window-bang-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-runid-github-env-write-mention-window-bang-pad.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
+    {
+            "id": "reject-overrefusal-mention-window-zero-pad",
+            "files": ["reject-overrefusal-mention-window-zero-pad.yml"],
+            "exit": 1,
+            "base_exit": 0,
+            "diagnostics": [
+                "reject-overrefusal-mention-window-zero-pad.yml:19: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+            ],
+        },
 ]
