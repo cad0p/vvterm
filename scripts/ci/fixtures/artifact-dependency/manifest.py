@@ -2789,4 +2789,57 @@ CASES = [
             "reject-runid-github-env-write-expansion-read-value.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `CI_RUN_ID`, an occurrence the extractor cannot account for (refusing rather than guessing)",
         ],
     },
+    # ------------------------------------------------------------------
+    # #342 fold round 6: the cross-line `$( … )`/backtick tracker closes
+    # with the substitution again (fold-5 BLOCKER-1), and an unterminated
+    # heredoc whose delimiter line ends in a continuation refuses rather
+    # than reading the swallowed write as shell (fold-5 MINOR-3).
+    # ------------------------------------------------------------------
+    {
+        "id": "accept-runid-github-env-write-substitution-then-cross-run-write",
+        "files": [
+            "accept-runid-github-env-write-substitution-then-cross-run-write.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-substitution-then-value-trace",
+        "files": [
+            "accept-runid-github-env-write-substitution-then-value-trace.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-substitution-then-alias-target",
+        "files": [
+            "accept-runid-github-env-write-substitution-then-alias-target.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-backtick-then-alias-target",
+        "files": [
+            "accept-runid-github-env-write-backtick-then-alias-target.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-runid-github-env-write-unterminated-heredoc-delimiter",
+        "files": [
+            "reject-runid-github-env-write-unterminated-heredoc-delimiter.yml"
+        ],
+        "exit": 1,
+        "excluded": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-unterminated-heredoc-delimiter.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job ends a line with an unescaped backslash continuation, so a redirect target or assignment can sit on the next line outside the extractor's per-line view (refusing rather than guessing)",
+        ],
+    },
 ]

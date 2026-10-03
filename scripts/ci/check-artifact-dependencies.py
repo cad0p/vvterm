@@ -294,7 +294,12 @@ operator refuses, because the shell joins the next line into that command
 and the redirect target (`>& \\` + newline + `"$n"`) can sit there outside
 the per-line view; a continuation after a plain word (a `printf … \\`
 argument split), after a `#` comment, or inside a quoted-heredoc payload is
-not a redirect split and stays accepted (issue #342, F1). A
+not a redirect split and stays accepted (issue #342, F1). An unterminated
+heredoc is the exception: when a line inside it ends in a continuation —
+the would-be delimiter (`EOF \\`) is the common shape — bash never sees the
+delimiter and consumes the rest of the body as heredoc text (`here-document
+… delimited by end-of-file`), so no later line executes and the body
+refuses rather than reading a swallowed write as shell (fold-6 MINOR-3). A
 heredoc payload (`cat >> "$GITHUB_ENV" <<'EOF'`) is read as
 literal env-file text, so its values are not shell-expanded. The env-file
 spelling is exact, AND an unresolved target that extends it with identifier
@@ -322,15 +327,21 @@ the body does not define (`>&"$LOGFILE"`, `>| "$LOGFILE"` with `LOGFILE`
 in the job `env:`), an `if … fi` boundary between the traced assignment
 and the write, `exec 3>&"$n"` (an ambiguous-redirect error in bash), any
 assignment reached through an `&&`/`||`/`|` list even when the list
-provably executes, an assignment in a subshell context (`n=… &`,
-`n=… | cat`, a cross-line `$( … )`), a mechanism that names a traced
+provably executes, an assignment inside a subshell context (`n=… &`,
+`n=… | cat`, an assignment inside a cross-line `$( … )`; the cross-line
+tracker closes with the substitution, so a later parent-shell assignment is
+reaching again), a mechanism that names a traced
 variable even when the body cannot reach it (a never-called function's
 `declare -g`), a dynamic mechanism target (`read -r "$name"`, `declare
 "$name=…"`, `printf -v "$name"`), a `for NAME in …`/`select NAME in …`
 loop whose control variable is traced, and a traced-name occurrence the
 detection-completeness walk cannot account for (`echo "$n"`, a bare
-`NAME` argument, a `NAME=VALUE`-shaped word in an unmodelled command, or a
-carrier string that names the variable; an `export NAME` marker is
+`NAME` argument, a `NAME=VALUE`-shaped word in an unmodelled command, a
+carrier string that names the variable, and the read-only occurrences the
+walk does not model — `case $NAME in`, `${NAME:-…}`, `${#NAME}`,
+`${NAME%…}`, `command -v NAME`, `grep NAME`, `type NAME`, `hash NAME`,
+`: NAME`, `true NAME`, `for x in "$NAME"`, every one measured to refuse
+and none able to change the value; an `export NAME` marker is
 accounted and does not refuse) — all fail-closed costs, as is the distinct
 unresolved-redirect-target refusal, which names the target it cannot
 resolve. The rule never
@@ -342,11 +353,19 @@ repo, and trigger parsing is deliberately not modelled); a `$GITHUB_ENV`
 write whose name pieces never appear in the body text
 (`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a name split past the
 64-character window) is not detected, the inherited text-detector boundary;
-and the write mechanisms the extractor still does not see at all — a
+and the write mechanisms and locations the extractor still does not see — a
 `source`d or `.`-sourced script's body, a `bash script.sh` path (only the
-`-c` string is inspected), and a carrier whose command string is assembled
+`-c` string is inspected), a carrier whose command string is assembled
 at runtime (`eval "$cmd"`: the carrier is seen, but a string that never
-mentions the env file or a traced name is the inherited textual boundary).
+mentions the env file or a traced name is the inherited textual boundary),
+and a `$GITHUB_ENV` write inside a `$( … )` command substitution (issue
+#345): the substitution is one token, and when that token is a modelled
+assignment RHS, an `echo`/`printf`/`cat` `NAME=VALUE` payload, a test
+operand, an env-write payload word, or a `bash <<EOF` payload line, the
+detection-completeness walk accounts the whole word and does not inspect
+the substitution body; a segment that already has an env redirect also
+skips the reference check. The name text is present, so this is a location
+boundary, not the text-detector boundary.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -396,7 +415,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 338
+EXPECTED_MANIFEST_CASES = 343
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2886,16 +2905,19 @@ def _continuation_hides_redirect_target(line: str) -> bool:
     return False
 
 
-def _command_substitution_depth(line: str) -> int:
-    """A conservative count of the command substitutions the physical line
-    leaves open (unclosed `$(`, or an unmatched backtick). A positive value
-    places the assignments on following lines inside a subshell, where they
-    cannot reach the parent shell (issue #342, F2). Quotes and escapes are
-    honoured and a `#` comment ends the scan; a construct this text scan
-    cannot parse yields a positive depth, which refuses rather than
-    passes."""
-    depth = 0
-    in_backtick = False
+def _command_substitution_depth(
+    line: str, depth: int = 0, in_backtick: bool = False
+) -> tuple[int, bool]:
+    """Track the command substitutions the body leaves open across physical
+    lines. The caller carries the `(depth, in_backtick)` state from the
+    previous lines in, and this scan returns the state this physical line
+    leaves: a line that opens a `$(` or a backtick raises the depth, and a
+    line that closes one lowers it, so an assignment inside a substitution
+    carried across physical lines stays subshell-local while an assignment
+    after that substitution closed is not (issue #342, F2 / fold-6
+    BLOCKER-1). Quotes and escapes are honoured and a `#` comment ends the
+    scan; a construct this text scan cannot parse yields a positive depth,
+    which refuses rather than passes."""
     quote: str | None = None
     i = 0
     n = len(line)
@@ -2941,7 +2963,7 @@ def _command_substitution_depth(line: str) -> int:
             i += 1
             continue
         i += 1
-    return max(0, depth)
+    return depth, in_backtick
 
 
 def _segment_redirects(
@@ -3038,13 +3060,19 @@ def _segment_reference_text(
     return "".join(pieces)
 
 
-def _heredoc_payload_line_indices(lines: list[str]) -> set[int]:
-    """Line indices a shell heredoc consumes as literal payload. Those lines
-    are not shell statements: excluding them from the alias/assignment index
-    keeps an env-file-looking payload line from being read as shell (a
-    false-positive `<<` only drops assignments, which refuses rather than
-    passes)."""
+def _heredoc_payload_line_indices(lines: list[str]) -> tuple[set[int], int | None]:
+    """Line indices a shell heredoc consumes as literal payload, plus the
+    opening-line index of the first heredoc whose delimiter never appears.
+    Those lines are not shell statements: excluding them from the
+    alias/assignment index keeps an env-file-looking payload line from being
+    read as shell (a false-positive `<<` only drops assignments, which
+    refuses rather than passes). A missing delimiter means bash consumes the
+    rest of the body as heredoc text (`here-document … delimited by
+    end-of-file`), so no later line is a shell statement either — the caller
+    refuses a continuation-ending line in that region rather than reading
+    the swallowed lines as shell (issue #342, fold-6 MINOR-3)."""
     skipped: set[int] = set()
+    unterminated_at: int | None = None
     index = 0
     while index < len(lines):
         match = _HEREDOC_RE.search(lines[index])
@@ -3056,8 +3084,12 @@ def _heredoc_payload_line_indices(lines: list[str]) -> set[int]:
         while cursor < len(lines) and lines[cursor].strip() != delimiter:
             skipped.add(cursor)
             cursor += 1
+        if cursor >= len(lines):
+            if unterminated_at is None:
+                unterminated_at = index
+            break
         index = cursor + 1
-    return skipped
+    return skipped, unterminated_at
 
 
 def _alias_value_is_pure_env_spelling(text: str) -> bool:
@@ -3108,6 +3140,7 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
     assignments: list[_ShellAssignment] = []
     starts_conditional = False
     subshell_depth = 0
+    in_backtick = False
     for index, line in enumerate(lines):
         if index in skip:
             continue
@@ -3156,7 +3189,9 @@ def _body_shell_assignments(lines: list[str], skip: set[int]) -> list[_ShellAssi
                     match.group(1), value, index, start, _indent_width(line), conditional
                 )
             )
-        subshell_depth += _command_substitution_depth(line)
+        subshell_depth, in_backtick = _command_substitution_depth(
+            line, subshell_depth, in_backtick
+        )
         if not tokens:
             # A blank or comment-only line does not end a `&&`/`||` list:
             # both `a &&` + blank + `b` and `a &&` + `# x` + `b` keep `b`
@@ -3967,7 +4002,18 @@ def _refuse_github_env_run_id_write(
         if not body.mentions_github_env or body.step_line >= step.uses_line:
             continue
         lines = body.body_text.split("\n")
-        payload_lines = _heredoc_payload_line_indices(lines)
+        payload_lines, unterminated_heredoc_at = _heredoc_payload_line_indices(lines)
+        if unterminated_heredoc_at is not None and any(
+            _line_has_continuation(line)
+            for line in lines[unterminated_heredoc_at + 1 :]
+        ):
+            # The would-be delimiter ends in a continuation, so bash never
+            # sees the delimiter and consumes the rest of the body as
+            # heredoc text; the lines the extractor would read as shell
+            # (including any write) never execute (issue #342, fold-6
+            # MINOR-3). Refusing keeps the extractor from accepting a body
+            # whose modelled write cannot run.
+            raise _run_id_continuation_refusal(step, body)
         aliases = _env_file_alias_names(lines, payload_lines)
         assignments = _body_shell_assignments(lines, payload_lines)
         modelled_positions = {(hit.index, hit.column) for hit in assignments}

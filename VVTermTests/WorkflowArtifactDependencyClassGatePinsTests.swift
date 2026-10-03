@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 338
+    private static let expectedManifestCases = 343
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -512,6 +512,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-arith-value.yml",
         "reject-runid-github-env-write-array-element-value.yml",
         "reject-runid-github-env-write-expansion-read-value.yml",
+        // #342 fold round 6: the cross-line tracker close (fold-5
+        // BLOCKER-1) and the unterminated-heredoc delimiter refusal
+        // (fold-5 MINOR-3).
+        "accept-runid-github-env-write-substitution-then-cross-run-write.yml",
+        "accept-runid-github-env-write-substitution-then-value-trace.yml",
+        "accept-runid-github-env-write-substitution-then-alias-target.yml",
+        "accept-runid-github-env-write-backtick-then-alias-target.yml",
+        "reject-runid-github-env-write-unterminated-heredoc-delimiter.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

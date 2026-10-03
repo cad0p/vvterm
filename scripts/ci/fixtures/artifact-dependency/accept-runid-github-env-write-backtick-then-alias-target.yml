@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a closed multi-line backtick substitution, then a mid-line alias
+# target. The fold-5 backtick tracker never closed (a later line's backtick
+# was read as a new opening) and refused (issue #342, fold-6 BLOCKER-1;
+# non-vacuous, the download keeps the exclusion).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve run context
+        run: |
+          x=`
+            echo hi
+          `
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$n"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
