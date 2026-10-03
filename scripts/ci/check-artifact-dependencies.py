@@ -4505,7 +4505,9 @@ def _line_continuation_pending(line: str) -> bool:
     backslash, so the shell joins the next physical line into this command
     (issue #350, item 1 (iii)). `_line_has_continuation` owns the odd-run
     test; this scan additionally rejects a backslash that sits inside a
-    single-quoted region, where it is literal rather than a continuation."""
+    single-quoted region, where it is literal rather than a continuation,
+    and stops at an unquoted `#` comment word, where the shell ends the
+    command (fold round 1 MAJOR-2(b))."""
     if not _line_has_continuation(line):
         return False
     quote: str | None = None
@@ -4529,8 +4531,13 @@ def _line_continuation_pending(line: str) -> bool:
             quote = None if quote == '"' else '"'
             index += 1
             continue
+        if char == "#" and quote is None and (index == 0 or line[index - 1].isspace()):
+            end = index
+            break
         index += 1
-    return quote != "'"
+    if quote == "'":
+        return False
+    return _line_has_continuation(line[:end])
 
 
 def _joined_continuation_segments(
@@ -4541,12 +4548,12 @@ def _joined_continuation_segments(
     (iii)). The per-line walk cannot see an argv target the shell joins
     from the continuation line (`cp payload \\` + newline + `"${arr[0]}"`),
     so the logical line is tokenized whole and the argv-target predicate
-    runs on the result. Returns [] unless `index` is the first physical
-    line of the continuation and the join stays inside the bound, so every
-    other line is untouched. A continuation longer than the bound stays
-    open (a named residual)."""
-    if index > 0 and _line_continuation_pending(lines[index - 1]):
-        return []
+    runs on the result. Returns [] unless `index` ends in a continuation
+    and the join stays inside the bound; a line inside a longer chain can
+    also join as a suffix (the joined scans are additive refusals, so
+    double-joining is harmless, and a backslash-terminated comment no
+    longer suppresses the real continuation — fold round 1 MAJOR-2(b)). A
+    continuation longer than the bound stays open (a named residual)."""
     if not _line_continuation_pending(lines[index]):
         return []
     joined = [lines[index]]
