@@ -346,26 +346,78 @@ accounted and does not refuse) — all fail-closed costs, as is the distinct
 unresolved-redirect-target refusal, which names the target it cannot
 resolve. The rule never
 touches the #339 token rule, the `needs:` reconciliation, the case-collision
-rule, or the trim/`parseInt` rules. Named residuals: a caller
-(`workflow_call`) or dispatcher (`workflow_dispatch`) can pass its own
-`github.run_id` as an `inputs.*` value (no `workflow_call` exists in this
-repo, and trigger parsing is deliberately not modelled); a `$GITHUB_ENV`
-write whose name pieces never appear in the body text
-(`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a name split past the
-64-character window) is not detected, the inherited text-detector boundary;
-and the write mechanisms and locations the extractor still does not see — a
-`source`d or `.`-sourced script's body, a `bash script.sh` path (only the
-`-c` string is inspected), a carrier whose command string is assembled
-at runtime (`eval "$cmd"`: the carrier is seen, but a string that never
-mentions the env file or a traced name is the inherited textual boundary),
-and a `$GITHUB_ENV` write inside a `$( … )` command substitution (issue
-#345): the substitution is one token, and when that token is a modelled
-assignment RHS, an `echo`/`printf`/`cat` `NAME=VALUE` payload, a test
-operand, an env-write payload word, or a `bash <<EOF` payload line, the
-detection-completeness walk accounts the whole word and does not inspect
-the substitution body; a segment that already has an env redirect also
-skips the reference check. The name text is present, so this is a location
-boundary, not the text-detector boundary.
+rule, or the trim/`parseInt` rules.
+
+THE `$( … )`/BACKTICK SUBSTITUTION-BODY SCAN (#345)
+---------------------------------------------------
+The #342 rule is gated on `_mentions_github_env` and walks shell words; a
+`$( … )`/backtick word is one token, so an env-file write inside one was
+invisible when the word was accounted (an assignment RHS, an
+`echo`/`printf`/`cat` `NAME=VALUE` payload, a test operand, an `export`
+identifier, an env-write payload word, or a `bash <<EOF` payload line), and
+a segment that already had an env redirect skipped the reference check. The
+closure re-tokenizes every such word and classifies its redirects with the
+outer scope. The A4 core is four mechanisms: (i) an executing heredoc's
+payload lines (`bash`/`sh`/`zsh`/`dash`/`ksh`/`source`/`.`) are no longer
+skipped when the alias scan looks for a pure env-file spelling; (ii) every
+body's redirects are classified — a target that resolves to `env` or
+`unknown` refuses, `other` is accepted, and nested substitutions recurse to
+depth 8 and refuse on overrun; (ii') inside a body, an unmodelled write
+mechanism refuses only when it is a carrier (`eval`, `trap`, `sh -c`, …),
+because the name-writing mechanisms (`read`, `mapfile`, `printf -v`) are
+subshell-local in a `$( … )` and cannot write the env file; (ii'') a
+physical line that ends in an unescaped `\\` and contains an unclosed
+`$( … )`/backtick whose partial text already shows a redirection refuses.
+A6 adds five widenings: (v) a carrier shell/interpreter named by basename
+(`/bin/bash`, `/usr/bin/env bash`); (vi) a pure variable in command
+position with `-c` (`$SHELL -c …`) is fail-closed; (vii) interpreter
+programs by basename and version suffix (`python3`, `python3.12`, `perl`,
+`ruby`, `node`, `php`, `awk -v`); (viii) `tee`/`dd of=` argv file targets
+are classified with the alias/assignment resolver; (ix) a carrier operand
+that is exactly one variable expansion (`eval "$CMD"`) cannot be proven
+disjoint and refuses. Boundary sentence: the gate refuses any recognized
+carrier invocation (shell/interpreter by basename and version suffix, a
+pure variable with `-c`, `eval`/`trap`, `awk -v`) or recognized argv write
+verb (`tee`, `dd of=`) whose carried command string or file target cannot
+be proven disjoint from the env file — it names the env machinery or a
+traced value, is an unreadable pure variable, or has a non-single-resolved
+target — while literal/read-only usages and non-write commands stay
+accepted.
+
+Measured scope: A6 closes every runtime-proven flip in the 382-shape
+measured family (A4 left 7 fail-opens; A6 newly refuses exactly 10 shapes
+and reopens none), the fixture corpus stays 382/382 with zero diagnostic
+changes, and the real tree stays green (`ios-adhoc-pr.yml`'s `gh api …`,
+`find …`, `${!name:-}` and continuation bodies are untouched). The cost is
+fail-closed over-refusal of 15 measured benign shapes (A4's 12 + A6's 3):
+the quoted-heredoc payload (`f15`); the unquoted executing heredoc where
+the parent expands the substitution before the alias exists (`h01`/`h02b`/
+`q3`) or the child does not inherit a non-exported alias (`k05`); the
+assembled literal target (`h10`/`h20`); the non-executing
+`true || n="$GITHUB_ENV"` alias (`h28`); a name-writing mechanism inside a
+body (`fz-o6-i4/i5/i7`); the malformed no-trailing-newline value (`a7`);
+and A6's three benign-as-stored argv targets (`t03`/`t04`/`t20`). The A6
+measurement also verified the lens-v2 `b1` (quoted data scanned as code),
+`b2` (heredoc-payload alias then a benign outer read) and `d9` (benign
+nesting depth > 8) classes as additional fail-closed refusals.
+
+Named residuals: a caller (`workflow_call`) or dispatcher
+(`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
+value (no `workflow_call` exists in this repo, and trigger parsing is
+deliberately not modelled); a `$GITHUB_ENV` write whose name pieces never
+appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`, a
+name split past the 64-character window — the `w2-64window-eval` class) is
+not detected, the inherited text-detector boundary; a `source`d or
+`.`-sourced script's body and a `bash script.sh` path (only the `-c` string
+is inspected); a carrier whose command string is assembled at runtime
+(`eval "$cmd"`: the carrier is seen, but a string that never mentions the
+env file or a traced name is the inherited textual boundary); a carrier
+operand that is itself a command substitution (`eval "$(cat …)"`); other
+argv write verbs that need verb-specific semantics (`sed -i`, `cp`/`mv`/
+`install`, `touch`/`truncate`); interpreters outside the inline-program
+table (`lua -e`, `tclsh`, a script file); substitution nesting deeper than
+8; and a heredoc opened inside a substitution body, which the inner scope
+does not model.
 The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
@@ -415,7 +467,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 343
+EXPECTED_MANIFEST_CASES = 382
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -2587,6 +2639,37 @@ _UNMODELLED_WRITE_VERBS = (
     "dash",
     "ksh",
 )
+# Interpreters whose inline program operand (`python3 -c`, `perl -e`,
+# `awk …`) is shell-adjacent code that can write a file: the program
+# operand is a carrier, and an awk `-v` assignment is one too because it
+# can name the program's redirect target (issue #345, lens-v2 t03/t17).
+_INLINE_PROGRAM_FLAGS: dict[str, tuple[str, ...]] = {
+    "python": ("-c",),
+    "python3": ("-c",),
+    "perl": ("-e",),
+    "ruby": ("-e",),
+    "node": ("-e", "-p", "--eval", "--print"),
+    "php": ("-r",),
+}
+_INLINE_PROGRAM_POSITIONAL = frozenset({"awk", "gawk", "mawk", "nawk"})
+_INLINE_PROGRAM_VERBS = frozenset(_INLINE_PROGRAM_FLAGS) | _INLINE_PROGRAM_POSITIONAL
+# A version suffix on an interpreter name (`python3.12`, `perl5.36`,
+# `php8.2`): the base name is the recognized interpreter, so a versioned
+# spelling does not evade the carrier check.
+_INTERPRETER_VERSION_RE = re.compile(r"^(.*?)([0-9]+(?:\.[0-9]+)*)$")
+# One whole shell expansion: `$NAME`, `${NAME}` or `%NAME%`. Used to count
+# how many expansion pieces an argv write target is assembled from.
+_EXPANSION_PIECE_RE = re.compile(
+    r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)|"
+    r"%[A-Za-z_][A-Za-z0-9_]*%"
+)
+# A word that is exactly one variable expansion (`$SHELL`, `${SHELL}`).
+_PURE_VARIABLE_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
+# Write verbs whose file operand is an argv word rather than a redirect
+# (`tee`, `dd of=…`): a computed operand cannot be seen by the redirect
+# classification, so it needs its own target check (issue #345, lens-v2
+# t04/t20/t22/t23).
+_ARGV_WRITE_VERBS = frozenset({"tee", "dd"})
 # `read` options that consume the next word. `-a` is deliberately absent:
 # its argument IS the array name that the rule must inspect.
 _READ_OPTIONS_WITH_ARGUMENT = ("-d", "-i", "-n", "-N", "-p", "-t", "-u")
@@ -3092,6 +3175,48 @@ def _heredoc_payload_line_indices(lines: list[str]) -> tuple[set[int], int | Non
     return skipped, unterminated_at
 
 
+_EXECUTING_HEREDOC_CONSUMERS = frozenset(
+    {"bash", "sh", "zsh", "dash", "ksh", "source", "."}
+)
+
+
+def _heredoc_consumer_is_executing(line: str) -> bool:
+    """True when the heredoc-opening line names an executing consumer
+    (`bash <<'EOF'`, `source /dev/stdin <<'INNER'`), so the payload is shell
+    code the inner shell runs (issue #345, Option A (i))."""
+    head = line.split("<<", 1)[0]
+    return any(
+        token[0] == "word" and token[1] in _EXECUTING_HEREDOC_CONSUMERS
+        for token in _shell_tokens(head)
+    )
+
+
+def _executing_heredoc_payload_lines(lines: list[str]) -> set[int]:
+    """Payload line indices of heredocs whose consumer is an executing verb:
+    those lines are shell statements for the inner shell, so a
+    pure-spelling alias definition on one is a real alias (issue #345,
+    Option A (i))."""
+    executing: set[int] = set()
+    index = 0
+    while index < len(lines):
+        match = _HEREDOC_RE.search(lines[index])
+        if match is None:
+            index += 1
+            continue
+        delimiter = match.group(1) or match.group(2) or match.group(3)
+        is_executing = _heredoc_consumer_is_executing(lines[index])
+        cursor = index + 1
+        while cursor < len(lines) and lines[cursor].strip() != delimiter:
+            if is_executing:
+                executing.add(cursor)
+            cursor += 1
+        if cursor >= len(lines):
+            break
+        index = cursor + 1
+    return executing
+
+
+
 def _alias_value_is_pure_env_spelling(text: str) -> bool:
     """True when `text` starts with one word that is a pure env-file
     spelling: no command substitution, backtick, redirection or separator
@@ -3339,6 +3464,91 @@ def _env_file_target_kind(
     return "other"
 
 
+def _argv_write_targets(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[str, str]]:
+    """The `(verb, target)` file operands of an argv write verb in one
+    segment: `tee` appends to every non-option path operand and `dd` writes
+    `of=…`. The verb is matched by basename so a path prefix does not evade
+    (issue #345, lens-v2 t04/t20/t22/t23)."""
+    words = [token[1] for token in segment if token[0] == "word"]
+    for position, text in enumerate(words):
+        verb = text.rsplit("/", 1)[-1] if "/" in text else text
+        if verb not in _ARGV_WRITE_VERBS:
+            continue
+        args = words[position + 1 :]
+        if verb == "tee":
+            targets: list[tuple[str, str]] = []
+            options_done = False
+            for argument in args:
+                if argument == "--":
+                    options_done = True
+                    continue
+                if argument == "-":
+                    # stdout, not a file.
+                    continue
+                if not options_done and argument.startswith("-"):
+                    continue
+                targets.append(("tee", argument))
+            return targets
+        return [
+            ("dd", argument[3:])
+            for argument in args
+            if argument.startswith("of=") and len(argument) > 3
+        ]
+    return []
+
+
+def _argv_write_target_is_unproven(
+    target: str,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+) -> bool:
+    """True when one argv write target is not provably harmless: the
+    env-file spelling/alias (`env`), an unassigned or computed value
+    (`unknown`), or a value assembled from more than one expansion piece.
+    The argv write form is new to the model, so a single resolved non-env
+    reference (or a plain literal) is the only accepted proof (issue #345,
+    lens-v2 t03/t04/t20/t22/t23)."""
+    kind = _env_file_target_kind(
+        target, aliases, assignments, lines, line_index, column_index
+    )
+    if kind != "other":
+        return True
+    return len(_EXPANSION_PIECE_RE.findall(target)) > 1
+
+
+def _refuse_argv_write_targets(
+    segment: list[tuple[str, str, int, int]],
+    step: ArtifactStep,
+    body: RunBody,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+    defer_env_spelling: bool,
+) -> None:
+    """Refuse when an argv write verb in this segment has a target the
+    extractor cannot prove harmless. Inside a substitution body
+    (`defer_env_spelling`) the exact env-file spelling is left to the outer
+    per-segment reference accounting, which sees the same text and owns that
+    diagnostic (issue #345)."""
+    for verb, target in _argv_write_targets(segment):
+        if not _argv_write_target_is_unproven(
+            target, aliases, assignments, lines, line_index, column_index
+        ):
+            continue
+        if defer_env_spelling and _env_file_target_kind(
+            target, aliases, assignments, lines, line_index, column_index
+        ) == "env":
+            continue
+        raise _run_id_argv_write_refusal(step, body, verb, target)
+
+
 def _segment_is_env_alias_assignment(
     segment: list[tuple[str, str, int, int]],
 ) -> bool:
@@ -3370,6 +3580,237 @@ def _segment_references_env_file(text: str, aliases: set[str]) -> bool:
         if re.search(r"\$\{?" + re.escape(name) + r"\}?", text):
             return True
     return False
+
+
+_SUBSTITUTION_SCAN_DEPTH_LIMIT = 8
+
+
+def _substitution_bodies(text: str) -> list[str]:
+    """Every `$( \u2026 )`/backtick body inside one shell word, in source
+    order. `$( \u2026 )` is quote-aware (`_consume_command_substitution`);
+    an unclosed construct yields the rest of the word, which the callers
+    treat fail-closed. The word text has usually lost its quotes, so a
+    single-quoted `$( \u2026 )` is indistinguishable here and is refused by
+    the callers' fail-closed guards rather than silently skipped (issue
+    #345, Option A (ii))."""
+    bodies: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "`":
+            end = text.find("`", i + 1)
+            if end == -1:
+                bodies.append(text[i + 1 :])
+                i = n
+            else:
+                bodies.append(text[i + 1 : end])
+                i = end + 1
+            continue
+        if c == "$" and i + 1 < n and text[i + 1] == "(":
+            end = _consume_command_substitution(text, i)
+            bodies.append(text[i + 2 : end - 1])
+            i = end
+            continue
+        i += 1
+    return bodies
+
+
+def _body_shadow_assignment(
+    body: str, relevant: set[str], broad: bool = False
+) -> str | None:
+    """A name the substitution body itself assigns (`NAME=`/`+=`) that is
+    part of the scope the download resolves through, or None. A body-local
+    assignment is invisible to the outer trace, so a body that assigns a
+    traced name is refused rather than classified through it (issue #345,
+    Option A (iii)). `broad` also reads an assignment embedded inside a
+    quoted carrier word (`eval "printf \u2026 NAME=... \u2026"`), which the
+    word-position form cannot see."""
+    for token in _shell_tokens(body):
+        if token[0] != "word":
+            continue
+        match = _ENV_ALIAS_ASSIGNMENT_RE.match(token[1])
+        if match is None:
+            match = _ENV_APPEND_ASSIGNMENT_RE.match(token[1])
+        if match is not None and match.group(1) in relevant:
+            return match.group(1)
+    if broad:
+        for name in sorted(relevant, key=len, reverse=True):
+            if re.search(
+                r"(?<![A-Za-z0-9_])" + re.escape(name) + r"\s*(?:\+)?=", body
+            ):
+                return name
+    return None
+
+
+def _unclosed_substitution_hides_redirect(line: str) -> bool:
+    """True when a physical line that ends in a continuation contains a
+    command substitution that does not close on the line and whose text
+    already shows a redirection operator: the joined next line closes the
+    substitution and completes the redirect target, outside the per-line
+    view (issue #345, h23)."""
+    if not _line_has_continuation(line):
+        return False
+    for token in _shell_tokens(line):
+        if token[0] != "word":
+            continue
+        text = token[1]
+        i = 0
+        n = len(text)
+        while i < n:
+            c = text[i]
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == "`":
+                end = text.find("`", i + 1)
+                if end == -1:
+                    if any(ch in text[i:] for ch in (">", "<")):
+                        return True
+                    break
+                i = end + 1
+                continue
+            if c == "$" and i + 1 < n and text[i + 1] == "(":
+                end = _consume_command_substitution(text, i)
+                if end >= n:
+                    if any(ch in text[i:] for ch in (">", "<")):
+                        return True
+                    break
+                i = end
+                continue
+            i += 1
+    return False
+
+
+def _refuse_substitution_body_writes(
+    text: str,
+    step: ArtifactStep,
+    body: RunBody,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+    relevant_names: set[str],
+    flip_targets: set[str],
+    mechanism_guard: str | None,
+    use_body_shadow_guard: bool,
+    broad_shadow_guard: bool,
+    depth: int = 0,
+) -> None:
+    """Issue #345, Option A (ii)/(iii): a `$( \u2026 )`/backtick body the
+    per-line walk did not model is shell code the shell runs, so each of its
+    redirects is classified with the outer scope and each of its words is
+    scanned recursively. Refuses when a target classifies `env`/`unknown`
+    (accepting `other`), when an optional body-level unmodelled-write guard
+    names a traced variable, or when an optional shadow guard sees a body
+    assignment of a traced name. A depth overrun refuses rather than
+    recursing without bound."""
+    if depth > _SUBSTITUTION_SCAN_DEPTH_LIMIT:
+        raise _run_id_payload_refusal(step, body)
+    for inner in _substitution_bodies(text):
+        if use_body_shadow_guard:
+            shadow = _body_shadow_assignment(
+                inner, relevant_names | flip_targets, broad_shadow_guard
+            )
+            if shadow is not None:
+                raise _run_id_unaccounted_occurrence_refusal(step, body, shadow)
+        inner_tokens = _shell_tokens(inner)
+        if mechanism_guard is not None:
+            mechanism = _unmodelled_write_match(
+                inner_tokens, step, relevant_names, flip_targets
+            )
+            if mechanism is not None and (
+                mechanism_guard != "carrier" or mechanism[2]
+            ):
+                raise _run_id_unmodelled_write_refusal(step, body, mechanism)
+        for inner_segment in _shell_segments(inner_tokens):
+            for op, target, _start, _span, fd in _segment_redirects(inner_segment):
+                if op == "<>" and fd == 0:
+                    continue
+                kind = _env_file_target_kind(
+                    target,
+                    aliases,
+                    assignments,
+                    lines,
+                    line_index,
+                    column_index,
+                )
+                if kind == "unknown":
+                    raise _run_id_unresolved_target_refusal(step, body, target)
+                if kind == "env":
+                    raise _run_id_reference_refusal(step, body)
+            _refuse_argv_write_targets(
+                inner_segment,
+                step,
+                body,
+                aliases,
+                assignments,
+                lines,
+                line_index,
+                column_index,
+                True,
+            )
+            for token in inner_segment:
+                if token[0] == "word" and ("$(" in token[1] or "`" in token[1]):
+                    _refuse_substitution_body_writes(
+                        token[1],
+                        step,
+                        body,
+                        aliases,
+                        assignments,
+                        lines,
+                        line_index,
+                        column_index,
+                        relevant_names,
+                        flip_targets,
+                        mechanism_guard,
+                        use_body_shadow_guard,
+                        broad_shadow_guard,
+                        depth + 1,
+                    )
+
+
+def _scan_segment_substitutions(
+    segment: list[tuple[str, str, int, int]],
+    step: ArtifactStep,
+    body: RunBody,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+    relevant_names: set[str],
+    flip_targets: set[str],
+    mechanism_guard: str | None,
+    use_body_shadow_guard: bool,
+    broad_shadow_guard: bool,
+) -> None:
+    for token in segment:
+        if token[0] != "word":
+            continue
+        if "$(" not in token[1] and "`" not in token[1]:
+            continue
+        _refuse_substitution_body_writes(
+            token[1],
+            step,
+            body,
+            aliases,
+            assignments,
+            lines,
+            line_index,
+            column_index,
+            relevant_names,
+            flip_targets,
+            mechanism_guard,
+            use_body_shadow_guard,
+            broad_shadow_guard,
+        )
+
+
 
 
 def _local_reference_name(text: str) -> str | None:
@@ -3568,6 +4009,19 @@ def _run_id_unresolved_target_refusal(
     )
 
 
+def _run_id_argv_write_refusal(
+    step: ArtifactStep, body: RunBody, verb: str, target: str
+) -> Refusal:
+    """An argv write verb (`tee`, `dd of=…`) whose file target the extractor
+    cannot resolve to the env file or prove harmless (issue #345)."""
+    return Refusal(
+        step.run_id_line or step.uses_line,
+        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job runs `{verb}` "
+        f"with a file target `{target}` the extractor cannot resolve to the env file or prove "
+        "harmless (refusing rather than guessing)",
+    )
+
+
 def _run_id_continuation_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
@@ -3691,6 +4145,25 @@ def _mechanism_operands(
         return [(word, True) for word in argv]
     if mechanism in ("bash", "sh", "zsh", "dash", "ksh") and "-c" in argv:
         return [(word, True) for word in argv]
+    if mechanism in _INLINE_PROGRAM_POSITIONAL:
+        operands = []
+        for word in argv:
+            if word == "-v":
+                continue
+            if word.startswith("-v") and len(word) > 2:
+                operands.append((word[2:], True))
+                continue
+            if word.startswith("-"):
+                continue
+            operands.append((word, True))
+        return operands
+    if mechanism in _INLINE_PROGRAM_FLAGS:
+        flags = _INLINE_PROGRAM_FLAGS[mechanism]
+        return [
+            (argv[position + 1], True)
+            for position, word in enumerate(argv)
+            if word in flags and position + 1 < len(argv)
+        ]
     return []
 
 
@@ -3724,8 +4197,13 @@ def _carrier_operand_matches(
 ) -> bool:
     """True when a `trap`/`eval`/`sh -c` command string can carry the value
     the download resolves through: it mentions the env file, references a
-    traced variable, or assigns one (issue #342, R4)."""
+    traced variable, assigns one, or is itself an unreadable variable
+    (`eval "$CMD"`: the gate cannot see what it runs, so it cannot prove the
+    command string is harmless), issue #342, R4 / issue #345 lens-v2
+    t16/t16b."""
     if _mentions_github_env(text):
+        return True
+    if _PURE_VARIABLE_RE.match(text) is not None:
         return True
     if _text_references_names(text, relevant, flip_targets):
         return True
@@ -3745,19 +4223,51 @@ def _unmodelled_write_match(
     operand names a variable the run-id rule traces, or None. The walk is
     over words, not segment starts, so a mechanism inside a group or a
     function body (`f() { declare -g …; }`) is seen (issue #342, R4)."""
+    def _interpreter_core(verb: str) -> str:
+        if verb in _INLINE_PROGRAM_VERBS:
+            return verb
+        match = _INTERPRETER_VERSION_RE.match(verb)
+        if match is not None and match.group(1) in _INLINE_PROGRAM_VERBS:
+            return match.group(1)
+        return verb
+
     index = 0
     while index < len(tokens):
         kind, text, _start, _end = tokens[index]
-        if kind != "word" or text not in _UNMODELLED_WRITE_VERBS:
+        if kind != "word":
             index += 1
             continue
-        mechanism = text
+        # A path-prefixed verb (`/bin/bash`, `/usr/bin/tee`) is the same
+        # mechanism as the bare name, so the table is keyed by basename
+        # (issue #345, lens-v2 t01).
+        verb = text.rsplit("/", 1)[-1] if "/" in text else text
+        interpreter = _interpreter_core(verb)
+        var_command = _PURE_VARIABLE_RE.match(text) is not None
+        if (
+            verb not in _UNMODELLED_WRITE_VERBS
+            and interpreter not in _INLINE_PROGRAM_VERBS
+            and not var_command
+        ):
+            index += 1
+            continue
+        resolved = interpreter if interpreter in _INLINE_PROGRAM_VERBS else verb
+        mechanism = verb
         index += 1
         argv: list[str] = []
         while index < len(tokens) and tokens[index][0] == "word":
             argv.append(tokens[index][1])
             index += 1
-        for operand, carrier in _mechanism_operands(mechanism, argv):
+        if var_command:
+            # A variable in command position (`$SHELL -c …`): only an
+            # invocation with `-c` carries a command string, and it must
+            # reach the env file/traced names to refuse (issue #345,
+            # lens-v2 t02).
+            if "-c" in argv:
+                for word in argv:
+                    if _carrier_operand_matches(word, relevant, flip_targets):
+                        return (text, word, True)
+            continue
+        for operand, carrier in _mechanism_operands(resolved, argv):
             if operand is None:
                 return (mechanism, None, carrier)
             if carrier:
@@ -4014,7 +4524,8 @@ def _refuse_github_env_run_id_write(
             # MINOR-3). Refusing keeps the extractor from accepting a body
             # whose modelled write cannot run.
             raise _run_id_continuation_refusal(step, body)
-        aliases = _env_file_alias_names(lines, payload_lines)
+        executing_payload = _executing_heredoc_payload_lines(lines)
+        aliases = _env_file_alias_names(lines, payload_lines - executing_payload)
         assignments = _body_shell_assignments(lines, payload_lines)
         modelled_positions = {(hit.index, hit.column) for hit in assignments}
         relevant_names = _relevant_shell_names(
@@ -4027,6 +4538,8 @@ def _refuse_github_env_run_id_write(
             if index not in payload_lines and _continuation_hides_redirect_target(line):
                 raise _run_id_continuation_refusal(step, body)
             tokens = _shell_tokens(line)
+            if True and _unclosed_substitution_hides_redirect(line):
+                raise _run_id_continuation_refusal(step, body)
             mechanism = _unmodelled_write_match(
                 tokens, step, relevant_names, flip_targets
             )
@@ -4035,6 +4548,21 @@ def _refuse_github_env_run_id_write(
             accounted: set[tuple[int, int]] = set()
             for segment in _shell_segments(tokens):
                 write_column = segment[0][2]
+                _scan_segment_substitutions(
+                    segment,
+                    step,
+                    body,
+                    aliases,
+                    assignments,
+                    lines,
+                    index,
+                    write_column,
+                    relevant_names,
+                    flip_targets,
+                    'carrier',
+                    False,
+                    False,
+                )
                 env_redirect: int | None = None
                 unknown_redirect: str | None = None
                 other_target_spans: list[tuple[int, int]] = []
@@ -4161,6 +4689,18 @@ def _refuse_github_env_run_id_write(
             )
             if occurrence is not None:
                 raise _run_id_unaccounted_occurrence_refusal(step, body, occurrence)
+            for segment in _shell_segments(tokens):
+                _refuse_argv_write_targets(
+                    segment,
+                    step,
+                    body,
+                    aliases,
+                    assignments,
+                    lines,
+                    index,
+                    segment[0][2] if segment else 0,
+                    False,
+                )
 
 
 def _unresolved_env_link(

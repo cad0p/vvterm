@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the quoted `echo "x=$( ... )"` hidden write (issue
+# #345, shape `a12-quoted-subshell-xprefix-last` = battery f03).
+# The substitution sits inside a double-quoted echo payload word,
+# which the walk accounted as data at base.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          echo "x=$(printf '%s\n' "SOURCE_""RUN_ID=42424242" >> "$n")"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

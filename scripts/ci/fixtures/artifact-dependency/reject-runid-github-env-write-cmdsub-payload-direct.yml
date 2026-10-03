@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the cleanest issue body (issue #345, shape
+# `t6-payload-word-direct-spelling` = battery f07). The payload
+# word spells `$GITHUB_ENV` directly inside its substitution.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf '%s\n' "X=$(printf '%s\n' SOURCE_RUN_ID=${{ github.run_id }} >> "$GITHUB_ENV")" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

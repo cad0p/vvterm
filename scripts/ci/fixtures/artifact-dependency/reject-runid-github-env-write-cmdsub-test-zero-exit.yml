@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the `test -n "$( ... )" || true` operand hidden write
+# (issue #345, shape `t7-test-operand-zero-exit` = battery f05). The
+# zero-exit guard hides the write from the exit-code view as well.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          test -n "$(printf '%s\n' "SOURCE_""RUN_ID=${{ github.run_id }}" >> "$n")" || true
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

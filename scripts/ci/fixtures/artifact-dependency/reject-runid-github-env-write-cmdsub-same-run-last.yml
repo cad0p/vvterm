@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the unquoted-subshell hidden write (issue #345, shape
+# `a8-unquoted-subshell-same-run-last` = battery f01). A `$( ... )`
+# word performing the env-file write is re-tokenized and its
+# redirects classified; the target resolves to the env file, so the
+# gate refuses rather than keeping the cross-run exclusion.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          x=$(printf '%s\n' "SOURCE_""RUN_ID=42424242" >> "$n")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

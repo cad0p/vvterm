@@ -71,7 +71,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// P4's value pins (lens-2 NIT 1): the fixture-manifest case count and
     /// the scanned-workflow floor. A stale constant must red the pin, not
     /// only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 343
+    private static let expectedManifestCases = 382
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -520,6 +520,49 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-substitution-then-alias-target.yml",
         "accept-runid-github-env-write-backtick-then-alias-target.yml",
         "reject-runid-github-env-write-unterminated-heredoc-delimiter.yml",
+        // #345: the `$( ... )`/backtick hidden-write closure (A6): the
+        // 29 measured closure rejects, the `other`-target accept, and
+        // the 9 over-refusal pins (six A4 classes + A6's three
+        // benign-as-stored shapes).
+        "accept-runid-github-env-write-sub-other-target.yml",
+        "reject-overrefusal-assembled-literal-target.yml",
+        "reject-overrefusal-awk-argv-target.yml",
+        "reject-overrefusal-dd-of-target.yml",
+        "reject-overrefusal-executing-heredoc-alias.yml",
+        "reject-overrefusal-malformed-no-newline-value.yml",
+        "reject-overrefusal-nonexecuting-conditional-alias.yml",
+        "reject-overrefusal-quoted-heredoc-payload.yml",
+        "reject-overrefusal-subshell-name-writing-mechanism.yml",
+        "reject-overrefusal-tee-argv-target.yml",
+        "reject-runid-github-env-write-cmdsub-assembled-inline-target.yml",
+        "reject-runid-github-env-write-cmdsub-bash-heredoc-alias.yml",
+        "reject-runid-github-env-write-cmdsub-binbash-carrier.yml",
+        "reject-runid-github-env-write-cmdsub-dd-printenv.yml",
+        "reject-runid-github-env-write-cmdsub-eval-carrier.yml",
+        "reject-runid-github-env-write-cmdsub-eval-var-operand-noxy.yml",
+        "reject-runid-github-env-write-cmdsub-eval-var-operand.yml",
+        "reject-runid-github-env-write-cmdsub-export-alias.yml",
+        "reject-runid-github-env-write-cmdsub-heredoc-payload.yml",
+        "reject-runid-github-env-write-cmdsub-if-condition.yml",
+        "reject-runid-github-env-write-cmdsub-indirect-name-target.yml",
+        "reject-runid-github-env-write-cmdsub-nested.yml",
+        "reject-runid-github-env-write-cmdsub-payload-computed-alias.yml",
+        "reject-runid-github-env-write-cmdsub-payload-direct.yml",
+        "reject-runid-github-env-write-cmdsub-payload-word.yml",
+        "reject-runid-github-env-write-cmdsub-plainname-last.yml",
+        "reject-runid-github-env-write-cmdsub-printenv-alias-target.yml",
+        "reject-runid-github-env-write-cmdsub-printenv-target.yml",
+        "reject-runid-github-env-write-cmdsub-python3-open.yml",
+        "reject-runid-github-env-write-cmdsub-quoted-xprefix-last.yml",
+        "reject-runid-github-env-write-cmdsub-same-run-last.yml",
+        "reject-runid-github-env-write-cmdsub-sh-heredoc-alias.yml",
+        "reject-runid-github-env-write-cmdsub-shellvar-carrier.yml",
+        "reject-runid-github-env-write-cmdsub-source-heredoc-alias.yml",
+        "reject-runid-github-env-write-cmdsub-source-heredoc-both.yml",
+        "reject-runid-github-env-write-cmdsub-tee-printenv.yml",
+        "reject-runid-github-env-write-cmdsub-test-operand.yml",
+        "reject-runid-github-env-write-cmdsub-test-zero-exit.yml",
+        "reject-runid-github-env-write-cmdsub-unclosed-continuation.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

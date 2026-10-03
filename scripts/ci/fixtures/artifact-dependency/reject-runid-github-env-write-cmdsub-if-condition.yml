@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `if [ -n "$( ... )" ]` condition (issue #345, shape
+# `f11-if-condition`). A conditional test position; runtime-malicious
+# (rc=0, current run last).
+name: probe
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          m=1; n="$GITHUB_ENV"
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          if [ -n "$(printf '%s\n' SOURCE_RUN_ID=${{ github.run_id }} >> "$n")" ]; then :; fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
