@@ -555,11 +555,11 @@ struct WorkflowShardSplitPinsTests {
         let scheduledSet = Set(scheduled)
         let exemptSet = Set(exempt)
         #expect(
-            scheduledSet.isDisjoint(with: exemptSet),
+            Self.isDisjoint(scheduledSet, exemptSet),
             "a method must never be both scheduled and exempt; overlap: \(scheduledSet.intersection(exemptSet).sorted()) — re-derive this pin (issue #362)"
         )
         #expect(
-            scheduledSet.union(exemptSet) == declaredSet,
+            Self.unionEquals(scheduledSet, exemptSet, declaredSet),
             "the declared methods must be exactly scheduled ∪ exempt (name-exact, issue #362); declared but neither scheduled nor exempt: \(declaredSet.subtracting(scheduledSet).subtracting(exemptSet).sorted()); scheduled/exempt but not declared (stale): \(scheduledSet.union(exemptSet).subtracting(declaredSet).sorted())"
         )
 
@@ -999,6 +999,17 @@ struct WorkflowShardSplitPinsTests {
             return false
         }
         return true
+    }
+
+    /// Bool wrappers keep `#expect`'s operand expansion out of the failure
+    /// output, which would otherwise dump both 125-element sets; the failure
+    /// messages already name the differing directions.
+    private static func isDisjoint(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
+        lhs.isDisjoint(with: rhs)
+    }
+
+    private static func unionEquals(_ lhs: Set<String>, _ rhs: Set<String>, _ union: Set<String>) -> Bool {
+        lhs.union(rhs) == union
     }
 
     private static func allowlistFixture() throws -> AllowlistFixture {
