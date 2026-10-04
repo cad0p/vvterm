@@ -837,7 +837,9 @@ at A16: the fixture corpus is 756/756 cases, of which 325 declare their
 measured base verdict (`base_exit`); the operand-mask fold adds 110 fixtures
 (24 accept pins, 47 reject fixtures including 8 documented over-refusals,
 and 39 base-REFUSE boundary pins — 14 are the sole-operand
-input-redirect controls added by fold round 1 F1 and 9 are the
+input-redirect controls added by fold round 1 F1, 16 are the
+redirect-prefix/fd-dup/read-write/trailing-operand controls also added by
+fold round 1, and 9 are the
 `ln`/`rsync`-prefix shadowing controls added by fold round 2 BLOCKER-1),
 and the regenerated
 7848-cell differential battery (4680 operand-bearing + 1980 continuation +
@@ -3527,7 +3529,9 @@ _ARGV_WRITE_VERBS = frozenset(
 )
 # The pre-fold write-verb table (this fold added `ln`/`rsync`, issue #350
 # item 13). `_argv_all_write_targets` re-classifies the base word list with
-# this table so its base pass is byte-equivalent to the pre-fold walk:
+# this table so its base pass reproduces the pre-fold walk's first-verb
+# choice exactly on the pre-fold verb vocabulary (a strict superset where the
+# fold widened a branch, e.g. the attached sed `w`):
 # `_argv_write_targets` returns on the FIRST recognized verb, so leaving
 # `ln`/`rsync` in the base pass lets a leading `ln`/`rsync` shadow a later
 # base verb (`touch`/`tee`/`truncate`/`sed`) and drop the base refusal from
