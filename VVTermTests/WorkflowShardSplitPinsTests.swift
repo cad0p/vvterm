@@ -484,7 +484,7 @@ struct WorkflowShardSplitPinsTests {
         // the bare spelling, so accept an optional quote around the key. A YAML
         // merge key (`<<: *anchor`, `- <<: *anchor`) or a bare `*alias` value
         // injects mapping entries the canonical scanner never sees, so it fails
-        // closed too (issue #248, ND-1).
+        // closed too (issue #248, ND-2).
         if let nonCanonical = region.first(where: {
             $0.range(of: #"^\s*["']?(include|exclude)["']?\s*:"#, options: .regularExpression) != nil
         }) {
