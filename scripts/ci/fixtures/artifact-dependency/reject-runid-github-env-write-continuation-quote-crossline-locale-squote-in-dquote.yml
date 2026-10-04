@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the locale-string spelling `$"…"` holds the same literal `'`, so
+# the gated plain-`'` opener must not fire inside it and mask the next line's
+# continuation join.
+# #350 item 12 fold round 3 (fold round 2 re-lens BLOCKER-1); base ACCEPT /
+# fold round 2 ACCEPT with a runtime FLIP -> fold round 3 REFUSE, runtime FLIP.
+name: reject-runid-github-env-write-continuation-quote-crossline-locale-squote-in-dquote
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          echo $"a'b"
+          dd of=\
+          "${arr[0]}" < payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

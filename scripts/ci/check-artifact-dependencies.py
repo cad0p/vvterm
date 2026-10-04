@@ -774,12 +774,25 @@ read `$'…'` as `'…'`, carried a phantom quote into the next line and
 skipped a `\\`+newline pair the previous head (`bdbb8cfd`) joined (fold
 round 2 lens-1 BLOCKER-1: the 6 escaped-quote variants and the witness are
 all prev-REFUSE -> fold-REFUSE with a runtime FLIP; 6 reject fixtures ship);
+the fold round 2 edit dropped the plain `'` opener's `quote is None` guard,
+so a `'` inside an open double-quoted (or locale `$"…"`) region opened a
+phantom single-quote state, suppressed the join and left 10 measured
+runtime-FLIP spellings accepted; fold round 3 restores the guard and ships 7
+reject fixtures plus the boundary accept pin (fold round 2 re-lens
+BLOCKER-1), and names two cross-run-only widenings — the unterminated
+`$'a\'b` shape (base ACCEPT / `7d712907` REFUSE -> fold-ACCEPT) and the
+`$'a\\'b'` shape (base/`7d712907` ACCEPT / `bdbb8cfd` REFUSE ->
+fold-ACCEPT, runtime cross-run) — neither a data-loss fail-open;
 the joined logical line
 feeds the existing extractors unchanged, alongside the sibling join above.
-The addition is refuse-only relative to the previous head over the
-measured sets — 0 widenings (prev REFUSE -> fold ACCEPT) over the 187-shape
-battery, the 468-shape fuzz, the 3240- and 900-shape grids, the 134-case
-union, the 653-file corpus and the ANSI-C escaped-quote family — but it is
+The addition is refuse-only relative to the fold round 2 head (`7d712907`)
+and the fold round 1 head (`bdbb8cfd`) over the measured sets — 0 widenings
+and 0 removals vs `7d712907` (187 {REFUSE->REFUSE 116, ACCEPT->ACCEPT 71};
+468 {159, 309}; 3240 {1260, 1980}; 900 {351, 549}; 134-union {116, 18};
+661-file corpus {REFUSE->REFUSE 504, ACCEPT->ACCEPT 151, ACCEPT->REFUSE 6})
+and, vs `bdbb8cfd`, one named cross-run corpus widening (`bdbb8cfd` REFUSE
+-> fold-ACCEPT — the `…-dquote-literal` accept pin correcting a fold round 2
+over-refusal, not a fail-open) — but it is
 not a theorem for every input (the join can also skip a pair the sibling
 join joins); `_scan_continuation_quote_state` is a fail-closed subset of
 bash's quote classes, not bash exactness. Claimed:
@@ -790,7 +803,7 @@ content puts a write target where the argv
 extractor reads it — a command's last operand (`cp`/`mv`/`install`), an
 `of=` target, or a sed `w` target — in all three styles (`|`, `>`, plain),
 every indicator spelling, and at EOF (measured at this commit: `--selftest`
-639/639). The command-position guard an earlier design carried was dropped:
+646/646). The command-position guard an earlier design carried was dropped:
 it kept 17 shapes ACCEPT, of which 9 are base-ACCEPT + runtime FLIP (real
 writes the guard suppressed) and 8 are benign; the join closes all nine and
 the eight benign shapes become measured over-refusals (the price of
@@ -798,12 +811,12 @@ fail-closed joining, listed by class with the corpus counts). Boundary
 (stays open, never implied closed): the `>8` chain bound
 (`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
 closed, `n9+` open) and the outside-class fail-opens — #350 item 13 (the
-continuation-independent extractor gaps, including the same-line `$'…\'…'`
-tokenizer gap: `_shell_tokens` reads `\'` as a close and swallows the rest
-of the line, so `echo $'a\'' ; cp payload \\` + `"${arr[0]}"` leaves
-`_argv_write_targets` empty — base/prev/fold ACCEPT + runtime FLIP, its
-continuation-free control also FLIPs, and no join fix closes it; fold round
-2 lens-1 MAJOR-1, named not folded), #350 item 14 (a target masked by a
+continuation-independent extractor gaps), #350 item 17 (the same-line
+`$'…\'…'` tokenizer gap: `_shell_tokens` reads `\'` as a close and swallows
+the rest of the line, so `echo $'a\'' ; cp payload \\` + `"${arr[0]}"`
+leaves `_argv_write_targets` empty — base/prev/fold ACCEPT + runtime FLIP,
+its continuation-free control also FLIPs, and no join fix closes it; fold
+round 2 lens-1 MAJOR-1, named not folded), #350 item 14 (a target masked by a
 trailing operator token: `_shell_segments` does not split on `(`, so
 `_argv_write_targets` reads `)` as `cp`'s last operand; the redirect-operand
 masks — `cp payload \\` + `"${arr[0]}" < payload`, `> /dev/null`, `2>&1`,
@@ -869,7 +882,7 @@ measured NUL spellings; item 8 stays a boundary class: `$'\\x00'` and `""`
 are pinned as accepted boundary fixtures, and the other five measured
 survivors (`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`)
 stay accepted and are recorded here. Measured at A13: the fixture corpus is
-639/639, of which 208 fixtures declare their measured base verdict
+646/646, of which 215 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 4 over-refusal pins under
 two root causes — 3 unmodelled-write shapes (any unmodelled write of the
 now-relevant base name refuses) and 1 no-write target mention (the
@@ -934,7 +947,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 639
+EXPECTED_MANIFEST_CASES = 646
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -951,7 +964,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 208
+EXPECTED_BASE_VERDICT_CASES = 215
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -4733,7 +4746,10 @@ def _scan_continuation_quote_state(
     toggle, the line-local `#` comment), but the state is an input and an
     output instead of being reset per line (issue #350 item 12, fold round
     1 lens-1 BLOCKER-1), and ANSI-C `$'…'` quoting is modelled distinctly
-    from `'…'` (issue #350 item 12, fold round 2 BLOCKER-1): inside
+    from `'…'` (issue #350 item 12, fold round 2 BLOCKER-1; the plain `'`
+    opener stays gated on `quote is None` so a `'` inside `"…"`/`$"…"`
+    cannot open a phantom single-quote state — fold round 3 restored the
+    guard the fold round 2 edit dropped, re-lens BLOCKER-1): inside
     `$'…'` a backslash escapes the next character, so `\'` is a literal
     quote and does not close the string while `\\` is a literal
     backslash. A trailing backslash inside an open single quote or ANSI-C
@@ -4742,8 +4758,8 @@ def _scan_continuation_quote_state(
     not a continuation; inside double quotes bash still removes the
     `\\`+newline pair. This is a fail-closed subset, not a shell: it does
     not model command substitutions, heredocs, or the same-line
-    `$'…\'…'` tokenizer gap in `_shell_tokens` (named residual — issue
-    #350 item 12 fold round 2 lens-1 MAJOR-1)."""
+    `$'…\'…'` tokenizer gap in `_shell_tokens` (named residual — #350
+    item 17, fold round 2 lens-1 MAJOR-1)."""
     index = 0
     end = len(line)
     escaped_until = -1
@@ -4778,7 +4794,7 @@ def _scan_continuation_quote_state(
             quote = "$'"
             index += 2
             continue
-        if char == "'":
+        if char == "'" and quote is None:
             quote = "'"
             index += 1
             continue
@@ -4897,12 +4913,16 @@ def _bash_joined_continuation_segments(
     mask the pair — fold round 1 lens-1 BLOCKER-1), not the per-line
     `_line_continuation_pending`. The callers keep the sibling join's
     verdicts and add this scan alongside. The addition is refuse-only
-    relative to the previous head (`bdbb8cfd`) over the measured sets — 0
-    prev-REFUSE -> fold-ACCEPT widenings over the 187/468/3240/900
-    batteries, the 134-case union and the 653-file corpus — but it is not a
-    theorem for every input: the join can also skip a pair the sibling join
-    joins, and the fold round 1 `$'…'` state mis-model was exactly such a
-    removal until fold round 2 modelled ANSI-C quoting (lens-1 BLOCKER-1).
+    relative to the fold round 2 head (`7d712907`) over the measured sets —
+    0 widenings and 0 removals over the 187/468/3240/900 batteries, the
+    134-case union and the 661-file corpus — and relative to the fold round 1
+    head (`bdbb8cfd`) the corpus holds one named cross-run widening (the
+    `…-dquote-literal` accept pin: `bdbb8cfd` REFUSE -> fold-ACCEPT, a fold
+    round 2 over-refusal the restored guard corrects) — but it is not a theorem for every input:
+    the join can also skip a pair the sibling join joins, and both the fold
+    round 1 `$'…'` state mis-model and the fold round 2 dropped `quote is
+    None` guard were exactly such removals until folded (lens-1 BLOCKER-1
+    rounds 1 and 2).
     Fidelity is bounded by `_scan_continuation_quote_state`'s modelled
     quote classes, which is a fail-closed subset of bash, not bash
     exactness."""

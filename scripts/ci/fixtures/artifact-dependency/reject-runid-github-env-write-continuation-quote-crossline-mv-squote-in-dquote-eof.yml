@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Fixture: `$'` inside an open double-quoted region is literal text, not
-# ANSI-C quoting, so the whole-body scan must not open the `$'` state there;
-# the line-2 continuation join stays in force.
-# #350 item 12 fold round 2 lens-1 BLOCKER-1 boundary; base ACCEPT / previous
-# head REFUSE -> folded REFUSE, runtime cross-run (the script is a bash syntax
-# error, so the refusal is fail-closed).
-name: reject-runid-github-env-write-continuation-quote-crossline-ansic-dquote-literal
+# Fixture: the `mv` last-operand writer after a `'`-in-dquotes line; the
+# body-final `\` masks the target at base and the item-12 join drops both
+# `\`+newline pairs, exposing it.
+# #350 item 12 fold round 3 (fold round 2 re-lens BLOCKER-1); base ACCEPT /
+# fold round 2 ACCEPT with a runtime FLIP -> fold round 3 REFUSE, runtime FLIP.
+name: reject-runid-github-env-write-continuation-quote-crossline-mv-squote-in-dquote-eof
 on: [workflow_dispatch]
 jobs:
   build:
@@ -26,9 +25,9 @@ jobs:
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
           printf '%s\n' "$(printenv "${x}${y}")" > pf
           read -a arr < pf
-          echo "$'\'
-          dd of=\
-          "${arr[0]}" < payload
+          echo "don't"
+          mv payload \
+          "${arr[0]}" \
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

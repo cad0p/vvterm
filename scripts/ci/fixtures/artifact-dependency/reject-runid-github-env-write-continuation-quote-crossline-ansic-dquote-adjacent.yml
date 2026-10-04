@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `$'` inside an open double-quoted region is literal text and the
+# following plain `'` must not open single-quote state there either, so the
+# `"` closes on the same line and the line-2 continuation join stays in force.
+# #350 item 12 fold round 3 (fold round 2 re-lens BLOCKER-1): the dropped
+# `quote is None` guard on the plain `'` opener made fold round 2 accept this
+# shape (runtime FLIP); base ACCEPT / fold round 2 ACCEPT -> fold round 3
+# REFUSE, runtime FLIP.
+name: reject-runid-github-env-write-continuation-quote-crossline-ansic-dquote-adjacent
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          echo "a$'b"
+          dd of=\
+          "${arr[0]}" < payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the whole rest of the body stays inside the open double-quoted
+# region (`$'` and `'` there are literal text), so the continuation join
+# re-opens the `"` around the `dd` text; the corrected model accepts the shape
+# (bash fails at parse time, so no write can run).
+# #350 item 12 fold round 3 (fold round 2 re-lens BLOCKER-1) boundary accept
+# pin; base ACCEPT -> fold round 3 ACCEPT, runtime cross-run.
+name: accept-runid-github-env-write-continuation-quote-crossline-ansic-dquote-literal
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          echo "$'\'
+          dd of=\
+          "${arr[0]}" < payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
