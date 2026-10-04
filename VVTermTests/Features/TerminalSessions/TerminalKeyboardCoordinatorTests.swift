@@ -447,10 +447,13 @@ struct TerminalKeyboardCoordinatorTests {
         #expect(session.acquireCount == 1)
         #expect(session.snapshot.isSoftwareInputActive)
 
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
+
         coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
             CGRect(x: 0, y: 700, width: 1_024, height: 300)
         )
         #expect(!coordinator.keyboardUITestPresentationVerificationPending)
+        await drainMainQueue()
 
         #expect(session.releaseCount == 1)
         #expect(session.rebuildCount == 0)
@@ -843,6 +846,9 @@ struct TerminalKeyboardCoordinatorTests {
             CGRect(x: 0, y: 700, width: 1_024, height: 300)
         )
         #expect(!coordinator.keyboardUITestPresentationVerificationPending)
+        await drainMainQueue()
+        await drainMainQueue()
+
         #expect(originalSession.forceSoftwareKeyboardCount == 1)
         #expect(originalSession.rebuildCount == 0)
         #expect(originalSession.accessorySuppressionRequests.isEmpty)
