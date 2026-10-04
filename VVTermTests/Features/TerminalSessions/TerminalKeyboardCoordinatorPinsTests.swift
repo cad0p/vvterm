@@ -115,7 +115,7 @@ struct TerminalKeyboardCoordinatorPinsTests {
             )
             #expect(
                 !body.contains("sleep("),
-                "site \(pin.site) (\(pin.testName)) must not race any fixed sleep (Task.sleep, Thread.sleep, usleep, or a wrapper)"
+                "site \(pin.site) (\(pin.testName)) must not race any fixed sleep (Task.sleep, Thread.sleep, or usleep)"
             )
         }
     }
