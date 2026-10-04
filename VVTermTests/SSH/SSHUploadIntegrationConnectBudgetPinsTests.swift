@@ -33,23 +33,33 @@
 //  cannot satisfy (or trip) an assertion; string contents are copied
 //  verbatim. The production-wiring scan binds the call *arguments*: the one
 //  `libssh2_session_set_timeout(` call and the one handshake-region
-//  `Task.sleep(nanoseconds:` must reference the local bound from the one
+//  `Task.sleep(` (label-checked) must reference the local bound from the one
 //  `SSHSessionHandshakeBudget.forConnectTimeout(config.connectionTimeout)`
 //  derivation, must match the `Int(<derived>.handshake * 1_000)` /
 //  `UInt64(<derived>.watchdog * 1_000_000_000)` shape, and must carry no
 //  other integer literal — so `30_000`, `30000`, `Int(30 * 1_000)`,
 //  `35 * 1_000_000_000`, `UInt64(35 * 1_000_000_000)` and a second call
-//  site all red. Still defeated, stated honestly: the scan is file-scoped
-//  (`SSHClient.swift`), so a second `libssh2_session_set_timeout` call in
-//  another file is invisible; an aliased derivation (`let f =
-//  SSHSessionHandshakeBudget.forConnectTimeout`), a wrapping helper, an
-//  argument assembled through an intermediate variable, a `var` binding, or
-//  a direct `SSHSessionHandshakeBudget(` construction shadowing the
-//  derivation red deliberately rather than passing. The `count == 1`
-//  assertions are intentionally strict: a second client construction in any
-//  `SSHClient(` / `SSHClient.init(` / bare `.init(` spelling, or a second
-//  `SSHSessionConfig(` / `SSHSessionConfig.init(` construction, must update
-//  this pin on purpose — re-affirm the rule here when the shape changes.
+//  site all red; a same-named method on another receiver
+//  (`Self.forConnectTimeout(…)`) reds too, because the derivation needle
+//  carries its `SSHSessionHandshakeBudget.` receiver. Still defeated, stated
+//  honestly: the scan is file-scoped (`SSHClient.swift`), so a second
+//  `libssh2_session_set_timeout` call in another file is invisible; an
+//  aliased derivation (`let f = SSHSessionHandshakeBudget.forConnectTimeout`),
+//  a wrapping helper, an argument assembled through an intermediate
+//  variable, or a `var` binding red deliberately rather than passing. Two
+//  shapes stay green and are admitted: a same-name shadowing local (a
+//  `do { let <derivedName> = SSHSessionHandshakeBudget.forConnectTimeout(30) … }`
+//  after the dead derived binding supplies both the pinned name and a
+//  hardcoded cap), and the two-step client alias (`let t = SSHClient.self;
+//  t.init()` — rejected inside `withConnection` by its bare `SSHClient` ban
+//  but invisible in a leg). The `count == 1` assertions are intentionally
+//  strict: a second client construction in any `SSHClient(` /
+//  `SSHClient.init` (called or as a function reference) /
+//  `SSHClient.self.init(` / bare `.init(` spelling, a second
+//  `atomicSocket.interrupt("handshake-watchdog")` anywhere in the file, or a
+//  second `SSHSessionConfig(` / `SSHSessionConfig.init(` construction, must
+//  update this pin on purpose — re-affirm the rule here when the shape
+//  changes.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the source scans at
 //  a mutated tree (`TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<tree>` exported into
@@ -211,21 +221,27 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             helperCalls.count == 1,
             "`withConnection` must build its client through exactly one `makeUploadClient(` call; found \(helperCalls.count) — re-derive this pin (issue #356)"
         )
-        for forbidden in ["SSHClient(", "setConnectTimeout("] {
+        // Any mention of the type in the helper is illegitimate:
+        // construction, an initializer-reference alias (`let make =
+        // SSHClient.init`), or a re-configuration would all bypass the
+        // factory (closure lens F1).
+        for forbidden in ["SSHClient", "setConnectTimeout("] {
             let found = Self.occurrences(of: forbidden, in: text, range: helperBody)
             #expect(
                 found.isEmpty,
-                "`withConnection` must not contain `\(forbidden)` (\(found.count) occurrence(s)): constructing or re-configuring a client in the helper would bypass the factory — re-derive this pin (issue #356)"
+                "`withConnection` must not mention `\(forbidden)` (\(found.count) occurrence(s)): constructing, aliasing or re-configuring a client in the helper would bypass the factory — re-derive this pin (issue #356)"
             )
         }
 
-        // Every construction spelling counts: `SSHClient(`, `SSHClient.init(`
-        // and a bare contextually-typed `.init(`. The helper-body ban above
-        // plus this file-wide count are what keep `makeUploadClient` the only
-        // site (impl lens 2 MINOR-1).
+        // Every construction spelling counts: `SSHClient(`, `SSHClient.init`
+        // (called or as the paren-less function reference `= SSHClient.init`),
+        // `SSHClient.self.init(` and a bare contextually-typed `.init(`. The
+        // helper-body ban above plus this file-wide count are what keep
+        // `makeUploadClient` the only site (impl lens 2 MINOR-1 + closure
+        // lens F1).
         var constructions = Self.occurrences(of: "SSHClient(", in: text)
         constructions += Self.regexOccurrences(
-            of: #"\bSSHClient\s*\.\s*init\s*\("#,
+            of: #"\bSSHClient\s*(?:\.\s*self)?\s*\.\s*init\b"#,
             in: text
         )
         constructions += Self.regexOccurrences(
@@ -235,7 +251,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         constructions.sort { $0.lowerBound < $1.lowerBound }
         #expect(
             constructions.count == 1,
-            "the upload suite must have exactly one client construction site (any `SSHClient(`, `SSHClient.init(` or bare `.init(` spelling, inside `makeUploadClient`); found \(constructions.count) — re-derive this pin (issue #356)"
+            "the upload suite must have exactly one client construction site (any `SSHClient(`, `SSHClient.init`, `SSHClient.self.init(` or bare `.init(` spelling, inside `makeUploadClient`); found \(constructions.count) — re-derive this pin (issue #356)"
         )
         let factoryAnchor = try #require(
             text.range(of: "static func makeUploadClient()", range: suiteBody),
@@ -311,40 +327,81 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             "`SSHSession` must keep its `connect()` function — re-derive this pin (issue #356)"
         )
         let connectBody = try Self.bracedBlock(after: connectAnchor, in: text)
+        // The tokens are the call/function *openers*, not the adjacent
+        // arguments: a formatter that wraps after `set_timeout(session,`
+        // must not red as if the call vanished (closure lens F5).
         for token in [
             "ssh_handshake_begin",
-            "libssh2_session_set_timeout(session,",
-            "atomicSocket.interrupt(\"handshake-watchdog\")"
+            "libssh2_session_set_timeout("
         ] {
             #expect(
                 text[connectBody].contains(token),
                 "the resolved `SSHSession.connect()` span must contain `\(token)` — re-derive this pin (issue #356)"
             )
         }
+        // The watchdog interrupt is unique file-wide and lives in this body:
+        // a second, earlier watchdog in a helper outside `connect()` could
+        // fire first with a hardcoded cap (closure lens F2). This is the
+        // watchdog counterpart of the file-wide
+        // `libssh2_session_set_timeout(` count below.
+        let watchdogInterrupts = Self.occurrences(
+            of: "atomicSocket.interrupt(\"handshake-watchdog\")",
+            in: text
+        )
+        #expect(
+            watchdogInterrupts.count == 1,
+            "SSHClient.swift must contain exactly one `atomicSocket.interrupt(\"handshake-watchdog\")` call — a second watchdog outside `connect()` could fire first with a hardcoded cap; found \(watchdogInterrupts.count) — re-derive this pin (issue #356)"
+        )
+        if let watchdogInterrupt = watchdogInterrupts.first {
+            #expect(
+                Self.isInside(connectBody, watchdogInterrupt.lowerBound),
+                "the single `atomicSocket.interrupt(\"handshake-watchdog\")` must stay inside `SSHSession.connect()` (positive control for the resolved span) — re-derive this pin (issue #356)"
+            )
+        }
         // Exactly one derivation in `connect()`, bound with `let` (a `var`
         // binding could be reassigned after the derivation). The local name is
         // read from the source, so renaming it is fine; the expression itself
-        // is pinned, so aliasing or wrapping the derivation reds.
+        // is pinned *with its receiver*, so aliasing, wrapping or a same-named
+        // method on another receiver (`Self.forConnectTimeout(…)`) reds
+        // (closure lens F3).
+        let derivationNeedle = "SSHSessionHandshakeBudget.forConnectTimeout(config.connectionTimeout)"
         let derivationExpressions = Self.occurrences(
-            of: "forConnectTimeout(config.connectionTimeout)",
+            of: derivationNeedle,
             in: text,
             range: connectBody
         )
         #expect(
             derivationExpressions.count == 1,
-            "the regular handshake must derive its caps through exactly one `forConnectTimeout(config.connectionTimeout)` expression (a dead extra reference must update this pin); found \(derivationExpressions.count) — re-derive this pin (issue #356)"
+            "the regular handshake must derive its caps through exactly one `\(derivationNeedle)` expression (a dead extra reference or a receiver swap must update this pin); found \(derivationExpressions.count) — re-derive this pin (issue #356)"
         )
         let derivationExpression = try #require(
             derivationExpressions.first,
-            "the regular handshake must derive its caps through `forConnectTimeout(config.connectionTimeout)` — re-derive this pin (issue #356)"
+            "the regular handshake must derive its caps through `\(derivationNeedle)` — re-derive this pin (issue #356)"
+        )
+        // The receiver must be the real type, and that type must declare the
+        // derivation exactly once: a same-named actor-local twin with
+        // hardcoded caps cannot be what the call site binds.
+        let budgetTypeAnchor = try #require(
+            text.range(of: "struct SSHSessionHandshakeBudget"),
+            "`SSHClient.swift` must keep the `struct SSHSessionHandshakeBudget` declaration — re-derive this pin (issue #356)"
+        )
+        let budgetTypeBody = try Self.bracedBlock(after: budgetTypeAnchor, in: text)
+        let typeDerivations = Self.occurrences(
+            of: "func forConnectTimeout(",
+            in: text,
+            range: budgetTypeBody
+        )
+        #expect(
+            typeDerivations.count == 1,
+            "`SSHSessionHandshakeBudget` must declare exactly one `func forConnectTimeout(` (the caps' single source); found \(typeDerivations.count) — re-derive this pin (issue #356)"
         )
         let derivationPrefix = String(text[connectBody.lowerBound..<derivationExpression.lowerBound])
         let bindingName = try #require(
             Self.firstCapture(
-                ofPattern: #"let\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)?$"#,
+                ofPattern: #"let\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*$"#,
                 in: derivationPrefix
             ),
-            "`forConnectTimeout(config.connectionTimeout)` must be bound by `let <name> =` immediately before it (a `var` binding could be reassigned after the derivation) — re-derive this pin (issue #356)"
+            "`\(derivationNeedle)` must be bound by `let <name> =` immediately before it (a `var` binding could be reassigned after the derivation) — re-derive this pin (issue #356)"
         )
         #expect(
             Self.occurrences(
@@ -398,26 +455,34 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         )
 
         // The single handshake watchdog must consume the derived `watchdog`.
-        let watchdogSleeps = Self.occurrences(
-            of: "Task.sleep(nanoseconds:",
+        // The count matches the `Task.sleep(` opener, not the adjacent
+        // `nanoseconds:` label, so a formatter that wraps after the opener or
+        // after the colon stays green (closure lens F5); the label itself is
+        // asserted below.
+        let watchdogSleeps = Self.regexOccurrences(
+            of: #"(?<![A-Za-z0-9_])Task\s*\.\s*sleep\s*\("#,
             in: text,
             range: connectBody
         )
         #expect(
             watchdogSleeps.count == 1,
-            "`SSHSession.connect()` must contain exactly one `Task.sleep(nanoseconds:` handshake watchdog; found \(watchdogSleeps.count) — re-derive this pin (issue #356)"
+            "`SSHSession.connect()` must contain exactly one handshake-watchdog `Task.sleep(`; found \(watchdogSleeps.count) — re-derive this pin (issue #356)"
         )
         let watchdogSleep = try #require(
             watchdogSleeps.first,
-            "the handshake watchdog's `Task.sleep(nanoseconds:` must exist — re-derive this pin (issue #356)"
+            "the handshake watchdog's `Task.sleep(` must exist — re-derive this pin (issue #356)"
         )
         let watchdogArgument = try Self.parenthesizedArgument(
             after: watchdogSleep.upperBound,
             in: text
         )
         #expect(
+            watchdogArgument.text.contains("nanoseconds:"),
+            "the handshake watchdog's `Task.sleep(` must use the `nanoseconds:` label; found `\(watchdogArgument.text.trimmingCharacters(in: .whitespacesAndNewlines))` — re-derive this pin (issue #356)"
+        )
+        #expect(
             watchdogArgument.text.contains("\(bindingName).watchdog"),
-            "the watchdog `Task.sleep(nanoseconds:` argument must reference `\(bindingName).watchdog`; found `\(watchdogArgument.text.trimmingCharacters(in: .whitespacesAndNewlines))` — re-derive this pin (issue #356)"
+            "the handshake watchdog's `Task.sleep(` argument must reference `\(bindingName).watchdog`; found `\(watchdogArgument.text.trimmingCharacters(in: .whitespacesAndNewlines))` — re-derive this pin (issue #356)"
         )
         let watchdogLiterals = Self.numericLiteralTokens(in: watchdogArgument.text)
             .filter { !Self.conversionScaleFactors.contains($0) }
@@ -740,20 +805,24 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         return result
     }
 
-    /// Every match of the ICU regular expression `pattern` in `text`, in
-    /// source order. Used for construction-spelling counts (`SSHClient.init(`,
-    /// bare `.init(`) that a literal substring scan cannot see.
+    /// Every match of the ICU regular expression `pattern` in `text`
+    /// (optionally within `range`), in source order. Used for
+    /// construction-spelling counts (`SSHClient.init(`, bare `.init(`) and
+    /// the `Task.sleep(` watchdog-opener count, which literal substring scans
+    /// cannot see.
     private static func regexOccurrences(
         of pattern: String,
-        in text: String
+        in text: String,
+        range: Range<String.Index>? = nil
     ) -> [Range<String.Index>] {
+        let searchRange = range ?? text.startIndex..<text.endIndex
         var result: [Range<String.Index>] = []
-        var searchStart = text.startIndex
-        while searchStart < text.endIndex,
+        var searchStart = searchRange.lowerBound
+        while searchStart < searchRange.upperBound,
               let found = text.range(
                   of: pattern,
                   options: .regularExpression,
-                  range: searchStart..<text.endIndex
+                  range: searchStart..<searchRange.upperBound
               ) {
             result.append(found)
             searchStart = found.upperBound
