@@ -617,18 +617,35 @@ jobs:
             > "$RUNNER_TEMP/sim-vvterm.log" 2>&1 || true
           echo "captured $(wc -l < "$RUNNER_TEMP/sim-vvterm.log") lines"
 
+      - name: Snapshot fixture sshd log
+        # `sshd -E` runs as root and can leave sshd.log root-owned 0600 (the
+        # setup-time chown races sshd's first open — repro-sshd-setup.sh now
+        # pre-creates the file; this snapshot is the second line of defence).
+        # `upload-artifact` fails the WHOLE artifact with
+        # `EACCES … open sshd.log` when one path is unreadable — silently,
+        # because both upload steps are `continue-on-error: true` (measured
+        # on run 37191709358: all three e2e jobs, every `-logs` artifact
+        # absent). Snapshot through sudo so the uploaded copy is
+        # runner-owned and frozen while the fixture sshd keeps appending.
+        if: always()
+        run: |
+          set -euo pipefail
+          sudo cat "$RUNNER_TEMP/vvterm-repro/sshd.log" \
+            > "$RUNNER_TEMP/vvterm-repro/sshd-snapshot.log" || true
+
       - name: Check fixture sshd log presence
         # `if-no-files-found: ignore` is silent when only one of several
         # artifact paths is missing (measured: the upload-hardening.log path
         # was silently absent in a real failure artifact), so make the
         # upload legs' server-side log loud before the uploads. The fixture
-        # writes it at $RUNNER_TEMP/vvterm-repro/sshd.log
-        # (scripts/ci/repro-sshd-setup.sh:117).
+        # writes the live log at $RUNNER_TEMP/vvterm-repro/sshd.log
+        # (scripts/ci/repro-sshd-setup.sh) and the step above snapshots it
+        # into the readable copy that both artifacts upload.
         if: always()
         run: |
           set -euo pipefail
-          test -s "$RUNNER_TEMP/vvterm-repro/sshd.log" \
-            || echo "::warning::$RUNNER_TEMP/vvterm-repro/sshd.log missing or empty — upload-leg stall attribution will be unavailable"
+          test -s "$RUNNER_TEMP/vvterm-repro/sshd-snapshot.log" \
+            || echo "::warning::$RUNNER_TEMP/vvterm-repro/sshd-snapshot.log missing or empty — upload-leg stall attribution will be unavailable"
 
       - name: Upload teleport logs (always)
         if: always()
@@ -641,7 +658,7 @@ jobs:
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
             ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
             ${{ runner.temp }}/sim-vvterm.log
-            ${{ runner.temp }}/vvterm-repro/sshd.log
+            ${{ runner.temp }}/vvterm-repro/sshd-snapshot.log
             ${{ runner.temp }}/vvterm-diag.txt
           if-no-files-found: ignore
 
@@ -655,7 +672,7 @@ jobs:
             ${{ runner.temp }}/test.log
             ${{ runner.temp }}/upload-hardening.log
             ${{ runner.temp }}/sim-vvterm.log
-            ${{ runner.temp }}/vvterm-repro/sshd.log
+            ${{ runner.temp }}/vvterm-repro/sshd-snapshot.log
             ${{ runner.temp }}/samples
           if-no-files-found: ignore
 

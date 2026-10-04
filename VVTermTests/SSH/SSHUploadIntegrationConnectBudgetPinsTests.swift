@@ -68,6 +68,15 @@
 //  `SSHSessionConfig.self.init(` construction, must update this pin on
 //  purpose — re-affirm the rule here when the shape changes.
 //
+//  Pin C (same issue, same evidence pipeline): the fixture sshd log reaches
+//  the `teleport-e2e` artifacts as a runner-owned snapshot. The live
+//  `sshd -E` log can be root-owned 0600, and one unreadable path makes
+//  `upload-artifact` fail the whole zip while `continue-on-error` hides it
+//  (measured: run 37191709358, all three e2e jobs, every `-logs` artifact
+//  absent) — so the live log must appear only as the `sudo cat` source and
+//  both artifact path lists must carry the snapshot, with the fixture
+//  script pre-creating the log before sshd opens it.
+//
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the source scans at
 //  a mutated tree (`TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<tree>` exported into
 //  xcodebuild's own environment). Never set in CI.
@@ -569,9 +578,102 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         }
     }
 
+    // MARK: - Pin C: the stall-attribution log artifact
+
+    /// Assertion 8: the fixture sshd log reaches the artifacts as a
+    /// runner-owned snapshot. `sshd -E` runs as root, and one unreadable
+    /// path makes `upload-artifact` fail the whole zip with `EACCES` while
+    /// `continue-on-error: true` hides the missing artifact (measured on
+    /// run 37191709358: all three e2e jobs, every `-logs` artifact absent).
+    /// The live log may therefore appear exactly once — as the `sudo cat`
+    /// source inside the snapshot step — and both artifact path lists must
+    /// upload the snapshot.
+    @Test
+    func testFixtureSshdLogIsUploadedAsAReadableSnapshot() throws {
+        let workflow = Self.strippingYAMLComments(
+            try Self.source(".github/workflows/teleport-e2e.yml")
+        )
+        let liveLog = "vvterm-repro/sshd.log"
+        let snapshot = "vvterm-repro/sshd-snapshot.log"
+
+        let liveRefs = Self.occurrences(of: liveLog, in: workflow)
+        #expect(
+            liveRefs.count == 1,
+            "the live fixture sshd log must be referenced exactly once in `teleport-e2e.yml` — as the `sudo cat` snapshot source; an artifact path pointing at it fails the whole zip with `EACCES` while `continue-on-error` hides it (issue #356); found \(liveRefs.count) reference(s) — re-derive this pin"
+        )
+        // 1 = the snapshot target, 2 = the presence check (`test -s` + the
+        // warning text), 1 each in the two artifact path lists.
+        let snapshotRefs = Self.occurrences(of: snapshot, in: workflow)
+        #expect(
+            snapshotRefs.count == 5,
+            "the snapshot must be referenced exactly 5 times (snapshot target, the presence check's `test -s` and warning text, and both artifact path lists); found \(snapshotRefs.count) — re-derive this pin (issue #356)"
+        )
+
+        let snapshotStep = try Self.stepBlock(
+            named: "Snapshot fixture sshd log",
+            containing: "sudo cat",
+            in: workflow
+        )
+        for token in ["sudo cat", liveLog, snapshot] {
+            #expect(
+                snapshotStep.contains(token),
+                "the `Snapshot fixture sshd log` step must contain `\(token)`; the live log is root-owned 0600, so only a sudo read can produce a readable copy (issue #356) — re-derive this pin"
+            )
+        }
+        #expect(
+            snapshotStep.contains("if: always()"),
+            "the snapshot step must run on failed legs too — the failing legs are exactly the ones whose attribution matters (issue #356) — re-derive this pin"
+        )
+
+        // The workflow reuses step names across jobs (two `Upload teleport
+        // logs (always)` steps), so each lookup is disambiguated by its
+        // artifact name.
+        let artifactSteps: [(name: String, artifact: String)] = [
+            (
+                "Upload teleport logs (always)",
+                "teleport-e2e-${{ matrix.second-factor }}-${{ matrix.session-recording }}-logs"
+            ),
+            (
+                "Upload test results on failure",
+                "teleport-e2e-${{ matrix.second-factor }}-${{ matrix.session-recording }}-test-results"
+            )
+        ]
+        for step in artifactSteps {
+            let block = try Self.stepBlock(named: step.name, containing: step.artifact, in: workflow)
+            #expect(
+                block.contains(snapshot),
+                "`\(step.name)` must upload `\(snapshot)` — the live log cannot be zipped while it may be root-owned (issue #356) — re-derive this pin"
+            )
+            #expect(
+                !block.contains(liveLog),
+                "`\(step.name)` must not upload the live `\(liveLog)`: one unreadable path fails the whole artifact with `EACCES` while `continue-on-error` swallows it (issue #356) — re-derive this pin"
+            )
+        }
+    }
+
+    /// Assertion 9: `repro-sshd-setup.sh` pre-creates the log as the runner
+    /// user before sshd opens it, so ownership no longer depends on the
+    /// post-start `chown`, which races sshd's first open and silently loses.
+    @Test
+    func testFixtureSetupPreCreatesTheSshdLogBeforeLaunch() throws {
+        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let preCreate = try #require(
+            script.range(of: #": >> "$REPRO_DIR/sshd.log""#),
+            "`repro-sshd-setup.sh` must pre-create `$REPRO_DIR/sshd.log` (append, never truncate) before starting sshd — `-E` creates a missing file root-owned 0600 (issue #356) — re-derive this pin"
+        )
+        let launch = try #require(
+            script.range(of: #"sudo "$SSHD" -E "$REPRO_DIR/sshd.log""#),
+            "`repro-sshd-setup.sh` must keep its `sudo \"$SSHD\" -E …/sshd.log` launch — re-derive this pin (issue #356)"
+        )
+        #expect(
+            preCreate.lowerBound < launch.lowerBound,
+            "the pre-create must run BEFORE the sshd launch — the owner is only fixed while the file already exists (issue #356) — re-derive this pin"
+        )
+    }
+
     // MARK: - The conversion
 
-    /// Assertion 8: the `Duration` → `TimeInterval` bridge itself (closure
+    /// Assertion 10: the `Duration` → `TimeInterval` bridge itself (closure
     /// lens R2-4). The wiring pin binds the *call* text, so a body that
     /// dropped the attoseconds term would leave every source scan green while
     /// a fractional budget silently truncated; assert the conversion
@@ -644,6 +746,34 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             }
         }
         return result
+    }
+
+    /// The text of the `teleport-e2e.yml` step whose `- name:` line matches
+    /// `name` AND whose block contains `token`. The workflow reuses step names
+    /// across jobs (e.g. two `Upload teleport logs (always)` steps), so a
+    /// name-only lookup would silently bind the wrong job's step; the caller
+    /// passes a token unique to the intended step (its artifact name). Steps
+    /// sit at a uniform 6-space indent, so the next `\n      - name:` line is
+    /// the block boundary.
+    private static func stepBlock(
+        named name: String,
+        containing token: String,
+        in workflow: String
+    ) throws -> Substring {
+        var searchStart = workflow.startIndex
+        while let anchor = workflow.range(
+            of: "- name: \(name)",
+            range: searchStart..<workflow.endIndex
+        ) {
+            let rest = workflow[anchor.upperBound...]
+            let boundary = rest.range(of: "\n      - name:")?.lowerBound ?? rest.endIndex
+            let block = workflow[anchor.lowerBound..<boundary]
+            if block.contains(token) { return block }
+            searchStart = boundary
+        }
+        throw PinFailure(
+            "`teleport-e2e.yml` must keep the `\(name)` step containing `\(token)` — re-derive this pin (issue #356)"
+        )
     }
 
     // MARK: - Source helpers

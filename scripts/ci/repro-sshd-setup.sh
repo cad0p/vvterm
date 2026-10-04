@@ -110,6 +110,16 @@ fi
 if pgrep -f "sshd.*$REPRO_DIR/sshd_config" >/dev/null; then
   echo "sshd already running for this rig"
 else
+  # Pre-create the log as the runner user BEFORE sshd opens it with `-E`.
+  # sshd runs as root and `-E` creates a missing file root-owned 0600; the
+  # post-start chown below then races sshd's first open and silently loses
+  # (`2>/dev/null || true`), leaving the log unreadable — measured once
+  # `teleport-e2e` began uploading it: `upload-artifact` died with
+  # `EACCES: permission denied, open …/sshd.log` in all three jobs of run
+  # 37191709358, so the `continue-on-error` uploads produced no artifact at
+  # all. `-E` opens an existing file with O_APPEND and keeps its owner; `>>`
+  # (not `>`) so a still-running sshd's log is never truncated.
+  : >> "$REPRO_DIR/sshd.log"
   # -E logfile: sshd debug (LogLevel DEBUG3) appended to sshd.log instead of
   # syslog — ground truth for who closed/reset the connection at the tap-kill
   # moment. (Plain -ddd re-exec broke the listener on macOS; sudo -E broke
@@ -117,8 +127,9 @@ else
   sudo "$SSHD" -E "$REPRO_DIR/sshd.log" -D -f "$REPRO_DIR/sshd_config" >/dev/null 2>&1 &
   SSHD_PID=$!
   echo "$SSHD_PID" > "$REPRO_DIR/sshd.pid"
-  # The -E file is opened as root (sudo); the evidence dump + artifact
-  # upload run as the runner user.
+  # Defence-in-depth for a rig sshd that recreated the file between the
+  # pre-create and its first open; the artifact path no longer depends on
+  # this chown (the workflow snapshots the log through sudo before upload).
   sudo chown "$USERNAME" "$REPRO_DIR/sshd.log" 2>/dev/null || true
   # Wait for the listener (macOS python3 socket probe).
   for i in $(seq 1 30); do
