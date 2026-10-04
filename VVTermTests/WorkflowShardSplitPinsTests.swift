@@ -83,7 +83,14 @@
 //  declaration is not a resolved `XCTestCase` class/extension (file scope,
 //  unknown base, `extension XCTestCase`, or a nested `struct`/`enum`/`actor`/
 //  `protocol`) is UNATTRIBUTED and fails assertion 7 closed; a `private
-//  func test…` is deliberately treated as declared (rename it); (5) the
+//  func test…` is deliberately treated as declared (rename it). Other
+//  lexical escapes are NOT probed: an `@objc(customSelector)` declaration
+//  whose runtime selector starts with `test`, a generic clause
+//  (`func testX<T>(…)` — harmless, XCTest cannot discover it), and platform
+//  conditions that exclude the iOS Simulator destination but contain neither
+//  `os(` nor `targetEnvironment(` (e.g. `#if !canImport(UIKit)`,
+//  `#if arch(x86_64)`) — revise the probe if any of these become reachable;
+//  (5) the
 //  shape guard fails CLOSED on the canonical-shape violations it names — a
 //  missing/misspelled `needs-fixture`, a multi-line `only-testing:`, a
 //  duplicate `only-testing:` key, an `include:`/`exclude:` key in the matrix
@@ -108,7 +115,10 @@
 //  (8) the ledger categories are reason classes, not verified mechanisms —
 //  only `platformGated` is cross-checked against the declaration's gate; the
 //  pin never executes the in-code `XCTSkip` guard and never proves a reason
-//  true; (9) `liveTrackers` is a static Swift set, so the pin cannot query
+//  true; the 20-character reason floor is a LENGTH floor for the 7
+//  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×3, `platformGated`
+//  ×1) — the other 30 rows are additionally protected by the `#N` check;
+//  (9) `liveTrackers` is a static Swift set, so the pin cannot query
 //  GitHub: a closed tracker stays green until a human removes it, and a
 //  closed tracker must name its successor in the reason and in `liveTrackers`
 //  in the same PR; (10) JSONSerialization is last-wins on duplicate keys, so
@@ -492,11 +502,13 @@ struct WorkflowShardSplitPinsTests {
     ]
 
     /// Assertion 7 — declared = scheduled ⊎ exempt (name-exact). The scanner
-    /// fails closed twice: any unattributed candidate reds, and the broad
-    /// probe total must equal the attributed count (a separate, unanchored
-    /// pattern, so a modifier-prefixed declaration cannot hide). Also pins
-    /// the declared/exempt/per-category counts, the frozen 8 never-scheduled
-    /// `(id, category)` pairs, and the scheduled-gate guard.
+    /// fails closed on any unattributed candidate, and the broad probe's match
+    /// count is recomputed in a separate `numberOfMatches` pass and must equal
+    /// attributed + unattributed — a classification-completeness guard against
+    /// a candidate dropped between match and attribution, not a second regex
+    /// miss check. Also pins the declared/exempt/per-category counts, the
+    /// frozen 8 never-scheduled `(id, category)` pairs, and the
+    /// scheduled-gate guard.
     @Test
     func testEveryDeclaredUITestIsScheduledOrExempt() throws {
         let scan = try Self.declaredUITestMethods()
@@ -506,8 +518,8 @@ struct WorkflowShardSplitPinsTests {
             "every `func test…(` must sit inside a resolved `XCTestCase` body; declaration(s) outside a scanned XCTestCase body: \(scan.unattributed.map { "\($0.name) (\($0.file):\($0.line))" }.sorted()) — re-derive this pin (issue #362)"
         )
         #expect(
-            scan.broadProbeTotal == scan.attributed.count,
-            "the broad `\\bfunc\\s+(test\\w*)\\s*\\(` probe must attribute every declaration: broad total \(scan.broadProbeTotal), attributed \(scan.attributed.count), unattributed \(scan.unattributed.count) — re-derive this pin (issue #362)"
+            scan.broadProbeTotal == scan.attributed.count + scan.unattributed.count,
+            "classification-completeness guard: the broad `\\bfunc\\s+(test\\w*)\\s*\\(` probe matched \(scan.broadProbeTotal) declaration(s) in its own pass, but attributed \(scan.attributed.count) + unattributed \(scan.unattributed.count) — a candidate was dropped between match and attribution; re-derive this pin (issue #362)"
         )
 
         let declared = scan.attributed
@@ -554,12 +566,16 @@ struct WorkflowShardSplitPinsTests {
         let declaredSet = Set(declared.map(\.identifier))
         let scheduledSet = Set(scheduled)
         let exemptSet = Set(exempt)
+        // Bind the partition to locals so Swift Testing expands only the Bool
+        // (`partitionHolds → false`), not all three 100+-element sets.
+        let setsAreDisjoint = scheduledSet.isDisjoint(with: exemptSet)
+        let partitionHolds = scheduledSet.union(exemptSet) == declaredSet
         #expect(
-            Self.isDisjoint(scheduledSet, exemptSet),
+            setsAreDisjoint,
             "a method must never be both scheduled and exempt; overlap: \(scheduledSet.intersection(exemptSet).sorted()) — re-derive this pin (issue #362)"
         )
         #expect(
-            Self.unionEquals(scheduledSet, exemptSet, declaredSet),
+            partitionHolds,
             "the declared methods must be exactly scheduled ∪ exempt (name-exact, issue #362); declared but neither scheduled nor exempt: \(declaredSet.subtracting(scheduledSet).subtracting(exemptSet).sorted()); scheduled/exempt but not declared (stale): \(scheduledSet.union(exemptSet).subtracting(declaredSet).sorted())"
         )
 
@@ -577,8 +593,8 @@ struct WorkflowShardSplitPinsTests {
         for entry in scheduled {
             guard let gate = gatesByIdentifier[entry] else { continue }  // stale scheduled is asserted above
             #expect(
-                gate == nil || gate?.contains("os(iOS)") == true,
-                "a scheduled method must compile on the iOS Simulator destination; `\(entry)` carries gate `\(gate ?? "nil")` — a macOS-only scheduled test silently runs zero coverage (issue #362)"
+                gate == nil || gate == "os(iOS)",
+                "a scheduled method must compile on the iOS Simulator destination (only an exact `os(iOS)` gate proves it); `\(entry)` carries gate `\(gate ?? "nil")` — a macOS-only, negated or narrowed scheduled test silently runs zero coverage (issue #362)"
             )
         }
     }
@@ -653,7 +669,7 @@ struct WorkflowShardSplitPinsTests {
     /// `VVTermUITests/`, blanks comments and string interiors, line-scans the
     /// `#if` condition stack WITH polarity (`#else` flips, `#elseif`
     /// replaces), brace-matches every type declaration as an attribution
-    /// barrier, and attributes each unanchored `\bfunc\s+(test\w*)\s*\(`
+    /// barrier, and attributes each unanchored `\bfunc\s+`?(test\w*)`?\s*\(`
     /// candidate to its innermost enclosing declaration. A candidate whose
     /// innermost declaration is not a resolved `XCTestCase` class (direct or
     /// a transitive base chain within the scan) or an extension of one is
@@ -700,7 +716,7 @@ struct WorkflowShardSplitPinsTests {
 
         let regex: NSRegularExpression
         do {
-            regex = try NSRegularExpression(pattern: #"\bfunc\s+(test\w*)\s*\("#)
+            regex = try NSRegularExpression(pattern: #"\bfunc\s+`?(test\w*)`?\s*\("#)
         } catch {
             throw PinFailure("could not compile the declared-test probe: \(error) — re-derive this pin (issue #362)")
         }
@@ -714,9 +730,16 @@ struct WorkflowShardSplitPinsTests {
             let gates = try platformGatesByLine(in: blanked)
             let declarations = declarationsByFile[file.path] ?? []
             let nsText = blanked as NSString
+            // Classification-completeness guard: count the broad probe's
+            // matches in a SEPARATE pass, so a candidate dropped between
+            // match and attribution reds even when `unattributed` is empty.
+            broadProbeTotal += regex.numberOfMatches(
+                in: blanked,
+                range: NSRange(location: 0, length: nsText.length)
+            )
             for match in regex.matches(in: blanked, range: NSRange(location: 0, length: nsText.length)) {
-                broadProbeTotal += 1
                 let name = nsText.substring(with: match.range(at: 1))
+                    .replacingOccurrences(of: "`", with: "")
                 let index = match.range.location
                 let line = lineNumber(atUTF16Offset: index, in: nsText)
                 let innermost = declarations
@@ -754,9 +777,13 @@ struct WorkflowShardSplitPinsTests {
     }
 
     /// Per-line platform gate: the innermost POSITIVE `#if` frame whose
-    /// trimmed condition contains `os(`, after applying `#else` polarity.
-    /// A method in the `#else` of `#if os(macOS)` compiles on the iOS
-    /// Simulator, so it must not carry the macOS gate (re-lens-1 MINOR-1).
+    /// trimmed condition contains `os(` or `targetEnvironment(`, after
+    /// applying `#else` polarity. A method in the `#else` of `#if os(macOS)`
+    /// compiles on the iOS Simulator, so it must not carry the macOS gate
+    /// (re-lens-1 MINOR-1); `#if targetEnvironment(macCatalyst)` is recorded
+    /// so the scheduled-gate guard reds instead of silently compiling out.
+    /// `swift(`/`DEBUG` are deliberately not recorded (they do not exclude
+    /// the destination); conditions with neither token are defeat (4).
     private static func platformGatesByLine(in blanked: String) throws -> [Int: String] {
         var gates: [Int: String] = [:]
         var stack: [(condition: String, positive: Bool)] = []
@@ -783,7 +810,9 @@ struct WorkflowShardSplitPinsTests {
                 }
                 stack.removeLast()
             }
-            if let gate = stack.last(where: { $0.positive && $0.condition.contains("os(") })?.condition {
+            if let gate = stack.last(where: {
+                $0.positive && ($0.condition.contains("os(") || $0.condition.contains("targetEnvironment("))
+            })?.condition {
                 gates[offset + 1] = gate
             }
         }
@@ -999,17 +1028,6 @@ struct WorkflowShardSplitPinsTests {
             return false
         }
         return true
-    }
-
-    /// Bool wrappers keep `#expect`'s operand expansion out of the failure
-    /// output, which would otherwise dump both 125-element sets; the failure
-    /// messages already name the differing directions.
-    private static func isDisjoint(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
-        lhs.isDisjoint(with: rhs)
-    }
-
-    private static func unionEquals(_ lhs: Set<String>, _ rhs: Set<String>, _ union: Set<String>) -> Bool {
-        lhs.union(rhs) == union
     }
 
     private static func allowlistFixture() throws -> AllowlistFixture {
