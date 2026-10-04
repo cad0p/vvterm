@@ -1746,6 +1746,13 @@ final class TerminalKeyboardCoordinator: ObservableObject {
         presentationVerifyTask != nil
     }
 
+    /// Awaits the currently pending presentation-verification pass, if any.
+    /// The pass body runs on the MainActor, so its effects are visible to a
+    /// MainActor test when this returns.
+    func keyboardUITestAwaitPresentationVerification() async {
+        await presentationVerifyTask?.value
+    }
+
     func keyboardUITestReceiveKeyboardEndFrame(
         _ frame: CGRect?,
         isLocal: Bool
