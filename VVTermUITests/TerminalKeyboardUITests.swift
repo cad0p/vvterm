@@ -1,9 +1,14 @@
 // Keyboard UI tests synced from upstream vivy-company/vvterm (DEV-319).
-// 13 tests are quarantined under #92 (https://github.com/cad0p/vvterm/issues/92):
+// 14 tests are quarantined under #92 (https://github.com/cad0p/vvterm/issues/92):
 // upstream's new harness is coupled to upstream's TerminalTabManager wiring and
 // fails on the fork's app (harness control-panel geometry + keyboard state machine).
-// Plus one CI-only quarantine under #184: testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel
-// (marginal IME-proxy handoff timeout — see the test body).
+// Four more are CI-only gated in the test body: #119
+// (testPrivacyModeBackgroundResumeRestoresResponsiveTerminal), #201 (closed;
+// testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal and
+// testDefaultKeyboardAvoidanceResizesTerminalGrid) and #184 (closed;
+// testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel); the live
+// host-state tracker for those is #257, and scripts/ci/ui-test-allowlist.json is
+// the authoritative ledger (WorkflowShardSplitPinsTests assertions 7-8).
 import XCTest
 
 final class TerminalKeyboardUITests: XCTestCase {
