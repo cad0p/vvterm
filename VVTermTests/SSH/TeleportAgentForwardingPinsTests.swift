@@ -392,4 +392,30 @@ struct TeleportAgentForwardingPinsTests {
             "the helper must not hop into the session actor for the stored failure"
         )
     }
+
+    @Test
+    func eofRetirementTestObservesTheStoreInsteadOfSleeping() throws {
+        // #358: the EOF-retirement assertion used to race a fixed 50 ms sleep
+        // against the serve loop's retirement. The test must observe the
+        // retirement (`ownedChannelCount == 0`) and must never reintroduce a
+        // fixed sleep in that body.
+        let source = try source("VVTermTests/SSH/TeleportAgentForwardingTests.swift")
+        let header = try #require(
+            source.range(of: "func serviceEndsOnEOFWithoutFreeingTheChannel()")
+        )
+        let rest = source[header.lowerBound...]
+        let end = try #require(
+            rest.range(of: "@Test", range: rest.index(after: rest.startIndex)..<rest.endIndex)
+        )
+        let body = rest[..<end.lowerBound]
+
+        #expect(
+            body.contains("ownedChannelCount"),
+            "the EOF-retirement test must observe the store's ownership"
+        )
+        #expect(
+            !body.contains("Task.sleep"),
+            "the EOF-retirement test must not race a fixed sleep"
+        )
+    }
 }

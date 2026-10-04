@@ -302,7 +302,9 @@ struct TeleportAgentForwardingTests {
         service.markTransportStarted()
 
         try await waitUntil { fake.readCount > 0 }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Observe the retirement itself (#358): a fixed sleep raced the serve loop's
+        // retirement under load. `ownedChannelCount == 0` means `retire` ran.
+        try await waitUntil { service.ownedChannelCount == 0 }
         #expect(fake.closeCount == 0, "the serving task must not free the channel on EOF")
         #expect(service.cancelAndDrain().isEmpty, "a channel whose serve loop ended is retired from the store")
     }
