@@ -335,7 +335,14 @@ struct TeleportAgentForwardingTests {
         #expect(store.ownedChannelCount == 1)          // in flight (next() path)
         store.retire(channel)
         #expect(store.ownedChannelCount == 0)
-        #expect(store.cancelAndDrain().isEmpty)        // drain zeroes the count too
+
+        // Drain a non-empty store: the count drops to zero with the channel.
+        let draining = OpaquePointer(bitPattern: 0x11001)!
+        store.push(draining)
+        #expect(store.ownedChannelCount == 1)
+        #expect(store.cancelAndDrain() == [draining])
+        #expect(store.ownedChannelCount == 0)
+        #expect(store.cancelAndDrain().isEmpty)
     }
 
     @Test
