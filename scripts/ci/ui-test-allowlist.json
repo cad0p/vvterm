@@ -20,7 +20,7 @@
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild",
       "category": "quarantined",
-      "reason": "unconditional in-code XCTSkip cites #92 historically; mechanism is the #257 AX-responder/app-switch race family",
+      "reason": "unconditional in-code XCTSkip cites #92 historically; AX responder-release race across app-switch (2 consecutive clean-runner shard-3 failures, 2026-08-07, run ids in #92); the instance is recorded on #257 (live flake tracker) — see the history entry",
       "tracker": 257
     },
     {
@@ -140,7 +140,7 @@
     {
       "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase2RegistrationSuccess_transitionsToLoginSheet",
       "category": "issueGated",
-      "reason": "no in-code gate; never scheduled until the #277 phase-transition repairs land",
+      "reason": "no in-code gate; class-level gate on #277 (not individually measured) - never scheduled until the phase-transition repairs land",
       "tracker": 277
     },
     {
@@ -166,7 +166,7 @@
     {
       "id": "VVTermUITests/VVTermUITests/testLaunchPerformance",
       "category": "launchPerf",
-      "reason": "measure-only benchmark with no pass/fail verdict; no performance baseline is configured"
+      "reason": "measure-only benchmark with no pass/fail verdict; no performance baseline is configured - delete-vs-keep decision tracked in #364"
     },
     {
       "id": "VVTermUITests/VVTermUITestsLaunchTests/testLaunch",
@@ -181,37 +181,37 @@
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance",
       "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; same launchKeyboardHarness root cause as the #92 quarantines - schedule-or-quarantine decision tracked in #364",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
       "tracker": 364
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews",
       "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; same launchKeyboardHarness root cause as the #92 quarantines - schedule-or-quarantine decision tracked in #364",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
       "tracker": 364
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance",
       "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; same launchKeyboardHarness root cause as the #92 quarantines - schedule-or-quarantine decision tracked in #364",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
       "tracker": 364
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop",
       "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; same launchKeyboardHarness root cause as the #92 quarantines - schedule-or-quarantine decision tracked in #364",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
       "tracker": 364
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory",
       "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; same launchKeyboardHarness root cause as the #92 quarantines - schedule-or-quarantine decision tracked in #364",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
       "tracker": 364
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting",
       "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; same launchKeyboardHarness root cause as the #92 quarantines - schedule-or-quarantine decision tracked in #364",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
       "tracker": 364
     },
     {
