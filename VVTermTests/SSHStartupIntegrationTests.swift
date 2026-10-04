@@ -691,7 +691,9 @@ struct SSHStartupIntegrationTests {
     /// Waits until `tmux list-panes` reports the session's panes as present
     /// and live (`pane_dead == 0`) for two consecutive samples (~250 ms apart),
     /// then returns the final marker-tagged probe output. The old fixed 750 ms
-    /// settle raced pane creation; this observes the pane state directly.
+    /// settle raced pane creation; this observes the pane state directly. A
+    /// mid-probe failure is retained and rethrown when the deadline expires
+    /// instead of being masked as a timeout.
     private func awaitTmuxPaneLive(
         named sessionName: String,
         using client: SSHClient,
@@ -702,21 +704,27 @@ struct SSHStartupIntegrationTests {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         var sawLiveSample = false
+        var lastProbeError: Error?
         while clock.now < deadline {
-            let output = try? await client.execute(probe, timeout: .seconds(1))
-            if let output, output.contains(marker) {
-                let states = tmuxPaneStates(in: output, before: marker)
-                if panesAreLive(states) {
-                    if sawLiveSample { return output }
-                    sawLiveSample = true
-                    try? await Task.sleep(for: .milliseconds(250))
-                    continue
+            do {
+                let output = try await client.execute(probe, timeout: .seconds(1))
+                lastProbeError = nil
+                if output.contains(marker) {
+                    let states = tmuxPaneStates(in: output, before: marker)
+                    if panesAreLive(states) {
+                        if sawLiveSample { return output }
+                        sawLiveSample = true
+                        try? await Task.sleep(for: .milliseconds(250))
+                        continue
+                    }
                 }
+            } catch {
+                lastProbeError = error
             }
             sawLiveSample = false
             try? await Task.sleep(for: .milliseconds(20))
         }
-        throw SSHError.timeout
+        throw lastProbeError ?? SSHError.timeout
     }
 
     private func tmuxPaneStates(in output: String, before marker: String) -> [String] {
