@@ -447,10 +447,12 @@ struct TerminalKeyboardCoordinatorTests {
         #expect(session.acquireCount == 1)
         #expect(session.snapshot.isSoftwareInputActive)
 
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
+
         coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
             CGRect(x: 0, y: 700, width: 1_024, height: 300)
         )
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        #expect(!coordinator.keyboardUITestPresentationVerificationPending)
         await drainMainQueue()
 
         #expect(session.releaseCount == 1)
@@ -774,15 +776,14 @@ struct TerminalKeyboardCoordinatorTests {
         #expect(session.rebuildCount == 0)
         #expect(coordinator.keyboardUITestPresentationVerificationPending)
 
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-        await drainMainQueue()
+        await awaitOnePresentationVerificationPass(coordinator)
 
         #expect(session.acquireCount == 2)
         #expect(session.rebuildCount == 1)
         #expect(coordinator.keyboardUITestPresentationVerificationPending)
 
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-        await drainMainQueue()
+        let settledPasses = await drainPresentationVerification(coordinator)
+        #expect(settledPasses >= 1)
 
         #expect(session.acquireCount == 2)
         #expect(session.rebuildCount == 1)
@@ -844,11 +845,10 @@ struct TerminalKeyboardCoordinatorTests {
         coordinator.keyboardUITestSetSoftwareKeyboardEndFrame(
             CGRect(x: 0, y: 700, width: 1_024, height: 300)
         )
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        #expect(!coordinator.keyboardUITestPresentationVerificationPending)
         await drainMainQueue()
         await drainMainQueue()
 
-        #expect(!coordinator.keyboardUITestPresentationVerificationPending)
         #expect(originalSession.forceSoftwareKeyboardCount == 1)
         #expect(originalSession.rebuildCount == 0)
         #expect(originalSession.accessorySuppressionRequests.isEmpty)
@@ -1140,8 +1140,6 @@ struct TerminalKeyboardCoordinatorTests {
         let forceSoftwareKeyboardCount = session.forceSoftwareKeyboardCount
 
         coordinator.deactivateInputImmediately(reason: .routeModal)
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-        await drainMainQueue()
 
         #expect(!coordinator.keyboardUITestPresentationVerificationPending)
         #expect(session.releaseCount == 1)
@@ -1224,8 +1222,10 @@ struct TerminalKeyboardCoordinatorTests {
         await drainMainQueue()
         #expect(session.rebuildCount == 2)
 
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-        await drainMainQueue()
+        #expect(coordinator.keyboardUITestPresentationVerificationPending)
+
+        let recoveryPasses = await drainPresentationVerification(coordinator)
+        #expect(recoveryPasses >= 1)
 
         #expect(session.rebuildCount == 2)
     }
@@ -1966,8 +1966,8 @@ struct TerminalKeyboardCoordinatorTests {
         #expect(session.accessorySuppressionRequests.isEmpty)
         #expect(coordinator.keyboardUITestPresentationVerificationPending)
 
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-        await drainMainQueue()
+        let settlePasses = await drainPresentationVerification(coordinator)
+        #expect(settlePasses >= 1)
 
         #expect(session.accessorySuppressionRequests == [true])
     }
@@ -2247,6 +2247,51 @@ private func drainMainQueue() async {
             continuation.resume()
         }
     }
+}
+
+/// Flushes the main queue through a bounded chain of hops: a completed
+/// verification pass enqueues its continuation (`markDirty` → main-queue
+/// `sync()`) and `sync()`'s defer can enqueue a coalesced re-sync, so one
+/// `drainMainQueue()` is not a chain flush.
+@MainActor
+private func drainMainQueueChain(maxHops: Int = 4) async {
+    for _ in 0..<maxHops {
+        await drainMainQueue()
+    }
+}
+
+/// Awaits exactly one pending presentation-verification pass, then flushes the
+/// main-queue work it scheduled. The pass body runs on the MainActor, so its
+/// effects are visible here when the seam returns.
+@MainActor
+private func awaitOnePresentationVerificationPass(
+    _ coordinator: TerminalKeyboardCoordinator
+) async {
+    #expect(coordinator.keyboardUITestPresentationVerificationPending)
+    await coordinator.keyboardUITestAwaitPresentationVerification()
+    await drainMainQueueChain()
+}
+
+/// Drains pending presentation-verification passes until the coordinator has
+/// no pending pass, bounded at `maxPasses`. Cap exhaustion fails loudly so a
+/// never-settling verification chain cannot silently pass the caller.
+@MainActor
+@discardableResult
+private func drainPresentationVerification(
+    _ coordinator: TerminalKeyboardCoordinator,
+    maxPasses: Int = 8
+) async -> Int {
+    var passes = 0
+    while coordinator.keyboardUITestPresentationVerificationPending {
+        guard passes < maxPasses else { break }
+        await awaitOnePresentationVerificationPass(coordinator)
+        passes += 1
+    }
+    #expect(
+        !coordinator.keyboardUITestPresentationVerificationPending,
+        "verification chain did not settle within \(maxPasses) passes"
+    )
+    return passes
 }
 
 @MainActor

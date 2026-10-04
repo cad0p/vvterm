@@ -79,8 +79,10 @@ struct HandshakeWatchdogTests {
             }
             socket.interrupt()
         }
-        // No cancellation — the watchdog must fire.
-        try await Task.sleep(for: .milliseconds(500))
+        // No cancellation — the watchdog must fire. Await the watchdog task
+        // itself: `interrupt()` sets the socket state synchronously before the
+        // task completes, so task completion happens-before the read.
+        await watchdog.value
 
         #expect(!socket.isUsable, "watchdog must interrupt the socket after its timeout")
     }

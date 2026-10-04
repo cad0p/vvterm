@@ -251,14 +251,15 @@ struct SSHStartupIntegrationTests {
             try await awaitFirstData(from: shell.stream)
             try await awaitTmuxSession(named: sessionName, using: client)
 
-            try await Task.sleep(for: .milliseconds(750))
             let paneMarker = "__VVTERM_DEV239_PANE__"
-            let paneState = try await client.execute(
-                "\(RemoteTerminalBootstrap.shellPathExport()); tmux list-panes -t =\(sessionName): -F '#{pane_dead}:#{pane_current_command}' && printf %s \(paneMarker)"
+            let paneState = try await awaitTmuxPaneLive(
+                named: sessionName,
+                using: client,
+                marker: paneMarker
             )
             let createdPaneStates = tmuxPaneStates(in: paneState, before: paneMarker)
             #expect(!createdPaneStates.isEmpty)
-            #expect(createdPaneStates.allSatisfy { $0.split(separator: ":", maxSplits: 1).first == "0" })
+            #expect(panesAreLive(createdPaneStates))
             #expect(paneState.contains(paneMarker))
 
             let detachMarker = "__VVTERM_DEV239_DETACHED__"
@@ -280,18 +281,18 @@ struct SSHStartupIntegrationTests {
             )
             try #require(reattached.transport == .ssh)
             try await awaitFirstData(from: reattached.stream)
-            try await Task.sleep(for: .milliseconds(750))
-
             let reattachPaneMarker = "__VVTERM_DEV239_REATTACHED_PANE__"
-            let reattachedPaneState = try await client.execute(
-                "\(RemoteTerminalBootstrap.shellPathExport()); tmux list-panes -t =\(sessionName): -F '#{pane_dead}:#{pane_current_command}' && printf %s \(reattachPaneMarker)"
+            let reattachedPaneState = try await awaitTmuxPaneLive(
+                named: sessionName,
+                using: client,
+                marker: reattachPaneMarker
             )
             let reattachedPaneStates = tmuxPaneStates(
                 in: reattachedPaneState,
                 before: reattachPaneMarker
             )
             #expect(!reattachedPaneStates.isEmpty)
-            #expect(reattachedPaneStates.allSatisfy { $0.split(separator: ":", maxSplits: 1).first == "0" })
+            #expect(panesAreLive(reattachedPaneStates))
             #expect(reattachedPaneState.contains(reattachPaneMarker))
 
             _ = try await client.execute(
@@ -305,6 +306,18 @@ struct SSHStartupIntegrationTests {
             await client.disconnect()
             throw error
         }
+    }
+
+    /// Synthetic-output coverage for the tmux pane-liveness predicate the
+    /// env-gated integration sites depend on. Runs without configuration.
+    @Test
+    func panesAreLiveRequiresANonEmptyAllAliveSample() {
+        #expect(!panesAreLive([]))
+        #expect(!panesAreLive(["1:sh"]))
+        #expect(!panesAreLive([":"]))
+        #expect(panesAreLive(["0:sh"]))
+        #expect(panesAreLive(["0:sh", "0:bash"]))
+        #expect(!panesAreLive(["0:sh", "1:sh"]))
     }
 
     @Test
@@ -675,12 +688,59 @@ struct SSHStartupIntegrationTests {
         throw SSHError.timeout
     }
 
+    /// Waits until `tmux list-panes` reports the session's panes as present
+    /// and live (`pane_dead == 0`) for two consecutive samples (~250 ms apart),
+    /// then returns the final marker-tagged probe output. The old fixed 750 ms
+    /// settle raced pane creation; this observes the pane state directly. A
+    /// mid-probe failure is retained and rethrown when the deadline expires
+    /// instead of being masked as a timeout.
+    private func awaitTmuxPaneLive(
+        named sessionName: String,
+        using client: SSHClient,
+        marker: String,
+        timeout: Duration = .seconds(10)
+    ) async throws -> String {
+        let probe = "\(RemoteTerminalBootstrap.shellPathExport()); tmux list-panes -t =\(sessionName): -F '#{pane_dead}:#{pane_current_command}' && printf %s \(marker)"
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var sawLiveSample = false
+        var lastProbeError: Error?
+        while clock.now < deadline {
+            do {
+                let output = try await client.execute(probe, timeout: .seconds(1))
+                lastProbeError = nil
+                if output.contains(marker) {
+                    let states = tmuxPaneStates(in: output, before: marker)
+                    if panesAreLive(states) {
+                        if sawLiveSample { return output }
+                        sawLiveSample = true
+                        try? await Task.sleep(for: .milliseconds(250))
+                        continue
+                    }
+                }
+            } catch {
+                lastProbeError = error
+            }
+            sawLiveSample = false
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        throw lastProbeError ?? SSHError.timeout
+    }
+
     private func tmuxPaneStates(in output: String, before marker: String) -> [String] {
         let paneOutput = output.components(separatedBy: marker).first ?? output
         return paneOutput
             .split(whereSeparator: \Character.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    /// True when the sample is non-empty and every `pane_dead` field is `0`.
+    /// Pure so the env-gated live sites' predicate has synthetic coverage.
+    private func panesAreLive(_ states: [String]) -> Bool {
+        !states.isEmpty && states.allSatisfy {
+            $0.split(separator: ":", maxSplits: 1).first == "0"
+        }
     }
 
     private func cleanupTmuxSession(named sessionName: String, using client: SSHClient) async {

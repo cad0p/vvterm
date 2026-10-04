@@ -117,7 +117,18 @@ struct GhosttyOpenURLHandlerTests {
 
         // OSC 8 hyperlink: ESC ]8;;URL ESC \ label ESC ]8;; ESC \
         surface.feedText("\u{1B}]8;;https://example.com\u{1B}\\VVTERM-OSC8-LINK\u{1B}]8;;\u{1B}\\\n")
-        try await Task.sleep(for: .milliseconds(20))
+        // The parser is sequential and feed→read is synchronous, so reading
+        // the label back at the tap cell proves the OSC 8 open sequence has
+        // been consumed before the synthetic tap can miss it.
+        #expect(
+            await waitForCellText(
+                surfaceC,
+                row: 0,
+                column: 0,
+                containing: "VVTERM-OSC8-LINK"
+            ),
+            "the OSC 8 label must be parsed into the grid before the tap"
+        )
 
         // Tap the center of the link's cell (0,0). The core's mouse events
         // are in POINTS (the app sends recognizer points), but
@@ -223,6 +234,66 @@ struct GhosttyOpenURLHandlerTests {
                 action: action
             )
         }
+    }
+
+    /// Bounded read-back of the grid cells starting at `(row, column)`.
+    /// Returns `false` on timeout so the caller's `#expect` is the gate; the
+    /// poll interval is bounded by the deadline.
+    private func waitForCellText(
+        _ surface: ghostty_surface_t,
+        row: UInt32,
+        column: UInt32,
+        containing needle: String,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if cellText(surface, row: row, column: column, width: needle.count)
+                .contains(needle) {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    /// Reads `width` cells from `(row, column)` via
+    /// `ghostty_surface_read_text`, freeing the core-owned `ghostty_text_s`
+    /// when `read_text` hands it over (the `defer` is installed only after a
+    /// successful read) and decoding its UTF-8 bytes with a test-local
+    /// converter (`ghosttyTextString` is private to the view).
+    private func cellText(
+        _ surface: ghostty_surface_t,
+        row: UInt32,
+        column: UInt32,
+        width: Int
+    ) -> String {
+        let span = UInt32(max(width, 1))
+        var text = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_EXACT,
+                x: column,
+                y: row
+            ),
+            bottom_right: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_EXACT,
+                x: column + span - 1,
+                y: row
+            ),
+            rectangle: true
+        )
+        guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let rawText = text.text else { return "" }
+        let bytes = UnsafeBufferPointer(
+            start: UnsafeRawPointer(rawText).assumingMemoryBound(to: UInt8.self),
+            count: Int(text.text_len)
+        )
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// The handler routes through `DispatchQueue.main.async`, so the test
