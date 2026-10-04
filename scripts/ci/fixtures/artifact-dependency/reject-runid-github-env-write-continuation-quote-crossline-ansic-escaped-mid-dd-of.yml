@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Fixture: ANSI-C `$'…'` quoting with an escaped quote mid-string and a `dd of=`
+# continuation target
+# #350 item 12 fold round 2 lens-1 BLOCKER-1: the fold round 1 whole-body quote
+# state read `\'` as a close and the following `'` as a new open, carrying a
+# phantom quote that suppressed the continuation join; base ACCEPT / previous
+# head REFUSE -> folded REFUSE, runtime FLIP.
+name: reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-dd-of
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          echo $'a\'b'
+          dd of=\
+          "${arr[0]}" < payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
