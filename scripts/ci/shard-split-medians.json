@@ -1,0 +1,305 @@
+{
+  "_provenance": {
+    "measured": "2026-10-04",
+    "population_rule": "every attempt-1 VVTerm PR CI run (event=pull_request, conclusion=success) whose four ui-tests-shard-* jobs all succeeded and whose four shard logs parse to exactly the current 88-method universe, since the last only-testing change (#236, merged 2026-09-29 17:07 UTC)",
+    "extraction": "gh api --allow-escape-sequences /repos/cad0p/vvterm/actions/jobs/<job-id>/logs ; regex: Test Case '-\\[(\\S+) (\\S+)\\]' passed \\((\\d+(?:\\.\\d+)?) seconds\\)",
+    "method_count": 88,
+    "runs": [
+      {
+        "run": "36641124208",
+        "head": "4732bc732c6ccc98eb3ffafe3a451f8ba1b46575",
+        "created": "2026-09-29T22:42:19Z"
+      },
+      {
+        "run": "36668462494",
+        "head": "fbd5a28a4f6807d933255b250bda836bb4e96b6e",
+        "created": "2026-09-30T04:21:25Z"
+      },
+      {
+        "run": "36693786135",
+        "head": "10d763aaf7c7b37096e19c0f4add8d8ddd4406a9",
+        "created": "2026-09-30T09:04:54Z"
+      },
+      {
+        "run": "36711168858",
+        "head": "1083185db483ccc962ef7ff57fc6ce08d6bab319",
+        "created": "2026-09-30T11:52:05Z"
+      },
+      {
+        "run": "36722322469",
+        "head": "b0146a788f7cc2e6a7c7f8684950595647e85e34",
+        "created": "2026-09-30T13:32:02Z"
+      },
+      {
+        "run": "36766740880",
+        "head": "93d31d087bedaf62afcfc4f50da160bf4e4f6e2c",
+        "created": "2026-09-30T19:35:33Z"
+      },
+      {
+        "run": "36770667327",
+        "head": "4e420fea3072d494a1776ff3a25cddbe2459cd21",
+        "created": "2026-09-30T20:09:43Z"
+      },
+      {
+        "run": "36792124929",
+        "head": "c97cb72bb26df397f6d595edc61a727f834b3361",
+        "created": "2026-09-30T23:38:30Z"
+      },
+      {
+        "run": "36807737678",
+        "head": "2516aa4fef1f850aae53e3186de731466644be0f",
+        "created": "2026-10-01T02:50:43Z"
+      },
+      {
+        "run": "36811420162",
+        "head": "ed6e4869cb26e176c15a67f884c9a3c7bac01e8f",
+        "created": "2026-10-01T03:38:11Z"
+      },
+      {
+        "run": "36829575232",
+        "head": "89afa2b914152456e261a853d9dcd1a9715fd1f6",
+        "created": "2026-10-01T07:18:34Z"
+      },
+      {
+        "run": "36847236727",
+        "head": "f574f70d0201fd8e6f5ff4fdc95b08ab6eda476e",
+        "created": "2026-10-01T10:08:28Z"
+      },
+      {
+        "run": "36892869598",
+        "head": "b3dce701718fdc6308b19ba57b5053236a1e2b68",
+        "created": "2026-10-01T16:33:20Z"
+      },
+      {
+        "run": "36944577792",
+        "head": "cceb42f46d9f65e24b8b5bedb17cbf761c306e8b",
+        "created": "2026-10-02T00:09:42Z"
+      },
+      {
+        "run": "36954304047",
+        "head": "56758e5c8268e1221d8947ed58bc0987b518c6d2",
+        "created": "2026-10-02T02:09:21Z"
+      },
+      {
+        "run": "36964571932",
+        "head": "a555e26c267a1e9905b9bb4d3b0b36660c55de42",
+        "created": "2026-10-02T04:26:38Z"
+      },
+      {
+        "run": "36969278632",
+        "head": "86c970c7e5d344c32abb89a6c3f1f3074a902d39",
+        "created": "2026-10-02T05:30:58Z"
+      },
+      {
+        "run": "36974070179",
+        "head": "4827abf9256bd746732c394517e8798320f713fe",
+        "created": "2026-10-02T06:32:51Z"
+      },
+      {
+        "run": "36992645176",
+        "head": "24a985bf52caa108cece283fb9c3337e9438c309",
+        "created": "2026-10-02T09:56:20Z"
+      },
+      {
+        "run": "37000154616",
+        "head": "4977836aee5a0e6fde6ac40601b9f6c777e92cf7",
+        "created": "2026-10-02T11:17:03Z"
+      },
+      {
+        "run": "37029157073",
+        "head": "a9da11d301a83f944587eac4ceee76527d50cd7c",
+        "created": "2026-10-02T15:45:00Z"
+      },
+      {
+        "run": "37047261372",
+        "head": "46a7a6a95fc2d9b14e948f8d7f2331698d71e665",
+        "created": "2026-10-02T18:24:53Z"
+      },
+      {
+        "run": "37065681033",
+        "head": "d542989272eb677a83515992e51ace15954b5b6b",
+        "created": "2026-10-02T21:14:56Z"
+      },
+      {
+        "run": "37068713123",
+        "head": "6d5704887f77500c99869374bc1470ff77b291da",
+        "created": "2026-10-02T21:45:26Z"
+      },
+      {
+        "run": "37074078905",
+        "head": "21584adbd9aaa87c57e7a7efa1924a1c5935a23c",
+        "created": "2026-10-02T22:44:22Z"
+      },
+      {
+        "run": "37097727616",
+        "head": "f7275c7f250eab6efd537fd52e2c15679589f582",
+        "created": "2026-10-03T04:47:51Z"
+      },
+      {
+        "run": "37100045793",
+        "head": "9af64e570af44d2db506f7ad812509916e9331c0",
+        "created": "2026-10-03T05:30:34Z"
+      },
+      {
+        "run": "37104533683",
+        "head": "86d58f4c10b41b92254d49b6cfbb832c6720ac34",
+        "created": "2026-10-03T06:53:43Z"
+      },
+      {
+        "run": "37118161176",
+        "head": "5b6d9dcfb32d4fb2c81c6eebc3124bdb4cccc2b8",
+        "created": "2026-10-03T10:58:56Z"
+      },
+      {
+        "run": "37120943900",
+        "head": "1dafc489b45348573b8b969f6edcf1a7a6b3c4b0",
+        "created": "2026-10-03T11:50:41Z"
+      },
+      {
+        "run": "37142364986",
+        "head": "4b3170df1b8af9dbdbd6476dd0ebf95799edfc8f",
+        "created": "2026-10-03T17:56:45Z"
+      },
+      {
+        "run": "37145877994",
+        "head": "59d32904229a580e056b9a137b0e8977a94e2936",
+        "created": "2026-10-03T18:53:11Z"
+      },
+      {
+        "run": "37152831710",
+        "head": "3ae9f3fcedee1442f32f4bb091295b606fed6ec8",
+        "created": "2026-10-03T20:48:02Z"
+      },
+      {
+        "run": "37157538542",
+        "head": "846a939263844963d7e8b9a8598de6e274dde572",
+        "created": "2026-10-03T22:10:41Z"
+      },
+      {
+        "run": "37160902542",
+        "head": "b6e3ad90cb062cf7d21808178deb1d04124030d0",
+        "created": "2026-10-03T23:10:30Z"
+      },
+      {
+        "run": "37174775786",
+        "head": "fd41e747087fc40b9596a6e7bb0672dae025fd0a",
+        "created": "2026-10-04T03:41:18Z"
+      },
+      {
+        "run": "37183874554",
+        "head": "543f481e6b31976a66b1ef9ac8cb820f3f29b2bf",
+        "created": "2026-10-04T06:48:20Z"
+      },
+      {
+        "run": "37188419990",
+        "head": "8babea453337075bb81c699c6a225843e81b076d",
+        "created": "2026-10-04T08:17:09Z"
+      },
+      {
+        "run": "37190196550",
+        "head": "080d7e6a33b25264940ef3f19a72d6337c0876e1",
+        "created": "2026-10-04T08:50:05Z"
+      },
+      {
+        "run": "37200838759",
+        "head": "33b15658a450e854fe1e8491f9163b078cd29f9c",
+        "created": "2026-10-04T12:04:03Z"
+      },
+      {
+        "run": "37209386282",
+        "head": "3fc2d1bab31361f3e0e011e17525ad481ac21013",
+        "created": "2026-10-04T14:28:30Z"
+      }
+    ]
+  },
+  "medians": {
+    "VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar": 33.434,
+    "VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying": 36.579,
+    "VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction": 11.152,
+    "VVTermUITests/NoticePresentationUITests/testDiagnosticBannerExpandsCopiesScrollsAndDismisses": 38.544,
+    "VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect": 23.841,
+    "VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview": 11.891,
+    "VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance": 10.351,
+    "VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions": 10.846,
+    "VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner": 27.484,
+    "VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet": 23.579,
+    "VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner": 12.826,
+    "VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure": 14.31,
+    "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPosition": 126.152,
+    "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesSession": 75.043,
+    "VVTermUITests/ServerNavigationUITests/testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness": 101.176,
+    "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions": 78.537,
+    "VVTermUITests/StatsCardsLayoutUITests/testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions": 92.598,
+    "VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation": 68.588,
+    "VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates": 63.101,
+    "VVTermUITests/TeleportFormUITests/testAddMode_faceIDTeleport_showsTeleportFieldCopy": 49.265,
+    "VVTermUITests/TeleportFormUITests/testEditMode_teleportServer_showsTeleportCaptions": 20.073,
+    "VVTermUITests/TeleportReadinessIOSUITests/testBootstrap_swipeDismissDuringRetry_cancelsTheFlow": 51.865,
+    "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap": 12.761,
+    "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet": 12.912,
+    "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet": 16.282,
+    "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsRegistration_tapShowsBootstrapSheetNotRegistration": 14.353,
+    "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_ready_tapConnectsDirectly": 10.293,
+    "VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap": 14.021,
+    "VVTermUITests/TeleportReadinessUITests/testReadiness_needsBootstrap_tapShowsBootstrapSheet": 14.274,
+    "VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet": 11.91,
+    "VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration": 14.123,
+    "VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly": 12.834,
+    "VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy": 12.479,
+    "VVTermUITests/TeleportUITests/testBootstrap_networkLost_showsNetworkConnectionLostCopy": 11.369,
+    "VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy": 11.65,
+    "VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim": 11.213,
+    "VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry": 16.332,
+    "VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy": 11.176,
+    "VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy": 11.162,
+    "VVTermUITests/TeleportUITests/testHostLogin_emptyPrincipals_showsSetupError": 11.658,
+    "VVTermUITests/TeleportUITests/testHostLogin_multiplePrincipals_pickerSelectsAndContinues": 16.36,
+    "VVTermUITests/TeleportUITests/testHostLogin_pickerCancel_storesNothing": 12.622,
+    "VVTermUITests/TeleportUITests/testHostLogin_singlePrincipal_isShownAndContinues": 12.981,
+    "VVTermUITests/TeleportUITests/testHostLogin_storedLogin_noReLoginPicker": 13.99,
+    "VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL": 11.845,
+    "VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy": 12.983,
+    "VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy": 12.262,
+    "VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity": 14.384,
+    "VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity": 12.053,
+    "VVTermUITests/TeleportUITests/testLogin_serverError_showsTheServerMessageVerbatim": 12.435,
+    "VVTermUITests/TeleportUITests/testLogin_serverUnreachable_showsNetworkLostCopy": 12.647,
+    "VVTermUITests/TeleportUITests/testRegistration_alreadyExists_showsInlineErrorCopy": 13.885,
+    "VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel": 13.534,
+    "VVTermUITests/TeleportUITests/testRegistration_emptyDeviceName_disablesContinueButton": 15.859,
+    "VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds": 13.969,
+    "VVTermUITests/TeleportUITests/testRegistration_invalidChars_showsPrefilledSanitizedName": 11.927,
+    "VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat": 25.119,
+    "VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput": 37.287,
+    "VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture": 24.866,
+    "VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid": 32.447,
+    "VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession": 25.844,
+    "VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat": 25.35,
+    "VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar": 20.402,
+    "VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat": 25.665,
+    "VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath": 21.696,
+    "VVTermUITests/TerminalKeyboardUITests/testKeyboardIsScopedToTerminalSurface": 24.638,
+    "VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel": 24.79,
+    "VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard": 23.516,
+    "VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable": 32.049,
+    "VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive": 48.231,
+    "VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput": 33.295,
+    "VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus": 18.642,
+    "VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord": 20.871,
+    "VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert": 29.717,
+    "VVTermUITests/TerminalReconnectUITests/testColdRelaunchRestoresTabsSplitsSelectionAndReconnects": 29.753,
+    "VVTermUITests/TerminalReconnectUITests/testProductionCodexFindKeyboardMenuRestoresPTYTyping": 91.736,
+    "VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping": 58.899,
+    "VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesDarkAccessoryAppearance": 31.167,
+    "VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesSessionKeyboardAndTyping": 94.622,
+    "VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground": 18.378,
+    "VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen": 21.462,
+    "VVTermUITests/TerminalZenModeUITests/testFullScreenZenAutoShiftsInitialPromptBelowNotch": 14.255,
+    "VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch": 18.536,
+    "VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible": 22.537,
+    "VVTermUITests/TerminalZenModeUITests/testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets": 18.723,
+    "VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt": 24.269,
+    "VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable": 16.346,
+    "VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler": 18.69
+  }
+}

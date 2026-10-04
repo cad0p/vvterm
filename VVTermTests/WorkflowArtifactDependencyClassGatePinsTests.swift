@@ -40,8 +40,12 @@
 //  `stepBlocks(in:)`) — after `WorkflowArtifactDependencyPinsTests`,
 //  `WorkflowXcodebuildFlagPinsTests` and `WorkflowPerPREventGatePinsTests` —
 //  because each pin file is self-contained so it reverts independently. A
-//  parser fix must be applied to all four copies until a fifth pin file
-//  justifies extracting a shared helper.
+//  FIFTH copy now exists — `WorkflowShardSplitPinsTests`, which adds a
+//  `matrix.shard` block slicer the others do not share — so the fifth-pin
+//  threshold that line deferred to has been reached. The shared-helper
+//  extraction is DELIBERATELY DEFERRED in that pin's header (a record refresh
+//  must not refactor five suites); until it lands, a parser/comment-strip fix
+//  must be applied to all FIVE copies.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree. The variable must actually reach the test process: on this
