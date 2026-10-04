@@ -5088,6 +5088,15 @@ def _argv_verb_name(text: str) -> str:
     return candidate.rsplit("/", 1)[-1] if "/" in candidate else candidate
 
 
+def _argv_base_verb_name(text: str) -> str:
+    """The pre-fold verb basename (`text.rsplit("/", 1)[-1]`, no leading
+    `(` strip). The base-word-list pass in `_refuse_argv_write_targets` uses
+    it so it reproduces the pre-fold walk exactly: with `_argv_verb_name`
+    the pass could recognize an earlier `(cp` word and pick a different
+    first verb, dropping a base refusal (fold round 1 F1)."""
+    return text.rsplit("/", 1)[-1] if "/" in text else text
+
+
 def _argv_dropped_input_targets(
     segment: list[tuple[str, str, int, int]],
 ) -> list[tuple[int, str, bool]]:
@@ -5177,6 +5186,7 @@ def _argv_target_is_unproven(
 def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
     operand_words: list[tuple[int, str]] | None = None,
+    verb_namer=_argv_verb_name,
 ) -> list[tuple[str, str]]:
     """The `(verb, target)` file operands of an argv write verb in one
     segment: `tee` appends to every non-option path operand and `dd` writes
@@ -5191,12 +5201,14 @@ def _argv_write_targets(
     `operand_words` selects the operand list: the private redirect-aware
     walk by default, or the base word list (`[token[1] for token in segment
     if token[0] == "word"]`) so `_refuse_argv_write_targets` can re-classify
-    every target the pre-fold walk read (fold round 1 F1)."""
+    every target the pre-fold walk read (fold round 1 F1). `verb_namer` is
+    the corresponding verb classifier; the base pass passes
+    `_argv_base_verb_name` so it is exact."""
     if operand_words is None:
         operand_words = _argv_operand_words(segment)
     words = [text for _index, text in operand_words]
     for position, text in enumerate(words):
-        verb = _argv_verb_name(text)
+        verb = verb_namer(text)
         if verb in _ARGV_WRITE_VERBS:
             args = words[position + 1 :]
             if verb == "tee":
@@ -5391,6 +5403,25 @@ def _argv_write_targets(
     return []
 
 
+def _argv_all_write_targets(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[str, str]]:
+    """The union of the redirect-aware walk's targets and the base word
+    list's targets. The base pass uses `_argv_base_verb_name` so it
+    reproduces the pre-fold walk exactly; every consumer (the refusal path
+    and the relevance readers) therefore sees a superset of the pre-fold
+    target set and the fold cannot widen a base REFUSE to ACCEPT or shrink
+    the relevance set (fold round 1 F1)."""
+    base_words = [
+        (index, token[1])
+        for index, token in enumerate(segment)
+        if token[0] == "word"
+    ]
+    return _argv_write_targets(segment) + _argv_write_targets(
+        segment, base_words, _argv_base_verb_name
+    )
+
+
 def _new_verb_target_is_unproven(
     target: str,
     aliases: set[str],
@@ -5495,26 +5526,12 @@ def _refuse_argv_write_targets(
     has no env redirect of its own, so the caller defers only in that case
     and otherwise refuses with the argv diagnostic (issue #345, fold round 1
     F2)."""
-    targets = _argv_write_targets(segment)
-    # The operand walk drops every input-redirect target (`<`, `<<`, `<<<`,
-    # the `<&` fd-duplication forms and the bare/fd-0 `<>` read-write
-    # form), which the base walk read as operands. Classify the base word
-    # list too, so every target the pre-fold walk classified is
-    # re-classified here and the fold cannot widen a base REFUSE to ACCEPT
-    # (issue #350 item 16; fold round 1 F1). The base walk's words are the
-    # raw `word` tokens, exactly what it sliced; `_argv_write_targets`
-    # applies the same verb table to them, so the union is a superset of
-    # the base target set by construction. A redirect prefix before the
-    # verb is still read here, but the base walk read it too (and accepted
-    # it), so no new refusal class is introduced. A benign `<> /dev/null`
-    # stays proven and is not refused, and the fd-0 read-write exemption is
+    # The union re-classifies the base word list, so every target the
+    # pre-fold walk classified is classified again and the fold cannot widen
+    # a base REFUSE to ACCEPT (issue #350 item 16; fold round 1 F1). A benign
+    # `<> /dev/null` stays proven and the fd-0 read-write exemption is
     # preserved.
-    base_words = [
-        (index, token[1])
-        for index, token in enumerate(segment)
-        if token[0] == "word"
-    ]
-    for verb, target in targets + _argv_write_targets(segment, base_words):
+    for verb, target in _argv_all_write_targets(segment):
         if not _argv_target_is_unproven(
             verb, target, aliases, assignments, lines, line_index, column_index
         ):
@@ -6497,7 +6514,7 @@ def _relevant_shell_names(
             # target (`$OUT_DIR/VVTerm.ipa`) deliberately adds no names:
             # that is the real `cp` false-red the narrow predicate exists
             # to keep accepted.
-            for _verb, target in _argv_write_targets(segment):
+            for _verb, target in _argv_all_write_targets(segment):
                 if _local_reference_name(target) is not None:
                     names.update(_expansion_names(target))
     return names
@@ -6750,7 +6767,7 @@ def _refuse_github_env_run_id_write(
             if _joined_index in payload_lines:
                 continue
             for _joined_segment in _joined_continuation_segments(lines, _joined_index):
-                for _verb, _target in _argv_write_targets(_joined_segment):
+                for _verb, _target in _argv_all_write_targets(_joined_segment):
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
                 for _target_index, _target, _read_write in _argv_dropped_input_targets(
@@ -6770,7 +6787,7 @@ def _refuse_github_env_run_id_write(
                 body.scalar_content_indent,
                 continuation_pending,
             ):
-                for _verb, _target in _argv_write_targets(_joined_segment):
+                for _verb, _target in _argv_all_write_targets(_joined_segment):
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
                 for _target_index, _target, _read_write in _argv_dropped_input_targets(
