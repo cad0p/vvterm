@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 632
-    private static let expectedBaseVerdictCases = 201
+    private static let expectedManifestCases = 639
+    private static let expectedBaseVerdictCases = 208
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -841,6 +841,16 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-continuation-quote-crossline-folded-over2.yml",
         "reject-runid-github-env-write-continuation-quote-crossline-direct-device.yml",
         "accept-runid-github-env-write-continuation-quote-crossline-benign.yml",
+        // #350 item 12, fold round 2 (lens-1 BLOCKER-1): the ANSI-C `$'…'`
+        // escaped-quote sub-class of the cross-line-quote family, plus the
+        // boundary pin that `$'` inside a double-quoted region is literal.
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-dd-of.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-sed-w.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-dd-of.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-sed-w.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-dd-of.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-sed-w.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic-dquote-literal.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

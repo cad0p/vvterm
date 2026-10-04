@@ -5703,5 +5703,95 @@ CASES = [
         "base_exit": 0,
         "excluded": 1,
         "diagnostics": []
+    },
+    # #350 item 12, fold round 2 (lens-1 BLOCKER-1): the ANSI-C `$'…'`
+    # escaped-quote sub-class. The fold round 1 whole-body quote state scanned
+    # `$'…'` as a plain `'…'` region, so `\'` read as a close and the next
+    # `'` as a new open; the phantom quote carried to the next line suppressed
+    # the continuation join. Each spelling is measured base ACCEPT / previous
+    # head (bdbb8cfd) REFUSE -> folded REFUSE with a runtime FLIP, is
+    # mention-bearing and device-bearing (`read -a arr < pf`), and uses
+    # relative targets.
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-dd-of.yml:35: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-sed-w",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-sed-w.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-mid-sed-w.yml:35: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-dd-of.yml:34: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-sed-w",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-sed-w.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-end-sed-w.yml:34: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-dd-of.yml:34: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-sed-w",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-sed-w.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-escaped-twice-sed-w.yml:34: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    # #350 item 12, fold round 2 (lens-1 BLOCKER-1) boundary: `$'` inside an
+    # open double-quoted region is literal text, not ANSI-C quoting, so the
+    # scan must not open the `$'` state there. base ACCEPT / previous head
+    # (bdbb8cfd) REFUSE -> folded REFUSE, runtime cross-run (the script is a
+    # bash syntax error, so the refusal is fail-closed).
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic-dquote-literal",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-dquote-literal.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic-dquote-literal.yml:35: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
     }
 ]

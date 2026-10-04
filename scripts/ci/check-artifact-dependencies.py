@@ -767,17 +767,30 @@ whole-body property (carried across physical lines, and the join re-opens it
 on the joined text), so a single-quoted region opened on an earlier body
 line cannot mask the pair bash removes — the per-line predicate read the
 *closing* `'` as an opening quote and missed it (fold round 1 lens-1
-BLOCKER-1: 33 measured spellings closed); the joined logical line
-feeds the existing extractors unchanged, alongside the sibling join above,
-so the addition is monotone (refuse-only; measured 0 widenings and 0
-verdict/diagnostic/`body_text` changes over the 611-file corpus). Claimed:
+BLOCKER-1: 33 measured spellings closed); ANSI-C `$'…'` quoting is modelled
+distinctly from `'…'` (inside `$'…'` a backslash escapes the next
+character, so `\'` does not close the string) after the fold round 1 state
+read `$'…'` as `'…'`, carried a phantom quote into the next line and
+skipped a `\\`+newline pair the previous head (`bdbb8cfd`) joined (fold
+round 2 lens-1 BLOCKER-1: the 6 escaped-quote variants and the witness are
+all prev-REFUSE -> fold-REFUSE with a runtime FLIP; 6 reject fixtures ship);
+the joined logical line
+feeds the existing extractors unchanged, alongside the sibling join above.
+The addition is refuse-only relative to the previous head over the
+measured sets — 0 widenings (prev REFUSE -> fold ACCEPT) over the 187-shape
+battery, the 468-shape fuzz, the 3240- and 900-shape grids, the 134-case
+union, the 653-file corpus and the ANSI-C escaped-quote family — but it is
+not a theorem for every input (the join can also skip a pair the sibling
+join joins); `_scan_continuation_quote_state` is a fail-closed subset of
+bash's quote classes, not bash exactness. Claimed:
 every mention-bearing scalar whose raw text ends a line in an unquoted
-backslash (the whole-body quote state decides "unquoted") and whose joined
+backslash (the whole-body quote state decides whether the line end is
+outside `'…'` and `$'…'`) and whose joined
 content puts a write target where the argv
 extractor reads it — a command's last operand (`cp`/`mv`/`install`), an
 `of=` target, or a sed `w` target — in all three styles (`|`, `>`, plain),
 every indicator spelling, and at EOF (measured at this commit: `--selftest`
-632/632). The command-position guard an earlier design carried was dropped:
+639/639). The command-position guard an earlier design carried was dropped:
 it kept 17 shapes ACCEPT, of which 9 are base-ACCEPT + runtime FLIP (real
 writes the guard suppressed) and 8 are benign; the join closes all nine and
 the eight benign shapes become measured over-refusals (the price of
@@ -785,7 +798,12 @@ fail-closed joining, listed by class with the corpus counts). Boundary
 (stays open, never implied closed): the `>8` chain bound
 (`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
 closed, `n9+` open) and the outside-class fail-opens — #350 item 13 (the
-continuation-independent extractor gaps), #350 item 14 (a target masked by a
+continuation-independent extractor gaps, including the same-line `$'…\'…'`
+tokenizer gap: `_shell_tokens` reads `\'` as a close and swallows the rest
+of the line, so `echo $'a\'' ; cp payload \\` + `"${arr[0]}"` leaves
+`_argv_write_targets` empty — base/prev/fold ACCEPT + runtime FLIP, its
+continuation-free control also FLIPs, and no join fix closes it; fold round
+2 lens-1 MAJOR-1, named not folded), #350 item 14 (a target masked by a
 trailing operator token: `_shell_segments` does not split on `(`, so
 `_argv_write_targets` reads `)` as `cp`'s last operand; the redirect-operand
 masks — `cp payload \\` + `"${arr[0]}" < payload`, `> /dev/null`, `2>&1`,
@@ -851,7 +869,7 @@ measured NUL spellings; item 8 stays a boundary class: `$'\\x00'` and `""`
 are pinned as accepted boundary fixtures, and the other five measured
 survivors (`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`)
 stay accepted and are recorded here. Measured at A13: the fixture corpus is
-632/632, of which 201 fixtures declare their measured base verdict
+639/639, of which 208 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 4 over-refusal pins under
 two root causes — 3 unmodelled-write shapes (any unmodelled write of the
 now-relevant base name refuses) and 1 no-write target mention (the
@@ -916,7 +934,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 632
+EXPECTED_MANIFEST_CASES = 639
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -933,7 +951,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 201
+EXPECTED_BASE_VERDICT_CASES = 208
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -4708,15 +4726,24 @@ def _scan_continuation_quote_state(
     line: str, quote: str | None
 ) -> tuple[bool, str | None]:
     """One physical line of the whole-body quote machine: given the quote
-    state carried from the previous line (`None`, `'` or `"`), return
-    whether this line ends in a backslash bash treats as a continuation,
-    and the quote state at the line end. The scan is the same one
-    `_line_continuation_pending` runs (escape pairs, the double-quote
+    state carried from the previous line (`None`, `'`, `"` or the ANSI-C
+    `$'`), return whether this line ends in a backslash bash treats as a
+    continuation, and the quote state at the line end. The scan is the same
+    one `_line_continuation_pending` runs (escape pairs, the double-quote
     toggle, the line-local `#` comment), but the state is an input and an
     output instead of being reset per line (issue #350 item 12, fold round
-    1 lens-1 BLOCKER-1). A trailing backslash inside an open single quote
-    is literal for bash, so it is not a continuation; inside double quotes
-    bash still removes the `\\`+newline pair."""
+    1 lens-1 BLOCKER-1), and ANSI-C `$'…'` quoting is modelled distinctly
+    from `'…'` (issue #350 item 12, fold round 2 BLOCKER-1): inside
+    `$'…'` a backslash escapes the next character, so `\'` is a literal
+    quote and does not close the string while `\\` is a literal
+    backslash. A trailing backslash inside an open single quote or ANSI-C
+    region is literal for bash (measured on bash 3.2.57 and 5.2.26:
+    `$'a\\` + newline + `b'` keeps the backslash and the newline), so it is
+    not a continuation; inside double quotes bash still removes the
+    `\\`+newline pair. This is a fail-closed subset, not a shell: it does
+    not model command substitutions, heredocs, or the same-line
+    `$'…\'…'` tokenizer gap in `_shell_tokens` (named residual — issue
+    #350 item 12 fold round 2 lens-1 MAJOR-1)."""
     index = 0
     end = len(line)
     escaped_until = -1
@@ -4727,11 +4754,31 @@ def _scan_continuation_quote_state(
                 quote = None
             index += 1
             continue
-        if char == "\\" and quote != "'" and index + 1 < end:
+        if quote == "$'":
+            # ANSI-C quoting: a backslash escapes the next character, so
+            # `\'` does not close the string and `\\` is a literal
+            # backslash. A trailing backslash is not a continuation.
+            if char == "\\" and index + 1 < end:
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < end:
             escaped_until = index + 1
             index += 2
             continue
-        if char == "'" and quote is None:
+        if (
+            char == "$"
+            and quote is None
+            and index + 1 < end
+            and line[index + 1] == "'"
+        ):
+            quote = "$'"
+            index += 2
+            continue
+        if char == "'":
             quote = "'"
             index += 1
             continue
@@ -4747,7 +4794,7 @@ def _scan_continuation_quote_state(
             end = index
             break
         index += 1
-    pending = quote != "'" and _line_has_continuation(line[:end])
+    pending = quote not in ("'", "$'") and _line_has_continuation(line[:end])
     return pending, quote
 
 
@@ -4763,10 +4810,11 @@ def _whole_body_continuation_state(
     closed on the line that ends in `\\` makes it read the *closing* `'` as
     an opening quote and reject a `\\`+newline pair bash removes (33
     measured spellings, all base-ACCEPT + runtime FLIP). Bash removes a
-    `\\`+newline pair everywhere except inside single quotes, so a line's
-    flag is True exactly when the state at its end is out-of-single-quote
-    and its last character is an active backslash. The start state is
-    returned too: a join that begins inside a quote must re-open it before
+    `\\`+newline pair everywhere except inside single quotes (both `'…'`
+    and ANSI-C `$'…'` — measured), so a line's flag is True exactly when
+    the state at its end is outside both single-quote forms and its last
+    character is an active backslash. The start state is returned too: a
+    join that begins inside a quote must re-open it before
     the extractor tokenizes the joined text, or the closing quote on the
     joined line is misread as an opening quote. Heredoc payload lines are
     literal text, not shell: they neither carry a continuation nor change
@@ -4848,8 +4896,16 @@ def _bash_joined_continuation_segments(
     across physical lines, so a single-quoted region opened earlier cannot
     mask the pair — fold round 1 lens-1 BLOCKER-1), not the per-line
     `_line_continuation_pending`. The callers keep the sibling join's
-    verdicts and add this scan alongside, so the addition is monotone
-    (refuse-only)."""
+    verdicts and add this scan alongside. The addition is refuse-only
+    relative to the previous head (`bdbb8cfd`) over the measured sets — 0
+    prev-REFUSE -> fold-ACCEPT widenings over the 187/468/3240/900
+    batteries, the 134-case union and the 653-file corpus — but it is not a
+    theorem for every input: the join can also skip a pair the sibling join
+    joins, and the fold round 1 `$'…'` state mis-model was exactly such a
+    removal until fold round 2 modelled ANSI-C quoting (lens-1 BLOCKER-1).
+    Fidelity is bounded by `_scan_continuation_quote_state`'s modelled
+    quote classes, which is a fail-closed subset of bash, not bash
+    exactness."""
 
     def stripped(line: str) -> str:
         return _strip_continuation_indent(line, content_indent)
