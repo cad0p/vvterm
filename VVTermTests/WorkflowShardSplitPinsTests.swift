@@ -55,13 +55,21 @@
 //  FORMATTING HEURISTIC, NOT A PROOF. This pin parses the workflow as text.
 //  Defeat list, stated honestly: (1) a reorder inside a list stays green by
 //  design (the assertions are order-free); (2) the pin is a CONSISTENCY LOCK,
-//  not a measurement-freshness check — a coherently edited fixture+lists pair,
-//  or a sub-threshold median edit that leaves the 1 dp sums within tolerance,
-//  passes; (3) the workflow comment itself is prose this pin cannot verify;
-//  (4) a new UI test added to the target but never scheduled is NOT detected
-//  (the follow-up issue for the 8 currently-ungated unlisted methods owns
-//  that); (5) a malformed matrix block fails CLOSED with a re-derive message,
-//  so a shape this parser does not understand reds rather than passes.
+//  not a measurement-freshness check — a coherently edited fixture+lists pair
+//  passes, but a median edit reds unless its net effect on a bin sum is
+//  ≤ 0.0005 s (the 1 dp literals tolerate ±0.05 s, yet the exact-sum assertion
+//  is ≤ 0.0005 s), so only sub-0.0005 s or compensating edits pass; (3) the
+//  workflow comment itself is prose this pin cannot verify; (4) a new UI test
+//  added to the target but never scheduled is NOT detected (the follow-up
+//  issue for the 8 currently-ungated unlisted methods owns that); (5) the
+//  shape guard fails CLOSED on a malformed or non-canonical matrix shape —
+//  a missing/misspelled `needs-fixture`, a multi-line `only-testing:`, a
+//  duplicate `only-testing:` key, an `include:`/`exclude:` key in the matrix
+//  region, or a `- name:` entry at a non-canonical indent all red with a
+//  re-derive message rather than passing on a partial parse; (6) a `shard-N`
+//  block appended OUTSIDE the `ui-tests` job is NOT detected — the parser is
+//  scoped to that job, so a 5th shard must be added INSIDE its `matrix:` to be
+//  caught (the counterfactual (g) recipe was corrected for exactly this).
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree. The variable must actually reach the test process: on this
@@ -149,8 +157,11 @@ struct WorkflowShardSplitPinsTests {
     /// Assertion 1 — shape guard (fail closed). The `ui-tests` job must carry
     /// exactly four canonical `shard-N` matrix blocks (10-space `- name:`),
     /// each with `needs-fixture: true` and exactly one single-line
-    /// double-quoted `only-testing:` scalar. Anything else fails the suite
-    /// with a re-derive message rather than passing on a partial parse.
+    /// double-quoted `only-testing:` scalar. The job's `matrix:` region must
+    /// carry no `include:`/`exclude:` key and exactly four `- name:` entries at
+    /// any indent, so a well-formed 5th shard the 10-space scanner would miss
+    /// (e.g. `matrix.include:`, or a differently-indented `- name:`) still fails
+    /// the suite with a re-derive message rather than passing on a partial parse.
     @Test
     func testTheShardMatrixIsFourCanonicalBlocks() throws {
         let blocks = try Self.uiTestsShardBlocks()
@@ -163,10 +174,6 @@ struct WorkflowShardSplitPinsTests {
             "the shard names must be exactly shard-0..shard-3 — re-derive this pin (issue #248); found \(blocks.map(\.name).sorted())"
         )
         for block in blocks {
-            #expect(
-                block.needsFixture,
-                "\(block.name) must set `needs-fixture: true`; every bin carries loopback-SSH-fixture-gated tests (issue #248)"
-            )
             #expect(
                 !block.entries.isEmpty,
                 "\(block.name) must carry a non-empty `only-testing:` list — re-derive this pin (issue #248)"
@@ -241,7 +248,12 @@ struct WorkflowShardSplitPinsTests {
             let className = parts[1]
             let method = parts[2]
             let body = try Self.classBody(className: className, cache: &fileCache)
-            if !body.contains("func \(method)(") {
+            // #248 F6: anchor to a declaration line so a method name that only
+            // appears inside a string literal cannot false-green the existence
+            // check. An attribute on the preceding line (`@MainActor`, `@Test`)
+            // is fine — only `func` must start the whitespace-trimmed line.
+            let declaration = #"(?m)^[ \t]*func \#(NSRegularExpression.escapedPattern(for: method))\("#
+            if body.range(of: declaration, options: .regularExpression) == nil {
                 missing.append(entry)
             }
         }
@@ -347,7 +359,6 @@ struct WorkflowShardSplitPinsTests {
 
     private struct ShardBlock {
         let name: String
-        let needsFixture: Bool
         let entries: [String]
     }
 
@@ -375,6 +386,7 @@ struct WorkflowShardSplitPinsTests {
             cursor += 1
         }
         let jobLines = Array(lines[jobStart..<jobEnd])
+        try validateMatrixRegion(of: jobLines)
 
         var blocks: [ShardBlock] = []
         var index = 0
@@ -406,19 +418,91 @@ struct WorkflowShardSplitPinsTests {
                     "\(name) must carry exactly one single-line double-quoted `only-testing:` scalar — a multi-line/plain scalar parses differently and the shard silently resolves to an empty test set (issue #248)"
                 )
             }
+            // #248 F2: this scanner is first-wins (it reads `index + 2`), while
+            // YAML loaders are last-wins — a duplicate `only-testing:` key in
+            // the same mapping would let the shard run a list the pin never
+            // checked. Scan the whole block mapping (up to the next `- name:` or
+            // dedent below 12 spaces) and reject a second key.
+            let blockMapping = uiTestsShardBlockMapping(startingAt: index + 1, in: jobLines)
+            let onlyTestingKeys = blockMapping.filter {
+                $0.range(of: #"^\s*only-testing\s*:"#, options: .regularExpression) != nil
+            }
+            guard onlyTestingKeys.count == 1 else {
+                throw PinFailure(
+                    "\(name) must carry exactly one `only-testing:` key in its mapping — found \(onlyTestingKeys.count); a duplicate key is read first-wins by this text scanner but last-wins by YAML, so the shard could run an unchecked list (issue #248)"
+                )
+            }
             let scalar = String(jobLines[index + 2])
                 .replacingOccurrences(of: #"            only-testing: ""#, with: "")
                 .dropLast()
             blocks.append(
                 ShardBlock(
                     name: name,
-                    needsFixture: true,
                     entries: scalar.components(separatedBy: ",")
                 )
             )
             index += 3
         }
         return blocks
+    }
+
+    /// Fail closed on a non-canonical shard source the 10-space scanner below
+    /// cannot see (issue #248, F1). The `ui-tests` job's `matrix:` region must
+    /// not carry an `include:`/`exclude:` key — a `matrix.include:` entry adds a
+    /// real 5th shard — and must contain exactly four `- name:` entries at any
+    /// indent, so a re-indented or extra entry reds rather than passing.
+    private static func validateMatrixRegion(of jobLines: [String]) throws {
+        guard let matrixStart = jobLines.firstIndex(where: {
+            $0.range(of: #"^      matrix:\s*$"#, options: .regularExpression) != nil
+        }) else {
+            throw PinFailure(
+                "no `      matrix:` block inside the `ui-tests` job — re-derive this pin (issue #248)"
+            )
+        }
+        var region: [String] = []
+        var cursor = matrixStart + 1
+        while cursor < jobLines.count {
+            let line = jobLines[cursor]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty && !line.hasPrefix("        ") {
+                break
+            }
+            region.append(line)
+            cursor += 1
+        }
+        if let nonCanonical = region.first(where: {
+            $0.range(of: #"^\s*(include|exclude)\s*:"#, options: .regularExpression) != nil
+        }) {
+            throw PinFailure(
+                "the `ui-tests` matrix carries a non-canonical `\(nonCanonical.trimmingCharacters(in: .whitespaces))` key — a `matrix.include:`/`exclude:` entry can add a real 5th shard the canonical 10-space scanner cannot see, so the shape guard fails closed (issue #248); re-derive this pin"
+            )
+        }
+        let nameEntries = region.filter {
+            $0.range(of: #"^\s*- name:"#, options: .regularExpression) != nil
+        }
+        guard nameEntries.count == 4 else {
+            throw PinFailure(
+                "the `ui-tests` matrix must carry exactly four `- name:` shard entries at any indent — found \(nameEntries.count); a differently-indented or extra entry can add a real 5th shard the canonical 10-space scanner cannot see (issue #248); re-derive this pin"
+            )
+        }
+    }
+
+    /// The mapping lines of one shard block: from `start` (the line after
+    /// `- name:`) until the next non-blank line dedented below 12 spaces (the
+    /// next `- name:` sits at 10 spaces).
+    private static func uiTestsShardBlockMapping(startingAt start: Int, in jobLines: [String]) -> [String] {
+        var mapping: [String] = []
+        var cursor = start
+        while cursor < jobLines.count {
+            let line = jobLines[cursor]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty && !line.hasPrefix("            ") {
+                break
+            }
+            mapping.append(line)
+            cursor += 1
+        }
+        return mapping
     }
 
     // MARK: - Fixture parsing
