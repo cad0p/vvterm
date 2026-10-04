@@ -62,16 +62,27 @@
 //  workflow comment itself is prose this pin cannot verify; (4) a new UI test
 //  added to the target but never scheduled is NOT detected (the follow-up
 //  issue for the 8 currently-ungated unlisted methods owns that); (5) the
-//  shape guard fails CLOSED on a malformed or non-canonical matrix shape —
-//  a missing/misspelled `needs-fixture`, a multi-line `only-testing:`, a
+//  shape guard fails CLOSED on the canonical-shape violations it names — a
+//  missing/misspelled `needs-fixture`, a multi-line `only-testing:`, a
 //  duplicate `only-testing:` key, an `include:`/`exclude:` key in the matrix
 //  region (bare OR quoted — `"include":` is the same YAML key), a YAML merge
-//  key (`<<: *anchor`, `- <<: *anchor`) or a bare `*alias` value, or a
-//  `- name:` entry at a non-canonical indent all red with a re-derive message
-//  rather than passing on a partial parse; (6) a `shard-N`
+//  key (`<<: *anchor`, `- <<: *anchor`) or a bare `*alias` value, a
+//  `- name:` entry at a non-canonical indent, or any number of canonical
+//  `- name:` entries other than four — all red with a re-derive message rather
+//  than passing on a partial parse. DOCUMENTED ESCAPES: because the guard is a
+//  text scan, equivalent YAML spellings it does NOT catch are a tagged key
+//  (`!!str include:`), an explicit key (`? include`), a quoted or
+//  space-before-colon shard entry (`- "name": shard-4`, `- name : shard-4`),
+//  and an alias as the matrix/shard value (`matrix: *anchor`,
+//  `shard: *anchor`) — a visible, documented gap, not a silent pass, and each
+//  requires non-canonical YAML; (6) a `shard-N`
 //  block appended OUTSIDE the `ui-tests` job is NOT detected — the parser is
 //  scoped to that job, so a 5th shard must be added INSIDE its `matrix:` to be
-//  caught (the counterfactual (g) recipe was corrected for exactly this).
+//  caught (the counterfactual (g) recipe was corrected for exactly this);
+//  (7) the existence check is a text search for a declaration line — a method
+//  name appearing on a line that begins (after inline attributes)
+//  `func <method>(` inside a multi-line string literal is NOT detected
+//  (comments are stripped; string contents are not; 0 occurrences today).
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree. The variable must actually reach the test process: on this
