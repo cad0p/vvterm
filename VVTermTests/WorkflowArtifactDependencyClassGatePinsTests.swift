@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 596
-    private static let expectedBaseVerdictCases = 165
+    private static let expectedManifestCases = 623
+    private static let expectedBaseVerdictCases = 192
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -802,6 +802,34 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-sed-expression-abbrev-expre-eq.yml",
         "reject-runid-github-env-write-sed-expression-abbrev-expressio-eq.yml",
         "accept-runid-github-env-write-sed-expression-abbrev-benign.yml",
+        // #350 item 12: the trailing-backslash continuation masking family (scoped as #354)
+        "reject-runid-github-env-write-continuation-mask-cp.yml",
+        "reject-runid-github-env-write-continuation-mask-mv.yml",
+        "reject-runid-github-env-write-continuation-mask-install.yml",
+        "reject-runid-github-env-write-continuation-mask-dd-of.yml",
+        "reject-runid-github-env-write-continuation-mask-sed-w.yml",
+        "reject-runid-github-env-write-continuation-mask-sed-cmdsub.yml",
+        "reject-runid-github-env-write-continuation-mask-indicator-dd-of.yml",
+        "reject-runid-github-env-write-continuation-eof-mask-cp.yml",
+        "reject-runid-github-env-write-continuation-eof-mask-mv.yml",
+        "reject-runid-github-env-write-continuation-eof-mask-dd-of.yml",
+        "reject-runid-github-env-write-continuation-eof-mask-folded-cp.yml",
+        "reject-runid-github-env-write-continuation-mask-folded-blank-verb.yml",
+        "reject-runid-github-env-write-continuation-mask-folded-more-indent-cont.yml",
+        "reject-runid-github-env-write-continuation-mask-folded-more-indent-verb-eof.yml",
+        "reject-runid-github-env-write-continuation-mask-folded-over2-eof.yml",
+        "reject-runid-github-env-write-continuation-mask-plain-blank.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-literal-single-blank-cp.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-folded-same-dd-of.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-plain-dd-of-eof.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-folded-blank-indent-cp.yml",
+        "reject-runid-github-env-write-continuation-mask-folded-blank-env-prefix-cp.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-folded-blank-builtin-prefix-cp.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-folded-eof-command-cp.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-folded-uniform-cmdsub-eof-cp.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-folded-more-indent-blank-cp.yml",
+        "accept-runid-github-env-write-continuation-benign-literal.yml",
+        "accept-runid-github-env-write-continuation-benign-sed-read.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

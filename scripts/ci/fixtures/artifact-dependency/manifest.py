@@ -5296,5 +5296,305 @@ CASES = [
         "base_exit": 0,
         "excluded": 1,
         "diagnostics": []
+    },
+    # #350 item 12 (scoped as #354): the trailing-backslash continuation masking
+    # family. Every reject is measured base ACCEPT -> shipped REFUSE; the closure
+    # rows runtime-FLIP (the body-final `dd of=` row truncates the env file: runtime
+    # absent/destructive), the over-refusal pins runtime cross-run. Every fixture is
+    # mention-bearing and carries the `read -a arr < pf` device.
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-cp",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-cp.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-mv",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-mv.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-mv.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-install",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-install.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-install.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-dd-of.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-sed-w",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-sed-w.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-sed-w.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-sed-cmdsub",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-sed-cmdsub.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-sed-cmdsub.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `sed` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-indicator-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-indicator-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-indicator-dd-of.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-eof-mask-cp",
+        "files": [
+            "reject-runid-github-env-write-continuation-eof-mask-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-eof-mask-cp.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-eof-mask-mv",
+        "files": [
+            "reject-runid-github-env-write-continuation-eof-mask-mv.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-eof-mask-mv.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-eof-mask-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-eof-mask-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-eof-mask-dd-of.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-eof-mask-folded-cp",
+        "files": [
+            "reject-runid-github-env-write-continuation-eof-mask-folded-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-eof-mask-folded-cp.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-folded-blank-verb",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-folded-blank-verb.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-folded-blank-verb.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-folded-more-indent-cont",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-folded-more-indent-cont.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-folded-more-indent-cont.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-folded-more-indent-verb-eof",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-folded-more-indent-verb-eof.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-folded-more-indent-verb-eof.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-folded-over2-eof",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-folded-over2-eof.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-folded-over2-eof.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-plain-blank",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-plain-blank.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-plain-blank.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-literal-single-blank-cp",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-literal-single-blank-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-literal-single-blank-cp.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-folded-same-dd-of",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-same-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-same-dd-of.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-plain-dd-of-eof",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-plain-dd-of-eof.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-plain-dd-of-eof.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-folded-blank-indent-cp",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-blank-indent-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-blank-indent-cp.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-mask-folded-blank-env-prefix-cp",
+        "files": [
+            "reject-runid-github-env-write-continuation-mask-folded-blank-env-prefix-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-mask-folded-blank-env-prefix-cp.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-folded-blank-builtin-prefix-cp",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-blank-builtin-prefix-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-blank-builtin-prefix-cp.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-folded-eof-command-cp",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-eof-command-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-eof-command-cp.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-folded-uniform-cmdsub-eof-cp",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-uniform-cmdsub-eof-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-uniform-cmdsub-eof-cp.yml:25: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `cp` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-folded-more-indent-blank-cp",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-more-indent-blank-cp.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-folded-more-indent-blank-cp.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-continuation-benign-literal",
+        "files": [
+            "accept-runid-github-env-write-continuation-benign-literal.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-continuation-benign-sed-read",
+        "files": [
+            "accept-runid-github-env-write-continuation-benign-sed-read.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
     }
 ]
