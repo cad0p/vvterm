@@ -15,6 +15,17 @@
 //  the #227 pair, or drifts away from the recorded fixture is invisible —
 //  the workflow is prose the compiler cannot check.
 //
+//  Issue #362 extends the pin to the DECLARED-TEST ALLOWLIST: every
+//  `func test…(` declared in the target's `VVTermUITests/` sources must
+//  appear in exactly one shard `only-testing` list or in the reasoned
+//  exemption ledger at `scripts/ci/ui-test-allowlist.json` (assertions 7-8).
+//  The ledger is a CLOSED record of pre-existing never-scheduled debt: new
+//  tests must be scheduled; a new exemption requires an in-code `XCTSkip`
+//  with a live tracker. A category is a REASON CLASS, not a verified
+//  mechanism — only `platformGated` is cross-checked against the
+//  declaration's gate — and the ledger is authoritative over in-code
+//  `XCTSkip` strings, which are historical provenance.
+//
 //  PRECISION CONTRACT (lens 2 P1 / lens 1 F6 / closure F10). The fixture
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
@@ -36,21 +47,29 @@
 //  file justifies extracting a shared helper. This PR DELIBERATELY DEFERS
 //  that extraction: the new pin needs a `matrix.shard` block slicer that the
 //  other four do not share, and this PR is a record refresh (no behaviour
-//  change), so a refactor of four pin suites would be an unrelated risk. Any
-//  parser/comment-strip fix for the shared idiom must be applied to all five
-//  files until the extraction lands.
+//  change), so a refactor of four pin suites would be an unrelated risk. The
+//  #362 allowlist extension defers it a SECOND time: the declaration scanner
+//  is scanner-local by design (hash-prefix-aware string blanking, `#if`
+//  polarity), and extraction would still span the five Swift pin suites, plus
+//  the ledger schema/loader. Re-evaluate when this
+//  file passes ~1500 lines (the ClassGate pin is the 1416-line precedent).
+//  Any parser/comment-strip fix for the shared idiom must be applied to all
+//  five files until the extraction lands.
 //
-//  REFRESH PATH (adding or removing a scheduled method). A PR that schedules
-//  a new method — or removes one — must, in the SAME PR: update
+//  REFRESH PATH (adding, removing or renaming any declared UI test). A PR
+//  that changes the declared-test set must, in the SAME PR, do ONE of:
+//  (a) schedule the method in a shard — updating
 //  `scripts/ci/shard-split-medians.json` (adding the method's 3 dp median and
-//  a provenance run), update the four 1 dp sum literals plus the exact sums
-//  below, and refresh the workflow comment above `matrix.shard`. A new
-//  method's median comes from a calibration measurement: the first green
-//  attempt-1 run after the change, whose run id is appended to
-//  `_provenance.runs`. Removals are additionally caught by the literal
-//  88-method count and the per-class counts below, which are asserted so an
-//  existing method cannot be dropped coherently from the fixture and the
-//  lists at once.
+//  a provenance run), the four 1 dp sum literals plus the exact sums below,
+//  and the workflow comment above `matrix.shard` — or (b) record/update a
+//  reasoned exemption row in `scripts/ci/ui-test-allowlist.json` (with a live
+//  tracker where the category requires one) and refresh the
+//  declared/exempt/per-category counts below. A new method's median comes
+//  from a calibration measurement: the first green attempt-1 run after the
+//  change, whose run id is appended to `_provenance.runs`. Removals are
+//  additionally caught by the literal 88-method count and the per-class
+//  counts below, which are asserted so an existing method cannot be dropped
+//  coherently from the fixture and the lists at once.
 //
 //  FORMATTING HEURISTIC, NOT A PROOF. This pin parses the workflow as text.
 //  Defeat list, stated honestly: (1) a reorder inside a list stays green by
@@ -59,9 +78,20 @@
 //  passes, but a median edit reds unless its net effect on a bin sum is
 //  ≤ 0.0005 s (the 1 dp literals tolerate ±0.05 s, yet the exact-sum assertion
 //  is ≤ 0.0005 s), so only sub-0.0005 s or compensating edits pass; (3) the
-//  workflow comment itself is prose this pin cannot verify; (4) a new UI test
-//  added to the target but never scheduled is NOT detected (the follow-up
-//  issue for the 8 currently-ungated unlisted methods owns that); (5) the
+//  workflow comment itself is prose this pin cannot verify; (4) the
+//  declaration scanner is lexical: a `func test…(` inside a comment or a
+//  string is invisible (blanked), and a candidate whose innermost enclosing
+//  declaration is not a resolved `XCTestCase` class/extension (file scope,
+//  unknown base, `extension XCTestCase`, or a nested `struct`/`enum`/`actor`/
+//  `protocol`) is UNATTRIBUTED and fails assertion 7 closed; a `private
+//  func test…` is deliberately treated as declared (rename it). Other
+//  lexical escapes are NOT probed: an `@objc(customSelector)` declaration
+//  whose runtime selector starts with `test`, a generic clause
+//  (`func testX<T>(…)` — harmless, XCTest cannot discover it), and platform
+//  conditions that exclude the iOS Simulator destination but contain neither
+//  `os(` nor `targetEnvironment(` (e.g. `#if !canImport(UIKit)`,
+//  `#if arch(x86_64)`) — revise the probe if any of these become reachable;
+//  (5) the
 //  shape guard fails CLOSED on the canonical-shape violations it names — a
 //  missing/misspelled `needs-fixture`, a multi-line `only-testing:`, a
 //  duplicate `only-testing:` key, an `include:`/`exclude:` key in the matrix
@@ -82,7 +112,19 @@
 //  (7) the existence check is a text search for a declaration line — a method
 //  name appearing on a line that begins (after inline attributes)
 //  `func <method>(` inside a multi-line string literal is NOT detected
-//  (comments are stripped; string contents are not; 0 occurrences today).
+//  (comments are stripped; string contents are not; 0 occurrences today);
+//  (8) the ledger categories are reason classes, not verified mechanisms —
+//  only `platformGated` is cross-checked against the declaration's gate; the
+//  pin never executes the in-code `XCTSkip` guard and never proves a reason
+//  true; the 20-character reason floor is a LENGTH floor for the 7
+//  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×3, `platformGated`
+//  ×1) — the other 30 rows are additionally protected by the `#N` check;
+//  (9) `liveTrackers` is a static Swift set, so the pin cannot query
+//  GitHub: a closed tracker stays green until a human removes it, and a
+//  closed tracker must name its successor in the reason and in `liveTrackers`
+//  in the same PR; (10) JSONSerialization is last-wins on duplicate keys, so
+//  a hand-edited duplicate top-level `exemptions` key (or duplicate member)
+//  silently keeps one — the count/schema assertions are the guard.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree. The variable must actually reach the test process: on this
@@ -371,6 +413,662 @@ struct WorkflowShardSplitPinsTests {
                 "every provenance run must carry run/head/created (issue #248); bad entry: \(run)"
             )
         }
+    }
+
+    // MARK: - UI-test allowlist (issue #362)
+
+    private struct DeclaredMethod: Equatable {
+        let identifier: String
+        let platformGate: String?
+    }
+
+    private struct UnattributedDeclaration {
+        let name: String
+        let file: String
+        let line: Int
+    }
+
+    private struct DeclarationScan {
+        let attributed: [DeclaredMethod]
+        let unattributed: [UnattributedDeclaration]
+        let broadProbeTotal: Int
+    }
+
+    private struct Exemption {
+        let id: String
+        let category: String
+        let reason: String
+        let tracker: Int?
+    }
+
+    private struct AllowlistFixture {
+        let exemptions: [Exemption]
+    }
+
+    /// One lexical type declaration; every kind is an attribution barrier.
+    private struct TypeDeclaration {
+        let name: String
+        let kind: String
+        let base: String?
+        let bodyStart: Int
+        let bodyEnd: Int
+    }
+
+    private static let allowlistPath = "scripts/ci/ui-test-allowlist.json"
+
+    /// 125 = the declared universe at d98e3aa3 (18 `XCTestCase` classes).
+    private static let expectedDeclaredMethodCount = 125
+
+    /// 37 = the exemption ledger (pre-existing never-scheduled debt only).
+    private static let expectedExemptionCount = 37
+
+    /// The eight categories and their pinned counts (issue #362).
+    private static let expectedExemptionCountsByCategory: [String: Int] = [
+        "quarantined": 14,
+        "ciQuarantined": 5,
+        "capabilityGated": 1,
+        "issueGated": 3,
+        "reproOnly": 3,
+        "launchPerf": 3,
+        "platformGated": 1,
+        "unscheduled": 7,
+    ]
+
+    /// Categories whose resolution is owned by a live issue.
+    private static let trackerRequiredCategories: Set<String> = [
+        "quarantined",
+        "ciQuarantined",
+        "issueGated",
+        "capabilityGated",
+        "unscheduled",
+    ]
+
+    /// Live trackers only (open at filing, 2026-10-04). The pin cannot query
+    /// GitHub: a closed tracker must name its successor here and in its
+    /// reason, or assertion 8 reds.
+    private static let liveTrackers: Set<Int> = [92, 257, 277, 364]
+
+    /// The 8 never-scheduled methods (7 `unscheduled` + 1 `capabilityGated`),
+    /// frozen as exact `(id, category)` pairs so a category swap between
+    /// `unscheduled` and `capabilityGated` is visible.
+    private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
+        ("VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "capabilityGated"),
+        ("VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel", "unscheduled"),
+    ]
+
+    /// Assertion 7 — declared = scheduled ⊎ exempt (name-exact). The scanner
+    /// fails closed on any unattributed candidate, and the broad probe's match
+    /// count is recomputed in a separate `numberOfMatches` pass and must equal
+    /// attributed + unattributed — a classification-completeness guard against
+    /// a candidate dropped between match and attribution, not a second regex
+    /// miss check. Also pins the declared/exempt/per-category counts, the
+    /// frozen 8 never-scheduled `(id, category)` pairs, and the
+    /// scheduled-gate guard.
+    @Test
+    func testEveryDeclaredUITestIsScheduledOrExempt() throws {
+        let scan = try Self.declaredUITestMethods()
+
+        #expect(
+            scan.unattributed.isEmpty,
+            "every `func test…(` must sit inside a resolved `XCTestCase` body; declaration(s) outside a scanned XCTestCase body: \(scan.unattributed.map { "\($0.name) (\($0.file):\($0.line))" }.sorted()) — re-derive this pin (issue #362)"
+        )
+        #expect(
+            scan.broadProbeTotal == scan.attributed.count + scan.unattributed.count,
+            "classification-completeness guard: the broad `\\bfunc\\s+(test\\w*)\\s*\\(` probe matched \(scan.broadProbeTotal) declaration(s) in its own pass, but attributed \(scan.attributed.count) + unattributed \(scan.unattributed.count) — a candidate was dropped between match and attribution; re-derive this pin (issue #362)"
+        )
+
+        let declared = scan.attributed
+        #expect(
+            declared.count == Self.expectedDeclaredMethodCount,
+            "the target must declare \(Self.expectedDeclaredMethodCount) `func test…(` methods — re-derive this pin (issue #362); found \(declared.count)"
+        )
+        let duplicateDeclared = Self.duplicates(in: declared.map(\.identifier))
+        #expect(
+            duplicateDeclared.isEmpty,
+            "two same-named test classes would collide on `VVTermUITests/<Class>/<method>`; duplicates: \(duplicateDeclared.sorted()) — re-derive this pin (issue #362)"
+        )
+
+        let blocks = try Self.uiTestsShardBlocks()
+        let scheduled = blocks.flatMap(\.entries)
+        let fixture = try Self.allowlistFixture()
+        let exempt = fixture.exemptions.map(\.id)
+
+        #expect(
+            exempt.count == Self.expectedExemptionCount,
+            "the allowlist ledger must carry \(Self.expectedExemptionCount) exemptions — re-derive this pin (issue #362); found \(exempt.count)"
+        )
+        let duplicateExempt = Self.duplicates(in: exempt)
+        #expect(
+            duplicateExempt.isEmpty,
+            "an exemption id must be unique; duplicates: \(duplicateExempt.sorted()) — re-derive this pin (issue #362)"
+        )
+
+        var categoryCounts: [String: Int] = [:]
+        for row in fixture.exemptions {
+            categoryCounts[row.category, default: 0] += 1
+        }
+        for (category, expected) in Self.expectedExemptionCountsByCategory {
+            #expect(
+                categoryCounts[category] == expected,
+                "category `\(category)` must carry \(expected) exemptions — re-derive this pin (issue #362); found \(categoryCounts[category] ?? 0)"
+            )
+        }
+        #expect(
+            Set(categoryCounts.keys) == Set(Self.expectedExemptionCountsByCategory.keys),
+            "unexpected exemption categor(y|ies): \(Set(categoryCounts.keys).subtracting(Self.expectedExemptionCountsByCategory.keys).sorted()); missing: \(Set(Self.expectedExemptionCountsByCategory.keys).subtracting(categoryCounts.keys).sorted()) — re-derive this pin (issue #362)"
+        )
+
+        let declaredSet = Set(declared.map(\.identifier))
+        let scheduledSet = Set(scheduled)
+        let exemptSet = Set(exempt)
+        // Bind the partition to locals so Swift Testing expands only the Bool
+        // (`partitionHolds → false`), not all three 100+-element sets.
+        let setsAreDisjoint = scheduledSet.isDisjoint(with: exemptSet)
+        let partitionHolds = scheduledSet.union(exemptSet) == declaredSet
+        #expect(
+            setsAreDisjoint,
+            "a method must never be both scheduled and exempt; overlap: \(scheduledSet.intersection(exemptSet).sorted()) — re-derive this pin (issue #362)"
+        )
+        #expect(
+            partitionHolds,
+            "the declared methods must be exactly scheduled ∪ exempt (name-exact, issue #362); declared but neither scheduled nor exempt: \(declaredSet.subtracting(scheduledSet).subtracting(exemptSet).sorted()); scheduled/exempt but not declared (stale): \(scheduledSet.union(exemptSet).subtracting(declaredSet).sorted())"
+        )
+
+        for pair in Self.frozenNeverScheduledPairs {
+            #expect(
+                fixture.exemptions.contains { $0.id == pair.id && $0.category == pair.category },
+                "the never-scheduled-runnable methods are frozen as exact (id, category) pairs (issue #362); missing `\(pair.id)` as `\(pair.category)`"
+            )
+        }
+
+        var gatesByIdentifier: [String: String?] = [:]
+        for method in declared {
+            gatesByIdentifier[method.identifier] = method.platformGate
+        }
+        for entry in scheduled {
+            guard let gate = gatesByIdentifier[entry] else { continue }  // stale scheduled is asserted above
+            #expect(
+                gate == nil || gate == "os(iOS)",
+                "a scheduled method must compile on the iOS Simulator destination (only an exact `os(iOS)` gate proves it); `\(entry)` carries gate `\(gate ?? "nil")` — a macOS-only, negated or narrowed scheduled test silently runs zero coverage (issue #362)"
+            )
+        }
+    }
+
+    /// Assertion 8 — exemption hygiene. Every row carries a known category, a
+    /// reason of at least 20 characters, a tracker iff the category requires
+    /// one, a tracker that is in the pinned live set and named as `#N` in the
+    /// reason, and an id that resolves to a declared method. `platformGated`
+    /// is the only mechanism cross-check (the declaration's trimmed positive
+    /// `os(macOS)` gate).
+    @Test
+    func testEveryExemptionCarriesAReasonAndResolvesToADeclaration() throws {
+        let scan = try Self.declaredUITestMethods()
+        var declarationsByIdentifier: [String: DeclaredMethod] = [:]
+        for method in scan.attributed {
+            declarationsByIdentifier[method.identifier] = method
+        }
+        let fixture = try Self.allowlistFixture()
+        let knownCategories = Set(Self.expectedExemptionCountsByCategory.keys)
+
+        for row in fixture.exemptions {
+            let parts = row.id.components(separatedBy: "/")
+            #expect(
+                parts.count == 3 && parts[0] == "VVTermUITests" && parts[2].hasPrefix("test"),
+                "exemption id `\(row.id)` must be `VVTermUITests/<Class>/<test…>` — re-derive this pin (issue #362)"
+            )
+            #expect(
+                knownCategories.contains(row.category),
+                "exemption `\(row.id)` has unknown category `\(row.category)` — re-derive this pin (issue #362)"
+            )
+            #expect(
+                row.reason.count >= 20,
+                "exemption `\(row.id)` needs a mechanism-accurate reason of at least 20 characters; found \(row.reason.count) — re-derive this pin (issue #362)"
+            )
+            if Self.trackerRequiredCategories.contains(row.category) {
+                guard let tracker = row.tracker else {
+                    throw PinFailure(
+                        "exemption `\(row.id)` category `\(row.category)` requires a live `tracker` — re-derive this pin (issue #362)"
+                    )
+                }
+                #expect(
+                    Self.liveTrackers.contains(tracker),
+                    "exemption `\(row.id)` tracker #\(tracker) is not in the pinned live-tracker set \(Self.liveTrackers.sorted()); a closed tracker must name its successor — re-derive this pin (issue #362)"
+                )
+                #expect(
+                    row.reason.contains("#\(tracker)"),
+                    "exemption `\(row.id)` reason must name its tracker as `#\(tracker)` — re-derive this pin (issue #362)"
+                )
+            } else {
+                #expect(
+                    row.tracker == nil,
+                    "exemption `\(row.id)` category `\(row.category)` is structural and must not carry a tracker (found #\(row.tracker.map(String.init) ?? "?")) — re-derive this pin (issue #362)"
+                )
+            }
+            #expect(
+                declarationsByIdentifier[row.id] != nil,
+                "exemption `\(row.id)` does not resolve to a declared `func test…(` — remove a stale row in the same PR that removes the method (issue #362)"
+            )
+            guard let declaration = declarationsByIdentifier[row.id] else { continue }
+            if row.category == "platformGated" {
+                #expect(
+                    declaration.platformGate == "os(macOS)",
+                    "`platformGated` exemption `\(row.id)` must carry the trimmed positive `os(macOS)` gate; found `\(declaration.platformGate ?? "nil")` — re-derive this pin (issue #362)"
+                )
+            }
+        }
+    }
+
+    // MARK: - Allowlist declaration scanner (issue #362)
+
+    /// Assertion 7/8 source scanner (plan v3 §3.2). Recursively reads
+    /// `VVTermUITests/`, blanks comments and string interiors, line-scans the
+    /// `#if` condition stack WITH polarity (`#else` flips, `#elseif`
+    /// replaces), brace-matches every type declaration as an attribution
+    /// barrier, and attributes each unanchored `\bfunc\s+`?(test\w*)`?\s*\(`
+    /// candidate to its innermost enclosing declaration. A candidate whose
+    /// innermost declaration is not a resolved `XCTestCase` class (direct or
+    /// a transitive base chain within the scan) or an extension of one is
+    /// returned UNATTRIBUTED and fails assertion 7 closed; `extension
+    /// XCTestCase` is never a test class.
+    private static func declaredUITestMethods() throws -> DeclarationScan {
+        let directory = try repositoryRoot().appendingPathComponent(uiTestsDirectory)
+        let files = try swiftFiles(under: directory)
+
+        var declarationsByFile: [String: [TypeDeclaration]] = [:]
+        var blankedByFile: [String: String] = [:]
+        var classBases: [String: String?] = [:]
+
+        for file in files {
+            let source: String
+            do {
+                source = try String(contentsOf: file, encoding: .utf8)
+            } catch {
+                throw PinFailure("could not read \(file.path): \(error) — re-derive this pin (issue #362)")
+            }
+            let blanked = strippingCommentsAndStrings(source)
+            blankedByFile[file.path] = blanked
+            let declarations = typeDeclarations(in: blanked)
+            declarationsByFile[file.path] = declarations
+            for declaration in declarations where declaration.kind == "class" {
+                if classBases[declaration.name] == nil {
+                    classBases[declaration.name] = declaration.base
+                }
+            }
+        }
+
+        func resolvesToXCTestCase(_ name: String) -> Bool {
+            var visited: Set<String> = []
+            var current = name
+            while true {
+                guard current != "XCTestCase" else { return false }
+                guard !visited.contains(current) else { return false }
+                visited.insert(current)
+                guard let base = classBases[current].flatMap({ $0 }) else { return false }
+                if base == "XCTestCase" { return true }
+                current = base
+            }
+        }
+
+        let regex: NSRegularExpression
+        do {
+            regex = try NSRegularExpression(pattern: #"\bfunc\s+`?(test\w*)`?\s*\("#)
+        } catch {
+            throw PinFailure("could not compile the declared-test probe: \(error) — re-derive this pin (issue #362)")
+        }
+
+        var attributed: [DeclaredMethod] = []
+        var unattributed: [UnattributedDeclaration] = []
+        var broadProbeTotal = 0
+
+        for file in files {
+            guard let blanked = blankedByFile[file.path] else { continue }
+            let gates = try platformGatesByLine(in: blanked)
+            let declarations = declarationsByFile[file.path] ?? []
+            let nsText = blanked as NSString
+            // Classification-completeness guard: count the broad probe's
+            // matches in a SEPARATE pass, so a candidate dropped between
+            // match and attribution reds even when `unattributed` is empty.
+            broadProbeTotal += regex.numberOfMatches(
+                in: blanked,
+                range: NSRange(location: 0, length: nsText.length)
+            )
+            for match in regex.matches(in: blanked, range: NSRange(location: 0, length: nsText.length)) {
+                let name = nsText.substring(with: match.range(at: 1))
+                    .replacingOccurrences(of: "`", with: "")
+                let index = match.range.location
+                let line = lineNumber(atUTF16Offset: index, in: nsText)
+                let innermost = declarations
+                    .filter { $0.bodyStart < index && index < $0.bodyEnd }
+                    .max { $0.bodyStart < $1.bodyStart }
+                let resolvedClass: String?
+                if let innermost, innermost.kind == "class" || innermost.kind == "extension" {
+                    resolvedClass = resolvesToXCTestCase(innermost.name) ? innermost.name : nil
+                } else {
+                    resolvedClass = nil
+                }
+                if let className = resolvedClass {
+                    attributed.append(
+                        DeclaredMethod(
+                            identifier: "\(uiTestsDirectory)/\(className)/\(name)",
+                            platformGate: gates[line]
+                        )
+                    )
+                } else {
+                    unattributed.append(
+                        UnattributedDeclaration(
+                            name: name,
+                            file: file.lastPathComponent,
+                            line: line
+                        )
+                    )
+                }
+            }
+        }
+        return DeclarationScan(
+            attributed: attributed,
+            unattributed: unattributed,
+            broadProbeTotal: broadProbeTotal
+        )
+    }
+
+    /// Per-line platform gate: the innermost POSITIVE `#if` frame whose
+    /// trimmed condition contains `os(` or `targetEnvironment(`, after
+    /// applying `#else` polarity. A method in the `#else` of `#if os(macOS)`
+    /// compiles on the iOS Simulator, so it must not carry the macOS gate
+    /// (re-lens-1 MINOR-1); `#if targetEnvironment(macCatalyst)` is recorded
+    /// so the scheduled-gate guard reds instead of silently compiling out.
+    /// `swift(`/`DEBUG` are deliberately not recorded (they do not exclude
+    /// the destination); conditions with neither token are defeat (4).
+    private static func platformGatesByLine(in blanked: String) throws -> [Int: String] {
+        var gates: [Int: String] = [:]
+        var stack: [(condition: String, positive: Bool)] = []
+        for (offset, line) in blanked.components(separatedBy: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#if") {
+                let condition = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                stack.append((condition, true))
+            } else if trimmed.hasPrefix("#elseif") {
+                guard !stack.isEmpty else {
+                    throw PinFailure("unbalanced `#elseif` while scanning \(uiTestsDirectory)/ — re-derive this pin (issue #362)")
+                }
+                let condition = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+                stack[stack.count - 1] = (condition, true)
+            } else if trimmed.hasPrefix("#else") {
+                guard !stack.isEmpty else {
+                    throw PinFailure("unbalanced `#else` while scanning \(uiTestsDirectory)/ — re-derive this pin (issue #362)")
+                }
+                let frame = stack[stack.count - 1]
+                stack[stack.count - 1] = (frame.condition, false)
+            } else if trimmed.hasPrefix("#endif") {
+                guard !stack.isEmpty else {
+                    throw PinFailure("unbalanced `#endif` while scanning \(uiTestsDirectory)/ — re-derive this pin (issue #362)")
+                }
+                stack.removeLast()
+            }
+            if let gate = stack.last(where: {
+                $0.positive && ($0.condition.contains("os(") || $0.condition.contains("targetEnvironment("))
+            })?.condition {
+                gates[offset + 1] = gate
+            }
+        }
+        return gates
+    }
+
+    /// Brace-match every lexical type declaration on the comment/string-blanked
+    /// text. All kinds (`class`, `struct`, `enum`, `actor`, `protocol`,
+    /// `extension`) are attribution barriers (re-lens-1 MAJOR-1); a class's
+    /// base is the first identifier after its `:` clause.
+    private static func typeDeclarations(in text: String) -> [TypeDeclaration] {
+        let units = Array(text.utf16)
+        let nsText = text as NSString
+        let regex: NSRegularExpression
+        do {
+            regex = try NSRegularExpression(
+                pattern: #"\b(extension|class|struct|enum|actor|protocol)\s+([A-Za-z_][A-Za-z0-9_]*)"#
+            )
+        } catch {
+            return []
+        }
+        let reservedClassNames: Set<String> = ["func", "var", "let", "subscript", "init", "deinit", "case", "where"]
+        var declarations: [TypeDeclaration] = []
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            let kind = nsText.substring(with: match.range(at: 1))
+            let name = nsText.substring(with: match.range(at: 2))
+            if kind == "class" && reservedClassNames.contains(name) { continue }
+            let searchStart = match.range.location + match.range.length
+            guard let bodyStart = nextBraceIndex(in: units, from: searchStart) else { continue }
+            guard let bodyEnd = matchingBraceIndex(in: units, from: bodyStart) else { continue }
+            var base: String?
+            if kind == "class" {
+                let clause = nsText.substring(with: NSRange(location: searchStart, length: bodyStart - searchStart))
+                if let colon = clause.firstIndex(of: ":") {
+                    base = firstIdentifier(in: String(clause[clause.index(after: colon)...]))
+                }
+            }
+            declarations.append(
+                TypeDeclaration(name: name, kind: kind, base: base, bodyStart: bodyStart, bodyEnd: bodyEnd)
+            )
+        }
+        return declarations
+    }
+
+    private static func nextBraceIndex(in units: [UInt16], from start: Int) -> Int? {
+        var index = max(0, start)
+        while index < units.count {
+            if units[index] == 0x7B { return index }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func matchingBraceIndex(in units: [UInt16], from open: Int) -> Int? {
+        var depth = 0
+        var index = open
+        while index < units.count {
+            if units[index] == 0x7B {
+                depth += 1
+            } else if units[index] == 0x7D {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func firstIdentifier(in text: String) -> String? {
+        guard let range = text.range(of: #"[A-Za-z_][A-Za-z0-9_]*"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(text[range])
+    }
+
+    private static func lineNumber(atUTF16Offset offset: Int, in text: NSString) -> Int {
+        var line = 1
+        var cursor = 0
+        while cursor < offset {
+            let found = text.range(
+                of: "\n",
+                options: [],
+                range: NSRange(location: cursor, length: offset - cursor)
+            )
+            if found.location == NSNotFound { break }
+            line += 1
+            cursor = found.location + found.length
+        }
+        return line
+    }
+
+    /// Blanks `//` and nested `/* */` comments plus string interiors while
+    /// preserving the UTF-16 length (newlines are kept), so regex match
+    /// offsets and line numbers stay aligned with the source. Hash-prefix
+    /// aware: `#"…"#`, `##"…"##`, … close only on `"` + the same number of
+    /// `#` (re-lens-1 MINOR-2). Scanner-local by design; the existing
+    /// `strippingComments` (string contents kept) is untouched for assertion 3.
+    private static func strippingCommentsAndStrings(_ source: String) -> String {
+        let units = Array(source.utf16)
+        let slash: UInt16 = 0x2F
+        let star: UInt16 = 0x2A
+        let newline: UInt16 = 0x0A
+        let space: UInt16 = 0x20
+        var result: [UInt16] = []
+        result.reserveCapacity(units.count)
+        var index = 0
+        var inLineComment = false
+        var blockDepth = 0
+        while index < units.count {
+            let unit = units[index]
+            if inLineComment {
+                if unit == newline {
+                    inLineComment = false
+                    result.append(unit)
+                } else {
+                    result.append(space)
+                }
+                index += 1
+                continue
+            }
+            if blockDepth > 0 {
+                if unit == slash, index + 1 < units.count, units[index + 1] == star {
+                    blockDepth += 1
+                    result.append(space)
+                    result.append(space)
+                    index += 2
+                } else if unit == star, index + 1 < units.count, units[index + 1] == slash {
+                    blockDepth -= 1
+                    result.append(space)
+                    result.append(space)
+                    index += 2
+                } else {
+                    result.append(unit == newline ? newline : space)
+                    index += 1
+                }
+                continue
+            }
+            if unit == slash, index + 1 < units.count, units[index + 1] == slash {
+                inLineComment = true
+                result.append(space)
+                result.append(space)
+                index += 2
+                continue
+            }
+            if unit == slash, index + 1 < units.count, units[index + 1] == star {
+                blockDepth = 1
+                result.append(space)
+                result.append(space)
+                index += 2
+                continue
+            }
+            if unit == 0x22 || unit == 0x23 {
+                if let end = stringLiteralEnd(in: units, at: index) {
+                    var cursor = index
+                    while cursor < end {
+                        result.append(units[cursor] == newline ? newline : space)
+                        cursor += 1
+                    }
+                    index = end
+                    continue
+                }
+            }
+            result.append(unit)
+            index += 1
+        }
+        return String(decoding: result, as: UTF16.self)
+    }
+
+    /// End (exclusive UTF-16 offset) of the string literal opening at `start`
+    /// (a `"` or the first `#` of a raw prefix), or nil when `start` opens no
+    /// literal. Unterminated literals run to EOF, which fails the count closed.
+    private static func stringLiteralEnd(in units: [UInt16], at start: Int) -> Int? {
+        let hash: UInt16 = 0x23
+        let quote: UInt16 = 0x22
+        let backslash: UInt16 = 0x5C
+        var cursor = start
+        var hashes = 0
+        while cursor < units.count, units[cursor] == hash {
+            hashes += 1
+            cursor += 1
+        }
+        guard cursor < units.count, units[cursor] == quote else { return nil }
+        let triple = cursor + 2 < units.count
+            && units[cursor + 1] == quote
+            && units[cursor + 2] == quote
+        var index = cursor + (triple ? 3 : 1)
+        while index < units.count {
+            if hashes == 0, units[index] == backslash {
+                index += 2
+                continue
+            }
+            if units[index] == quote {
+                if triple {
+                    if index + 2 < units.count,
+                       units[index + 1] == quote,
+                       units[index + 2] == quote,
+                       matchesHashSuffix(units, at: index + 3, count: hashes) {
+                        return index + 3 + hashes
+                    }
+                } else if matchesHashSuffix(units, at: index + 1, count: hashes) {
+                    return index + 1 + hashes
+                }
+            }
+            index += 1
+        }
+        return units.count
+    }
+
+    private static func matchesHashSuffix(_ units: [UInt16], at index: Int, count: Int) -> Bool {
+        guard count > 0 else { return true }
+        guard index + count <= units.count else { return false }
+        for offset in 0..<count where units[index + offset] != 0x23 {
+            return false
+        }
+        return true
+    }
+
+    private static func allowlistFixture() throws -> AllowlistFixture {
+        let url = try repositoryRoot().appendingPathComponent(allowlistPath)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw PinFailure("could not read the allowlist fixture at \(url.path): \(error) — re-derive this pin (issue #362)")
+        }
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw PinFailure("the allowlist fixture at \(url.path) is not valid JSON: \(error) — re-derive this pin (issue #362)")
+        }
+        guard let root = object as? [String: Any],
+              root["_provenance"] is [String: Any],
+              let rows = root["exemptions"] as? [[String: Any]]
+        else {
+            throw PinFailure("the allowlist fixture at \(url.path) must have a `_provenance` object and an `exemptions` array — re-derive this pin (issue #362)")
+        }
+        var exemptions: [Exemption] = []
+        for row in rows {
+            guard let id = row["id"] as? String,
+                  let category = row["category"] as? String,
+                  let reason = row["reason"] as? String
+            else {
+                throw PinFailure("every exemption row must carry string `id`, `category` and `reason` — re-derive this pin (issue #362); bad row: \(row)")
+            }
+            var tracker: Int?
+            if let rawTracker = row["tracker"] {
+                guard let number = rawTracker as? Int else {
+                    throw PinFailure("exemption `\(id)` must carry an integer `tracker` — re-derive this pin (issue #362)")
+                }
+                tracker = number
+            }
+            exemptions.append(Exemption(id: id, category: category, reason: reason, tracker: tracker))
+        }
+        return AllowlistFixture(exemptions: exemptions)
     }
 
     // MARK: - Matrix parsing

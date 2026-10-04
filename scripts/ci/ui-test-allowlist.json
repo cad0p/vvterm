@@ -1,0 +1,224 @@
+{
+  "_provenance": {
+    "date": "2026-10-04",
+    "issue": 362,
+    "source": "first-hand census at d98e3aa3"
+  },
+  "exemptions": [
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testBackgroundRoundTripPreservesTerminalTyping",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testCodexPromptKeyboardLossIsRepairedAndReturnsInputToTerminal",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testCrossAppFocusTransferReleasesResponderWithoutRebuild",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip cites #92 historically; AX responder-release race across app-switch (2 consecutive clean-runner shard-3 failures, 2026-08-07, run ids in #92); the instance is recorded on #257 (live flake tracker) — see the history entry",
+      "tracker": 257
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testDefaultLayoutClearsDockedInsetForEveryFloatingTransition",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testDirectTouchRoutesBalancedClicksWithoutGestureDuplicates",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testExplicitKeyboardCommandMaintainsForcedPolicyWhileHardwareRemainsAttached",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testKeyboardButtonRestoresAfterUserHideButTerminalTapDoesNot",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testKeyboardHarnessMenuRepairsUnexpectedKeyboardLoss",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testKeyboardMenuDismissesFindAndTransfersInputToTerminal",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testNativeSelectionGesturesYieldToCapturedDirectTouch",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testSettingsSheetDoesNotOverlapRealSoftwareKeyboard",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testSettingsSheetReleasesAndRestoresTerminalKeyboardOwnership",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayDetachesAndRestoresAccessoryWithoutLosingTyping",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testTemporarySystemOverlayPreservesUserHiddenKeyboardIntent",
+      "category": "quarantined",
+      "reason": "unconditional in-code XCTSkip (#92): upstream keyboard harness coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
+    },
+    {
+      "id": "VVTermUITests/NoticePresentationUITests/testDismissedFailureDoesNotImmediatelyReopen",
+      "category": "ciQuarantined",
+      "reason": "CI-env XCTSkip for a host-degraded notice-presentation flake; in-code string cites #119 as the per-test instance, live tracker #257",
+      "tracker": 257
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testDefaultKeyboardAvoidanceResizesTerminalGrid",
+      "category": "ciQuarantined",
+      "reason": "CI-env XCTSkip for the host-degraded AX scroll wedge; in-code string cites #201 (closed), live tracker #257",
+      "tracker": 257
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testPrintableHardwareKeyRepeatOwnsResolvedTextUntilReleaseOrCancel",
+      "category": "ciQuarantined",
+      "reason": "CI-env XCTSkip for a marginal IME-proxy handoff timeout under CI host load; in-code string cites #184 (closed), live tracker #257",
+      "tracker": 257
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyModeBackgroundResumeRestoresResponsiveTerminal",
+      "category": "ciQuarantined",
+      "reason": "CI-env XCTSkip for a host-degraded keyboard-scene flake; in-code string cites #119 as the per-test instance, live tracker #257",
+      "tracker": 257
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal",
+      "category": "ciQuarantined",
+      "reason": "CI-env XCTSkip for the host-degraded AX scroll wedge; in-code string cites #201 (closed), live tracker #257",
+      "tracker": 257
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews",
+      "category": "capabilityGated",
+      "reason": "skips only when the simulator suppresses the software keyboard or lacks the native dock/redock gesture; never scheduled - decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_doesNotReRunBootstrap",
+      "category": "issueGated",
+      "reason": "no in-code gate; bootstrap-mock race measured on #277 - never scheduled until its exit criteria land",
+      "tracker": 277
+    },
+    {
+      "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_transitionsToRegistrationSheet",
+      "category": "issueGated",
+      "reason": "no in-code gate; deterministic AX query failure measured on #277 (readiness pill is Other, not StaticText) - never scheduled",
+      "tracker": 277
+    },
+    {
+      "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase2RegistrationSuccess_transitionsToLoginSheet",
+      "category": "issueGated",
+      "reason": "no in-code gate; class-level gate on #277 (not individually measured) - never scheduled until the phase-transition repairs land",
+      "tracker": 277
+    },
+    {
+      "id": "VVTermUITests/ZmxScrollbackReloadUITests/testKeyboardCloseDoesNotReloadScrollback",
+      "category": "reproOnly",
+      "reason": "setUpWithError requires VVTERM_REPRO_SSH_* and runs via repro-zmx.yml, not a shard"
+    },
+    {
+      "id": "VVTermUITests/ZmxScrollbackReloadUITests/testKeyboardOpenDoesNotReloadScrollback",
+      "category": "reproOnly",
+      "reason": "setUpWithError requires VVTERM_REPRO_SSH_* and runs via repro-zmx.yml, not a shard"
+    },
+    {
+      "id": "VVTermUITests/ZmxScrollbackReloadUITests/testZmxAttachReplaysScrollbackOnConnect",
+      "category": "reproOnly",
+      "reason": "setUpWithError requires VVTERM_REPRO_SSH_* and runs via repro-zmx.yml, not a shard"
+    },
+    {
+      "id": "VVTermUITests/VVTermUITests/testExample",
+      "category": "launchPerf",
+      "reason": "template test with no functional assertions; CI-gated in the method body (#45, closed with the skip) and kept for local template parity"
+    },
+    {
+      "id": "VVTermUITests/VVTermUITests/testLaunchPerformance",
+      "category": "launchPerf",
+      "reason": "measure-only benchmark with no pass/fail verdict; no performance baseline is configured - delete-vs-keep decision tracked in #364"
+    },
+    {
+      "id": "VVTermUITests/VVTermUITestsLaunchTests/testLaunch",
+      "category": "launchPerf",
+      "reason": "template launch test, CI-gated in setUpWithError; runs once per UI configuration (77 variants per run) (#45, closed with the skip)"
+    },
+    {
+      "id": "VVTermUITests/StatsAppearancePresentationUITests/testStatsAppearanceCanBeClosedFromGeneralSettings",
+      "category": "platformGated",
+      "reason": "compiled only under #if os(macOS); every test destination is the iOS Simulator, so it is never compiled in CI"
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    },
+    {
+      "id": "VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel",
+      "category": "unscheduled",
+      "reason": "never scheduled since the #91 sync; real-terminal-launcher harness unrelated to #92 - schedule-or-quarantine decision tracked in #364",
+      "tracker": 364
+    }
+  ]
+}
