@@ -829,16 +829,18 @@ sub-family and item 16's redirect-operand masks are closed at this fold:
 the argv operand walk drops redirect operators, their target words and
 fd-prefix words, and pure `(`/`)` group tokens; the write-verb table gains
 `ln`/`rsync` and the sed `w` command accepts the attached `w<target>`
-spelling; the dropped input-redirect targets are re-added to the relevance
-set and re-classified in the refusal path so the fold is monotone. Measured
+spelling; the dropped input-redirect target names are re-added to the
+relevance set, and the refusal path classifies both the redirect-aware
+operand list and the base word list, so the fold is monotone by
+construction. Measured
 at A14: the fixture corpus is 728/728 cases, of which 297 declare their
 measured base verdict (`base_exit`); the operand-mask fold adds 82 fixtures
 (23 accept pins, 43 reject fixtures including 4 documented over-refusals,
 and 16 base-REFUSE boundary pins), and the 4680-cell
 verb × target × redirect × paren battery reports 0 REFUSE→ACCEPT with every
 ACCEPT→REFUSE named in the PR body. The boundary pins for item 17, item
-14's substitution sub-family, item 15 and items 3–6/8/10/11 are committed
-at this commit; the
+14's substitution sub-family, item 15 and items 3–6/8/10/11 are pre-existing
+corpus entries, not added by this fold; this
 comment spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
@@ -4997,15 +4999,6 @@ def _bash_joined_continuation_segments(
 # two existing diagnostics (issue #350 item 16; plan lens 1 MAJOR-4).
 _ARGV_REDIRECT_OPERATORS = frozenset({">", ">>", ">|", "<>", "<", "<<"})
 _FD_PREFIX_BRACE_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
-# The write verbs whose base branch classifies every non-option operand
-# (`tee`/`touch`/`truncate` return all of them; the sed branch collects every
-# positional), so a dropped input-redirect target was classified there too.
-_ARGV_ALL_OPERAND_WRITE_VERBS = frozenset({"tee", "touch", "truncate", "sed"})
-# The write verbs whose base branch classifies only the last non-option
-# operand. `dd` classifies only `of=` and an inline interpreter only its
-# positionals, so a redirect target was never one of their operands and the
-# dropped-target guard must not invent one.
-_ARGV_LAST_OPERAND_WRITE_VERBS = frozenset({"cp", "mv", "install", "ln", "rsync"})
 
 
 def _argv_operand_words(
@@ -5036,14 +5029,9 @@ def _argv_operand_words(
             ):
                 consumed.add(index - 1)
             after = index + 1
-            if (
-                text == "<<"
-                and after < len(segment)
-                and segment[after][0] == "op"
-                and segment[after][1] == "<"
-            ):
-                # A here-string (`<<<`) tokenizes as `<<` + `<`.
-                after += 1
+            # A here-string (`<<<`) tokenizes as `<<` + `<`; the trailing
+            # `<` consumes the word on its own iteration, so no `<<`
+            # operator-pair special case is needed (fold round 1 F10).
             if (
                 after < len(segment)
                 and segment[after][0] == "op"
@@ -5089,9 +5077,10 @@ def _argv_dropped_input_targets(
     bare or explicit-fd-0 `<>` read-write forms (`read_write` True). The
     input forms are not modelled by `_segment_redirects`, so their variable
     names must be re-added to the relevance set explicitly (issue #350 item
-    16; plan lens 1 BLOCKER-2); every one of them was an operand at base,
-    so the refusal path re-classifies them to keep the fold monotone (plan
-    §3.4 `<>` guard). An explicit higher fd or a `{name}` allocation on `<>`
+    16; plan lens 1 BLOCKER-2); every one of them was an operand at base.
+    The refusal path no longer reads this list: it re-classifies the base
+    word list directly (fold round 1 F1), which is a superset of these
+    targets. An explicit higher fd or a `{name}` allocation on `<>`
     is a payload-writing target the redirect accounting already
     classifies."""
     targets: list[tuple[int, str, bool]] = []
@@ -5100,13 +5089,8 @@ def _argv_dropped_input_targets(
         kind, text, start, _end = segment[index]
         if kind == "op" and text in ("<", "<<"):
             after = index + 1
-            if (
-                text == "<<"
-                and after < len(segment)
-                and segment[after][0] == "op"
-                and segment[after][1] == "<"
-            ):
-                after += 1
+            # A here-string (`<<<`) tokenizes as `<<` + `<`; the trailing
+            # `<` records the word on its own iteration (fold round 1 F10).
             if (
                 after < len(segment)
                 and segment[after][0] == "op"
@@ -5149,35 +5133,6 @@ def _argv_dropped_input_targets(
     return targets
 
 
-def _argv_base_last_operand(
-    segment: list[tuple[str, str, int, int]],
-) -> str | None:
-    """The last non-option word after the first write verb in `segment`:
-    the operand the base `cp`/`mv`/`install`/`ln`/`rsync` branch classified
-    (`operands[-1]`)."""
-    words = [token[1] for token in segment if token[0] == "word"]
-    for position, text in enumerate(words):
-        if _argv_verb_name(text) not in _ARGV_WRITE_VERBS:
-            continue
-        operands = [argument for argument in words[position + 1 :] if not argument.startswith("-")]
-        return operands[-1] if operands else None
-    return None
-
-
-def _argv_write_verb_index(
-    segment: list[tuple[str, str, int, int]],
-) -> int | None:
-    """The segment index of the first argv write verb the operand walk
-    recognizes, or None. The dropped-target guard uses it to stay within the
-    operands the base walk could have classified: a redirect prefix before
-    the verb was never an operand."""
-    for index, text in _argv_operand_words(segment):
-        verb = _argv_verb_name(text)
-        if verb in _ARGV_WRITE_VERBS or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
-            return index
-    return None
-
-
 def _argv_target_is_unproven(
     verb: str,
     target: str,
@@ -5201,6 +5156,7 @@ def _argv_target_is_unproven(
 
 def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
+    operand_words: list[tuple[int, str]] | None = None,
 ) -> list[tuple[str, str]]:
     """The `(verb, target)` file operands of an argv write verb in one
     segment: `tee` appends to every non-option path operand and `dd` writes
@@ -5210,8 +5166,15 @@ def _argv_write_targets(
     carries its file targets in argv (`sys.argv[1]`, `$ARGV[0]`, `ARGV[0]`),
     so the non-flag words after the inline program are returned too and
     classified with the same resolver as `tee`/`dd of=` (issue #345, fold
-    round 1 F4)."""
-    words = [text for _index, text in _argv_operand_words(segment)]
+    round 1 F4).
+
+    `operand_words` selects the operand list: the private redirect-aware
+    walk by default, or the base word list (`[token[1] for token in segment
+    if token[0] == "word"]`) so `_refuse_argv_write_targets` can re-classify
+    every target the pre-fold walk read (fold round 1 F1)."""
+    if operand_words is None:
+        operand_words = _argv_operand_words(segment)
+    words = [text for _index, text in operand_words]
     for position, text in enumerate(words):
         verb = _argv_verb_name(text)
         if verb in _ARGV_WRITE_VERBS:
@@ -5513,7 +5476,25 @@ def _refuse_argv_write_targets(
     and otherwise refuses with the argv diagnostic (issue #345, fold round 1
     F2)."""
     targets = _argv_write_targets(segment)
-    for verb, target in targets:
+    # The operand walk drops every input-redirect target (`<`, `<<`, `<<<`,
+    # the `<&` fd-duplication forms and the bare/fd-0 `<>` read-write
+    # form), which the base walk read as operands. Classify the base word
+    # list too, so every target the pre-fold walk classified is
+    # re-classified here and the fold cannot widen a base REFUSE to ACCEPT
+    # (issue #350 item 16; fold round 1 F1). The base walk's words are the
+    # raw `word` tokens, exactly what it sliced; `_argv_write_targets`
+    # applies the same verb table to them, so the union is a superset of
+    # the base target set by construction. A redirect prefix before the
+    # verb is still read here, but the base walk read it too (and accepted
+    # it), so no new refusal class is introduced. A benign `<> /dev/null`
+    # stays proven and is not refused, and the fd-0 read-write exemption is
+    # preserved.
+    base_words = [
+        (index, token[1])
+        for index, token in enumerate(segment)
+        if token[0] == "word"
+    ]
+    for verb, target in targets + _argv_write_targets(segment, base_words):
         if not _argv_target_is_unproven(
             verb, target, aliases, assignments, lines, line_index, column_index
         ):
@@ -5523,39 +5504,6 @@ def _refuse_argv_write_targets(
         ) == "env":
             continue
         raise _run_id_argv_write_refusal(step, body, verb, target)
-    # The operand walk drops every input-redirect target (`<`, `<<`, `<<<`,
-    # the `<&` fd-duplication forms and the bare/fd-0 `<>` read-write
-    # form), which the base walk read as operands. Re-classify the dropped
-    # targets that sit after the verb with the same verb predicate so the
-    # fold cannot widen a base REFUSE to ACCEPT (issue #350 item 16; plan
-    # §3.4 `<>` guard). A target before the verb was never an operand; a
-    # benign `<> /dev/null` stays dropped, and the fd-0 read-write
-    # exemption is preserved.
-    if targets:
-        verb = targets[0][0]
-        verb_index = _argv_write_verb_index(segment)
-        base_last = _argv_base_last_operand(segment)
-        for target_index, target, _read_write in _argv_dropped_input_targets(segment):
-            if verb_index is not None and target_index < verb_index:
-                # A redirect prefix before the verb was never an operand.
-                continue
-            if verb in _ARGV_ALL_OPERAND_WRITE_VERBS:
-                pass
-            elif verb in _ARGV_LAST_OPERAND_WRITE_VERBS:
-                if target != base_last:
-                    continue
-            else:
-                # `dd`/an inline interpreter classified no redirect target.
-                continue
-            if not _argv_target_is_unproven(
-                verb, target, aliases, assignments, lines, line_index, column_index
-            ):
-                continue
-            if defer_env_spelling and _env_file_target_kind(
-                target, aliases, assignments, lines, line_index, column_index
-            ) == "env":
-                continue
-            raise _run_id_argv_write_refusal(step, body, verb, target)
 
 
 def _segment_is_env_alias_assignment(
