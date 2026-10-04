@@ -810,27 +810,29 @@ the eight benign shapes become measured over-refusals (the price of
 fail-closed joining, listed by class with the corpus counts). Boundary
 (stays open, never implied closed): the `>8` chain bound
 (`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
-closed, `n9+` open) and the outside-class fail-opens — #350 item 13 (the
-continuation-independent extractor gaps), #350 item 17 (the same-line
-`$'…\'…'` tokenizer gap: `_shell_tokens` reads `\'` as a close and swallows
-the rest of the line, so `echo $'a\'' ; cp payload \\` + `"${arr[0]}"`
-leaves `_argv_write_targets` empty — base/prev/fold ACCEPT + runtime FLIP,
-its continuation-free control also FLIPs, and no join fix closes it; fold
-round 2 lens-1 MAJOR-1, named not folded), #350 item 14 (a target masked by a
-trailing operator token: `_shell_segments` does not split on `(`, so
-`_argv_write_targets` reads `)` as `cp`'s last operand; the redirect-operand
-masks — `cp payload \\` + `"${arr[0]}" < payload`, `> /dev/null`, `2>&1`,
-`mv`/`install` and the redirection-prefix spelling — read the redirect's
-source word as the last operand; and the substitution masks `$( … )`,
-backtick, `eval "…"`, `case x in x) … ;; esac` and `w=$(cp …)` hide the
-verb inside a substitution the argv extractor does not descend; every one of
-these has a continuation-free control that also runtime-FLIPs, so they are
-extractor gaps, not join gaps), and #350 item 15 (a `>`/plain break YAML
+closed, `n9+` open) and the outside-class fail-opens — #350 item 17 (the
+same-line `$'…\'…'` tokenizer gap: `_shell_tokens` reads `\'` as a close
+and swallows the rest of the line, so `echo $'a\'' ; cp payload \\` +
+`"${arr[0]}"` leaves `_argv_write_targets` empty — base/prev/fold ACCEPT +
+runtime FLIP, its continuation-free control also FLIPs, and no join fix
+closes it; fold round 2 lens-1 MAJOR-1, named not folded), #350 item 14's
+substitution sub-family (a target masked by a substitution spelling:
+`$( … )`, backtick, `eval "…"`, `case x in x) … ;; esac` and `w=$(cp …)`
+hide the verb inside a substitution the argv extractor does not descend;
+each has a continuation-free control that also runtime-FLIPs, so it is an
+extractor gap, not a join gap), and #350 item 15 (a `>`/plain break YAML
 folds to a space, joining verb and target with no backslash at all; closing
 it needs the YAML fold model the review rounds rejected as unsound) — a
-target masked by an operator token, a redirection operand or a substitution
-spelling, or folded across a break, therefore stays outside this
-closure; the
+target masked by a substitution spelling, or folded across a break,
+therefore stays outside this closure. #350 item 14's operator-token
+sub-family and item 16's redirect-operand masks are closed at this fold:
+the argv operand walk drops redirect operators, their target words and
+fd-prefix words, and pure `(`/`)` group tokens; the write-verb table gains
+`ln`/`rsync` and the sed `w` command accepts the attached `w<target>`
+spelling; the dropped input-redirect targets are re-added to the relevance
+set and re-classified in the refusal path so the fold is monotone. The
+boundary pins for item 17, item 14's substitution sub-family, item 15 and
+items 3–6/8/10/11 are committed at this commit; the
 comment spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
@@ -3463,7 +3465,9 @@ _PURE_VARIABLE_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 # (`tee`, `dd of=…`): a computed operand cannot be seen by the redirect
 # classification, so it needs its own target check (issue #345, lens-v2
 # t04/t20/t22/t23).
-_ARGV_WRITE_VERBS = frozenset({"tee", "dd", "sed", "cp", "mv", "install", "touch", "truncate"})
+_ARGV_WRITE_VERBS = frozenset(
+    {"tee", "dd", "sed", "cp", "mv", "install", "ln", "rsync", "touch", "truncate"}
+)
 # `read` options that consume the next word. `-a` is deliberately absent:
 # its argument IS the array name that the rule must inspect.
 _READ_OPTIONS_WITH_ARGUMENT = ("-d", "-i", "-n", "-N", "-p", "-t", "-u")
@@ -4563,7 +4567,7 @@ _SED_ADDRESS = (
     + r")?"
 )
 _SED_WRITE_COMMAND_RE = re.compile(
-    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*[wW][ \t]+(?P<target>\S[^\n;]*)",
+    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*[wW][ \t]*(?P<target>\S[^\n;]*)",
     re.MULTILINE,
 )
 
@@ -4965,6 +4969,214 @@ def _bash_joined_continuation_segments(
     ]
 
 
+# The redirect operators the argv operand walk consumes. `_segment_redirects`
+# deliberately stays untouched: it models only the `>`-family (plus `<>`) for
+# its four consumers, and an in-place `<`/`<<` extension was measured to change
+# two existing diagnostics (issue #350 item 16; plan lens 1 MAJOR-4).
+_ARGV_REDIRECT_OPERATORS = frozenset({">", ">>", ">|", "<>", "<", "<<"})
+_FD_PREFIX_BRACE_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+# The write verbs whose base branch classifies every non-option operand
+# (`tee`/`touch`/`truncate` return all of them; the sed branch collects every
+# positional), so a dropped input-redirect target was classified there too.
+_ARGV_ALL_OPERAND_WRITE_VERBS = frozenset({"tee", "touch", "truncate", "sed"})
+# The write verbs whose base branch classifies only the last non-option
+# operand. `dd` classifies only `of=` and an inline interpreter only its
+# positionals, so a redirect target was never one of their operands and the
+# dropped-target guard must not invent one.
+_ARGV_LAST_OPERAND_WRITE_VERBS = frozenset({"cp", "mv", "install", "ln", "rsync"})
+
+
+def _argv_operand_words(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[int, str]]:
+    """The operand words of one segment for the argv write-target walk:
+    every word except the redirect operators' target words, the fd-prefix
+    words glued to an operator, and the pure `(`/`)` group tokens. A word's
+    trailing `)` run is stripped only when the word carries no `(` (a
+    subshell close glued to the operand: `(cp payload "${arr[0]}")`), so a
+    `$(…)`/`<(…)` target keeps its closing parenthesis (issue #350 item 16;
+    plan lens 1 BLOCKER-1). Returns `(segment_index, text)` in source order
+    so every verb branch's `args` slicing keeps working."""
+    consumed: set[int] = set()
+    index = 0
+    while index < len(segment):
+        kind, text, start, _end = segment[index]
+        if kind == "op" and text in _ARGV_REDIRECT_OPERATORS:
+            previous = segment[index - 1] if index > 0 else None
+            if (
+                previous is not None
+                and previous[0] == "word"
+                and previous[3] == start
+                and (
+                    (previous[1].isascii() and previous[1].isdigit())
+                    or _FD_PREFIX_BRACE_RE.fullmatch(previous[1])
+                )
+            ):
+                consumed.add(index - 1)
+            after = index + 1
+            if (
+                text == "<<"
+                and after < len(segment)
+                and segment[after][0] == "op"
+                and segment[after][1] == "<"
+            ):
+                # A here-string (`<<<`) tokenizes as `<<` + `<`.
+                after += 1
+            if (
+                after < len(segment)
+                and segment[after][0] == "op"
+                and segment[after][1] == "&"
+            ):
+                # An fd duplication (`<&`/`<<&`/`2<&`/`>&`) consumes the
+                # `&` operator and the word after it.
+                after += 1
+            if after < len(segment) and segment[after][0] == "word":
+                consumed.add(after)
+                index = after + 1
+                continue
+            index = after
+            continue
+        index += 1
+    operands: list[tuple[int, str]] = []
+    for position, (kind, text, _start, _end) in enumerate(segment):
+        if kind != "word" or position in consumed:
+            continue
+        if text in ("(", ")"):
+            continue
+        while text.endswith(")") and "(" not in text:
+            text = text[:-1]
+        if text:
+            operands.append((position, text))
+    return operands
+
+
+def _argv_verb_name(text: str) -> str:
+    """The basename of a verb candidate with a leading `(` run stripped, so
+    an attached subshell opener (`(cp`) is recognized as `cp` (issue #350
+    item 14a)."""
+    candidate = text.lstrip("(")
+    return candidate.rsplit("/", 1)[-1] if "/" in candidate else candidate
+
+
+def _argv_dropped_input_targets(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[int, str, bool]]:
+    """Every input-redirect target word the argv operand walk drops, as
+    `(segment_index, text, read_write)`: `<`, `<<`, `<<<` and the
+    `<&`/`<<&`/`{fd}<&` fd-duplication forms (`read_write` False), plus the
+    bare or explicit-fd-0 `<>` read-write forms (`read_write` True). The
+    input forms are not modelled by `_segment_redirects`, so their variable
+    names must be re-added to the relevance set explicitly (issue #350 item
+    16; plan lens 1 BLOCKER-2); every one of them was an operand at base,
+    so the refusal path re-classifies them to keep the fold monotone (plan
+    §3.4 `<>` guard). An explicit higher fd or a `{name}` allocation on `<>`
+    is a payload-writing target the redirect accounting already
+    classifies."""
+    targets: list[tuple[int, str, bool]] = []
+    index = 0
+    while index < len(segment):
+        kind, text, start, _end = segment[index]
+        if kind == "op" and text in ("<", "<<"):
+            after = index + 1
+            if (
+                text == "<<"
+                and after < len(segment)
+                and segment[after][0] == "op"
+                and segment[after][1] == "<"
+            ):
+                after += 1
+            if (
+                after < len(segment)
+                and segment[after][0] == "op"
+                and segment[after][1] == "&"
+            ):
+                after += 1
+            if after < len(segment) and segment[after][0] == "word":
+                targets.append((after, segment[after][1], False))
+                index = after + 1
+                continue
+            index = after
+            continue
+        if kind == "op" and text == "<>":
+            fd = 0
+            previous = segment[index - 1] if index > 0 else None
+            if (
+                previous is not None
+                and previous[0] == "word"
+                and previous[3] == start
+                and previous[1].isascii()
+                and previous[1].isdigit()
+            ):
+                fd = int(previous[1])
+            elif (
+                previous is not None
+                and previous[0] == "word"
+                and previous[3] == start
+                and _FD_PREFIX_BRACE_RE.fullmatch(previous[1])
+            ):
+                fd = -1
+            if (
+                fd == 0
+                and index + 1 < len(segment)
+                and segment[index + 1][0] == "word"
+            ):
+                targets.append((index + 1, segment[index + 1][1], True))
+                index += 2
+                continue
+        index += 1
+    return targets
+
+
+def _argv_base_last_operand(
+    segment: list[tuple[str, str, int, int]],
+) -> str | None:
+    """The last non-option word after the first write verb in `segment`:
+    the operand the base `cp`/`mv`/`install`/`ln`/`rsync` branch classified
+    (`operands[-1]`)."""
+    words = [token[1] for token in segment if token[0] == "word"]
+    for position, text in enumerate(words):
+        if _argv_verb_name(text) not in _ARGV_WRITE_VERBS:
+            continue
+        operands = [argument for argument in words[position + 1 :] if not argument.startswith("-")]
+        return operands[-1] if operands else None
+    return None
+
+
+def _argv_write_verb_index(
+    segment: list[tuple[str, str, int, int]],
+) -> int | None:
+    """The segment index of the first argv write verb the operand walk
+    recognizes, or None. The dropped-target guard uses it to stay within the
+    operands the base walk could have classified: a redirect prefix before
+    the verb was never an operand."""
+    for index, text in _argv_operand_words(segment):
+        verb = _argv_verb_name(text)
+        if verb in _ARGV_WRITE_VERBS or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
+            return index
+    return None
+
+
+def _argv_target_is_unproven(
+    verb: str,
+    target: str,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+) -> bool:
+    """The verb-specific predicate the argv refusal uses: `tee`/`dd`/an
+    inline interpreter take the broad predicate, every other write verb the
+    narrow one."""
+    if verb in ("tee", "dd") or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
+        return _argv_write_target_is_unproven(
+            target, aliases, assignments, lines, line_index, column_index
+        )
+    return _new_verb_target_is_unproven(
+        target, aliases, assignments, lines, line_index, column_index
+    )
+
+
 def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
 ) -> list[tuple[str, str]]:
@@ -4977,9 +5189,9 @@ def _argv_write_targets(
     so the non-flag words after the inline program are returned too and
     classified with the same resolver as `tee`/`dd of=` (issue #345, fold
     round 1 F4)."""
-    words = [token[1] for token in segment if token[0] == "word"]
+    words = [text for _index, text in _argv_operand_words(segment)]
     for position, text in enumerate(words):
-        verb = text.rsplit("/", 1)[-1] if "/" in text else text
+        verb = _argv_verb_name(text)
         if verb in _ARGV_WRITE_VERBS:
             args = words[position + 1 :]
             if verb == "tee":
@@ -5002,7 +5214,7 @@ def _argv_write_targets(
                     for argument in args
                     if argument.startswith("of=") and len(argument) > 3
                 ]
-            if verb in ("cp", "mv", "install"):
+            if verb in ("cp", "mv", "install", "ln", "rsync"):
                 operands = [a for a in args if not a.startswith("-")]
                 if not operands:
                     return []
@@ -5278,22 +5490,50 @@ def _refuse_argv_write_targets(
     has no env redirect of its own, so the caller defers only in that case
     and otherwise refuses with the argv diagnostic (issue #345, fold round 1
     F2)."""
-    for verb, target in _argv_write_targets(segment):
-        if verb in ("tee", "dd") or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
-            unproven = _argv_write_target_is_unproven(
-                target, aliases, assignments, lines, line_index, column_index
-            )
-        else:
-            unproven = _new_verb_target_is_unproven(
-                target, aliases, assignments, lines, line_index, column_index
-            )
-        if not unproven:
+    targets = _argv_write_targets(segment)
+    for verb, target in targets:
+        if not _argv_target_is_unproven(
+            verb, target, aliases, assignments, lines, line_index, column_index
+        ):
             continue
         if defer_env_spelling and _env_file_target_kind(
             target, aliases, assignments, lines, line_index, column_index
         ) == "env":
             continue
         raise _run_id_argv_write_refusal(step, body, verb, target)
+    # The operand walk drops every input-redirect target (`<`, `<<`, `<<<`,
+    # the `<&` fd-duplication forms and the bare/fd-0 `<>` read-write
+    # form), which the base walk read as operands. Re-classify the dropped
+    # targets that sit after the verb with the same verb predicate so the
+    # fold cannot widen a base REFUSE to ACCEPT (issue #350 item 16; plan
+    # §3.4 `<>` guard). A target before the verb was never an operand; a
+    # benign `<> /dev/null` stays dropped, and the fd-0 read-write
+    # exemption is preserved.
+    if targets:
+        verb = targets[0][0]
+        verb_index = _argv_write_verb_index(segment)
+        base_last = _argv_base_last_operand(segment)
+        for target_index, target, _read_write in _argv_dropped_input_targets(segment):
+            if verb_index is not None and target_index < verb_index:
+                # A redirect prefix before the verb was never an operand.
+                continue
+            if verb in _ARGV_ALL_OPERAND_WRITE_VERBS:
+                pass
+            elif verb in _ARGV_LAST_OPERAND_WRITE_VERBS:
+                if target != base_last:
+                    continue
+            else:
+                # `dd`/an inline interpreter classified no redirect target.
+                continue
+            if not _argv_target_is_unproven(
+                verb, target, aliases, assignments, lines, line_index, column_index
+            ):
+                continue
+            if defer_env_spelling and _env_file_target_kind(
+                target, aliases, assignments, lines, line_index, column_index
+            ) == "env":
+                continue
+            raise _run_id_argv_write_refusal(step, body, verb, target)
 
 
 def _segment_is_env_alias_assignment(
@@ -6240,6 +6480,24 @@ def _relevant_shell_names(
         for segment in _shell_segments(_shell_tokens(line)):
             for _op, target, _start, _span, _fd in _segment_redirects(segment):
                 names.update(_expansion_names(target))
+            # The input redirects `_segment_redirects` does not model
+            # (`<`/`<<`/`<<<` and the `<&` fd-duplication forms) are dropped
+            # from the operand list, so their variable names must be re-added
+            # here or the relevance set would shrink and suppress the
+            # `read`/`printf -v`/`mapfile` guard (issue #350 item 16; plan
+            # lens 1 BLOCKER-2). The pure-variable filter mirrors the argv
+            # target loop below (a multi-piece target deliberately adds no
+            # names).
+            for _target_index, target, read_write in _argv_dropped_input_targets(
+                segment
+            ):
+                if read_write:
+                    # `_segment_redirects` already adds every `<>` target's
+                    # names, so only the unmodelled input forms need the
+                    # explicit re-add here.
+                    continue
+                if _local_reference_name(target) is not None:
+                    names.update(_expansion_names(target))
             # A newly-modelled argv write target's variable name is traced
             # too when the target is a PURE variable (`$p`): if the name is
             # written by an unmodelled assignment form (`printf -v`,
@@ -6505,6 +6763,13 @@ def _refuse_github_env_run_id_write(
                 for _verb, _target in _argv_write_targets(_joined_segment):
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
+                for _target_index, _target, _read_write in _argv_dropped_input_targets(
+                    _joined_segment
+                ):
+                    if _read_write:
+                        continue
+                    if _local_reference_name(_target) is not None:
+                        relevant_names.update(_expansion_names(_target))
             # Issue #350 item 12: the sibling join above keeps the raw `\`
             # and the inserted newline, so a joined argv target can stay
             # masked; the bash-faithful join is additive and adds its
@@ -6516,6 +6781,13 @@ def _refuse_github_env_run_id_write(
                 continuation_pending,
             ):
                 for _verb, _target in _argv_write_targets(_joined_segment):
+                    if _local_reference_name(_target) is not None:
+                        relevant_names.update(_expansion_names(_target))
+                for _target_index, _target, _read_write in _argv_dropped_input_targets(
+                    _joined_segment
+                ):
+                    if _read_write:
+                        continue
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
         skip_until = -1
