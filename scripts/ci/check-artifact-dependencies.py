@@ -785,9 +785,9 @@ BLOCKER-1), and names two cross-run-only widenings — the unterminated
 fold-ACCEPT, runtime cross-run) — neither a data-loss fail-open;
 the joined logical line
 feeds the existing extractors unchanged, alongside the sibling join above.
-The addition is refuse-only relative to the fold round 2 head (`7d712907`)
-and the fold round 1 head (`bdbb8cfd`) over the measured sets — 0 widenings
-and 0 removals vs `7d712907` (187 {REFUSE->REFUSE 116, ACCEPT->ACCEPT 71};
+The addition is refuse-only relative to the head before fold round 2
+(`7d712907`) and the head before fold round 1 (`bdbb8cfd`) over the measured
+sets — 0 widenings and 0 removals vs `7d712907` (187 {REFUSE->REFUSE 116, ACCEPT->ACCEPT 71};
 468 {159, 309}; 3240 {1260, 1980}; 900 {351, 549}; 134-union {116, 18};
 661-file corpus {REFUSE->REFUSE 504, ACCEPT->ACCEPT 151, ACCEPT->REFUSE 6})
 and, vs `bdbb8cfd`, one named cross-run corpus widening (`bdbb8cfd` REFUSE
@@ -4913,10 +4913,10 @@ def _bash_joined_continuation_segments(
     mask the pair — fold round 1 lens-1 BLOCKER-1), not the per-line
     `_line_continuation_pending`. The callers keep the sibling join's
     verdicts and add this scan alongside. The addition is refuse-only
-    relative to the fold round 2 head (`7d712907`) over the measured sets —
-    0 widenings and 0 removals over the 187/468/3240/900 batteries, the
-    134-case union and the 661-file corpus — and relative to the fold round 1
-    head (`bdbb8cfd`) the corpus holds one named cross-run widening (the
+    relative to the head before fold round 2 (`7d712907`) over the measured
+    sets — 0 widenings and 0 removals over the 187/468/3240/900 batteries, the
+    134-case union and the 661-file corpus — and relative to the head before
+    fold round 1 (`bdbb8cfd`) the corpus holds one named cross-run widening (the
     `…-dquote-literal` accept pin: `bdbb8cfd` REFUSE -> fold-ACCEPT, a fold
     round 2 over-refusal the restored guard corrects) — but it is not a theorem for every input:
     the join can also skip a pair the sibling join joins, and both the fold
