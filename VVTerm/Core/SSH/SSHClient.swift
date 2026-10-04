@@ -294,7 +294,8 @@ actor SSHClient {
             authMethod: server.authMethod,
             credentials: credentials,
             teleportHostLogin: server.teleportHostLogin,
-            teleportNodeName: server.name
+            teleportNodeName: server.name,
+            connectionTimeout: SSHClient.timeInterval(from: connectTimeout)
         )
 
         let pendingSession = SSHSession(
@@ -1785,6 +1786,13 @@ actor SSHClient {
         return String(format: "%.2f", seconds)
     }
 
+    /// `Duration` → `TimeInterval` for the `SSHSessionConfig` bridge (#356).
+    nonisolated static func timeInterval(from duration: Duration) -> TimeInterval {
+        let components = duration.components
+        return Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+    }
+
     /// Epoch guard for a late cache write (#276/N7): `SSHSession` is recreated
     /// per connect, so session identity is the connection generation. A worker
     /// that resolved against an older session must not overwrite the current
@@ -1962,6 +1970,38 @@ nonisolated(unsafe) private let kbdintCallback: @convention(c) (
 
         responses[i].text = responseBuf
         responses[i].length = UInt32(length)
+    }
+}
+
+// MARK: - Regular handshake budget
+
+/// The derived session-I/O caps for the regular (raw-TCP) handshake path.
+///
+/// Both values come from the caller's whole-connect budget
+/// (`SSHSessionConfig.connectionTimeout`, wired from
+/// `SSHClient.connectTimeout`) so a widened connect budget is effective for
+/// libssh2's *inner* cap, not only the outer `runWithTimeout`. Naming,
+/// honestly:
+/// - `libssh2_session_set_timeout` is **session-wide**: the derived
+///   `handshake` value also bounds authentication (and host-key
+///   verification), not just the handshake.
+/// - `watchdog` bounds only the blocking handshake C call.
+/// - the outer connect budget remains the hard bound on handshake + auth.
+///
+/// `handshake = max(30, connect - 10)` and `watchdog = max(35, connect - 5)`,
+/// so the app default (`connect = 30`) derives exactly the previous constants
+/// (30_000 ms / 35 s).
+struct SSHSessionHandshakeBudget: Equatable {
+    /// Seconds passed to `libssh2_session_set_timeout` (converted to ms).
+    let handshake: TimeInterval
+    /// Seconds the detached interrupt watchdog sleeps.
+    let watchdog: TimeInterval
+
+    nonisolated static func forConnectTimeout(_ connectTimeout: TimeInterval) -> SSHSessionHandshakeBudget {
+        SSHSessionHandshakeBudget(
+            handshake: max(30, connectTimeout - 10),
+            watchdog: max(35, connectTimeout - 5)
+        )
     }
 }
 
@@ -2524,8 +2564,12 @@ actor SSHSession {
             libssh2_session_set_blocking(session, 1)
         } else {
             // Regular TCP path — blocking handshake (unchanged), bounded by
-            // libssh2's own timeout + a watchdog interrupt.
-            libssh2_session_set_timeout(session, 30_000)
+            // libssh2's own timeout + a watchdog interrupt. Both caps derive
+            // from the caller's connect budget (#356) so a widened budget
+            // reaches the inner cap; the app default still derives exactly
+            // the previous 30_000 ms / 35 s.
+            let handshakeBudget = SSHSessionHandshakeBudget.forConnectTimeout(config.connectionTimeout)
+            libssh2_session_set_timeout(session, Int(handshakeBudget.handshake * 1_000))
             // Watchdog: libssh2's own timeout can fail to fire (e.g. when the
             // transport never EAGAINs); interrupt the socket so the C call
             // returns instead of wedging the caller's thread indefinitely.
@@ -2536,7 +2580,7 @@ actor SSHSession {
                 // the just-established connection (dispatch 9: pump EOF + .notConnected
                 // 0.8ms after "Connected to").
                 do {
-                    try await Task.sleep(nanoseconds: 35_000_000_000)
+                    try await Task.sleep(nanoseconds: UInt64(handshakeBudget.watchdog * 1_000_000_000))
                 } catch {
                     return  // cancelled — handshake completed; disarm
                 }
