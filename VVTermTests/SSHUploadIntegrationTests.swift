@@ -32,6 +32,15 @@
 //  Not covered: the parked-teardown window has no reproduction (the guards
 //  are the structural invariant), so these legs are normal-path and
 //  failure-path regression coverage only.
+//
+//  Connect budget (#356): the app default (30 s) is not a contended-CI-host
+//  budget. On the dispatch-only `teleport-e2e` runner the *first* handshake
+//  measured 20.28 s, 22.98 s and 29.69 s in the slow regime, and the ~30.8 s
+//  failures were the app default's right-censored cap (`code=-9`), not the
+//  stall length. The legs therefore connect with `contendedConnectBudget`
+//  (90 s = 3× the slow-regime 29.7 s success); the app default stays 30 s,
+//  and `SSHSessionHandshakeBudget` derives the matching session-I/O /
+//  watchdog caps from whatever budget the client carries.
 
 import Foundation
 import Testing
@@ -83,7 +92,25 @@ private struct UploadFixtureConfiguration {
 @MainActor
 struct SSHUploadIntegrationTests {
 
-    // MARK: - Fixture
+    // MARK: - Connect budget (#356)
+
+    /// The connect budget these legs give the fixture sshd on a contended CI
+    /// host. Measured in the slow regime on the `teleport-e2e` runner: the
+    /// uncensored first-handshake successes were 20.28 s, 22.98 s and 29.69 s
+    /// (the ~30.8 s failures were the app default's right-censored cap, not
+    /// the stall length), so 90 s ≈ 3× the slow-mode 29.7 s success. The app
+    /// default stays 30 s; this is the test's budget.
+    static let contendedConnectBudget: Duration = .seconds(90)
+
+    /// The one construction site for a leg's client. The app default's 30 s
+    /// budget is inert for a contended host (#356), so apply the measured
+    /// `contendedConnectBudget`. `withConnection` must route through this
+    /// factory — pinned by `SSHUploadIntegrationConnectBudgetPinsTests`.
+    static func makeUploadClient() async -> SSHClient {
+        let client = SSHClient()
+        await client.setConnectTimeout(contendedConnectBudget)
+        return client
+    }
 
     // MARK: - Helpers
 
@@ -135,7 +162,7 @@ struct SSHUploadIntegrationTests {
             serverId: server.id,
             privateKey: configuration.privateKey
         )
-        let client = SSHClient()
+        let client = await Self.makeUploadClient()
         do {
             _ = try await client.connect(to: server, credentials: credentials)
             let result = try await body(client)
