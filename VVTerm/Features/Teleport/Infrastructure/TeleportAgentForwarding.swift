@@ -251,7 +251,7 @@ final class TeleportAgentChannelStore: @unchecked Sendable {
     }
 
     /// Test-observability seam: number of channels the store still owns
-    /// (queued or in flight). Never used by production code.
+    /// (queued or in flight). Not read on any production path.
     nonisolated var ownedChannelCount: Int {
         lock.withLock { $0.pending.count + $0.inFlight.count }
     }
