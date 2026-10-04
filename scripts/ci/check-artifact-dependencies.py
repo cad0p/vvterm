@@ -833,13 +833,19 @@ spelling; the dropped input-redirect target names are re-added to the
 relevance set, and the refusal path classifies both the redirect-aware
 operand list and the base word list, so the fold is monotone by
 construction. Measured
-at A14: the fixture corpus is 728/728 cases, of which 297 declare their
-measured base verdict (`base_exit`); the operand-mask fold adds 82 fixtures
-(23 accept pins, 43 reject fixtures including 4 documented over-refusals,
-and 16 base-REFUSE boundary pins), and the 4680-cell
-verb × target × redirect × paren battery reports 0 REFUSE→ACCEPT with every
-ACCEPT→REFUSE named in the PR body. The boundary pins for item 17, item
-14's substitution sub-family, item 15 and items 3–6/8/10/11 are pre-existing
+at A15: the fixture corpus is 747/747 cases, of which 316 declare their
+measured base verdict (`base_exit`); the operand-mask fold adds 101 fixtures
+(24 accept pins, 47 reject fixtures including 8 documented over-refusals,
+and 30 base-REFUSE boundary pins — the last 14 are the sole-operand
+input-redirect controls added by fold round 1 F1), and the regenerated
+6948-cell differential battery (4680 operand-bearing + 1980 continuation +
+288 sole-operand cells; the sole-operand family is the guard-skip class the
+first two structurally cannot generate) reports 0 REFUSE→ACCEPT at this
+head — 55 against the pre-fix head — with every ACCEPT→REFUSE in one of the
+three named diagnostic classes or a pinned over-refusal. The generator and
+its pinned output are preserved with the #350c evidence. The boundary pins
+for item 17, item 14's substitution sub-family, item 15 and items
+3–6/8/10/11 are pre-existing
 corpus entries, not added by this fold; this
 comment spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
@@ -957,7 +963,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 728
+EXPECTED_MANIFEST_CASES = 747
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -974,7 +980,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 297
+EXPECTED_BASE_VERDICT_CASES = 316
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -995,6 +1001,20 @@ A12_BASE_REFUSAL_PINS = frozenset(
         "reject-runid-github-env-write-operand-mask-boundary-touch-trailing",
         "reject-runid-github-env-write-operand-mask-boundary-truncate-trailing",
         "reject-runid-github-env-write-operand-mask-boundary-sed-inplace-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-mv-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-mv-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-install-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-install-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-lt-multivar",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-touch-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-truncate-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-amp-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-herestring-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-python-lt-multivar",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-perl-lt-subst",
     }
 )
 

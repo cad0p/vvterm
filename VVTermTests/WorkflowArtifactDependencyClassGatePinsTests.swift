@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 728
-    private static let expectedBaseVerdictCases = 297
+    private static let expectedManifestCases = 747
+    private static let expectedBaseVerdictCases = 316
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -952,6 +952,25 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-operand-mask-boundary-touch-trailing.yml",
         "reject-runid-github-env-write-operand-mask-boundary-truncate-trailing.yml",
         "reject-runid-github-env-write-operand-mask-boundary-sed-inplace-trailing.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-read-write-env.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-subst.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-mv-read-write-env.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-mv-lt-subst.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-install-read-write-env.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-install-lt-subst.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-read-write-env.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-lt-multivar.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-touch-lt-subst.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-truncate-read-write-env.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-amp-subst.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-herestring-subst.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-python-lt-multivar.yml",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-perl-lt-subst.yml",
+        "reject-overrefusal-operand-mask-compensation-process-substitution-attached.yml",
+        "reject-overrefusal-operand-mask-compensation-ln-unknown.yml",
+        "reject-overrefusal-operand-mask-compensation-rsync-unknown.yml",
+        "reject-overrefusal-operand-mask-compensation-sed-unknown.yml",
+        "accept-operand-mask-sed-read-write-benign.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

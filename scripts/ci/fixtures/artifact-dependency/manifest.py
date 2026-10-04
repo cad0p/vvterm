@@ -6590,4 +6590,175 @@ CASES = [
             "reject-runid-github-env-write-operand-mask-boundary-sed-inplace-trailing.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
         ],
     },
+
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-cp-read-write-env",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-cp-read-write-env.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-cp-read-write-env.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `cp` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `cp` with a file target `$(echo x)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-mv-read-write-env",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-mv-read-write-env.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-mv-read-write-env.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `mv` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-mv-lt-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-mv-lt-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-mv-lt-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `mv` with a file target `$(echo)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-install-read-write-env",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-install-read-write-env.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-install-read-write-env.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `install` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-install-lt-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-install-lt-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-install-lt-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `install` with a file target `$(echo)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-tee-read-write-env",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-tee-read-write-env.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-tee-read-write-env.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `tee` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-tee-lt-multivar",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-tee-lt-multivar.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-tee-lt-multivar.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `tee` with a file target `$A$B` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-touch-lt-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-touch-lt-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-touch-lt-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `touch` with a file target `$(echo x)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-truncate-read-write-env",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-truncate-read-write-env.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-truncate-read-write-env.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `truncate` with a file target `$GITHUB_ENV` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-amp-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-amp-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-amp-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `cp` with a file target `$(echo)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-tee-herestring-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-tee-herestring-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-tee-herestring-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `tee` with a file target `$(echo)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-python-lt-multivar",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-python-lt-multivar.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-python-lt-multivar.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `python3` with a file target `$A$B` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-operand-mask-boundary-sole-perl-lt-subst",
+        "files": ["reject-runid-github-env-write-operand-mask-boundary-sole-perl-lt-subst.yml"],
+        "exit": 1,
+        "base_exit": 1,
+        "diagnostics": [
+            "reject-runid-github-env-write-operand-mask-boundary-sole-perl-lt-subst.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `perl` with a file target `$(echo)` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-operand-mask-compensation-process-substitution-attached",
+        "files": ["reject-overrefusal-operand-mask-compensation-process-substitution-attached.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-operand-mask-compensation-process-substitution-attached.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-operand-mask-compensation-ln-unknown",
+        "files": ["reject-overrefusal-operand-mask-compensation-ln-unknown.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-operand-mask-compensation-ln-unknown.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job mentions `unknown`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-operand-mask-compensation-rsync-unknown",
+        "files": ["reject-overrefusal-operand-mask-compensation-rsync-unknown.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-operand-mask-compensation-rsync-unknown.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job mentions `unknown`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-operand-mask-compensation-sed-unknown",
+        "files": ["reject-overrefusal-operand-mask-compensation-sed-unknown.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-operand-mask-compensation-sed-unknown.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job mentions `unknown`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "accept-operand-mask-sed-read-write-benign",
+        "files": ["accept-operand-mask-sed-read-write-benign.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
 ]
