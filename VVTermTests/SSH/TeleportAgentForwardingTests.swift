@@ -302,7 +302,9 @@ struct TeleportAgentForwardingTests {
         service.markTransportStarted()
 
         try await waitUntil { fake.readCount > 0 }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Observe the retirement itself (#358): a fixed sleep raced the serve loop's
+        // retirement under load. `ownedChannelCount == 0` means `retire` ran.
+        try await waitUntil { service.ownedChannelCount == 0 }
         #expect(fake.closeCount == 0, "the serving task must not free the channel on EOF")
         #expect(service.cancelAndDrain().isEmpty, "a channel whose serve loop ended is retired from the store")
     }
@@ -317,7 +319,29 @@ struct TeleportAgentForwardingTests {
         try await waitUntil { store.isWaitingForChannel }
         store.push(channel)
         #expect(await parked.value == channel)
+        #expect(store.ownedChannelCount == 1)
         #expect(store.cancelAndDrain() == [channel])
+        #expect(store.cancelAndDrain().isEmpty)
+    }
+
+    @Test
+    func storeReportsOwnedChannelCountAcrossPushNextRetireAndDrain() async throws {
+        let store = TeleportAgentChannelStore()
+        let channel = OpaquePointer(bitPattern: 0x11000)!
+        #expect(store.ownedChannelCount == 0)
+        store.push(channel)
+        #expect(store.ownedChannelCount == 1)          // pending
+        #expect(await store.next() == channel)
+        #expect(store.ownedChannelCount == 1)          // in flight (next() path)
+        store.retire(channel)
+        #expect(store.ownedChannelCount == 0)
+
+        // Drain a non-empty store: the count drops to zero with the channel.
+        let draining = OpaquePointer(bitPattern: 0x11001)!
+        store.push(draining)
+        #expect(store.ownedChannelCount == 1)
+        #expect(store.cancelAndDrain() == [draining])
+        #expect(store.ownedChannelCount == 0)
         #expect(store.cancelAndDrain().isEmpty)
     }
 

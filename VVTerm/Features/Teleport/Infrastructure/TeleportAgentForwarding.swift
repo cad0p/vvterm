@@ -250,6 +250,12 @@ final class TeleportAgentChannelStore: @unchecked Sendable {
         lock.withLock { $0.waiter != nil }
     }
 
+    /// Test-observability seam: number of channels the store still owns
+    /// (queued or in flight). Not read on any production path.
+    nonisolated var ownedChannelCount: Int {
+        lock.withLock { $0.pending.count + $0.inFlight.count }
+    }
+
     /// Cancel the store and return every channel the service still owns.
     func cancelAndDrain() -> [OpaquePointer] {
         lock.withLock { state in
@@ -483,6 +489,10 @@ final class TeleportAgentForwardingService: @unchecked Sendable {
     nonisolated func closeAndFree(_ channel: OpaquePointer) {
         closeChannel(channel)
     }
+
+    /// Test-observability seam: number of channels the service still owns.
+    /// Never used by production code.
+    nonisolated var ownedChannelCount: Int { channels.ownedChannelCount }
 
     // MARK: - Serving
 
