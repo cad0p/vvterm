@@ -536,13 +536,13 @@ jobs:
           # both kept in shard-0 so they share one app launch (and one static
           # `sharedApp`). 13 loopback-SSH-fixture-gated tests (4/3/3/3 across
           # the bins) mean every bin is non-empty, so all four set
-          # needs-fixture: true. The 21 XCTSkip/CI-gated entries (19
-          # quarantined TerminalKeyboardUITests +
-          # NoticePresentationUITests.testDismissedFailureDoesNotImmediatelyReopen
-          # + VVTermUITests.testExample), the 3 TeleportPhaseTransitionUITests
-          # (#277), the 3 ZmxScrollbackReloadUITests (repro-zmx.yml), the 2
-          # launch/perf tests, and the 8 currently-ungated unlisted methods
-          # (issue #362) are deliberately not listed; they add no coverage.
+          # needs-fixture: true. Which declared tests are deliberately not
+          # listed, and why, is the declared-vs-scheduled allowlist contract:
+          # assertions 7-8 in
+          # `VVTermTests/WorkflowShardSplitPinsTests.swift` enforce that every
+          # declared test is scheduled or carries a reasoned exemption row in
+          # `scripts/ci/ui-test-allowlist.json`. Do not restate counts here;
+          # the pin and the ledger are the source of truth.
           # Each entry's `only-testing` is a comma-separated list of
           # Target/Class/method — no spaces.
           #
