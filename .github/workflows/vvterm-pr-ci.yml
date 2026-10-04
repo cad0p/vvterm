@@ -12,7 +12,7 @@
 #                    each downloading the build artifact and running a
 #                    subset of VVTermUITests via -only-testing:. fail-fast
 #                    is disabled so one failing shard does not cancel the
-#                    others; the 18 TeleportUITests are distributed across
+#                    others; the 24 TeleportUITests are distributed across
 #                    the 4 shards.
 #   (The unsigned Release device archive for per-PR OTA distribution —
 #   formerly job 4, ota-archive — moved to vvterm-pr-ota.yml. Split out so
@@ -42,7 +42,7 @@
 #     disabled so a failing shard does not cancel the others. (The test jobs
 #     are gated to `pull_request` (or an empty-`debug_test` dispatch); see
 #     Event gating above.)
-#   - The 18 TeleportUITests (Phase 1/2/3 sheet matrices) run against the
+#   - The 24 TeleportUITests (Phase 1/2/3 sheet matrices) run against the
 #     DEBUG-only TeleportUITestHarness + mock coordinators (no real Safari/
 #     Face ID/Teleport server) and are distributed across the 4 shards
 #     (~4-5 per shard). Each test captures an XCTAttachment(screenshot:)
@@ -60,15 +60,19 @@
 #   - The `unit-tests` job downloads the same artifact, so it reuses the
 #     prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
 #     target (fast), then runs the 577 tests (~7s).
-#   - Shard split is LPT bin-packing of measured per-method runtimes from
-#     the five successful 2026-09-23 runs. At measurement time 78 executing
-#     methods were distributed 19/19/20/20; bin sums 527.6/517.8/527.0/527.8 s
-#     (max/min 1.02). #227 has since split the push/pop test into a
-#     list-position half and a session half, both in shard-0 (79 executing
-#     methods, 20/19/20/20) so the two halves share one app launch; the bin
-#     sums above predate that split and are refreshed by the next ≥3-clean-run
-#     re-measurement. 525 s of test time + ~322 s of setup ≈ 14m/shard, so
-#     the wall clock is build + slowest shard ≈ 17m median.
+#   - Shard split is a measured assignment over the 41-run clean population
+#     (issue #248): every attempt-1 `pull_request` run whose four shard logs
+#     parse to exactly the current 88-method universe, since the last
+#     `only-testing` change (#236). Per-method medians (n=41) summed per bin:
+#     555.4 / 612.9 / 681.7 / 549.6 s → max/min 1.2405 ≤ 1.3, so NO rebalance
+#     (2026-10-04). The 2026-09-23 five-run LPT split (78 methods, bins
+#     527.6/517.8/527.0/527.8 s, max/min 1.02) is superseded; #227's split
+#     pair stays co-located in shard-0. The 164 measured shard-jobs carry
+#     326.6-796.7 s of setup/overhead (p10-p90 385-652 s), so the observed
+#     wall clock is 21.5-37.5 m (median 27.8 m; p25-p75 25.8-30.1 m) against
+#     the ≤ 20 m target this refresh does not change. The fixture is
+#     `scripts/ci/shard-split-medians.json`, pinned by
+#     `VVTermTests/WorkflowShardSplitPinsTests.swift`.
 #
 # Runner / toolchain:
 #   - All jobs run on `xcode-27` (macOS 26 + Xcode 27 public-preview, arm64).
@@ -503,45 +507,54 @@ jobs:
           # 5-concurrent-macOS-job cap with ZERO queueing (per PR #41).
           # fail-fast is disabled so one failing shard does not cancel others.
           #
-          # Shard split is LPT bin-packing of measured per-method runtimes
-          # from the five successful 2026-09-23 runs (35855154311,
-          # 35859452415, 35892455663, 35906201179, 35915626164); 35906201179
-          # is a workflow_dispatch with an empty `debug_test`, the preserved
-          # on-demand mode and the sampling route for future re-measurements
-          # (issue #315). At measurement time 78 executing methods were
-          # distributed
-          # 19/19/20/20; bin sums 527.6 / 517.8 / 527.0 / 527.8s → max/min
-          # ratio 1.02, well under the 1.3 rebalance threshold. #227 split
-          # the push/pop test into list-position + session halves, both kept
-          # in shard-0 (79 methods, 20/19/20/20) so they share one app
-          # launch; the recorded bin sums predate the split and the next
-          # ≥3-clean-run re-measurement refreshes them. Each bin carries 3
-          # loopback-SSH-fixture-gated tests, so all four set
+          # Shard split is a measured assignment over the 41-run clean
+          # population (issue #248): every attempt-1 `pull_request` run whose
+          # four `ui-tests-shard-*` jobs all succeeded and whose four shard
+          # logs parse to exactly the current 88-method universe, since the
+          # last `only-testing` change (#236). Per-method medians (n=41)
+          # summed per bin: shard-0 555.4 s (20 methods) / shard-1 612.9 s
+          # (24) / shard-2 681.7 s (24) / shard-3 549.6 s (20) → max/min
+          # 1.2405 ≤ 1.3 → NO rebalance (2026-10-04). The 2026-09-23
+          # five-run LPT split (78 methods, bins 527.6/517.8/527.0/527.8 s,
+          # max/min 1.02) is superseded. The normative trigger metric is the
+          # per-bin SUM OF PER-METHOD MEDIANS over the qualifying population;
+          # single-run and job-wall ratios are diagnostic only. LPT over the
+          # same medians would reach 1.0012 but moves 67/88 methods, and the
+          # observed per-run distribution (median 1.459, 33/41 runs > 1.3) is
+          # dominated by run-level host variance — recorded, not adopted; the
+          # acceptance's structural branch decides. Refresh procedure:
+          # re-enumerate the population, re-extract the
+          # `Test Case '-[...]' passed (N seconds)` lines, LPT-repack only if
+          # max/min > ~1.3, then update `scripts/ci/shard-split-medians.json`,
+          # the pinned 1 dp literals in
+          # `VVTermTests/WorkflowShardSplitPinsTests.swift`, and this comment
+          # in the same PR. The empty-`debug_test` dispatch (issue #315) is
+          # the preserved on-demand mode and the sampling route.
+          #
+          # #227 split the push/pop test into list-position + session halves,
+          # both kept in shard-0 so they share one app launch (and one static
+          # `sharedApp`). 13 loopback-SSH-fixture-gated tests (4/3/3/3 across
+          # the bins) mean every bin is non-empty, so all four set
           # needs-fixture: true. The 21 XCTSkip/CI-gated entries (19
           # quarantined TerminalKeyboardUITests +
           # NoticePresentationUITests.testDismissedFailureDoesNotImmediatelyReopen
-          # + VVTermUITests.testExample) and the duplicated TeleportReadinessIOS
-          # crossDevice entry are deliberately not listed; they add no coverage.
+          # + VVTermUITests.testExample), the 3 TeleportPhaseTransitionUITests
+          # (#277), the 3 ZmxScrollbackReloadUITests (repro-zmx.yml), the 2
+          # launch/perf tests, and the 8 currently-ungated unlisted methods
+          # (issue #362) are deliberately not listed; they add no coverage.
           # Each entry's `only-testing` is a comma-separated list of
           # Target/Class/method — no spaces.
           #
-          # The 23 TeleportUITests (mock-driven; measured 15-26s each, not the
+          # The 24 TeleportUITests (mock-driven; measured 15-26s each, not the
           # ~5-10s an earlier split assumed) are distributed across the 4 shards
-          # (3/10/6/4) rather than a 5th, preserving the 5-job cap. #262's
-          # host-login picker tests (5: multiple/single/frozen/empty/cancel) are
-          # in shard-1 (the 517.8s "smallest bin" was the superseded 2026-09-23
-          # measurement; the latest run, 36329610539, measured shard-1 as the
-          # largest bin at 1210s). The 2 TeleportFormUITests (production
-          # ServerFormSheet add/edit copy, one app launch each) are appended to
-          # shard-2 — the smallest bin in that run (910s) — so the recorded
-          # 1.33 max/min (952/1210/910/999s, run 36329610539, tracked on #248)
-          # returns to ≈1.27 once the appended class is accounted for; the bin
-          # sums are refreshed at the next ≥3-clean-run re-measurement. #272's
-          # swipe-dismissal test is appended to shard-2 for the same reason:
-          # measured 51.4/50.8/54.8s across three local runs (mock-driven, one
-          # 30s mock delay per phase, 3 phases). #236's login server-error
-          # presentation test is appended to shard-2 for the same reason (one
-          # launch, mock-driven). The 3
+          # (3/10/7/4) rather than a 5th, preserving the 5-job cap. The 300s
+          # per-test allowance has thin headroom: the largest 41-run sample is
+          # 274.228s (ServerNavigationUITests.
+          # testActiveTerminalPushPopPreservesListPosition, 91.4% of 300s),
+          # then 264.594/256.121/244.008/220.380s; fix-or-quarantine stays on
+          # #349/#264/#257.
+          #
+          # The 3
           # TeleportPhaseTransitionUITests are deliberately NOT added yet, for
           # two independent reasons measured on 2026-09-28: (1)
           # testPhase1BootstrapSuccess_transitionsToRegistrationSheet fails
@@ -718,20 +731,21 @@ jobs:
           # is KILLED and recorded as a failure BY NAME ("Exceeded execution
           # time allowance") instead of wedging the shard until XCTest's own
           # launch/activity timeouts fire — hangs become identifiable,
-          # skippable tests instead of silent wall-clock burn. 300s is set
-          # from the slowest real test: testActiveTerminalPushPopPreservesList
-          # PositionAndSession ran 185.8-245.1s across the five measured
-          # 2026-09-23 runs (next longest ~98s), so 300s leaves headroom for a
-          # loaded runner without letting a hang burn the cap. A degraded
-          # runner can still push that test past 300s and kill it (observed
-          # 2026-09-24 run 35939209454: killed at exactly 300.000s) — that is
-          # the allowance doing its job: a named failure, and a verdict to fix
-          # or quarantine, never to retry (AGENTS.md). #227 has split the test
-          # so a tighter allowance can be re-derived after the next
-          # ≥3-clean-run re-measurement.
+          # skippable tests instead of silent wall-clock burn. The 300s cap is
+          # set from the 41-run clean population's largest sample: 274.228s
+          # (ServerNavigationUITests.testActiveTerminalPushPopPreservesList
+          # Position, 91.4% of 300s), then 264.594 / 256.121 / 244.008 /
+          # 220.380s (issue #248). A degraded runner can still push a long
+          # test past 300s and kill it (observed 2026-09-24 run 35939209454:
+          # killed at exactly 300.000s) — that is the allowance doing its job:
+          # a named failure, and a verdict to fix or quarantine, never to
+          # retry (AGENTS.md). The headroom is thin; fix-or-quarantine stays
+          # on #349/#264/#257.
           #
-          # Parallel testing is explicitly OFF. The shard bins are LPT-packed
-          # from SERIAL per-test sums (~527s/bin ≈ 14.1m/shard), and
+          # Parallel testing is explicitly OFF. The shard bins are packed
+          # from SERIAL per-test medians (recorded per-bin sums 549.6-681.7s
+          # plus 326.6-796.7s of per-shard overhead; observed wall clock
+          # 21.5-37.5m, median 27.8m), and
           # `-parallel-testing-enabled YES` (the first #230 revision) instead
           # ran 2 simulator clones per shard — 8 concurrent clones across the
           # 4 shards — which correlates with the wedge wave and the 38-39m

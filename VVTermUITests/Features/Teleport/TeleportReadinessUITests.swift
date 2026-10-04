@@ -5,7 +5,7 @@
 //
 //  Real XCUITests for the Teleport "prompt-on-connect" flow (mockup B in the
 //  2.2 UI design doc) — the server-list → tap → sheet path that the existing
-//  18 TeleportUITests bypass by presenting sheets directly.
+//  24 TeleportUITests bypass by presenting sheets directly.
 //
 //  Each test launches the app with the TeleportServerListUITestHarness +
 //  a readiness arg, taps the server row, and asserts which sheet (or terminal
