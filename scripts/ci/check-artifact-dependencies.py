@@ -759,15 +759,21 @@ same fix and recorded here without a fixture — fold round 3 re-lens
 NIT-1). Issue #350 item 12 (scoped as #354) is closed at this commit by a
 fail-closed continuation join: for a mention-bearing scalar body the join
 strips the scalar's content indent (blank lines exempt), then walks the raw
-physical lines joining a line that ends in an unquoted backslash with the
+physical lines joining a line whose end is an unquoted backslash with the
 next non-blank line (dropping the `\\`+newline pair, skipping intervening
 blanks, bounded at 8 physical lines / 7 joins), with a trailing `\\` on the
-last body line dropped (the EOF case, all styles); the joined logical line
+last body line dropped (the EOF case, all styles); the quote state is a
+whole-body property (carried across physical lines, and the join re-opens it
+on the joined text), so a single-quoted region opened on an earlier body
+line cannot mask the pair bash removes — the per-line predicate read the
+*closing* `'` as an opening quote and missed it (fold round 1 lens-1
+BLOCKER-1: 33 measured spellings closed); the joined logical line
 feeds the existing extractors unchanged, alongside the sibling join above,
 so the addition is monotone (refuse-only; measured 0 widenings and 0
 verdict/diagnostic/`body_text` changes over the 611-file corpus). Claimed:
 every mention-bearing scalar whose raw text ends a line in an unquoted
-backslash and whose joined content puts a write target where the argv
+backslash (the whole-body quote state decides "unquoted") and whose joined
+content puts a write target where the argv
 extractor reads it — a command's last operand (`cp`/`mv`/`install`), an
 `of=` target, or a sed `w` target — in all three styles (`|`, `>`, plain),
 every indicator spelling, and at EOF (measured at this commit: `--selftest`
@@ -778,15 +784,21 @@ the eight benign shapes become measured over-refusals (the price of
 fail-closed joining, listed by class with the corpus counts). Boundary
 (stays open, never implied closed): the `>8` chain bound
 (`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
-closed, `n9+` open) and three outside-class fail-opens — #350 item 13 (the
+closed, `n9+` open) and the outside-class fail-opens — #350 item 13 (the
 continuation-independent extractor gaps), #350 item 14 (a target masked by a
 trailing operator token: `_shell_segments` does not split on `(`, so
-`_argv_write_targets` reads `)` as `cp`'s last operand; the
-continuation-free control also runtime-FLIPs, so it is an extractor gap, not
-a join gap), and #350 item 15 (a `>`/plain break YAML folds to a space,
-joining verb and target with no backslash at all; closing it needs the YAML
-fold model the review rounds rejected as unsound) — a target masked by an
-operator token or folded across a break therefore stays outside this
+`_argv_write_targets` reads `)` as `cp`'s last operand; the redirect-operand
+masks — `cp payload \\` + `"${arr[0]}" < payload`, `> /dev/null`, `2>&1`,
+`mv`/`install` and the redirection-prefix spelling — read the redirect's
+source word as the last operand; and the substitution masks `$( … )`,
+backtick, `eval "…"`, `case x in x) … ;; esac` and `w=$(cp …)` hide the
+verb inside a substitution the argv extractor does not descend; every one of
+these has a continuation-free control that also runtime-FLIPs, so they are
+extractor gaps, not join gaps), and #350 item 15 (a `>`/plain break YAML
+folds to a space, joining verb and target with no backslash at all; closing
+it needs the YAML fold model the review rounds rejected as unsound) — a
+target masked by an operator token, a redirection operand or a substitution
+spelling, or folded across a break, therefore stays outside this
 closure; the
 comment spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
@@ -4681,6 +4693,99 @@ def _line_continuation_pending(line: str) -> bool:
     return _line_has_continuation(line[:end])
 
 
+def _strip_continuation_indent(line: str, content_indent: int) -> str:
+    """The physical line as the shell sees it for the item-12 join: the
+    scalar's YAML content indent removed (a blank line is inert). Shared by
+    the whole-body quote scan and the join so both read the same text."""
+    if not line.strip():
+        return ""
+    if content_indent and line[:content_indent] == " " * content_indent:
+        return line[content_indent:]
+    return line
+
+
+def _scan_continuation_quote_state(
+    line: str, quote: str | None
+) -> tuple[bool, str | None]:
+    """One physical line of the whole-body quote machine: given the quote
+    state carried from the previous line (`None`, `'` or `"`), return
+    whether this line ends in a backslash bash treats as a continuation,
+    and the quote state at the line end. The scan is the same one
+    `_line_continuation_pending` runs (escape pairs, the double-quote
+    toggle, the line-local `#` comment), but the state is an input and an
+    output instead of being reset per line (issue #350 item 12, fold round
+    1 lens-1 BLOCKER-1). A trailing backslash inside an open single quote
+    is literal for bash, so it is not a continuation; inside double quotes
+    bash still removes the `\\`+newline pair."""
+    index = 0
+    end = len(line)
+    escaped_until = -1
+    while index < end:
+        char = line[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and quote != "'" and index + 1 < end:
+            escaped_until = index + 1
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if (
+            char == "#"
+            and quote is None
+            and (index == 0 or (line[index - 1].isspace() and index - 1 != escaped_until))
+        ):
+            end = index
+            break
+        index += 1
+    pending = quote != "'" and _line_has_continuation(line[:end])
+    return pending, quote
+
+
+def _whole_body_continuation_state(
+    lines: list[str], content_indent: int, skip_lines: set[int]
+) -> list[tuple[bool, str | None]]:
+    """The item-12 join's continuation predicate as a whole-body property
+    (issue #350 item 12, fold round 1 lens-1 BLOCKER-1): one `(pending,
+    quote at the line start)` pair per physical line, computed in a single
+    scan that carries the shell's quote state across physical lines.
+    `_line_continuation_pending` restarts with `quote = None` on every
+    line, so a single-quoted region opened on an earlier body line and
+    closed on the line that ends in `\\` makes it read the *closing* `'` as
+    an opening quote and reject a `\\`+newline pair bash removes (33
+    measured spellings, all base-ACCEPT + runtime FLIP). Bash removes a
+    `\\`+newline pair everywhere except inside single quotes, so a line's
+    flag is True exactly when the state at its end is out-of-single-quote
+    and its last character is an active backslash. The start state is
+    returned too: a join that begins inside a quote must re-open it before
+    the extractor tokenizes the joined text, or the closing quote on the
+    joined line is misread as an opening quote. Heredoc payload lines are
+    literal text, not shell: they neither carry a continuation nor change
+    the state. The sibling per-line predicate and the sibling join are
+    untouched, so only the additive item-12 join's verdicts move."""
+    flags: list[tuple[bool, str | None]] = []
+    quote: str | None = None
+    for index, raw in enumerate(lines):
+        start = quote
+        if index in skip_lines:
+            flags.append((False, start))
+            continue
+        pending, quote = _scan_continuation_quote_state(
+            _strip_continuation_indent(raw, content_indent), quote
+        )
+        flags.append((pending, start))
+    return flags
+
+
 def _joined_continuation_segments(
     lines: list[str], index: int
 ) -> list[list[tuple[str, str, int, int]]]:
@@ -4721,38 +4826,41 @@ def _joined_continuation_segments(
 
 
 def _bash_joined_continuation_segments(
-    lines: list[str], index: int, content_indent: int
+    lines: list[str],
+    index: int,
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
 ) -> list[list[tuple[str, str, int, int]]]:
     """Issue #350 item 12: the argv-write segments of the logical line that
     starts at `lines[index]`, joined the way bash joins it. The sibling
     `_joined_continuation_segments` keeps the raw `\\` and the inserted
     newline, which masks a last-operand/`w`/`of=` extractor (`cp`/`mv`/
     `install`, `dd of=`, sed `w`), so this scan strips the scalar's content
-    indent (blank lines exempt) and joins a line that ends in an unquoted
-    backslash with the next non-blank line, dropping the `\\`+newline pair
-    and skipping intervening blanks. A trailing `\\` on the last body line is
+    indent (blank lines exempt) and joins a line whose whole-body flag is
+    set with the next non-blank line, dropping the `\\`+newline pair and
+    skipping intervening blanks. A trailing `\\` on the last body line is
     dropped (the EOF case, all styles). The chain is bounded by
     `_CONTINUATION_JOIN_MAX_LINES` physical lines; a longer chain yields no
     join (a named residual). The join reads the raw physical lines, so no
     style/fold model is needed, and it joins across blank lines too, i.e. it
-    models a superset of bash's joining. The callers keep the sibling join's
+    models a superset of bash's joining beyond the quote state. The
+    predicate is `_whole_body_continuation_state` (the quote state carried
+    across physical lines, so a single-quoted region opened earlier cannot
+    mask the pair — fold round 1 lens-1 BLOCKER-1), not the per-line
+    `_line_continuation_pending`. The callers keep the sibling join's
     verdicts and add this scan alongside, so the addition is monotone
     (refuse-only)."""
 
     def stripped(line: str) -> str:
-        if not line.strip():
-            return ""
-        if content_indent and line[:content_indent] == " " * content_indent:
-            return line[content_indent:]
-        return line
+        return _strip_continuation_indent(line, content_indent)
 
-    if not _line_continuation_pending(stripped(lines[index])):
+    if index >= len(pending) or not pending[index][0]:
         return []
     parts: list[str] = []
     cursor = index
     while True:
         current = stripped(lines[cursor])
-        if not _line_continuation_pending(current):
+        if cursor >= len(pending) or not pending[cursor][0]:
             parts.append(current)
             break
         nxt = cursor + 1
@@ -4767,9 +4875,16 @@ def _bash_joined_continuation_segments(
             return []
         parts.append(current[:-1])
         cursor = nxt
+    joined = "".join(parts)
+    start_quote = pending[index][1]
+    if start_quote is not None:
+        # The join starts inside a quote, so the text must re-open it; the
+        # first matching quote in the joined lines closes it exactly where
+        # bash would.
+        joined = start_quote + joined
     return [
         segment
-        for segment in _shell_segments(_shell_tokens("".join(parts)))
+        for segment in _shell_segments(_shell_tokens(joined))
         if segment
     ]
 
@@ -6289,6 +6404,13 @@ def _refuse_github_env_run_id_write(
         executing_payload = _executing_heredoc_payload_lines(lines)
         aliases = _env_file_alias_names(lines, payload_lines - executing_payload)
         assignments = _body_shell_assignments(lines, payload_lines)
+        # Issue #350 item 12, fold round 1 lens-1 BLOCKER-1: the join's
+        # continuation predicate is a whole-body property (the quote state
+        # carried across physical lines), computed once per body and shared
+        # by the relevance pre-pass and the refusal path below.
+        continuation_pending = _whole_body_continuation_state(
+            lines, body.scalar_content_indent, payload_lines
+        )
         modelled_positions = {(hit.index, hit.column) for hit in assignments}
         relevant_names = _relevant_shell_names(
             flip_targets, aliases, assignments, lines, payload_lines
@@ -6312,7 +6434,10 @@ def _refuse_github_env_run_id_write(
             # masked; the bash-faithful join is additive and adds its
             # targets' base names to the relevance set first.
             for _joined_segment in _bash_joined_continuation_segments(
-                lines, _joined_index, body.scalar_content_indent
+                lines,
+                _joined_index,
+                body.scalar_content_indent,
+                continuation_pending,
             ):
                 for _verb, _target in _argv_write_targets(_joined_segment):
                     if _local_reference_name(_target) is not None:
@@ -6544,7 +6669,10 @@ def _refuse_github_env_run_id_write(
             # the sibling join above, so the scan can only ever add a
             # refusal.
             for joined_segment in _bash_joined_continuation_segments(
-                lines, index, body.scalar_content_indent
+                lines,
+                index,
+                body.scalar_content_indent,
+                continuation_pending,
             ):
                 _refuse_argv_write_targets(
                     joined_segment,
