@@ -42,24 +42,31 @@
 //  site all red; a same-named method on another receiver
 //  (`Self.forConnectTimeout(…)`) reds too, because the derivation needle
 //  carries its `SSHSessionHandshakeBudget.` receiver. Still defeated, stated
-//  honestly: the scan is file-scoped (`SSHClient.swift`), so a second
-//  `libssh2_session_set_timeout` call in another file is invisible; an
-//  aliased derivation (`let f = SSHSessionHandshakeBudget.forConnectTimeout`),
-//  a wrapping helper, an argument assembled through an intermediate
-//  variable, or a `var` binding red deliberately rather than passing. Two
-//  shapes stay green and are admitted: a same-name shadowing local (a
+//  honestly: the scan is file-scoped (`SSHClient.swift` + the upload suite),
+//  so a second `libssh2_session_set_timeout` call in another file is
+//  invisible; and these admitted green shapes need binding/scope awareness
+//  to close, not a better text scan: a same-name shadowing local (a
 //  `do { let <derivedName> = SSHSessionHandshakeBudget.forConnectTimeout(30) … }`
-//  after the dead derived binding supplies both the pinned name and a
-//  hardcoded cap), and the two-step client alias (`let t = SSHClient.self;
+//  after a dead derived binding supplies both the pinned name and a
+//  hardcoded cap), the two-step client alias (`let t = SSHClient.self;
 //  t.init()` — rejected inside `withConnection` by its bare `SSHClient` ban
-//  but invisible in a leg). The `count == 1` assertions are intentionally
-//  strict: a second client construction in any `SSHClient(` /
-//  `SSHClient.init` (called or as a function reference) /
+//  but invisible in a leg), and an indirect `connectionTimeout` write the
+//  scan cannot bind (e.g. `config[keyPath: \.connectionTimeout] = …`). A
+//  watchdog that interrupts through an API other than
+//  `atomicSocket.interrupt(` is likewise outside the scanned call surface.
+//  An aliased derivation
+//  (`let f = SSHSessionHandshakeBudget.forConnectTimeout`), a wrapping
+//  helper, an argument assembled through an intermediate variable, or a
+//  `var` binding red deliberately rather than passing. The `count == 1`
+//  assertions are intentionally strict: a second client construction in any
+//  `SSHClient(` / `SSHClient.init` (called or as a function reference) /
 //  `SSHClient.self.init(` / bare `.init(` spelling, a second
-//  `atomicSocket.interrupt("handshake-watchdog")` anywhere in the file, or a
-//  second `SSHSessionConfig(` / `SSHSessionConfig.init(` construction, must
-//  update this pin on purpose — re-affirm the rule here when the shape
-//  changes.
+//  `setConnectTimeout(` anywhere in the upload suite, a second
+//  `handshake-watchdog` label or `atomicSocket.interrupt(` call anywhere in
+//  `SSHClient.swift`, a post-construction `connectionTimeout =` write, or a
+//  second `SSHSessionConfig(` / `SSHSessionConfig.init(` /
+//  `SSHSessionConfig.self.init(` construction, must update this pin on
+//  purpose — re-affirm the rule here when the shape changes.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the source scans at
 //  a mutated tree (`TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<tree>` exported into
@@ -185,7 +192,8 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// rather than constructing or re-configuring a client itself. Every
     /// construction spelling counts (`SSHClient(`, `SSHClient.init(` and a
     /// bare contextually-typed `.init(`), so `SSHClient.init()` cannot slip
-    /// past the scan.
+    /// past the scan; the factory is also the suite's only
+    /// `setConnectTimeout(` site, so no leg can reset the budget after it.
     @Test
     func testUploadSuiteBuildsItsClientThroughTheFactory() throws {
         let text = Self.strippingComments(
@@ -253,6 +261,15 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             constructions.count == 1,
             "the upload suite must have exactly one client construction site (any `SSHClient(`, `SSHClient.init`, `SSHClient.self.init(` or bare `.init(` spelling, inside `makeUploadClient`); found \(constructions.count) — re-derive this pin (issue #356)"
         )
+        // The factory is the suite's only budget setter (closure lens
+        // R2-3): a leg calling `client.setConnectTimeout(…)` inside its own
+        // `withConnection` closure would silently reset the 90 s budget
+        // while every construction pin stayed green.
+        let budgetCalls = Self.occurrences(of: "setConnectTimeout(", in: text)
+        #expect(
+            budgetCalls.count == 1,
+            "the upload suite must contain exactly one `setConnectTimeout(` call (inside `makeUploadClient`); a leg-level reset would bypass the factory budget — found \(budgetCalls.count) — re-derive this pin (issue #356)"
+        )
         let factoryAnchor = try #require(
             text.range(of: "static func makeUploadClient()", range: suiteBody),
             "the upload suite must keep its `makeUploadClient` factory — re-derive this pin (issue #356)"
@@ -262,6 +279,12 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             #expect(
                 Self.isInside(factoryBody, construction.lowerBound),
                 "the suite's only client construction must live inside `makeUploadClient` — re-derive this pin (issue #356)"
+            )
+        }
+        if let budgetCall = budgetCalls.first {
+            #expect(
+                Self.isInside(factoryBody, budgetCall.lowerBound),
+                "the suite's only `setConnectTimeout(` call must live inside `makeUploadClient` — re-derive this pin (issue #356)"
             )
         }
     }
@@ -278,16 +301,19 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         let text = Self.strippingComments(try Self.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         // The config construction passes the caller's budget through. Count
-        // the `.init(` spelling too — the same hole as Pin A's `SSHClient.init`.
+        // every construction spelling — Pin A's regex family:
+        // `SSHSessionConfig(`, `SSHSessionConfig.init` (called or as the
+        // paren-less function reference `= SSHSessionConfig.init`), and
+        // `SSHSessionConfig.self.init(`.
         var configConstructions = Self.occurrences(of: "SSHSessionConfig(", in: text)
         configConstructions += Self.regexOccurrences(
-            of: #"\bSSHSessionConfig\s*\.\s*init\s*\("#,
+            of: #"\bSSHSessionConfig\s*(?:\.\s*self)?\s*\.\s*init\b"#,
             in: text
         )
         configConstructions.sort { $0.lowerBound < $1.lowerBound }
         #expect(
             configConstructions.count == 1,
-            "SSHClient.swift must keep exactly one `SSHSessionConfig(` / `SSHSessionConfig.init(` construction site; found \(configConstructions.count) — re-derive this pin (issue #356)"
+            "SSHClient.swift must keep exactly one `SSHSessionConfig(` / `SSHSessionConfig.init` / `SSHSessionConfig.self.init(` construction site; found \(configConstructions.count) — re-derive this pin (issue #356)"
         )
         let configConstruction = try #require(
             configConstructions.first,
@@ -314,6 +340,21 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
                 range: constructionRegion
             ) != nil,
             "the `SSHSessionConfig(` site must pass `connectionTimeout: SSHClient.timeInterval(from: connectTimeout)` so the caller's connect budget reaches the session caps — re-derive this pin (issue #356)"
+        )
+        // The value must not be overwritten before the session captures it
+        // (closure lens R2-1): `connectionTimeout` is a `var` on the struct,
+        // so `config.connectionTimeout = min(…, 30)` between the construction
+        // and `let pendingSession` would restore the hardcoded cap while every
+        // other pin stayed green. The only permitted `connectionTimeout =`
+        // write is the stored-property assignment in `SSHSessionConfig`'s own
+        // initializer.
+        let configWrites = Self.regexOccurrences(
+            of: #"\bconnectionTimeout\s*="#,
+            in: text
+        )
+        #expect(
+            configWrites.count == 1,
+            "SSHClient.swift must contain exactly one `connectionTimeout =` assignment (the stored-property write in `SSHSessionConfig.init`); a post-construction override would defeat the derived cap — found \(configWrites.count) — re-derive this pin (issue #356)"
         )
 
         // The regular handshake derives its caps from that config value.
@@ -351,6 +392,26 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         #expect(
             watchdogInterrupts.count == 1,
             "SSHClient.swift must contain exactly one `atomicSocket.interrupt(\"handshake-watchdog\")` call — a second watchdog outside `connect()` could fire first with a hardcoded cap; found \(watchdogInterrupts.count) — re-derive this pin (issue #356)"
+        )
+        // The label, not just the exact call spelling (closure lens R2-2): a
+        // re-spelled call whose label still contains `handshake-watchdog`
+        // (`atomicSocket.interrupt("early-handshake-watchdog")`) must red too.
+        let watchdogLabels = Self.occurrences(of: "handshake-watchdog", in: text)
+        #expect(
+            watchdogLabels.count == 1,
+            "SSHClient.swift must contain exactly one `handshake-watchdog` label — a second watchdog outside `connect()` could fire first with a hardcoded cap; found \(watchdogLabels.count) — re-derive this pin (issue #356)"
+        )
+        // And the interrupt surface itself, so a fully re-spelled label or a
+        // re-spaced call still reds. The five sites today: abort,
+        // handshake-watchdog, disconnect-outer, cleanup-libssh2,
+        // cleanup-libssh2-2.
+        let socketInterrupts = Self.regexOccurrences(
+            of: #"atomicSocket\s*\.\s*interrupt\s*\("#,
+            in: text
+        )
+        #expect(
+            socketInterrupts.count == 5,
+            "SSHClient.swift must keep exactly five `atomicSocket.interrupt(` sites (abort, handshake-watchdog, disconnect-outer, cleanup-libssh2, cleanup-libssh2-2) — a new watchdog site must update this pin on purpose; found \(socketInterrupts.count) — re-derive this pin (issue #356)"
         )
         if let watchdogInterrupt = watchdogInterrupts.first {
             #expect(
@@ -506,6 +567,25 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
                 "the hardcoded `\(literal)` must not return to `SSHSession.connect()` (\(found.count) occurrence(s)): the caps must derive from the connect budget — re-derive this pin (issue #356)"
             )
         }
+    }
+
+    // MARK: - The conversion
+
+    /// Assertion 8: the `Duration` → `TimeInterval` bridge itself (closure
+    /// lens R2-4). The wiring pin binds the *call* text, so a body that
+    /// dropped the attoseconds term would leave every source scan green while
+    /// a fractional budget silently truncated; assert the conversion
+    /// directly (integral and fractional cases).
+    @Test
+    func testTimeIntervalConversionPreservesIntegralAndFractionalSeconds() {
+        #expect(
+            SSHClient.timeInterval(from: .seconds(90)) == 90.0,
+            "an integral connect budget must convert exactly (90 s → 90.0)"
+        )
+        #expect(
+            SSHClient.timeInterval(from: .seconds(1) + .milliseconds(500)) == 1.5,
+            "a fractional connect budget must keep its attoseconds term (1.5 s → 1.5) — a dropped term returns 1.0 (issue #356)"
+        )
     }
 
     // MARK: - Fixtures
