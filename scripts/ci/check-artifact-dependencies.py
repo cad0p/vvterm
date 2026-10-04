@@ -3512,6 +3512,16 @@ _PURE_VARIABLE_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 _ARGV_WRITE_VERBS = frozenset(
     {"tee", "dd", "sed", "cp", "mv", "install", "ln", "rsync", "touch", "truncate"}
 )
+# The pre-fold write-verb table (this fold added `ln`/`rsync`, issue #350
+# item 13). `_argv_all_write_targets` re-classifies the base word list with
+# this table so its base pass is byte-equivalent to the pre-fold walk:
+# `_argv_write_targets` returns on the FIRST recognized verb, so leaving
+# `ln`/`rsync` in the base pass lets a leading `ln`/`rsync` shadow a later
+# base verb (`touch`/`tee`/`truncate`/`sed`) and drop the base refusal from
+# the union (fold round 2 BLOCKER-1).
+_BASE_ARGV_WRITE_VERBS = frozenset(
+    {"tee", "dd", "sed", "cp", "mv", "install", "touch", "truncate"}
+)
 # `read` options that consume the next word. `-a` is deliberately absent:
 # its argument IS the array name that the rule must inspect.
 _READ_OPTIONS_WITH_ARGUMENT = ("-d", "-i", "-n", "-N", "-p", "-t", "-u")
@@ -5187,6 +5197,7 @@ def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
     operand_words: list[tuple[int, str]] | None = None,
     verb_namer=_argv_verb_name,
+    write_verbs: frozenset[str] = _ARGV_WRITE_VERBS,
 ) -> list[tuple[str, str]]:
     """The `(verb, target)` file operands of an argv write verb in one
     segment: `tee` appends to every non-option path operand and `dd` writes
@@ -5202,14 +5213,18 @@ def _argv_write_targets(
     walk by default, or the base word list (`[token[1] for token in segment
     if token[0] == "word"]`) so `_refuse_argv_write_targets` can re-classify
     every target the pre-fold walk read (fold round 1 F1). `verb_namer` is
-    the corresponding verb classifier; the base pass passes
-    `_argv_base_verb_name` so it is exact."""
+    the corresponding verb classifier and `write_verbs` the corresponding
+    verb table; the base pass passes `_argv_base_verb_name` and
+    `_BASE_ARGV_WRITE_VERBS` so it reproduces the pre-fold walk's
+    first-verb choice exactly (fold round 2 BLOCKER-1; the fold's added
+    verb-branch spellings, e.g. attached sed `w`, keep it a strict
+    superset)."""
     if operand_words is None:
         operand_words = _argv_operand_words(segment)
     words = [text for _index, text in operand_words]
     for position, text in enumerate(words):
         verb = verb_namer(text)
-        if verb in _ARGV_WRITE_VERBS:
+        if verb in write_verbs:
             args = words[position + 1 :]
             if verb == "tee":
                 targets: list[tuple[str, str]] = []
@@ -5407,18 +5422,21 @@ def _argv_all_write_targets(
     segment: list[tuple[str, str, int, int]],
 ) -> list[tuple[str, str]]:
     """The union of the redirect-aware walk's targets and the base word
-    list's targets. The base pass uses `_argv_base_verb_name` so it
-    reproduces the pre-fold walk exactly; every consumer (the refusal path
-    and the relevance readers) therefore sees a superset of the pre-fold
-    target set and the fold cannot widen a base REFUSE to ACCEPT or shrink
-    the relevance set (fold round 1 F1)."""
+    list's targets. The base pass uses `_argv_base_verb_name` and
+    `_BASE_ARGV_WRITE_VERBS` so it reproduces the pre-fold walk's
+    first-verb choice (a leading `ln`/`rsync` may not shadow a later base
+    verb, fold round 2 BLOCKER-1) and is a superset of the pre-fold target
+    set; every consumer (the refusal path and the relevance readers)
+    therefore sees a superset of the pre-fold target set and the fold
+    cannot widen a base REFUSE to ACCEPT or shrink the relevance set (fold
+    round 1 F1)."""
     base_words = [
         (index, token[1])
         for index, token in enumerate(segment)
         if token[0] == "word"
     ]
     return _argv_write_targets(segment) + _argv_write_targets(
-        segment, base_words, _argv_base_verb_name
+        segment, base_words, _argv_base_verb_name, _BASE_ARGV_WRITE_VERBS
     )
 
 
