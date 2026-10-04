@@ -1,5 +1,8 @@
 // Keyboard UI tests synced from upstream vivy-company/vvterm (DEV-319).
-// 14 tests are quarantined under #92 (https://github.com/cad0p/vvterm/issues/92):
+// 14 tests carry an unconditional in-code #92 XCTSkip
+// (https://github.com/cad0p/vvterm/issues/92); one of them
+// (testCrossAppFocusTransferReleasesResponderWithoutRebuild) is tracked on #257 in
+// scripts/ci/ui-test-allowlist.json:
 // upstream's new harness is coupled to upstream's TerminalTabManager wiring and
 // fails on the fork's app (harness control-panel geometry + keyboard state machine).
 // Four more are CI-only gated in the test body: #119

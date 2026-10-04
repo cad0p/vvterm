@@ -50,7 +50,8 @@
 //  change), so a refactor of four pin suites would be an unrelated risk. The
 //  #362 allowlist extension defers it a SECOND time: the declaration scanner
 //  is scanner-local by design (hash-prefix-aware string blanking, `#if`
-//  polarity), and extraction would now span six files. Re-evaluate when this
+//  polarity), and extraction would still span the five Swift pin suites, plus
+//  the ledger schema/loader. Re-evaluate when this
 //  file passes ~1500 lines (the ClassGate pin is the 1416-line precedent).
 //  Any parser/comment-strip fix for the shared idiom must be applied to all
 //  five files until the extraction lands.
@@ -487,9 +488,9 @@ struct WorkflowShardSplitPinsTests {
     /// reason, or assertion 8 reds.
     private static let liveTrackers: Set<Int> = [92, 257, 277, 364]
 
-    /// The 8 runnable-on-the-iOS-destination methods that have never been
-    /// scheduled, frozen as exact `(id, category)` pairs so a category swap
-    /// between `unscheduled` and `capabilityGated` is visible.
+    /// The 8 never-scheduled methods (7 `unscheduled` + 1 `capabilityGated`),
+    /// frozen as exact `(id, category)` pairs so a category swap between
+    /// `unscheduled` and `capabilityGated` is visible.
     private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
         ("VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "unscheduled"),
