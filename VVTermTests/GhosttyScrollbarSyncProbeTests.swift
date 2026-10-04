@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import os
 import Testing
 @testable import VVTerm
 
@@ -42,21 +43,17 @@ struct GhosttyScrollbarSyncProbeTests {
 
         let surface = try #require(terminal.surface)
         let rowCount = max(Int(surface.terminalSize()?.rows ?? 24), 4)
-        var deliveries = 0
-        var deliveredOnMain = false
-        var deliveredOnBackground = false
+        // The observer block runs on the notification's posting thread while
+        // the test polls on MainActor, so the delivery state is read and
+        // written through a lock.
+        let deliveryState = ScrollbarDeliveryState()
         let observer = NotificationCenter.default.addObserver(
             forName: .ghosttyDidUpdateScrollbar,
             object: terminal,
             queue: nil
         ) { _ in
             // This block runs on the posting thread (queue: nil).
-            deliveries += 1
-            if Thread.isMainThread {
-                deliveredOnMain = true
-            } else {
-                deliveredOnBackground = true
-            }
+            deliveryState.record(isMainThread: Thread.isMainThread)
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
@@ -68,11 +65,10 @@ struct GhosttyScrollbarSyncProbeTests {
         let lines = (0..<(rowCount + 6)).map { "vvterm-scroll-probe-\($0)" }
         surface.feedText(lines.joined(separator: "\r\n") + "\r\n")
         #expect(
-            await waitForScrollbarSettle { deliveries },
+            await waitForScrollbarSettle { deliveryState.deliveries },
             "the feed must post its scrollbar updates before the scroll probe"
         )
-        deliveredOnMain = false
-        deliveredOnBackground = false
+        deliveryState.resetThreadFlags()
 
         // Scroll up (negative y = toward older content on macOS coordinates).
         surface.sendMouseScroll(
@@ -85,11 +81,11 @@ struct GhosttyScrollbarSyncProbeTests {
         // The observer uses `queue: nil`, so a synchronous delivery would have
         // run on this (main) thread before `sendMouseScroll` returned. Capture
         // the in-call window immediately.
-        let deliveredSynchronouslyOnMain = deliveredOnMain
+        let deliveredSynchronouslyOnMain = deliveryState.deliveredOnMain
 
         // The core does not promise an immediate scrollbar flush; poll a few
         // runloop turns for the eventual delivery and record its thread.
-        for _ in 0..<20 where !deliveredOnMain && !deliveredOnBackground {
+        for _ in 0..<20 where !deliveryState.deliveredOnMain && !deliveryState.deliveredOnBackground {
             try await Task.sleep(for: .milliseconds(100))
         }
 
@@ -99,10 +95,10 @@ struct GhosttyScrollbarSyncProbeTests {
         )
         // When the update does arrive it comes from the ghostty callback
         // thread, never synchronously on the calling (main) thread.
-        if deliveredOnMain || deliveredOnBackground {
+        if deliveryState.deliveredOnMain || deliveryState.deliveredOnBackground {
             #expect(
-                deliveredOnBackground,
-                "scrollbar notification must be posted from the ghostty callback thread (main-thread delivery observed: \(deliveredOnMain))"
+                deliveryState.deliveredOnBackground,
+                "scrollbar notification must be posted from the ghostty callback thread (main-thread delivery observed: \(deliveryState.deliveredOnMain))"
             )
         }
     }
@@ -132,4 +128,39 @@ struct GhosttyScrollbarSyncProbeTests {
         }
         return false
     }
+}
+
+/// Delivery observations shared between the `queue: nil` observer block (which
+/// runs on the notification's posting thread) and the MainActor test. A lock
+/// keeps the cross-thread reads and writes race-free.
+private final class ScrollbarDeliveryState {
+    private struct State {
+        var deliveries = 0
+        var deliveredOnMain = false
+        var deliveredOnBackground = false
+    }
+
+    private let lock = OSAllocatedUnfairLock(initialState: State())
+
+    func record(isMainThread: Bool) {
+        lock.withLock { state in
+            state.deliveries += 1
+            if isMainThread {
+                state.deliveredOnMain = true
+            } else {
+                state.deliveredOnBackground = true
+            }
+        }
+    }
+
+    func resetThreadFlags() {
+        lock.withLock { state in
+            state.deliveredOnMain = false
+            state.deliveredOnBackground = false
+        }
+    }
+
+    var deliveries: Int { lock.withLock { $0.deliveries } }
+    var deliveredOnMain: Bool { lock.withLock { $0.deliveredOnMain } }
+    var deliveredOnBackground: Bool { lock.withLock { $0.deliveredOnBackground } }
 }

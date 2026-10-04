@@ -259,8 +259,9 @@ struct GhosttyOpenURLHandlerTests {
     }
 
     /// Reads `width` cells from `(row, column)` via
-    /// `ghostty_surface_read_text`, always freeing the core-owned
-    /// `ghostty_text_s` and decoding its UTF-8 bytes with a test-local
+    /// `ghostty_surface_read_text`, freeing the core-owned `ghostty_text_s`
+    /// when `read_text` hands it over (the `defer` is installed only after a
+    /// successful read) and decoding its UTF-8 bytes with a test-local
     /// converter (`ghosttyTextString` is private to the view).
     private func cellText(
         _ surface: ghostty_surface_t,
