@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the cross-line-quote witness with ANSI-C `$'…'` quoting and the same-line
+# `- run:` step layout
+# #350 item 12 fold round 1 lens-1 BLOCKER-1; base ACCEPT -> folded REFUSE,
+# runtime FLIP.
+name: reject-runid-github-env-write-continuation-quote-crossline-ansic
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          printf $'%s' $'a \
+          b' ; cp payload \
+          "${arr[0]}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

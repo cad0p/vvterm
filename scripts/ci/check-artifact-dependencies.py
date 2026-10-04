@@ -777,7 +777,7 @@ content puts a write target where the argv
 extractor reads it — a command's last operand (`cp`/`mv`/`install`), an
 `of=` target, or a sed `w` target — in all three styles (`|`, `>`, plain),
 every indicator spelling, and at EOF (measured at this commit: `--selftest`
-623/623). The command-position guard an earlier design carried was dropped:
+632/632). The command-position guard an earlier design carried was dropped:
 it kept 17 shapes ACCEPT, of which 9 are base-ACCEPT + runtime FLIP (real
 writes the guard suppressed) and 8 are benign; the join closes all nine and
 the eight benign shapes become measured over-refusals (the price of
@@ -851,7 +851,7 @@ measured NUL spellings; item 8 stays a boundary class: `$'\\x00'` and `""`
 are pinned as accepted boundary fixtures, and the other five measured
 survivors (`$'\\000'`, `$'\\u0000'`, `$'\\c@'`, `$'\\0\\000'`, `$'\\x0'`)
 stay accepted and are recorded here. Measured at A13: the fixture corpus is
-623/623, of which 192 fixtures declare their measured base verdict
+632/632, of which 201 fixtures declare their measured base verdict
 (`base_exit`); the array-element family adds 4 over-refusal pins under
 two root causes — 3 unmodelled-write shapes (any unmodelled write of the
 now-relevant base name refuses) and 1 no-write target mention (the
@@ -916,7 +916,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 623
+EXPECTED_MANIFEST_CASES = 632
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -933,7 +933,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 192
+EXPECTED_BASE_VERDICT_CASES = 201
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",

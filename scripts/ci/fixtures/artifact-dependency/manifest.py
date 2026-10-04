@@ -5596,5 +5596,112 @@ CASES = [
         "base_exit": 0,
         "excluded": 1,
         "diagnostics": []
+    },
+    # #350 item 12, fold round 1 (lens-1 BLOCKER-1): the cross-line-quote
+    # family. A single quote opened on an earlier body line and closed on
+    # the line that ends in `\` used to make the per-line predicate read
+    # the closing quote as an opening one and miss the `\`+newline pair
+    # bash removes. Every reject is measured base ACCEPT -> folded REFUSE
+    # with runtime FLIP; the accept pin is a benign cross-line single-quoted
+    # string with a relative target (runtime cross-run). All are
+    # mention-bearing and device-bearing (`read -a arr < pf`, or the direct
+    # `$(printenv ...)` target).
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-canonical",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-canonical.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-canonical.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-mv",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-mv.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-mv.yml:32: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-install-doubled",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-install-doubled.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-install-doubled.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-dd-of",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-dd-of.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-dd-of.yml:32: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-sed-w-indicator",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-sed-w-indicator.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-sed-w-indicator.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-ansic",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-ansic.yml:32: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-folded-over2",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-folded-over2.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-folded-over2.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-quote-crossline-direct-device",
+        "files": [
+            "reject-runid-github-env-write-continuation-quote-crossline-direct-device.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-quote-crossline-direct-device.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `cp` with a file target `$(printenv \"${x}${y}\")` the extractor cannot resolve to the env file or prove harmless (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-continuation-quote-crossline-benign",
+        "files": [
+            "accept-runid-github-env-write-continuation-quote-crossline-benign.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
     }
 ]

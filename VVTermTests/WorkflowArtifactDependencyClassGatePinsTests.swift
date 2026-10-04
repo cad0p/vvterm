@@ -72,8 +72,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 623
-    private static let expectedBaseVerdictCases = 192
+    private static let expectedManifestCases = 632
+    private static let expectedBaseVerdictCases = 201
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -830,6 +830,17 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-runid-github-env-write-continuation-folded-more-indent-blank-cp.yml",
         "accept-runid-github-env-write-continuation-benign-literal.yml",
         "accept-runid-github-env-write-continuation-benign-sed-read.yml",
+        // #350 item 12, fold round 1 (lens-1 BLOCKER-1): the cross-line-quote
+        // family (single quote opened on an earlier body line).
+        "reject-runid-github-env-write-continuation-quote-crossline-canonical.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-mv.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-install-doubled.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-dd-of.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-sed-w-indicator.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-ansic.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-folded-over2.yml",
+        "reject-runid-github-env-write-continuation-quote-crossline-direct-device.yml",
+        "accept-runid-github-env-write-continuation-quote-crossline-benign.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist
