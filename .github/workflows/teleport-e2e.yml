@@ -617,6 +617,19 @@ jobs:
             > "$RUNNER_TEMP/sim-vvterm.log" 2>&1 || true
           echo "captured $(wc -l < "$RUNNER_TEMP/sim-vvterm.log") lines"
 
+      - name: Check fixture sshd log presence
+        # `if-no-files-found: ignore` is silent when only one of several
+        # artifact paths is missing (measured: the upload-hardening.log path
+        # was silently absent in a real failure artifact), so make the
+        # upload legs' server-side log loud before the uploads. The fixture
+        # writes it at $RUNNER_TEMP/vvterm-repro/sshd.log
+        # (scripts/ci/repro-sshd-setup.sh:117).
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/vvterm-repro/sshd.log" \
+            || echo "::warning::$RUNNER_TEMP/vvterm-repro/sshd.log missing or empty — upload-leg stall attribution will be unavailable"
+
       - name: Upload teleport logs (always)
         if: always()
         continue-on-error: true
@@ -628,6 +641,7 @@ jobs:
             ${{ runner.temp }}/vvterm-teleport/teleport.yaml
             ${{ runner.temp }}/vvterm-teleport/vvterm-teleport.env
             ${{ runner.temp }}/sim-vvterm.log
+            ${{ runner.temp }}/vvterm-repro/sshd.log
             ${{ runner.temp }}/vvterm-diag.txt
           if-no-files-found: ignore
 
@@ -641,6 +655,7 @@ jobs:
             ${{ runner.temp }}/test.log
             ${{ runner.temp }}/upload-hardening.log
             ${{ runner.temp }}/sim-vvterm.log
+            ${{ runner.temp }}/vvterm-repro/sshd.log
             ${{ runner.temp }}/samples
           if-no-files-found: ignore
 
