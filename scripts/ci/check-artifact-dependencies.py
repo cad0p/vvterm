@@ -830,9 +830,15 @@ the argv operand walk drops redirect operators, their target words and
 fd-prefix words, and pure `(`/`)` group tokens; the write-verb table gains
 `ln`/`rsync` and the sed `w` command accepts the attached `w<target>`
 spelling; the dropped input-redirect targets are re-added to the relevance
-set and re-classified in the refusal path so the fold is monotone. The
-boundary pins for item 17, item 14's substitution sub-family, item 15 and
-items 3–6/8/10/11 are committed at this commit; the
+set and re-classified in the refusal path so the fold is monotone. Measured
+at A14: the fixture corpus is 728/728 cases, of which 297 declare their
+measured base verdict (`base_exit`); the operand-mask fold adds 82 fixtures
+(23 accept pins, 43 reject fixtures including 4 documented over-refusals,
+and 16 base-REFUSE boundary pins), and the 4680-cell
+verb × target × redirect × paren battery reports 0 REFUSE→ACCEPT with every
+ACCEPT→REFUSE named in the PR body. The boundary pins for item 17, item
+14's substitution sub-family, item 15 and items 3–6/8/10/11 are committed
+at this commit; the
 comment spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
@@ -949,7 +955,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 646
+EXPECTED_MANIFEST_CASES = 728
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -966,11 +972,27 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 215
+EXPECTED_BASE_VERDICT_CASES = 297
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
         "reject-runid-github-env-write-sed-n-read-assigned-file",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-gt",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-lt",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-dup",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-2gt",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-lt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-ltlt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-2lt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-brace-lt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-read-write-arr",
+        "reject-runid-github-env-write-operand-mask-boundary-amp-gt",
+        "reject-runid-github-env-write-operand-mask-boundary-amp-gtgt",
+        "reject-runid-github-env-write-operand-mask-boundary-tee-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-touch-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-truncate-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-sed-inplace-trailing",
     }
 )
 
