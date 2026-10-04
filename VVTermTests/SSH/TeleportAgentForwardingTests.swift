@@ -317,8 +317,23 @@ struct TeleportAgentForwardingTests {
         try await waitUntil { store.isWaitingForChannel }
         store.push(channel)
         #expect(await parked.value == channel)
+        #expect(store.ownedChannelCount == 1)
         #expect(store.cancelAndDrain() == [channel])
         #expect(store.cancelAndDrain().isEmpty)
+    }
+
+    @Test
+    func storeReportsOwnedChannelCountAcrossPushNextRetireAndDrain() async throws {
+        let store = TeleportAgentChannelStore()
+        let channel = OpaquePointer(bitPattern: 0x11000)!
+        #expect(store.ownedChannelCount == 0)
+        store.push(channel)
+        #expect(store.ownedChannelCount == 1)          // pending
+        #expect(await store.next() == channel)
+        #expect(store.ownedChannelCount == 1)          // in flight (next() path)
+        store.retire(channel)
+        #expect(store.ownedChannelCount == 0)
+        #expect(store.cancelAndDrain().isEmpty)        // drain zeroes the count too
     }
 
     @Test
