@@ -17,17 +17,19 @@
 //
 //  WHAT IS PINNED: for each named test body (`func <name>` → the next
 //  `\n    @Test`), the body must contain the site's observation token and must
-//  not contain `Task.sleep(`. Sites 2 and 3 share one test body
+//  not contain `sleep(` (Task.sleep, Thread.sleep or usleep). Sites 2 and 3
+//  share one test body
 //  (`sceneActivationRepairsAcquiredSessionOnceWhenKeyboardNeverPresents`),
 //  which must carry both observation tokens.
 //
-//  DEFEAT LIST (known/measured limits): a computed duration (`Task.sleep`
-//  spelled via a variable), `Thread.sleep`/`usleep`, a wait hidden in a helper
-//  the body only calls (the accepted limit of a body-scoped pin), body-boundary
-//  drift (the `\n    @Test` sentinel changing), and a weakened but still
-//  matched observation such as a helper call whose body was gutted. A tripwire,
-//  not a proof. The `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` override lets a
-//  counterfactual run point the pin at a mutated tree.
+//  DEFEAT LIST (known/measured limits): a fixed wait whose `sleep(` is hidden
+//  behind a helper the body only calls (the accepted limit of a body-scoped
+//  pin), a wait spelled so the literal `sleep(` never appears (e.g. a
+//  variable-held closure), body-boundary drift (the `\n    @Test` sentinel
+//  changing), and a weakened but still matched observation such as a helper
+//  call whose body was gutted. A tripwire, not a proof. The
+//  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` override lets a counterfactual run
+//  point the pin at a mutated tree.
 
 import Foundation
 import Testing
@@ -112,8 +114,8 @@ struct TerminalKeyboardCoordinatorPinsTests {
                 "site \(pin.site) (\(pin.testName)) must observe the verification state via \(pin.observation.debugDescription)"
             )
             #expect(
-                !body.contains("Task.sleep("),
-                "site \(pin.site) (\(pin.testName)) must not race a fixed sleep"
+                !body.contains("sleep("),
+                "site \(pin.site) (\(pin.testName)) must not race any fixed sleep (Task.sleep, Thread.sleep, usleep, or a wrapper)"
             )
         }
     }
