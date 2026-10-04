@@ -65,8 +65,10 @@
 //  shape guard fails CLOSED on a malformed or non-canonical matrix shape —
 //  a missing/misspelled `needs-fixture`, a multi-line `only-testing:`, a
 //  duplicate `only-testing:` key, an `include:`/`exclude:` key in the matrix
-//  region, or a `- name:` entry at a non-canonical indent all red with a
-//  re-derive message rather than passing on a partial parse; (6) a `shard-N`
+//  region (bare OR quoted — `"include":` is the same YAML key), a YAML merge
+//  key (`<<: *anchor`, `- <<: *anchor`) or a bare `*alias` value, or a
+//  `- name:` entry at a non-canonical indent all red with a re-derive message
+//  rather than passing on a partial parse; (6) a `shard-N`
 //  block appended OUTSIDE the `ui-tests` job is NOT detected — the parser is
 //  scoped to that job, so a 5th shard must be added INSIDE its `matrix:` to be
 //  caught (the counterfactual (g) recipe was corrected for exactly this).
@@ -158,10 +160,12 @@ struct WorkflowShardSplitPinsTests {
     /// exactly four canonical `shard-N` matrix blocks (10-space `- name:`),
     /// each with `needs-fixture: true` and exactly one single-line
     /// double-quoted `only-testing:` scalar. The job's `matrix:` region must
-    /// carry no `include:`/`exclude:` key and exactly four `- name:` entries at
-    /// any indent, so a well-formed 5th shard the 10-space scanner would miss
-    /// (e.g. `matrix.include:`, or a differently-indented `- name:`) still fails
-    /// the suite with a re-derive message rather than passing on a partial parse.
+    /// carry no `include:`/`exclude:` key (bare or quoted — a quoted key is the
+    /// same YAML key) and no YAML merge/alias line, and exactly four `- name:`
+    /// entries at any indent, so a well-formed 5th shard the 10-space scanner
+    /// would miss (e.g. `matrix.include:`, or a differently-indented `- name:`)
+    /// still fails the suite with a re-derive message rather than passing on a
+    /// partial parse.
     @Test
     func testTheShardMatrixIsFourCanonicalBlocks() throws {
         let blocks = try Self.uiTestsShardBlocks()
@@ -250,9 +254,12 @@ struct WorkflowShardSplitPinsTests {
             let body = try Self.classBody(className: className, cache: &fileCache)
             // #248 F6: anchor to a declaration line so a method name that only
             // appears inside a string literal cannot false-green the existence
-            // check. An attribute on the preceding line (`@MainActor`, `@Test`)
-            // is fine — only `func` must start the whitespace-trimmed line.
-            let declaration = #"(?m)^[ \t]*func \#(NSRegularExpression.escapedPattern(for: method))\("#
+            // check. An attribute on the PRECEDING line (`@MainActor`, `@Test`)
+            // is fine, and the regex also accepts inline attributes on the same
+            // line, so a genuine `@MainActor func <method>(` declaration is not
+            // reported missing (NIT-1). A non-declaration line that merely
+            // contains the name after other text still reds.
+            let declaration = #"(?m)^[ \t]*(?:@\w+(?:\([^)]*\))?[ \t]+)*func\s+\#(NSRegularExpression.escapedPattern(for: method))\("#
             if body.range(of: declaration, options: .regularExpression) == nil {
                 missing.append(entry)
             }
@@ -449,8 +456,11 @@ struct WorkflowShardSplitPinsTests {
     /// Fail closed on a non-canonical shard source the 10-space scanner below
     /// cannot see (issue #248, F1). The `ui-tests` job's `matrix:` region must
     /// not carry an `include:`/`exclude:` key — a `matrix.include:` entry adds a
-    /// real 5th shard — and must contain exactly four `- name:` entries at any
-    /// indent, so a re-indented or extra entry reds rather than passing.
+    /// real 5th shard, whether the key is bare or quoted (`"include":`) — and
+    /// must not carry a YAML merge key (`<<: *anchor`) or bare `*alias` value
+    /// that injects entries the scanner cannot see; and it must contain exactly
+    /// four `- name:` entries at any indent, so a re-indented or extra entry
+    /// reds rather than passing.
     private static func validateMatrixRegion(of jobLines: [String]) throws {
         guard let matrixStart = jobLines.firstIndex(where: {
             $0.range(of: #"^      matrix:\s*$"#, options: .regularExpression) != nil
@@ -470,11 +480,24 @@ struct WorkflowShardSplitPinsTests {
             region.append(line)
             cursor += 1
         }
+        // A quoted key (`"include":` / `'exclude':`) is the same YAML key as
+        // the bare spelling, so accept an optional quote around the key. A YAML
+        // merge key (`<<: *anchor`, `- <<: *anchor`) or a bare `*alias` value
+        // injects mapping entries the canonical scanner never sees, so it fails
+        // closed too (issue #248, ND-1).
         if let nonCanonical = region.first(where: {
-            $0.range(of: #"^\s*(include|exclude)\s*:"#, options: .regularExpression) != nil
+            $0.range(of: #"^\s*["']?(include|exclude)["']?\s*:"#, options: .regularExpression) != nil
         }) {
             throw PinFailure(
-                "the `ui-tests` matrix carries a non-canonical `\(nonCanonical.trimmingCharacters(in: .whitespaces))` key — a `matrix.include:`/`exclude:` entry can add a real 5th shard the canonical 10-space scanner cannot see, so the shape guard fails closed (issue #248); re-derive this pin"
+                "the `ui-tests` matrix carries a non-canonical `\(nonCanonical.trimmingCharacters(in: .whitespaces))` key — a `matrix.include:`/`exclude:` entry (bare or quoted) can add a real 5th shard the canonical 10-space scanner cannot see, so the shape guard fails closed (issue #248); re-derive this pin"
+            )
+        }
+        if let mergeKey = region.first(where: {
+            $0.range(of: #"^\s*-?\s*<<\s*:"#, options: .regularExpression) != nil
+                || $0.range(of: #"^\s*\*\S+\s*$"#, options: .regularExpression) != nil
+        }) {
+            throw PinFailure(
+                "the `ui-tests` matrix carries a YAML merge/alias line `\(mergeKey.trimmingCharacters(in: .whitespaces))` — a `<<: *anchor` merge key or a bare `*alias` value injects matrix entries the canonical scanner cannot see, so the shape guard fails closed (issue #248); re-derive this pin"
             )
         }
         let nameEntries = region.filter {
