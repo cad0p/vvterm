@@ -45,7 +45,7 @@
 #   - The 24 TeleportUITests (Phase 1/2/3 sheet matrices) run against the
 #     DEBUG-only TeleportUITestHarness + mock coordinators (no real Safari/
 #     Face ID/Teleport server) and are distributed across the 4 shards
-#     (~4-5 per shard). Each test captures an XCTAttachment(screenshot:)
+#     (3/10/7/4). Each test captures an XCTAttachment(screenshot:)
 #     with .keepAlways lifetime.
 #
 # Build-once-fanout architecture:
@@ -59,7 +59,7 @@
 #     via `-only-testing:Target/Class/method,...`.
 #   - The `unit-tests` job downloads the same artifact, so it reuses the
 #     prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
-#     target (fast), then runs the 577 tests (~7s).
+#     target (fast), then runs the `VVTermUnitTests` suite (~30 s).
 #   - Shard split is a measured assignment over the 41-run clean population
 #     (issue #248): every attempt-1 `pull_request` run whose four shard logs
 #     parse to exactly the current 88-method universe, since the last
@@ -68,8 +68,9 @@
 #     (2026-10-04). The 2026-09-23 five-run LPT split (78 methods, bins
 #     527.6/517.8/527.0/527.8 s, max/min 1.02) is superseded; #227's split
 #     pair stays co-located in shard-0. The 164 measured shard-jobs carry
-#     326.6-796.7 s of setup/overhead (p10-p90 385-652 s), so the observed
-#     wall clock is 21.5-37.5 m (median 27.8 m; p25-p75 25.8-30.1 m) against
+#     326.6-796.7 s of setup/overhead (p10-p90 385-652 s; inclusive
+#     percentiles, m=n+1), so the observed wall clock is 21.5-37.5 m
+#     (median 27.8 m; p25-p75 25.8-30.1 m) against
 #     the ≤ 20 m target this refresh does not change. The fixture is
 #     `scripts/ci/shard-split-medians.json`, pinned by
 #     `VVTermTests/WorkflowShardSplitPinsTests.swift`.
