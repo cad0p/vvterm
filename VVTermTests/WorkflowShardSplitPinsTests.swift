@@ -31,9 +31,9 @@
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
 //  `(sum * 10).rounded() / 10` equals the recorded literals
-//  555.4 / 612.9 / 681.7 / 580.6. The exact sums are
-//  555.408 / 612.882 / 681.724 / 580.572 s, so the |sum − literal| deltas are
-//  0.008 / 0.018 / 0.024 / 0.028 — small but non-zero, recorded here so a
+//  555.4 / 612.9 / 681.7 / 589.6. The exact sums are
+//  555.408 / 612.882 / 681.724 / 589.648 s, so the |sum − literal| deltas are
+//  0.008 / 0.018 / 0.024 / 0.048 — small but non-zero, recorded here so a
 //  future refresh sees the margin instead of re-deriving it. A sum that moves
 //  by more than 0.05 s from its literal is red (the tolerance is deliberately
 //  wider than the current deltas so a calibration refresh has room, and
@@ -119,7 +119,7 @@
 //  pin never executes the in-code `XCTSkip` guard and never proves a reason
 //  true; the 20-character reason floor is a LENGTH floor for the 7
 //  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×3, `platformGated`
-//  ×1) — the other 30 rows are additionally protected by the `#N` check;
+//  ×1) — the other 27 rows are additionally protected by the `#N` check;
 //  (9) `liveTrackers` is a static Swift set, so the pin cannot query
 //  GitHub: a closed tracker stays green until a human removes it, and a
 //  closed tracker must name its successor in the reason and in `liveTrackers`
@@ -164,7 +164,7 @@ struct WorkflowShardSplitPinsTests {
         "shard-0": 555.4,
         "shard-1": 612.9,
         "shard-2": 681.7,
-        "shard-3": 580.6,
+        "shard-3": 589.6,
     ]
 
     /// The same sums at the fixture's full precision (recorded for the
@@ -173,11 +173,11 @@ struct WorkflowShardSplitPinsTests {
         "shard-0": 555.408,
         "shard-1": 612.882,
         "shard-2": 681.724,
-        "shard-3": 580.572,
+        "shard-3": 589.648,
     ]
 
     /// Tolerance around the 1 dp literal; wider than the current deltas
-    /// (≤0.043 s) so a refresh has room, narrower than any real method move.
+    /// (≤0.048 s) so a refresh has room, narrower than any real method move.
     private static let binSumTolerance = 0.05
 
     /// The acceptance's structural rebalance threshold (`> ~1.3`). Recorded

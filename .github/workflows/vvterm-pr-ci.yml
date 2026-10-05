@@ -66,7 +66,7 @@
 #     change (#236), plus the #277 local 3-run calibration of the three
 #     TeleportPhaseTransitionUITests. Per-method medians (n=41; the three
 #     #277 methods are the local 3-run calibration) summed per bin:
-#     555.4 / 612.9 / 681.7 / 580.6 s → max/min 1.2274 ≤ 1.3, so NO rebalance
+#     555.4 / 612.9 / 681.7 / 589.6 s → max/min 1.2274 ≤ 1.3, so NO rebalance
 #     (2026-10-05). The 2026-09-23 five-run LPT split (78 methods, bins
 #     527.6/517.8/527.0/527.8 s, max/min 1.02) is superseded; #227's split
 #     pair stays co-located in shard-0. The 164 measured shard-jobs carry
@@ -518,7 +518,7 @@ jobs:
           # calibration of the three TeleportPhaseTransitionUITests. Per-method
           # medians (n=41; the three #277 methods are the local calibration)
           # summed per bin: shard-0 555.4 s (20 methods) / shard-1 612.9 s
-          # (24) / shard-2 681.7 s (24) / shard-3 580.6 s (23) → max/min
+          # (24) / shard-2 681.7 s (24) / shard-3 589.6 s (23) → max/min
           # 1.2274 ≤ 1.3 → NO rebalance (2026-10-05). The 2026-09-23
           # five-run LPT split (78 methods, bins 527.6/517.8/527.0/527.8 s,
           # max/min 1.02) is superseded. The normative trigger metric is the
@@ -566,7 +566,7 @@ jobs:
           # `.awaitingApproval` until the test taps the release control, so
           # neither phase-1 test depends on a ~100 ms transient. Medians from
           # three consecutive local runs (Xcode 26.3 / iPhone 17 / iOS 26.3.1):
-          # 10.399 / 10.621 / 9.995 s; shard-3 sum 580.6 s, max/min 1.2274.
+          # 13.750 / 14.404 / 11.937 s; shard-3 sum 589.6 s, max/min 1.2274.
           # The first green attempt-1 PR run replaces the calibration.
           - name: shard-0
             needs-fixture: true
