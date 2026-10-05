@@ -15,7 +15,8 @@
 //
 //  This harness replicates that FIXED chaining so an XCUITest can assert:
 //    1. Tap a `needsBootstrap` server row → bootstrap sheet appears.
-//    2. The mock bootstrap coordinator immediately succeeds (happyPath).
+//    2. The mock bootstrap coordinator parks in `.awaitingApproval` until the
+//       release control is tapped, then succeeds (happyPath).
 //    3. The registration sheet appears (NOT dismissal, NOT a second bootstrap).
 //
 //  Launch-arg contract (read by this harness + by VVTermApp.swift):
@@ -197,17 +198,38 @@ private struct PhaseChainBootstrapSheet: View {
         self.cluster = cluster
         self.onSuccess = onSuccess
         self.onCancel = onCancel
-        // happyPath → immediate success (cert + TLS keypair in hand).
-        _coordinator = StateObject(wrappedValue: MockTeleportBootstrapCoordinator(scenario: .happyPath))
+        // happyPath → success (cert + TLS keypair in hand), but held in
+        // `.awaitingApproval` until the UI test taps the release control, so
+        // the test observes a stable gate instead of the ~150 ms transient
+        // happyPath window (issue #277).
+        _coordinator = StateObject(
+            wrappedValue: MockTeleportBootstrapCoordinator(scenario: .happyPath, holdsForApproval: true)
+        )
     }
 
     var body: some View {
-        TeleportBootstrapView(
-            coordinator: coordinator,
-            cluster: cluster,
-            onSuccess: onSuccess,
-            onCancel: onCancel
-        )
+        ZStack(alignment: .bottom) {
+            TeleportBootstrapView(
+                coordinator: coordinator,
+                cluster: cluster,
+                onSuccess: onSuccess,
+                onCancel: onCancel
+            )
+
+            // The deterministic gate release. Rendered only while the mock is
+            // actually parked in `.awaitingApproval`, so the control's own
+            // existence is the gate-engaged signal (issue #277). The wrapper is
+            // intentionally container-free: the element must surface as a
+            // hittable Button in the AX tree.
+            if coordinator.state == .awaitingApproval {
+                Button("Release Bootstrap Approval") {
+                    coordinator.releaseApproval()
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("vvterm.teleport.phaseChainHarness.releaseBootstrapApproval")
+                .padding(.bottom, 24)
+            }
+        }
     }
 }
 
