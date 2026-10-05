@@ -10,8 +10,10 @@
 //  Before #369 this harness re-implemented the production routing switch
 //  (`ServerSidebarView.teleportSetupSheet`) and its three phase wrappers, so
 //  the XCUITest asserted a mirror rather than the production view. It now
-//  presents the shared sheet directly, so a production routing drift reds the
-//  scheduled `TeleportPhaseTransitionUITests`.
+//  presents the shared sheet directly, so a drift in the shared routing view
+//  reds the scheduled `TeleportPhaseTransitionUITests`. The host call-site
+//  composition (readiness capture + presentation binding) is pinned by
+//  `TeleportSetupSheetPinsTests`, not exercised end-to-end here.
 //
 //  The XCUITest asserts:
 //    1. Tap a `needsBootstrap` server row → bootstrap sheet appears.

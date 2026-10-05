@@ -22,8 +22,8 @@
 //    is never invoked and the sheet shows `waitingBlock` forever.
 //
 //  The UI-test harnesses (`TeleportPhaseChainUITestHarness`) do NOT reproduce
-//  this because they hold the coordinator in `@StateObject` (see
-//  `PhaseChainBootstrapSheet`), which preserves identity across body re-evals.
+//  this because they hold the coordinator in `@StateObject` (see the shared
+//  `TeleportBootstrapSheet`), which preserves identity across body re-evals.
 //
 //  These unit tests host a parent view that mirrors the production inline
 //  construction pattern, drive the REAL `TeleportBootstrapCoordinator` (with a
