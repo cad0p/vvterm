@@ -810,28 +810,50 @@ the eight benign shapes become measured over-refusals (the price of
 fail-closed joining, listed by class with the corpus counts). Boundary
 (stays open, never implied closed): the `>8` chain bound
 (`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
-closed, `n9+` open) and the outside-class fail-opens — #350 item 13 (the
-continuation-independent extractor gaps), #350 item 17 (the same-line
-`$'…\'…'` tokenizer gap: `_shell_tokens` reads `\'` as a close and swallows
-the rest of the line, so `echo $'a\'' ; cp payload \\` + `"${arr[0]}"`
-leaves `_argv_write_targets` empty — base/prev/fold ACCEPT + runtime FLIP,
-its continuation-free control also FLIPs, and no join fix closes it; fold
-round 2 lens-1 MAJOR-1, named not folded), #350 item 14 (a target masked by a
-trailing operator token: `_shell_segments` does not split on `(`, so
-`_argv_write_targets` reads `)` as `cp`'s last operand; the redirect-operand
-masks — `cp payload \\` + `"${arr[0]}" < payload`, `> /dev/null`, `2>&1`,
-`mv`/`install` and the redirection-prefix spelling — read the redirect's
-source word as the last operand; and the substitution masks `$( … )`,
-backtick, `eval "…"`, `case x in x) … ;; esac` and `w=$(cp …)` hide the
-verb inside a substitution the argv extractor does not descend; every one of
-these has a continuation-free control that also runtime-FLIPs, so they are
-extractor gaps, not join gaps), and #350 item 15 (a `>`/plain break YAML
+closed, `n9+` open) and the outside-class fail-opens — #350 item 17 (the
+same-line `$'…\'…'` tokenizer gap: `_shell_tokens` reads `\'` as a close
+and swallows the rest of the line, so `echo $'a\'' ; cp payload \\` +
+`"${arr[0]}"` leaves `_argv_write_targets` empty — base/prev/fold ACCEPT +
+runtime FLIP, its continuation-free control also FLIPs, and no join fix
+closes it; fold round 2 lens-1 MAJOR-1, named not folded), #350 item 14's
+substitution sub-family (a target masked by a substitution spelling:
+`$( … )`, backtick, `eval "…"`, `case x in x) … ;; esac` and `w=$(cp …)`
+hide the verb inside a substitution the argv extractor does not descend;
+each has a continuation-free control that also runtime-FLIPs, so it is an
+extractor gap, not a join gap), and #350 item 15 (a `>`/plain break YAML
 folds to a space, joining verb and target with no backslash at all; closing
 it needs the YAML fold model the review rounds rejected as unsound) — a
-target masked by an operator token, a redirection operand or a substitution
-spelling, or folded across a break, therefore stays outside this
-closure; the
-comment spellings are pinned by
+target masked by a substitution spelling, or folded across a break,
+therefore stays outside this closure. #350 item 14's operator-token
+sub-family and item 16's redirect-operand masks are closed at this fold:
+the argv operand walk drops redirect operators, their target words and
+fd-prefix words, and pure `(`/`)` group tokens; the write-verb table gains
+`ln`/`rsync` and the sed `w` command accepts the attached `w<target>`
+spelling; the dropped input-redirect target names are re-added to the
+relevance set, and the refusal path classifies both the redirect-aware
+operand list and the base word list, so the fold is monotone by
+construction. Measured
+at A16: the fixture corpus is 756/756 cases, of which 325 declare their
+measured base verdict (`base_exit`); the operand-mask fold adds 110 fixtures
+(24 accept pins, 47 reject fixtures including 8 documented over-refusals,
+and 39 base-REFUSE boundary pins — 14 are the sole-operand
+input-redirect controls added by fold round 1 F1, 16 are the
+redirect-prefix/fd-dup/read-write/trailing-operand controls also added by
+fold round 1, and 9 are the
+`ln`/`rsync`-prefix shadowing controls added by fold round 2 BLOCKER-1),
+and the regenerated
+7848-cell differential battery (4680 operand-bearing + 1980 continuation +
+288 sole-operand + 144 attached-subshell mixed-verb + 756 `ln`/`rsync`
+mixed-verb cells; the last three families are the classes the first two
+structurally cannot generate) reports 0 REFUSE→ACCEPT at this
+head — 271 against the pre-fix head (55 sole-operand + 60 attached-subshell
+mixed-verb + 156 `ln`/`rsync` mixed-verb) — with every ACCEPT→REFUSE in one of the
+three named diagnostic classes or a pinned over-refusal. The generator and
+its pinned output are preserved with the #350c evidence. The boundary pins
+for item 17, item 14's substitution sub-family, item 15 and items
+3–6/8/10/11 are pre-existing
+corpus entries, not added by this fold; their
+spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
 `reject-runid-github-env-write-array-element-continuation-eof-target`; (viii-d) the
@@ -947,7 +969,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 646
+EXPECTED_MANIFEST_CASES = 756
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -964,11 +986,50 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # double cause reds but a *false* `base_exit: 0` still passes; the field
 # is reviewable data backed by the measured counterfactual evidence, not a
 # re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 215
+EXPECTED_BASE_VERDICT_CASES = 325
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
         "reject-runid-github-env-write-sed-n-read-assigned-file",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-gt",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-lt",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-dup",
+        "reject-runid-github-env-write-operand-mask-boundary-prefix-2gt",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-lt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-ltlt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-2lt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-fd-brace-lt-amp",
+        "reject-runid-github-env-write-operand-mask-boundary-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-read-write-arr",
+        "reject-runid-github-env-write-operand-mask-boundary-amp-gt",
+        "reject-runid-github-env-write-operand-mask-boundary-amp-gtgt",
+        "reject-runid-github-env-write-operand-mask-boundary-tee-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-touch-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-truncate-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-sed-inplace-trailing",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-mv-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-mv-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-install-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-install-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-lt-multivar",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-touch-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-truncate-read-write-env",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-cp-lt-amp-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-tee-herestring-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-python-lt-multivar",
+        "reject-runid-github-env-write-operand-mask-boundary-sole-perl-lt-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-ln-touch-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-ln-touch-arr",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-ln-touch-out",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-rsync-tee-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-ln-truncate-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-ln-sed-inplace-subst",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-rsync-tee-out",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-ln-tee-multivar",
+        "reject-runid-github-env-write-operand-mask-boundary-shadow-rsync-truncate-arr",
     }
 )
 
@@ -3463,7 +3524,21 @@ _PURE_VARIABLE_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 # (`tee`, `dd of=…`): a computed operand cannot be seen by the redirect
 # classification, so it needs its own target check (issue #345, lens-v2
 # t04/t20/t22/t23).
-_ARGV_WRITE_VERBS = frozenset({"tee", "dd", "sed", "cp", "mv", "install", "touch", "truncate"})
+_ARGV_WRITE_VERBS = frozenset(
+    {"tee", "dd", "sed", "cp", "mv", "install", "ln", "rsync", "touch", "truncate"}
+)
+# The pre-fold write-verb table (this fold added `ln`/`rsync`, issue #350
+# item 13). `_argv_all_write_targets` re-classifies the base word list with
+# this table so its base pass reproduces the pre-fold walk's first-verb
+# choice exactly on the pre-fold verb vocabulary (a strict superset where the
+# fold widened a branch, e.g. the attached sed `w`):
+# `_argv_write_targets` returns on the FIRST recognized verb, so leaving
+# `ln`/`rsync` in the base pass lets a leading `ln`/`rsync` shadow a later
+# base verb (`touch`/`tee`/`truncate`/`sed`) and drop the base refusal from
+# the union (fold round 2 BLOCKER-1).
+_BASE_ARGV_WRITE_VERBS = frozenset(
+    {"tee", "dd", "sed", "cp", "mv", "install", "touch", "truncate"}
+)
 # `read` options that consume the next word. `-a` is deliberately absent:
 # its argument IS the array name that the rule must inspect.
 _READ_OPTIONS_WITH_ARGUMENT = ("-d", "-i", "-n", "-N", "-p", "-t", "-u")
@@ -4563,7 +4638,7 @@ _SED_ADDRESS = (
     + r")?"
 )
 _SED_WRITE_COMMAND_RE = re.compile(
-    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*[wW][ \t]+(?P<target>\S[^\n;]*)",
+    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*[wW][ \t]*(?P<target>\S[^\n;]*)",
     re.MULTILINE,
 )
 
@@ -4965,8 +5040,181 @@ def _bash_joined_continuation_segments(
     ]
 
 
+# The redirect operators the argv operand walk consumes. `_segment_redirects`
+# deliberately stays untouched: it models only the `>`-family (plus `<>`) for
+# its four consumers, and an in-place `<`/`<<` extension was measured to change
+# two existing diagnostics (issue #350 item 16; plan lens 1 MAJOR-4).
+_ARGV_REDIRECT_OPERATORS = frozenset({">", ">>", ">|", "<>", "<", "<<"})
+_FD_PREFIX_BRACE_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def _argv_operand_words(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[int, str]]:
+    """The operand words of one segment for the argv write-target walk:
+    every word except the redirect operators' target words, the fd-prefix
+    words glued to an operator, and the pure `(`/`)` group tokens. A word's
+    trailing `)` run is stripped only when the word carries no `(` (a
+    subshell close glued to the operand: `(cp payload "${arr[0]}")`), so a
+    `$(…)`/`<(…)` target keeps its closing parenthesis (issue #350 item 16;
+    plan lens 1 BLOCKER-1). Returns `(segment_index, text)` in source order
+    so every verb branch's `args` slicing keeps working."""
+    consumed: set[int] = set()
+    index = 0
+    while index < len(segment):
+        kind, text, start, _end = segment[index]
+        if kind == "op" and text in _ARGV_REDIRECT_OPERATORS:
+            previous = segment[index - 1] if index > 0 else None
+            if (
+                previous is not None
+                and previous[0] == "word"
+                and previous[3] == start
+                and (
+                    (previous[1].isascii() and previous[1].isdigit())
+                    or _FD_PREFIX_BRACE_RE.fullmatch(previous[1])
+                )
+            ):
+                consumed.add(index - 1)
+            after = index + 1
+            # A here-string (`<<<`) tokenizes as `<<` + `<`; the trailing
+            # `<` consumes the word on its own iteration, so no `<<`
+            # operator-pair special case is needed (fold round 1 F10).
+            if (
+                after < len(segment)
+                and segment[after][0] == "op"
+                and segment[after][1] == "&"
+            ):
+                # An fd duplication (`<&`/`<<&`/`2<&`/`>&`) consumes the
+                # `&` operator and the word after it.
+                after += 1
+            if after < len(segment) and segment[after][0] == "word":
+                consumed.add(after)
+                index = after + 1
+                continue
+            index = after
+            continue
+        index += 1
+    operands: list[tuple[int, str]] = []
+    for position, (kind, text, _start, _end) in enumerate(segment):
+        if kind != "word" or position in consumed:
+            continue
+        if text in ("(", ")"):
+            continue
+        while text.endswith(")") and "(" not in text:
+            text = text[:-1]
+        if text:
+            operands.append((position, text))
+    return operands
+
+
+def _argv_verb_name(text: str) -> str:
+    """The basename of a verb candidate with a leading `(` run stripped, so
+    an attached subshell opener (`(cp`) is recognized as `cp` (issue #350
+    item 14a)."""
+    candidate = text.lstrip("(")
+    return candidate.rsplit("/", 1)[-1] if "/" in candidate else candidate
+
+
+def _argv_base_verb_name(text: str) -> str:
+    """The pre-fold verb basename (`text.rsplit("/", 1)[-1]`, no leading
+    `(` strip). The base-word-list pass in `_refuse_argv_write_targets` uses
+    it so it reproduces the pre-fold walk exactly: with `_argv_verb_name`
+    the pass could recognize an earlier `(cp` word and pick a different
+    first verb, dropping a base refusal (fold round 1 F1)."""
+    return text.rsplit("/", 1)[-1] if "/" in text else text
+
+
+def _argv_dropped_input_targets(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[int, str, bool]]:
+    """Every input-redirect target word the argv operand walk drops, as
+    `(segment_index, text, read_write)`: `<`, `<<`, `<<<` and the
+    `<&`/`<<&`/`{fd}<&` fd-duplication forms (`read_write` False), plus the
+    bare or explicit-fd-0 `<>` read-write forms (`read_write` True). The
+    input forms are not modelled by `_segment_redirects`, so their variable
+    names must be re-added to the relevance set explicitly (issue #350 item
+    16; plan lens 1 BLOCKER-2); every one of them was an operand at base.
+    The refusal path no longer reads this list: it re-classifies the base
+    word list directly (fold round 1 F1), which is a superset of these
+    targets. An explicit higher fd or a `{name}` allocation on `<>`
+    is a payload-writing target the redirect accounting already
+    classifies."""
+    targets: list[tuple[int, str, bool]] = []
+    index = 0
+    while index < len(segment):
+        kind, text, start, _end = segment[index]
+        if kind == "op" and text in ("<", "<<"):
+            after = index + 1
+            # A here-string (`<<<`) tokenizes as `<<` + `<`; the trailing
+            # `<` records the word on its own iteration (fold round 1 F10).
+            if (
+                after < len(segment)
+                and segment[after][0] == "op"
+                and segment[after][1] == "&"
+            ):
+                after += 1
+            if after < len(segment) and segment[after][0] == "word":
+                targets.append((after, segment[after][1], False))
+                index = after + 1
+                continue
+            index = after
+            continue
+        if kind == "op" and text == "<>":
+            fd = 0
+            previous = segment[index - 1] if index > 0 else None
+            if (
+                previous is not None
+                and previous[0] == "word"
+                and previous[3] == start
+                and previous[1].isascii()
+                and previous[1].isdigit()
+            ):
+                fd = int(previous[1])
+            elif (
+                previous is not None
+                and previous[0] == "word"
+                and previous[3] == start
+                and _FD_PREFIX_BRACE_RE.fullmatch(previous[1])
+            ):
+                fd = -1
+            if (
+                fd == 0
+                and index + 1 < len(segment)
+                and segment[index + 1][0] == "word"
+            ):
+                targets.append((index + 1, segment[index + 1][1], True))
+                index += 2
+                continue
+        index += 1
+    return targets
+
+
+def _argv_target_is_unproven(
+    verb: str,
+    target: str,
+    aliases: set[str],
+    assignments: list[_ShellAssignment],
+    lines: list[str],
+    line_index: int,
+    column_index: int,
+) -> bool:
+    """The verb-specific predicate the argv refusal uses: `tee`/`dd`/an
+    inline interpreter take the broad predicate, every other write verb the
+    narrow one."""
+    if verb in ("tee", "dd") or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
+        return _argv_write_target_is_unproven(
+            target, aliases, assignments, lines, line_index, column_index
+        )
+    return _new_verb_target_is_unproven(
+        target, aliases, assignments, lines, line_index, column_index
+    )
+
+
 def _argv_write_targets(
     segment: list[tuple[str, str, int, int]],
+    operand_words: list[tuple[int, str]] | None = None,
+    verb_namer=_argv_verb_name,
+    write_verbs: frozenset[str] = _ARGV_WRITE_VERBS,
 ) -> list[tuple[str, str]]:
     """The `(verb, target)` file operands of an argv write verb in one
     segment: `tee` appends to every non-option path operand and `dd` writes
@@ -4976,11 +5224,24 @@ def _argv_write_targets(
     carries its file targets in argv (`sys.argv[1]`, `$ARGV[0]`, `ARGV[0]`),
     so the non-flag words after the inline program are returned too and
     classified with the same resolver as `tee`/`dd of=` (issue #345, fold
-    round 1 F4)."""
-    words = [token[1] for token in segment if token[0] == "word"]
+    round 1 F4).
+
+    `operand_words` selects the operand list: the private redirect-aware
+    walk by default, or the base word list (`[token[1] for token in segment
+    if token[0] == "word"]`) so `_refuse_argv_write_targets` can re-classify
+    every target the pre-fold walk read (fold round 1 F1). `verb_namer` is
+    the corresponding verb classifier and `write_verbs` the corresponding
+    verb table; the base pass passes `_argv_base_verb_name` and
+    `_BASE_ARGV_WRITE_VERBS` so it reproduces the pre-fold walk's
+    first-verb choice exactly (fold round 2 BLOCKER-1; the fold's added
+    verb-branch spellings, e.g. attached sed `w`, keep it a strict
+    superset)."""
+    if operand_words is None:
+        operand_words = _argv_operand_words(segment)
+    words = [text for _index, text in operand_words]
     for position, text in enumerate(words):
-        verb = text.rsplit("/", 1)[-1] if "/" in text else text
-        if verb in _ARGV_WRITE_VERBS:
+        verb = verb_namer(text)
+        if verb in write_verbs:
             args = words[position + 1 :]
             if verb == "tee":
                 targets: list[tuple[str, str]] = []
@@ -5002,7 +5263,7 @@ def _argv_write_targets(
                     for argument in args
                     if argument.startswith("of=") and len(argument) > 3
                 ]
-            if verb in ("cp", "mv", "install"):
+            if verb in ("cp", "mv", "install", "ln", "rsync"):
                 operands = [a for a in args if not a.startswith("-")]
                 if not operands:
                     return []
@@ -5174,6 +5435,28 @@ def _argv_write_targets(
     return []
 
 
+def _argv_all_write_targets(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[str, str]]:
+    """The union of the redirect-aware walk's targets and the base word
+    list's targets. The base pass uses `_argv_base_verb_name` and
+    `_BASE_ARGV_WRITE_VERBS` so it reproduces the pre-fold walk's
+    first-verb choice (a leading `ln`/`rsync` may not shadow a later base
+    verb, fold round 2 BLOCKER-1) and is a superset of the pre-fold target
+    set; every consumer (the refusal path and the relevance readers)
+    therefore sees a superset of the pre-fold target set and the fold
+    cannot widen a base REFUSE to ACCEPT or shrink the relevance set (fold
+    round 1 F1)."""
+    base_words = [
+        (index, token[1])
+        for index, token in enumerate(segment)
+        if token[0] == "word"
+    ]
+    return _argv_write_targets(segment) + _argv_write_targets(
+        segment, base_words, _argv_base_verb_name, _BASE_ARGV_WRITE_VERBS
+    )
+
+
 def _new_verb_target_is_unproven(
     target: str,
     aliases: set[str],
@@ -5278,16 +5561,15 @@ def _refuse_argv_write_targets(
     has no env redirect of its own, so the caller defers only in that case
     and otherwise refuses with the argv diagnostic (issue #345, fold round 1
     F2)."""
-    for verb, target in _argv_write_targets(segment):
-        if verb in ("tee", "dd") or _interpreter_core(verb) in _INLINE_PROGRAM_FLAGS:
-            unproven = _argv_write_target_is_unproven(
-                target, aliases, assignments, lines, line_index, column_index
-            )
-        else:
-            unproven = _new_verb_target_is_unproven(
-                target, aliases, assignments, lines, line_index, column_index
-            )
-        if not unproven:
+    # The union re-classifies the base word list, so every target the
+    # pre-fold walk classified is classified again and the fold cannot widen
+    # a base REFUSE to ACCEPT (issue #350 item 16; fold round 1 F1). A benign
+    # `<> /dev/null` stays proven and the fd-0 read-write exemption is
+    # preserved.
+    for verb, target in _argv_all_write_targets(segment):
+        if not _argv_target_is_unproven(
+            verb, target, aliases, assignments, lines, line_index, column_index
+        ):
             continue
         if defer_env_spelling and _env_file_target_kind(
             target, aliases, assignments, lines, line_index, column_index
@@ -6240,6 +6522,24 @@ def _relevant_shell_names(
         for segment in _shell_segments(_shell_tokens(line)):
             for _op, target, _start, _span, _fd in _segment_redirects(segment):
                 names.update(_expansion_names(target))
+            # The input redirects `_segment_redirects` does not model
+            # (`<`/`<<`/`<<<` and the `<&` fd-duplication forms) are dropped
+            # from the operand list, so their variable names must be re-added
+            # here or the relevance set would shrink and suppress the
+            # `read`/`printf -v`/`mapfile` guard (issue #350 item 16; plan
+            # lens 1 BLOCKER-2). The pure-variable filter mirrors the argv
+            # target loop below (a multi-piece target deliberately adds no
+            # names).
+            for _target_index, target, read_write in _argv_dropped_input_targets(
+                segment
+            ):
+                if read_write:
+                    # `_segment_redirects` already adds every `<>` target's
+                    # names, so only the unmodelled input forms need the
+                    # explicit re-add here.
+                    continue
+                if _local_reference_name(target) is not None:
+                    names.update(_expansion_names(target))
             # A newly-modelled argv write target's variable name is traced
             # too when the target is a PURE variable (`$p`): if the name is
             # written by an unmodelled assignment form (`printf -v`,
@@ -6249,7 +6549,7 @@ def _relevant_shell_names(
             # target (`$OUT_DIR/VVTerm.ipa`) deliberately adds no names:
             # that is the real `cp` false-red the narrow predicate exists
             # to keep accepted.
-            for _verb, target in _argv_write_targets(segment):
+            for _verb, target in _argv_all_write_targets(segment):
                 if _local_reference_name(target) is not None:
                     names.update(_expansion_names(target))
     return names
@@ -6502,7 +6802,14 @@ def _refuse_github_env_run_id_write(
             if _joined_index in payload_lines:
                 continue
             for _joined_segment in _joined_continuation_segments(lines, _joined_index):
-                for _verb, _target in _argv_write_targets(_joined_segment):
+                for _verb, _target in _argv_all_write_targets(_joined_segment):
+                    if _local_reference_name(_target) is not None:
+                        relevant_names.update(_expansion_names(_target))
+                for _target_index, _target, _read_write in _argv_dropped_input_targets(
+                    _joined_segment
+                ):
+                    if _read_write:
+                        continue
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
             # Issue #350 item 12: the sibling join above keeps the raw `\`
@@ -6515,7 +6822,14 @@ def _refuse_github_env_run_id_write(
                 body.scalar_content_indent,
                 continuation_pending,
             ):
-                for _verb, _target in _argv_write_targets(_joined_segment):
+                for _verb, _target in _argv_all_write_targets(_joined_segment):
+                    if _local_reference_name(_target) is not None:
+                        relevant_names.update(_expansion_names(_target))
+                for _target_index, _target, _read_write in _argv_dropped_input_targets(
+                    _joined_segment
+                ):
+                    if _read_write:
+                        continue
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
         skip_until = -1
