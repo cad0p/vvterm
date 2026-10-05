@@ -2158,6 +2158,55 @@ struct TerminalKeyboardCoordinatorTests {
     }
 
     @Test
+    func keyboardFrameMinimumHeightBoundaryIsNinetyNineVersusOneHundred() {
+        // The gate is the intersection height, not the raw frame height: a
+        // 300 pt frame clipped to 98 pt of screen is invisible, and 100 pt is
+        // the inclusive minimum.
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 401, width: 1_000, height: 99),
+                in: screen
+            ) == nil
+        )
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 400, width: 1_000, height: 100),
+                in: screen
+            ) == CGRect(x: 0, y: 400, width: 1_000, height: 100)
+        )
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 402, width: 1_000, height: 300),
+                in: screen
+            ) == nil
+        )
+    }
+
+    @Test
+    func softwareKeyboardPresentationAcceptsWiderThanScreenAndNonZeroOriginFrames() {
+        // #372 lens-2 NIT: the raw-width rule has no screen-origin term and
+        // a frame wider than the screen still spans.
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        let widerThanScreen = CGRect(x: -40, y: 200, width: 1_100, height: 300)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: widerThanScreen,
+                in: screen
+            ) == .docked(frame: widerThanScreen)
+        )
+
+        let offsetScreen = CGRect(x: 120, y: 60, width: 1_000, height: 500)
+        let frame = CGRect(x: 130, y: 260, width: 800, height: 300)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: frame,
+                in: offsetScreen
+            ) == .docked(frame: frame)
+        )
+    }
+
+    @Test
     func keyboardPresentationModelsHiddenDockedAndFloatingStatesExplicitly() {
         let screen = CGRect(x: 0, y: 0, width: 1_366, height: 1_024)
         let docked = CGRect(x: 0, y: 650, width: 1_366, height: 374)

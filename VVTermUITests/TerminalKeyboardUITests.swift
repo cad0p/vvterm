@@ -1447,55 +1447,6 @@ final class TerminalKeyboardUITests: XCTestCase {
         #endif
     }
 
-    /// #372: tri-state outcome of the native float-gesture probe.
-    ///
-    /// Distinguishes a destination without the native float capability (the
-    /// iPhone pinch types characters; frames stay docked-width within jitter)
-    /// from an app-side divergence (the frame moved past the tolerance band
-    /// without floating, or the keyboard vanished). `internal`, not `private`,
-    /// so the pure classifier can be exercised directly by a scratch probe;
-    /// the UI-test target is never scheduled, so it has no unit-test coverage.
-    enum FloatGestureOutcome: Equatable {
-        case floated(frame: CGRect)
-        case unsupported(frames: [CGRect])
-        case divergence(frames: [CGRect])
-    }
-
-    /// Pure classification of the frames observed after each pinch attempt.
-    ///
-    /// - `.floated`: the first frame narrower than half the screen (a later
-    ///   pinch on a floating keyboard can move/type, so the caller exits early).
-    /// - `.unsupported`: no frame ever dropped below `0.8 x screenWidth` and
-    ///   every frame stayed within `tolerance` of the pre-pinch frame.
-    /// - `.divergence`: everything else, including a missing or zero frame
-    ///   (a pinch that dismisses the keyboard is a failure, not a capability).
-    nonisolated static func classifyFloatGesture(
-        frames: [CGRect],
-        prePinchFrame: CGRect,
-        screenWidth: CGFloat,
-        tolerance: CGFloat = 2
-    ) -> FloatGestureOutcome {
-        guard !frames.isEmpty,
-              prePinchFrame.isUsableKeyboardFrame,
-              frames.allSatisfy(\.isUsableKeyboardFrame),
-              screenWidth > 0 else {
-            return .divergence(frames: frames)
-        }
-        if let floated = frames.first(where: { $0.width < screenWidth / 2 }) {
-            return .floated(frame: floated)
-        }
-        let stayedDockedWidth = frames.allSatisfy { $0.width >= screenWidth * 0.8 }
-        let stayedWithinTolerance = frames.allSatisfy { frame in
-            abs(frame.minX - prePinchFrame.minX) <= tolerance
-                && abs(frame.minY - prePinchFrame.minY) <= tolerance
-                && abs(frame.width - prePinchFrame.width) <= tolerance
-                && abs(frame.height - prePinchFrame.height) <= tolerance
-        }
-        return stayedDockedWidth && stayedWithinTolerance
-            ? .unsupported(frames: frames)
-            : .divergence(frames: frames)
-    }
-
     /// #372: drive the native float gesture and classify the observed frames.
     /// The `keyboardPresentation` token is geometry-derived and can read
     /// `floating` with a docked frame, so it is a diagnostic in the caller's
@@ -1520,7 +1471,7 @@ final class TerminalKeyboardUITests: XCTestCase {
                 break
             }
         }
-        return Self.classifyFloatGesture(
+        return classifyFloatGesture(
             frames: frames,
             prePinchFrame: prePinchFrame,
             screenWidth: screenWidth
@@ -3492,11 +3443,3 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 }
 
-private extension CGRect {
-    /// A real keyboard frame: not null, not zero-sized and not infinite. A
-    /// pinch that dismisses the keyboard yields `.zero` (or a missing element);
-    /// that must classify as a divergence, never as a float.
-    var isUsableKeyboardFrame: Bool {
-        !isNull && !isEmpty && !isInfinite
-    }
-}
